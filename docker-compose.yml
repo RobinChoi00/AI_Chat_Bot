@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  backend:
+    build: 
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./.env:/app/.env  # 환경 변수 파일 연결
+    networks:
+      - ai_network
+
+  frontend:
+    build: 
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend  # 백엔드가 먼저 켜진 후 프론트가 켜지도록 순서 제어
+    networks:
+      - ai_network
+
+networks:
+  ai_network:
+    driver: bridge
