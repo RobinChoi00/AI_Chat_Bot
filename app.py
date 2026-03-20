@@ -56,7 +56,7 @@ if prompt := st.chat_input("Ask about Osaki massage chairs..."):
     # --- [6] Backend 통신 (HTTP POST - Streaming) ---
     with st.chat_message("assistant"):
         try:
-            api_url = "http://127.0.0.1:8000/api/v1/chat"
+            api_url = "http://backend:8000/api/v1/chat"
             payload = {
                 "user_query": prompt,
                 "session_id": st.session_state.session_id,

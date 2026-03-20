@@ -13,6 +13,10 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from typing import List, Optional
 
+# 💡 [신규 추가] LangChain 임베딩 및 FAISS 라이브러리
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS as LC_FAISS
+
 # 환경 변수 로드 (.env)
 load_dotenv(override=True)
 
@@ -22,13 +26,12 @@ logger = logging.getLogger(__name__)
 
 # --- [1] 데이터 모델 (요청/응답 양식) ---
 class Message(BaseModel):
-    role: str      # 'user' (고객) 또는 'assistant' (AI)
-    content: str   # 대화 내용
+    role: str      
+    content: str   
 
 class ChatRequest(BaseModel):
     user_query: str
     session_id: str = "default_session"
-    # [핵심] 과거 대화 기록을 담을 배열(List) 추가. 기본값은 빈 배열([])
     chat_history: Optional[List[Message]] = [] 
 
 class ChatResponse(BaseModel):
@@ -40,7 +43,6 @@ base_dir = Path(__file__).resolve().parent
 index_dir = base_dir / "faiss_index"
 
 try:
-    # 다시 OS의 환경 변수(.env)에서 읽어오도록 롤백
     api_key = os.environ.get("OPENAI_API_KEY")
     
     if not api_key:
@@ -48,7 +50,7 @@ try:
     
     openai_client = OpenAI(api_key=api_key)
     
-    # FAISS 로드
+    # 1. 💡 [기존 뇌] 제품 스펙 FAISS 로드 (오타 수정 완료!)
     faiss_index = faiss.read_index(str(index_dir / "osaki_products.faiss"))
     
     with open(index_dir / "osaki_metadata.jsonl", "r", encoding="utf-8") as f:
@@ -58,42 +60,60 @@ try:
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     embedding_model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
     
-    logger.info("✅ Backend RAG Engine Initialized Successfully.")
+    # 2. 💡 [신규 뇌] CS 워런티 FAISS 로드 (Federated Search)
+    embeddings_qa = OpenAIEmbeddings(api_key=api_key)
+    faiss_index_qa = LC_FAISS.load_local(
+        folder_path=str(index_dir / "freshdesk_qa"),
+        embeddings=embeddings_qa,
+        allow_dangerous_deserialization=True # 프로덕션 보안 승인
+    )
+    
+    logger.info("✅ Dual-Core RAG Engine Initialized Successfully.")
 except Exception as e:
     logger.error(f"🚨 Initialization Failed: {e}")
     faiss_index = None
+    faiss_index_qa = None
 
 # --- [3] FastAPI 앱 구성 ---
 app = FastAPI(title="Osaki AI Support API", version="1.0")
 
-# CORS 설정 (쇼핑몰 프론트엔드 도메인에서 API를 호출할 수 있도록 허용)
+# CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # 실무 배포 시에는 실제 쇼핑몰 도메인(예: https://osakimassage.com)으로 제한해야 합니다.
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # --- [4] 핵심 API 엔드포인트 ---
-@app.post("/api/v1/chat") # [엄격 검증] response_model=ChatResponse 삭제됨!
+@app.post("/api/v1/chat") 
 async def chat_endpoint(request: ChatRequest):
     """실시간 스트리밍(SSE) 메시지 전송 엔드포인트"""
     if faiss_index is None:
         raise HTTPException(status_code=500, detail="Vector DB is not loaded.")
 
     try:
-        # 1. Retrieval (검색 - 기존 로직 동일)
-        query_vector = embedding_model.encode([request.user_query], convert_to_numpy=True)
-        distances, indices = faiss_index.search(query_vector, 3)
-        
         retrieved_docs = []
+
+        # 1. [제품 DB]에서 검색 (토큰 절약을 위해 상위 2개만)
+        query_vector = embedding_model.encode([request.user_query], convert_to_numpy=True)
+        distances, indices = faiss_index.search(query_vector, 2) 
+        
         for idx in indices[0]:
             if idx != -1 and idx < len(metadata):
                 retrieved_docs.append(metadata[idx]["content"])
+
+        # 2. 💡 [CS 워런티 DB]에서 검색 (상위 2개)
+        if 'faiss_index_qa' in globals() and faiss_index_qa is not None:
+            cs_docs = faiss_index_qa.similarity_search(request.user_query, k=2)
+            for doc in cs_docs:
+                retrieved_docs.append(doc.page_content)
+
+        # 3. 두 뇌에서 찾아낸 지식을 하나로 융합
         context = "\n\n---\n\n".join(retrieved_docs)
 
-        # 2. Generation 프롬프트 세팅
+        # 4. Generation 프롬프트 세팅
         system_prompt = f"""You are the official Professional Customer Support Agent for Osaki Massage Chairs.
 Answer the user's question accurately based ONLY on the context below. Do not hallucinate.
 
@@ -108,10 +128,9 @@ You MUST formulate your entire response STRICTLY IN ENGLISH, regardless of the l
             messages_payload.append({"role": msg.role, "content": msg.content})
         messages_payload.append({"role": "user", "content": request.user_query})
 
-        # [핵심 로직] 데이터를 쪼개서 실시간으로 방출(Yield)하는 Generator 함수
+        # 실시간 스트리밍 제너레이터 함수
         def generate_stream():
             try:
-                # stream=True 옵션으로 OpenAI API 호출
                 stream_response = openai_client.chat.completions.create(
                     model="gpt-4o",
                     messages=messages_payload,
@@ -125,7 +144,6 @@ You MUST formulate your entire response STRICTLY IN ENGLISH, regardless of the l
                 logger.error(f"Streaming Error: {e}")
                 yield "🚨 API Streaming Error."
 
-        # 완성된 문장이 아닌, 흐르는 물(Stream) 자체를 프론트엔드에 연결
         return StreamingResponse(generate_stream(), media_type="text/event-stream")
 
     except Exception as e:

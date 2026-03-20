@@ -8,3 +8,5 @@ sentence-transformers
 faiss-cpu
 python-dotenv
 pandas
+langchain-openai
+langchain-community

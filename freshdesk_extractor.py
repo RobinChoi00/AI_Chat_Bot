@@ -5,7 +5,6 @@ import time
 import json
 from dotenv import load_dotenv
 
-# 로깅 설정 (운영 환경 필수)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -13,42 +12,75 @@ load_dotenv()
 
 class FreshdeskETL:
     def __init__(self):
-        """API 크레덴셜 및 엔드포인트 초기화"""
         self.domain = os.environ.get("FRESHDESK_DOMAIN")
         self.api_key = os.environ.get("FRESHDESK_API_KEY")
-        
-        if not self.domain or not self.api_key:
-            logger.error("🚨 System Error: .env 파일에 Freshdesk 크레덴셜이 누락되었습니다.")
-            raise ValueError("Missing Freshdesk Credentials")
-            
         self.base_url = f"https://{self.domain}/api/v2"
-        # Freshdesk는 API Key를 아이디로, 비밀번호는 임의의 문자('X')를 사용하는 Basic Auth 규격을 따릅니다.
         self.auth = (self.api_key, 'X')
         self.headers = {'Content-Type': 'application/json'}
 
-    def fetch_resolved_tickets(self, max_pages=3):
-        """해결 완료된(Resolved/Closed) 고객 CS 티켓만 추출 (Pagination 적용)"""
+    def fetch_conversations(self, ticket_id):
+        url = f"{self.base_url}/tickets/{ticket_id}/conversations"
+        try:
+            response = requests.get(url, auth=self.auth, headers=self.headers, timeout=10)
+            if response.status_code == 200:
+                conversations = response.json()
+                # 💡 None 에러 방지를 위해 get(..., "") 처리 강화
+                agent_replies = [conv.get("body_text") or "" for conv in conversations if conv.get("incoming") == False]
+                return "\n".join(filter(None, agent_replies))
+            return ""
+        except Exception:
+            return ""
+
+    def fetch_resolved_tickets(self, max_pages=5): # 💡 탐색 범위를 5페이지(150개)로 대폭 확대!
         tickets = []
         page = 1
         
         while page <= max_pages:
             logger.info(f"📄 Fetching Freshdesk Tickets - Page {page}...")
-            # 엔드포인트(Endpoint): 해결된 티켓(status 4, 5)만 필터링하여 요청
-            url = f"{self.base_url}/search/tickets?query=\"status:4 OR status:5\"&page={page}"
+            url = f"{self.base_url}/tickets"
+            params = {
+                "updated_since": "2023-01-01T00:00:00Z", # 💡 더 먼 과거의 데이터까지 영혼까지 끌어모음
+                "include": "description",
+                "page": page,
+                "per_page": 30
+            }
             
             try:
-                response = requests.get(url, auth=self.auth, headers=self.headers, timeout=10)
-                response.raise_for_status() # HTTP 200 OK가 아니면 즉시 에러 발생 (Circuit Breaker)
+                response = requests.get(url, auth=self.auth, headers=self.headers, params=params, timeout=10)
+                response.raise_for_status()
                 
-                data = response.json()
-                results = data.get("results", [])
-                
+                results = response.json()
                 if not results:
-                    break # 더 이상 가져올 데이터가 없으면 루프 종료
-                    
-                tickets.extend(results)
+                    break
+                
+                logger.info(f"🔍 [추적] {page}페이지에서 총 {len(results)}개의 티켓을 발견했습니다. 필터링을 시작합니다.")
+                
+                resolved_count = 0
+                valid_qa_count = 0
+                
+                for t in results:
+                    # 1차 관문: 해결된 티켓인가?
+                    if t.get("status") in [4, 5]:
+                        resolved_count += 1
+                        ticket_id = t["id"]
+                        
+                        # None 방어 로직 추가
+                        question = t.get("description_text") or "" 
+                        answer = self.fetch_conversations(ticket_id)
+                        time.sleep(0.3) 
+                        
+                        # 2차 관문: 질문과 답변이 모두 존재하는가?
+                        if question.strip() and answer.strip():
+                            valid_qa_count += 1
+                            tickets.append({
+                                "ticket_id": ticket_id,
+                                "subject": t.get("subject", ""),
+                                "question": question,
+                                "answer": answer
+                            })
+                            
+                logger.info(f"📊 [결과] {page}페이지 통계 -> 해결된 티켓: {resolved_count}개 | 최종 합격된 Q&A: {valid_qa_count}개")
                 page += 1
-                time.sleep(1) # API Rate Limit(호출 제한) 방어용 딜레이 (Trade-off)
                 
             except requests.exceptions.RequestException as e:
                 logger.error(f"🚨 API Request Failed: {e}")
@@ -57,28 +89,18 @@ class FreshdeskETL:
         return tickets
 
     def execute_pipeline(self):
-        """전체 ETL 파이프라인 실행 및 저장"""
         logger.info("🚀 Freshdesk Data Extraction 파이프라인 가동을 시작합니다.")
         
-        tickets = self.fetch_resolved_tickets(max_pages=2) # 테스트용으로 2페이지만 추출
-        logger.info(f"✅ 총 {len(tickets)}개의 CS 티켓 메타데이터를 성공적으로 추출했습니다.")
+        extracted_data = self.fetch_resolved_tickets(max_pages=5) 
+        logger.info(f"✅ 총 {len(extracted_data)}개의 유의미한 Q&A 세트를 성공적으로 추출했습니다.")
         
-        # 1차 정제 및 JSON 파일로 직렬화(Serialization)
-        extracted_data = []
-        for t in tickets:
-            extracted_data.append({
-                "ticket_id": t["id"],
-                "subject": t["subject"],
-                "description_text": t["description_text"], # HTML 태그가 제거된 순수 본문
-                "created_at": t["created_at"]
-            })
-            
-        # 데이터를 data 폴더에 저장 (이후 벡터 DB 인덱싱을 위함)
-        os.makedirs("data", exist_ok=True)
-        with open("data/freshdesk_tickets.json", "w", encoding="utf-8") as f:
-            json.dump(extracted_data, f, ensure_ascii=False, indent=4)
-            
-        logger.info("✅ 데이터가 data/freshdesk_tickets.json 파일로 저장되었습니다.")
+        if extracted_data:
+            os.makedirs("data", exist_ok=True)
+            with open("data/freshdesk_tickets.json", "w", encoding="utf-8") as f:
+                json.dump(extracted_data, f, ensure_ascii=False, indent=4)
+            logger.info("✅ 데이터가 data/freshdesk_tickets.json 파일로 저장되었습니다.")
+        else:
+            logger.warning("⚠️ 추출된 데이터가 없습니다. Freshdesk에 답변이 달린 해결된 티켓이 존재하는지 웹에서 직접 확인해 보십시오.")
 
 if __name__ == "__main__":
     etl = FreshdeskETL()
