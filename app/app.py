@@ -1,84 +1,117 @@
 import streamlit as st
 import requests
+import json
 import uuid
 
-# --- [1] Page Config (글로벌 스탠다드 UX 설정) ---
-st.set_page_config(page_title="Osaki AI Support", page_icon="🤖", layout="centered")
-st.title("💆‍♂️ Osaki Massage Chair AI")
+# 1. 페이지 기본 설정 (가장 먼저 호출되어야 함)
+st.set_page_config(
+    page_title="Titan Chair AI Copilot",
+    page_icon="💺",
+    layout="centered",
+    initial_sidebar_state="expanded"
+)
 
-# --- [2] Session State Management (상태 유지 아키텍처) ---
-# [엄격 검증] 변수 초기화가 무조건 가장 먼저 실행되어야 합니다.
+# 2. 💡 [UI/UX 핵심] Custom CSS 주입 (고급스러운 다크/라이트 테마 및 여백 최적화)
+st.markdown("""
+<style>
+    /* 상단 기본 헤더 숨기기 */
+    header {visibility: hidden;}
+    /* 푸터 워터마크 숨기기 */
+    footer {visibility: hidden;}
+    /* 챗봇 메시지 폰트 및 줄간격 최적화 */
+    .stChatMessage {
+        border-radius: 10px;
+        padding: 10px;
+        margin-bottom: 10px;
+    }
+    /* 타이틀 디자인 */
+    .main-title {
+        text-align: center;
+        font-family: 'Helvetica Neue', sans-serif;
+        font-weight: 700;
+        color: #2C3E50;
+        padding-bottom: 10px;
+        border-bottom: 2px solid #EAECEE;
+        margin-bottom: 30px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# 3. 세션(Session) 관리 초기화
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# --- [3] Zero-State UX (초기 웰컴 가이드) ---
-# 대화 기록이 배열에 단 하나도 없을 때만 이 안내 카드를 화면에 그립니다.
-if not st.session_state.messages:
-    st.info("""
-    👋 **Welcome to the Official Osaki Massage Chair AI Assistant!**
-    
-    I am your personal expert on ultimate relaxation. Whether you are a first-time buyer or a long-time Osaki owner, I'm here to provide professional product support strictly in English.
-    
-    Feel free to ask me about different models, unique features, or comparison details based on our technical specifications.
-    
-    Here are a few examples to get you started:
-    * `"What are the best 4D massage chairs?"`
-    * `"Which model has the strongest massage pressure?"`
-    * `"Compare the Maestro LE and Vista 4D."`
-    * `"Tell me about zero gravity features."`
-    
-    Ask your question in the input bar below to begin your journey to relaxation!
-    """)
+# 백엔드 API 주소 (Docker 배포 시 환경 변수로 분리 가능)
+API_URL = "http://localhost:8000/api/v1/chat"
 
-# --- [4] UI Rendering (기존 대화 연속 출력) ---
-# 이전 대화 기록을 UI에 연속 렌더링 (웰컴 카드가 뜬 상태에서는 빈 배열이므로 아무것도 그리지 않음)
+# 4. 사이드바 (Sidebar) UI 구성
+with st.sidebar:
+    st.image("https://cdn.shopify.com/s/files/1/0086/1297/0558/files/titan_logo.png", width=150) # 로고 (임시 URL, 필요시 변경)
+    st.markdown("### 🤖 AI Copilot Status")
+    st.caption(f"Session: `{st.session_state.session_id[:8]}...`")
+    st.markdown("---")
+    st.markdown("💡 **Capabilities:**")
+    st.markdown("- 💺 Product Specs & Pricing")
+    st.markdown("- 🛠️ Assembly & Troubleshooting")
+    st.markdown("- 📜 Warranty Policies")
+    
+    if st.button("🗑️ Clear Chat History", use_container_width=True):
+        st.session_state.messages = []
+        st.session_state.session_id = str(uuid.uuid4())
+        st.rerun()
+
+# 5. 메인 화면 UI
+st.markdown("<h1 class='main-title'>Titan Chair AI Copilot 💺</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #7F8C8D;'>Ask anything about our massage chairs, warranties, or troubleshooting.</p>", unsafe_allow_html=True)
+
+# 기존 대화 내역 렌더링
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
+    avatar = "🧑‍💻" if msg["role"] == "user" else "🤖"
+    with st.chat_message(msg["role"], avatar=avatar):
         st.markdown(msg["content"])
 
-# --- [5] User Input & API Request (데이터 조립 및 통신) ---
-if prompt := st.chat_input("Ask about Osaki massage chairs..."):
-    # 1. 고객의 현재 질문을 즉시 UI에 표시
-    with st.chat_message("user"):
-        st.markdown(prompt)
+# 6. 💡 [핵심 비즈니스 로직] 채팅 입력 및 스트리밍 처리
+if prompt := st.chat_input("How can I help you with your massage chair today?"):
     
-    # [핵심 로직] 백엔드로 보낼 과거 대화 기록(chat_history) 배열 추출
-    chat_history_payload = [
-        {"role": m["role"], "content": m["content"]} 
-        for m in st.session_state.messages
-    ]
-
-    # UI 렌더링을 위해 현재 질문을 세션 스테이트에 추가
+    # 유저 메시지 화면에 즉시 표시
     st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user", avatar="🧑‍💻"):
+        st.markdown(prompt)
 
-    # --- [6] Backend 통신 (HTTP POST - Streaming) ---
-    with st.chat_message("assistant"):
+    # AI 응답 스트리밍 영역
+    with st.chat_message("assistant", avatar="🤖"):
+        message_placeholder = st.empty()
+        full_response = ""
+        
+        # FastAPI 서버로 요청 전송 (스트리밍 모드)
         try:
-            api_url = "http://backend:8000/api/v1/chat"
             payload = {
                 "user_query": prompt,
                 "session_id": st.session_state.session_id,
-                "chat_history": chat_history_payload
+                "chat_history": st.session_state.messages[:-1] # 현재 질문 제외한 이전 기록만
             }
+            
+            with requests.post(API_URL, json=payload, stream=True) as response:
+                if response.status_code == 200:
+                    for chunk in response.iter_content(chunk_size=1024):
+                        if chunk:
+                            # 스트리밍 청크를 디코딩하여 실시간으로 화면에 이어붙임
+                            decoded_chunk = chunk.decode("utf-8")
+                            full_response += decoded_chunk
+                            message_placeholder.markdown(full_response + "▌")
+                    # 스트리밍 완료 후 커서(▌) 제거
+                    message_placeholder.markdown(full_response)
+                else:
+                    error_msg = f"🚨 API Error: {response.status_code}"
+                    message_placeholder.markdown(error_msg)
+                    full_response = error_msg
+                    
+        except requests.exceptions.ConnectionError:
+            error_msg = "🚨 Error: Cannot connect to the backend server. Is FastAPI running?"
+            message_placeholder.markdown(error_msg)
+            full_response = error_msg
 
-            # [핵심] stream=True 파라미터를 추가하여 연결을 끊지 않고 계속 파이프를 열어둡니다.
-            response = requests.post(api_url, json=payload, stream=True, timeout=30)
-            response.raise_for_status()
-            
-            # 파이프에서 떨어지는 조각(Chunk)들을 받아내는 Generator 함수
-            def stream_parser():
-                for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
-                    if chunk:
-                        yield chunk
-            
-            # Streamlit의 내장 스트리밍 렌더링 함수 가동 (타자기 효과)
-            answer = st.write_stream(stream_parser())
-            
-            # 스트리밍이 완벽히 끝난 최종 완성본을 세션 스테이트에 저장 (기억 유지)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
-
-        except requests.exceptions.RequestException as e:
-            error_msg = f"🚨 API Connection Error: 서버와 통신할 수 없습니다. ({e})"
-            st.error(error_msg)
+    # AI 응답을 세션 기록에 저장
+    st.session_state.messages.append({"role": "assistant", "content": full_response})

@@ -1,14 +1,10 @@
 import os
-import json
 import logging
-import faiss
-import torch
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
 from openai import OpenAI
 from dotenv import load_dotenv
 from typing import List, Optional
@@ -17,18 +13,18 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 import pytz
 
-# 💡 [신규 추가] LangChain 임베딩 및 FAISS 라이브러리
-from langchain_openai import OpenAIEmbeddings
+# 💡 [글로벌 스탠다드] LangChain 임베딩, FAISS, 프롬프트 파서
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS as LC_FAISS
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
-# 환경 변수 로드 (.env)
 load_dotenv(override=True)
 
-# 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- [1] 데이터 모델 (요청/응답 양식) ---
+# --- [1] 데이터 모델 ---
 class Message(BaseModel):
     role: str      
     content: str   
@@ -42,46 +38,45 @@ class ChatResponse(BaseModel):
     answer: str
     status: str
 
-# --- [2] RAG 엔진 초기화 (서버 시작 시 1회만 로드) ---
-# main.py는 /app/app 에 위치하므로, 프로젝트 루트를 기준으로 경로를 맞춥니다.
+# --- [2] 3-Core Agentic RAG 엔진 초기화 ---
 project_root = Path(__file__).resolve().parent.parent
 index_dir = project_root / "faiss_index"
 
 try:
     api_key = os.environ.get("OPENAI_API_KEY")
-    
     if not api_key:
         raise ValueError("OPENAI_API_KEY is missing in .env")
     
     openai_client = OpenAI(api_key=api_key)
     
-    # 1. 💡 [기존 뇌] 제품 스펙 FAISS 로드 (오타 수정 완료!)
-    faiss_index = faiss.read_index(str(index_dir / "osaki_products.faiss"))
+    logger.info("🚀 3-Core AI 뇌세포를 메모리에 적재합니다...")
+    embeddings = OpenAIEmbeddings(api_key=api_key)
     
-    with open(index_dir / "osaki_metadata.jsonl", "r", encoding="utf-8") as f:
-        metadata = [json.loads(line) for line in f]
-        
-    # MPS 가속 임베딩 로드
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    embedding_model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
+    # 💡 [아키텍처 통합] 3개의 뇌를 모두 동일한 규격으로 로드
+    vs_products = LC_FAISS.load_local(str(index_dir / "osaki_products"), embeddings, allow_dangerous_deserialization=True)
+    vs_qa = LC_FAISS.load_local(str(index_dir / "freshdesk_qa"), embeddings, allow_dangerous_deserialization=True)
+    vs_web = LC_FAISS.load_local(str(index_dir / "web_data"), embeddings, allow_dangerous_deserialization=True)
     
-    # 2. 💡 [신규 뇌] CS 워런티 FAISS 로드 (Federated Search)
-    embeddings_qa = OpenAIEmbeddings(api_key=api_key)
-    faiss_index_qa = LC_FAISS.load_local(
-        folder_path=str(index_dir / "freshdesk_qa"),
-        embeddings=embeddings_qa,
-        allow_dangerous_deserialization=True # 프로덕션 보안 승인
-    )
-    
-    logger.info("✅ Dual-Core RAG Engine Initialized Successfully.")
+    # 💡 [신규 이식] 의도 분류용 초고속 라우터 LLM (gpt-4o-mini)
+    router_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=api_key)
+    ROUTER_PROMPT = """
+    You are a highly intelligent routing system. Analyze the user's question and strictly output ONLY ONE of the following routing keys:
+    - "PRODUCTS": If asking about chair specifications, manual, warranty, dimensions, or how to assemble/fix parts.
+    - "QA": If asking about troubleshooting, refund status, previous customer issues, or technical support logs.
+    - "WEB": If asking about current sales, events, health benefits, FAQ, or general website info.
+
+    User Question: {question}
+    Routing Key:"""
+    router_chain = PromptTemplate.from_template(ROUTER_PROMPT) | router_llm | StrOutputParser()
+
+    logger.info("✅ 3-Core Agentic RAG Engine Initialized Successfully.")
 except Exception as e:
     logger.error(f"🚨 Initialization Failed: {e}")
-    faiss_index = None
-    faiss_index_qa = None
+    vs_products, vs_qa, vs_web, router_chain = None, None, None, None
 
-# --- [2.5] SQLite 대화 기록 DB 초기화 ---
+# --- [2.5] SQLite 대화 기록 DB 유지 (완벽한 코드 보존) ---
 DB_DIR = project_root / "db_data"
-DB_DIR.mkdir(exist_ok=True) # 폴더가 없으면 자동 생성 (도커 볼륨과 매핑됨)
+DB_DIR.mkdir(exist_ok=True) 
 DATABASE_URL = f"sqlite:///{DB_DIR}/chat_history.db"
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -94,15 +89,13 @@ class ChatLog(Base):
     session_id = Column(String, index=True)
     user_query = Column(Text)
     bot_response = Column(Text)
-    # 💡 글로벌 서버(UTC) 대신, 사장님이 직관적으로 보실 수 있도록 텍사스(Central Time) 기준으로 시간 자동 기록
     created_at = Column(DateTime, default=lambda: datetime.now(pytz.timezone('America/Chicago')))
 
 Base.metadata.create_all(bind=engine)
 
 # --- [3] FastAPI 앱 구성 ---
-app = FastAPI(title="Osaki AI Support API", version="1.0")
+app = FastAPI(title="Titan AI Copilot API", version="2.0")
 
-# CORS 설정
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -111,34 +104,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- [4] 핵심 API 엔드포인트 ---
+# --- [4] 핵심 API 엔드포인트 (Agentic RAG + Streaming) ---
 @app.post("/api/v1/chat") 
 async def chat_endpoint(request: ChatRequest):
-    """실시간 스트리밍(SSE) 메시지 전송 엔드포인트"""
-    if faiss_index is None:
-        raise HTTPException(status_code=500, detail="Vector DB is not loaded.")
+    if not all([vs_products, vs_qa, vs_web, router_chain]):
+        raise HTTPException(status_code=500, detail="AI Engine is not fully loaded.")
 
     try:
-        retrieved_docs = []
-
-        # 1. [제품 DB]에서 검색 (토큰 절약을 위해 상위 2개만)
-        query_vector = embedding_model.encode([request.user_query], convert_to_numpy=True)
-        distances, indices = faiss_index.search(query_vector, 2) 
+        user_query = request.user_query
         
-        for idx in indices[0]:
-            if idx != -1 and idx < len(metadata):
-                retrieved_docs.append(metadata[idx]["content"])
+        # 💡 Step 1: 라우터 엔진 가동 (의도 파악)
+        routing_decision = router_chain.invoke({"question": user_query}).strip().upper()
+        logger.info(f"🔀 라우터 판단: 타겟 뇌 ➡️ [{routing_decision}]")
 
-        # 2. 💡 [CS 워런티 DB]에서 검색 (상위 2개)
-        if 'faiss_index_qa' in globals() and faiss_index_qa is not None:
-            cs_docs = faiss_index_qa.similarity_search(request.user_query, k=2)
-            for doc in cs_docs:
-                retrieved_docs.append(doc.page_content)
+        # 💡 Step 2: 정밀 타격 (단 1개의 뇌만 검색하여 비용 및 속도 최적화)
+        if "PRODUCTS" in routing_decision:
+            docs = vs_products.similarity_search(user_query, k=3)
+        elif "QA" in routing_decision:
+            docs = vs_qa.similarity_search(user_query, k=3)
+        else:
+            docs = vs_web.similarity_search(user_query, k=3)
 
-        # 3. 두 뇌에서 찾아낸 지식을 하나로 융합
-        context = "\n\n---\n\n".join(retrieved_docs)
+        context = "\n\n---\n\n".join([doc.page_content for doc in docs])
 
-        # 4. Generation 프롬프트 세팅 (Technician Routing 주입)
+        # 💡 Step 3: 지웅님의 완벽한 프롬프트 유지
         system_prompt = f"""You are the official Professional Customer Support Agent for Osaki Massage Chairs.
 Answer the user's question accurately based ONLY on the context below. Do not hallucinate.
 
@@ -159,11 +148,11 @@ You MUST formulate your entire response STRICTLY IN ENGLISH, regardless of the l
         messages_payload = [{"role": "system", "content": system_prompt}]
         for msg in request.chat_history:
             messages_payload.append({"role": msg.role, "content": msg.content})
-        messages_payload.append({"role": "user", "content": request.user_query})
+        messages_payload.append({"role": "user", "content": user_query})
 
-        # 실시간 스트리밍 제너레이터 함수
+        # 💡 Step 4: 지웅님의 무결점 스트리밍 & DB 저장 로직 (완벽 보존)
         def generate_stream():
-            full_response = "" # 💡 [추가] 쪼개져서 오는 AI의 대답을 하나로 합칠 빈 바구니
+            full_response = "" 
             try:
                 stream_response = openai_client.chat.completions.create(
                     model="gpt-4o",
@@ -174,14 +163,13 @@ You MUST formulate your entire response STRICTLY IN ENGLISH, regardless of the l
                 for chunk in stream_response:
                     if chunk.choices[0].delta.content is not None:
                         content = chunk.choices[0].delta.content
-                        full_response += content # 💡 [추가] 스트리밍 되는 조각들을 바구니에 담음
+                        full_response += content 
                         yield content
                 
-                # 💡 [핵심] 스트리밍이 무사히 끝나면, 유저 질문과 AI 답변을 DB에 영구 저장!
                 db = SessionLocal()
                 new_log = ChatLog(
                     session_id=request.session_id,
-                    user_query=request.user_query,
+                    user_query=user_query,
                     bot_response=full_response
                 )
                 db.add(new_log)
