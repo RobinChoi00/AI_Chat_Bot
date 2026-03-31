@@ -10,7 +10,8 @@ services:
     restart: always  # 💡 [24/7 무중단 운영] 서버/프로세스가 죽으면 무조건 자동 부활
     volumes:
       - ./.env:/app/.env
-      - ./db_data:/app/db_data  # 💡 [데이터 영속성] 컨테이너 내부의 DB를 AWS 하드디스크와 영구 동기화
+      - ./faiss_index:/app/faiss_index  # 💡 호스트의 뇌를 컨테이너로 연결
+      - ./db_data:/app/db_data
     networks:
       - ai_network
 
