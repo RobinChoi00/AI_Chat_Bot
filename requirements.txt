@@ -100,3 +100,5 @@ uvicorn==0.40.0
 xxhash==3.6.0
 yarl==1.23.0
 zstandard==0.25.0
+streamlit>=1.32.0
+requests>=2.31.0
