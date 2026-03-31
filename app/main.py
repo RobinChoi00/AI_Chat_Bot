@@ -61,8 +61,8 @@ try:
     router_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=api_key)
     ROUTER_PROMPT = """
     You are a highly intelligent routing system. Analyze the user's question and strictly output ONLY ONE of the following routing keys:
-    - "PRODUCTS": If asking about chair specifications, manual, warranty, dimensions, or how to assemble/fix parts.
-    - "QA": If asking about troubleshooting, refund status, previous customer issues, or technical support logs.
+    - "PRODUCTS": If asking about product specifications, manuals, WARRANTY, return policies, guarantees, dimensions, or parts. (MUST use this for ANY warranty/policy questions).
+    - "QA": If asking about specific technical troubleshooting, previous customer support logs, or delivery tracking. (DO NOT use for warranty/policy).
     - "WEB": If asking about current sales, events, health benefits, FAQ, or general website info.
 
     User Question: {question}
@@ -119,28 +119,39 @@ async def chat_endpoint(request: ChatRequest):
 
         # 💡 Step 2: 정밀 타격 (단 1개의 뇌만 검색하여 비용 및 속도 최적화)
         if "PRODUCTS" in routing_decision:
-            docs = vs_products.similarity_search(user_query, k=3)
+            docs = vs_products.similarity_search(user_query, k=5)
         elif "QA" in routing_decision:
-            docs = vs_qa.similarity_search(user_query, k=3)
+            docs = vs_qa.similarity_search(user_query, k=5)
         else:
-            docs = vs_web.similarity_search(user_query, k=3)
+            docs = vs_web.similarity_search(user_query, k=5)
 
         context = "\n\n---\n\n".join([doc.page_content for doc in docs])
 
-        # 💡 Step 3: 지웅님의 완벽한 프롬프트 유지
-        system_prompt = f"""You are the official Professional Customer Support Agent for Osaki Massage Chairs.
-Answer the user's question accurately based ONLY on the context below. Do not hallucinate.
+        # 💡 [프롬프트 엔지니어링] 구조화된 마크다운 기반의 강력한 통제 프롬프트
+        system_prompt = f"""You are an elite, highly precise Professional Customer Support Agent for Titan Chair LLC and Osaki Massage Chairs.
+
+[CORE DIRECTIVE - STRICT GROUNDING]
+Your absolute primary directive is to answer the user's inquiry based SOLELY and EXCLUSIVELY on the [Context] provided below.
+You are strictly FORBIDDEN from utilizing pre-trained knowledge, external assumptions, or general common sense.
+
+[ANTI-HALLUCINATION PROTOCOL]
+1. VERIFY: Read the [Context] carefully. 
+2. ANSWER: If the exact information is present, synthesize it clearly and professionally.
+3. DECLINE: If the answer is NOT explicitly stated in the [Context], or if the [Context] is irrelevant, you MUST NOT guess. You MUST output EXACTLY this phrase:
+   "I apologize, but I do not have specific information regarding that in my current documentation. Please contact our support team at 1-888-848-2630 (Ext. 3) for precise assistance."
+4. PROHIBITION: NEVER invent warranty exclusions (e.g., zippers, velcro), part numbers, or policies that are not explicitly written in the [Context].
+
+[OUTPUT FORMATTING]
+- Use clear, structured bullet points if explaining multiple conditions (e.g., Year 1, Year 2 warranty coverage).
+- Maintain a polite, empathetic, yet strictly objective Professional Business English tone.
 
 [TECHNICIAN COPILOT MODE - STRICT ROUTING]
-If the user's prompt includes keywords like "assembly", "repair", "video", or "manual" along with a specific massage chair model, you MUST bypass standard CS responses and IMMEDIATELY provide the exact video download link from the [Video Database] below.
-Format your response exactly like this: "Here is the official [Assembly/Repair] video for [Model Name]: [Link]"
+If the user's prompt includes keywords like "assembly", "repair", "video", or "manual" along with a specific massage chair model, bypass standard CS responses and IMMEDIATELY provide the exact video download link from the [Video Database] below.
+Format EXACTLY like this: "Here is the official [Assembly/Repair] video for [Model Name]: [Link]"
 
 [Video Database]:
 - Titan Prime 3D : https://www.otasupport.com/api/download?fileId=1qJUblQGZksbVBFzbbsh9miUy3eBxg11L
 - Osaki Maestro : https://www.otasupport.com/api/download?fileId=1XReuOFDBwigbOANoNNigLN9F81gan7o7
-
-[CRITICAL INSTRUCTION]
-You MUST formulate your entire response STRICTLY IN ENGLISH, regardless of the language the user uses to ask the question. Even if the user asks in Korean, Spanish, or any other language, your final output must be 100% in Professional Business English.
 
 [Context]:
 {context}
