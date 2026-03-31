@@ -43,8 +43,9 @@ class ChatResponse(BaseModel):
     status: str
 
 # --- [2] RAG 엔진 초기화 (서버 시작 시 1회만 로드) ---
-base_dir = Path(__file__).resolve().parent
-index_dir = base_dir / "faiss_index"
+# main.py는 /app/app 에 위치하므로, 프로젝트 루트를 기준으로 경로를 맞춥니다.
+project_root = Path(__file__).resolve().parent.parent
+index_dir = project_root / "faiss_index"
 
 try:
     api_key = os.environ.get("OPENAI_API_KEY")
@@ -79,7 +80,7 @@ except Exception as e:
     faiss_index_qa = None
 
 # --- [2.5] SQLite 대화 기록 DB 초기화 ---
-DB_DIR = base_dir / "db_data"
+DB_DIR = project_root / "db_data"
 DB_DIR.mkdir(exist_ok=True) # 폴더가 없으면 자동 생성 (도커 볼륨과 매핑됨)
 DATABASE_URL = f"sqlite:///{DB_DIR}/chat_history.db"
 
