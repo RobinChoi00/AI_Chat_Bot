@@ -102,3 +102,6 @@ yarl==1.23.0
 zstandard==0.25.0
 streamlit>=1.32.0
 requests>=2.31.0
+langchain-openai>=0.1.0
+langchain>=0.1.0
+langchain-community>=0.1.0
