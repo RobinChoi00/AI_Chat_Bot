@@ -7,8 +7,10 @@ services:
       dockerfile: Dockerfile.backend
     ports:
       - "8000:8000"
+    restart: always  # 💡 [24/7 무중단 운영] 서버/프로세스가 죽으면 무조건 자동 부활
     volumes:
-      - ./.env:/app/.env  # 환경 변수 파일 연결
+      - ./.env:/app/.env
+      - ./db_data:/app/db_data  # 💡 [데이터 영속성] 컨테이너 내부의 DB를 AWS 하드디스크와 영구 동기화
     networks:
       - ai_network
 
@@ -18,8 +20,9 @@ services:
       dockerfile: Dockerfile.frontend
     ports:
       - "8501:8501"
+    restart: always  # 💡 [24/7 무중단 운영] 프론트엔드도 불사조 세팅 적용
     depends_on:
-      - backend  # 백엔드가 먼저 켜진 후 프론트가 켜지도록 순서 제어
+      - backend
     networks:
       - ai_network
 

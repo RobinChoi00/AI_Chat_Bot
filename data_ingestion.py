@@ -3,6 +3,7 @@ import faiss
 import json
 import torch
 import logging
+import docx 
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
 
@@ -10,9 +11,35 @@ from sentence_transformers import SentenceTransformer
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# 💡 [신규 함수] 비정형 문서 시맨틱 청킹 (Semantic Chunking)
+def extract_text_from_docx(file_path):
+    """Word 문서에서 텍스트를 추출하고 의미 단위로 청킹(Chunking)합니다."""
+    doc = docx.Document(file_path)
+    chunks = []
+    current_chunk = ""
+    
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            continue
+        
+        current_chunk += text + " "
+        # 💡 [Trade-off 최적화] 문단이 너무 짧으면 문맥(Context)을 상실하고, 너무 길면 벡터 밀도가 옅어짐.
+        # 약 250~300자 내외의 황금 비율로 텍스트를 묶어서 토큰 효율과 검색 정확도를 극대화.
+        if len(current_chunk) > 250:
+            chunks.append(current_chunk.strip())
+            current_chunk = ""
+            
+    # 남은 찌꺼기 텍스트 처리
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+        
+    return chunks
+
 def build_multi_source_index():
     base_dir = Path(__file__).resolve().parent
-    data_dir = base_dir / "data"  # [핵심] 이제 루트가 아닌 data/ 폴더만 바라봅니다.
+    data_dir = base_dir / "data"          # 정형 데이터 (CSV)
+    raw_dir = base_dir / "raw_data"       # 💡 [신규 경로] 비정형 날것의 데이터 (DOCX)
     index_dir = base_dir / "faiss_index"
     index_dir.mkdir(exist_ok=True)
 
@@ -25,22 +52,31 @@ def build_multi_source_index():
     
     index = faiss.IndexFlatL2(embedding_dim)
     metadata = []
-    
-    # 2. Extract & Transform: data/ 폴더 안의 모든 CSV 파일 순회
-    csv_files = list(data_dir.glob("*.csv"))
-    if not csv_files:
-        logger.error(f"🚨 {data_dir} 폴더 안에 정제된 CSV 파일이 없습니다.")
-        return
-
     all_texts = []
+    
+    # 2-A. Extract & Transform: data/ 폴더 안의 CSV 파일 순회
+    csv_files = list(data_dir.glob("*.csv"))
     for file_path in csv_files:
-        logger.info(f"📄 데이터 섭취 중 (Ingesting): {file_path.name}")
+        logger.info(f"📊 CSV 데이터 섭취 중 (Ingesting): {file_path.name}")
         try:
             df = pd.read_csv(file_path)
             for _, row in df.iterrows():
                 content = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
                 all_texts.append(content)
                 metadata.append({"source": file_path.name, "content": content})
+        except Exception as e:
+            logger.error(f"🚨 {file_path.name} 파일 처리 실패: {e}")
+
+    # 2-B. 💡 Extract & Transform: raw_data/ 폴더 안의 DOCX 파일 순회
+    docx_files = list(raw_dir.glob("*.docx"))
+    for file_path in docx_files:
+        logger.info(f"📄 Word 문서 섭취 중 (Ingesting): {file_path.name}")
+        try:
+            chunks = extract_text_from_docx(file_path)
+            for chunk in chunks:
+                all_texts.append(chunk)
+                # 메타데이터에 파일명(Warranty, Sales Policy)을 박아넣어 출처 추적 기능을 강화합니다.
+                metadata.append({"source": file_path.name, "content": chunk})
         except Exception as e:
             logger.error(f"🚨 {file_path.name} 파일 처리 실패: {e}")
 
@@ -59,7 +95,7 @@ def build_multi_source_index():
         for meta in metadata:
             f.write(json.dumps(meta) + "\n")
             
-    logger.info("✅ [System Halt] Multi-Source Ingestion Pipeline Completed Successfully.")
+    logger.info("✅ [System Halt] Multi-Source Hybrid Ingestion Pipeline Completed Successfully.")
 
 if __name__ == "__main__":
     build_multi_source_index()

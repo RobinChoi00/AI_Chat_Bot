@@ -12,6 +12,10 @@ from sentence_transformers import SentenceTransformer
 from openai import OpenAI
 from dotenv import load_dotenv
 from typing import List, Optional
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
+from sqlalchemy.orm import declarative_base, sessionmaker
+from datetime import datetime
+import pytz
 
 # 💡 [신규 추가] LangChain 임베딩 및 FAISS 라이브러리
 from langchain_openai import OpenAIEmbeddings
@@ -74,6 +78,26 @@ except Exception as e:
     faiss_index = None
     faiss_index_qa = None
 
+# --- [2.5] SQLite 대화 기록 DB 초기화 ---
+DB_DIR = base_dir / "db_data"
+DB_DIR.mkdir(exist_ok=True) # 폴더가 없으면 자동 생성 (도커 볼륨과 매핑됨)
+DATABASE_URL = f"sqlite:///{DB_DIR}/chat_history.db"
+
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+class ChatLog(Base):
+    __tablename__ = "chat_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, index=True)
+    user_query = Column(Text)
+    bot_response = Column(Text)
+    # 💡 글로벌 서버(UTC) 대신, 사장님이 직관적으로 보실 수 있도록 텍사스(Central Time) 기준으로 시간 자동 기록
+    created_at = Column(DateTime, default=lambda: datetime.now(pytz.timezone('America/Chicago')))
+
+Base.metadata.create_all(bind=engine)
+
 # --- [3] FastAPI 앱 구성 ---
 app = FastAPI(title="Osaki AI Support API", version="1.0")
 
@@ -113,9 +137,17 @@ async def chat_endpoint(request: ChatRequest):
         # 3. 두 뇌에서 찾아낸 지식을 하나로 융합
         context = "\n\n---\n\n".join(retrieved_docs)
 
-        # 4. Generation 프롬프트 세팅
+        # 4. Generation 프롬프트 세팅 (Technician Routing 주입)
         system_prompt = f"""You are the official Professional Customer Support Agent for Osaki Massage Chairs.
 Answer the user's question accurately based ONLY on the context below. Do not hallucinate.
+
+[TECHNICIAN COPILOT MODE - STRICT ROUTING]
+If the user's prompt includes keywords like "assembly", "repair", "video", or "manual" along with a specific massage chair model, you MUST bypass standard CS responses and IMMEDIATELY provide the exact video download link from the [Video Database] below.
+Format your response exactly like this: "Here is the official [Assembly/Repair] video for [Model Name]: [Link]"
+
+[Video Database]:
+- Titan Prime 3D : https://www.otasupport.com/api/download?fileId=1qJUblQGZksbVBFzbbsh9miUy3eBxg11L
+- Osaki Maestro : https://www.otasupport.com/api/download?fileId=1XReuOFDBwigbOANoNNigLN9F81gan7o7
 
 [CRITICAL INSTRUCTION]
 You MUST formulate your entire response STRICTLY IN ENGLISH, regardless of the language the user uses to ask the question. Even if the user asks in Korean, Spanish, or any other language, your final output must be 100% in Professional Business English.
@@ -130,6 +162,7 @@ You MUST formulate your entire response STRICTLY IN ENGLISH, regardless of the l
 
         # 실시간 스트리밍 제너레이터 함수
         def generate_stream():
+            full_response = "" # 💡 [추가] 쪼개져서 오는 AI의 대답을 하나로 합칠 빈 바구니
             try:
                 stream_response = openai_client.chat.completions.create(
                     model="gpt-4o",
@@ -139,7 +172,22 @@ You MUST formulate your entire response STRICTLY IN ENGLISH, regardless of the l
                 )
                 for chunk in stream_response:
                     if chunk.choices[0].delta.content is not None:
-                        yield chunk.choices[0].delta.content
+                        content = chunk.choices[0].delta.content
+                        full_response += content # 💡 [추가] 스트리밍 되는 조각들을 바구니에 담음
+                        yield content
+                
+                # 💡 [핵심] 스트리밍이 무사히 끝나면, 유저 질문과 AI 답변을 DB에 영구 저장!
+                db = SessionLocal()
+                new_log = ChatLog(
+                    session_id=request.session_id,
+                    user_query=request.user_query,
+                    bot_response=full_response
+                )
+                db.add(new_log)
+                db.commit()
+                db.close()
+                logger.info("✅ Chat log saved to DB successfully.")
+
             except Exception as e:
                 logger.error(f"Streaming Error: {e}")
                 yield "🚨 API Streaming Error."
