@@ -13,7 +13,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 import pytz
 
-# 💡 [글로벌 스탠다드] LangChain 임베딩, FAISS, 프롬프트 파서
+# LangChain embeddings, FAISS, and prompt parser
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS as LC_FAISS
 from langchain_core.prompts import PromptTemplate
@@ -24,7 +24,63 @@ load_dotenv(override=True)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- [1] 데이터 모델 ---
+# --- [0] Technician quick-route constants ---
+OTA_SUPPORT_URL = "https://www.otasupport.com/"
+TECHNICIAN_KEYWORDS = {
+    "repair",
+    "fix",
+    "troubleshoot",
+    "troubleshooting",
+    "assembly",
+    "disassembly",
+    "manual",
+    "service",
+    "technician",
+    "engineer",
+    # Keep Korean keywords for backward compatibility with legacy user queries.
+    "수리",
+    "조립",
+    "매뉴얼",
+    "엔지니어",
+}
+
+
+def is_technician_help_query(query: str) -> bool:
+    lowered = query.lower()
+    return any(keyword in lowered for keyword in TECHNICIAN_KEYWORDS)
+
+
+def build_technician_guide_message() -> str:
+    return (
+        "For repair or technician support, please use the official OTA Support portal:\n"
+        f"- [OTA Support]({OTA_SUPPORT_URL})\n\n"
+        "How to find the right repair resource:\n"
+        "1) Open the link above.\n"
+        "2) Select the correct brand (Osaki / Titan / AmaMedic).\n"
+        "3) Search your exact chair model name.\n"
+        "4) Open the model page and use the available assembly/repair videos and documents.\n\n"
+        "If you still cannot find your model, please contact support at 1-888-848-2630 (Ext. 3)."
+    )
+
+
+def stream_text_response(session_id: str, user_query: str, response_text: str):
+    """Stream plain text response and persist chat log."""
+    yield response_text
+    try:
+        db = SessionLocal()
+        new_log = ChatLog(
+            session_id=session_id,
+            user_query=user_query,
+            bot_response=response_text
+        )
+        db.add(new_log)
+        db.commit()
+        db.close()
+        logger.info("✅ Chat log saved to DB successfully.")
+    except Exception as e:
+        logger.error(f"DB Save Error: {e}")
+
+# --- [1] Data models ---
 class Message(BaseModel):
     role: str      
     content: str   
@@ -38,7 +94,7 @@ class ChatResponse(BaseModel):
     answer: str
     status: str
 
-# --- [2] 3-Core Agentic RAG 엔진 초기화 ---
+# --- [2] Initialize 3-core Agentic RAG engine ---
 project_root = Path(__file__).resolve().parent.parent
 index_dir = project_root / "faiss_index"
 
@@ -49,15 +105,15 @@ try:
     
     openai_client = OpenAI(api_key=api_key)
     
-    logger.info("🚀 3-Core AI 뇌세포를 메모리에 적재합니다...")
+    logger.info("🚀 Loading 3-core AI engines into memory...")
     embeddings = OpenAIEmbeddings(api_key=api_key)
     
-    # 💡 [아키텍처 통합] 3개의 뇌를 모두 동일한 규격으로 로드
+    # Load all three vector stores with the same format.
     vs_products = LC_FAISS.load_local(str(index_dir / "osaki_products"), embeddings, allow_dangerous_deserialization=True)
     vs_qa = LC_FAISS.load_local(str(index_dir / "freshdesk_qa"), embeddings, allow_dangerous_deserialization=True)
     vs_web = LC_FAISS.load_local(str(index_dir / "web_data"), embeddings, allow_dangerous_deserialization=True)
     
-    # 💡 [신규 이식] 의도 분류용 초고속 라우터 LLM (gpt-4o-mini)
+    # Fast intent router model (gpt-4o-mini).
     router_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=api_key)
     ROUTER_PROMPT = """
     You are a highly intelligent routing system. Analyze the user's question and strictly output ONLY ONE of the following routing keys:
@@ -74,7 +130,7 @@ except Exception as e:
     logger.error(f"🚨 Initialization Failed: {e}")
     vs_products, vs_qa, vs_web, router_chain = None, None, None, None
 
-# --- [2.5] SQLite 대화 기록 DB 유지 (완벽한 코드 보존) ---
+# --- [2.5] SQLite chat log persistence ---
 DB_DIR = project_root / "db_data"
 DB_DIR.mkdir(exist_ok=True) 
 DATABASE_URL = f"sqlite:///{DB_DIR}/chat_history.db"
@@ -93,7 +149,7 @@ class ChatLog(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# --- [3] FastAPI 앱 구성 ---
+# --- [3] FastAPI app setup ---
 app = FastAPI(title="Titan AI Copilot API", version="2.0")
 
 app.add_middleware(
@@ -104,20 +160,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- [4] 핵심 API 엔드포인트 (Agentic RAG + Streaming) ---
+# --- [4] Core API endpoint (Agentic RAG + Streaming) ---
 @app.post("/api/v1/chat") 
 async def chat_endpoint(request: ChatRequest):
+    user_query = request.user_query
+
+    # Technician/repair requests are immediately routed to OTA Support guidance.
+    if is_technician_help_query(user_query):
+        logger.info("🛠️ Technician query detected -> OTA Support quick route.")
+        quick_reply = build_technician_guide_message()
+        return StreamingResponse(
+            stream_text_response(request.session_id, user_query, quick_reply),
+            media_type="text/event-stream"
+        )
+
     if not all([vs_products, vs_qa, vs_web, router_chain]):
         raise HTTPException(status_code=500, detail="AI Engine is not fully loaded.")
 
     try:
-        user_query = request.user_query
-        
-        # 💡 Step 1: 라우터 엔진 가동 (의도 파악)
+        # Step 1: Run the intent router.
         routing_decision = router_chain.invoke({"question": user_query}).strip().upper()
-        logger.info(f"🔀 라우터 판단: 타겟 뇌 ➡️ [{routing_decision}]")
+        logger.info(f"🔀 Router decision: target store -> [{routing_decision}]")
 
-        # 💡 Step 2: 정밀 타격 (단 1개의 뇌만 검색하여 비용 및 속도 최적화)
+        # Step 2: Query only one store to optimize latency and cost.
         if "PRODUCTS" in routing_decision:
             docs = vs_products.similarity_search(user_query, k=5)
         elif "QA" in routing_decision:
@@ -127,7 +192,7 @@ async def chat_endpoint(request: ChatRequest):
 
         context = "\n\n---\n\n".join([doc.page_content for doc in docs])
 
-        # 💡 [프롬프트 엔지니어링] 구조화된 마크다운 기반의 강력한 통제 프롬프트
+        # Structured control prompt for strict grounding and safe output.
         system_prompt = f"""You are an elite, highly precise Professional Customer Support Agent for Titan Chair LLC and Osaki Massage Chairs.
 
 [CORE DIRECTIVE - STRICT GROUNDING]
@@ -161,7 +226,7 @@ Format EXACTLY like this: "Here is the official [Assembly/Repair] video for [Mod
             messages_payload.append({"role": msg.role, "content": msg.content})
         messages_payload.append({"role": "user", "content": user_query})
 
-        # 💡 Step 4: 지웅님의 무결점 스트리밍 & DB 저장 로직 (완벽 보존)
+        # Step 4: Stream response and persist chat logs.
         def generate_stream():
             full_response = "" 
             try:

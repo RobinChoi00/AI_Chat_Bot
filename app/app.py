@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import json
 import uuid
-import os # 💡 환경 변수 조작을 위해 추가
+import os
 
 # 1. 페이지 기본 설정
 st.set_page_config(
@@ -113,12 +113,12 @@ if prompt := st.chat_input("How can I help you with your massage chair today?"):
             message_placeholder.markdown(full_response)
                     
         except requests.exceptions.Timeout:
-            error_msg = "🚨 Timeout Error: AI 서버의 응답이 지연되고 있습니다. 다시 시도해 주세요."
+            error_msg = "🚨 Timeout Error: The AI server response is delayed. Please try again."
             message_placeholder.error(error_msg)
             full_response = error_msg
             
         except requests.exceptions.RequestException as e:
-            error_msg = f"🚨 Network/API Error: 서버와 연결할 수 없습니다. ({e})"
+            error_msg = f"🚨 Network/API Error: Unable to connect to the server. ({e})"
             message_placeholder.error(error_msg)
             full_response = error_msg
 
