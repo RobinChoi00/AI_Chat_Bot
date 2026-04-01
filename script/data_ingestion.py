@@ -1,9 +1,8 @@
 import pandas as pd
-import json
 import logging
 import docx 
 import os
-import glob  # 💡 파일 패턴 매칭을 위해 추가
+import glob
 from dotenv import load_dotenv
 
 from langchain_openai import OpenAIEmbeddings
@@ -30,48 +29,44 @@ def extract_text_from_docx(file_path):
         text = para.text.strip()
         if not text: continue
         current_chunk += text + " "
-        if len(current_chunk) > 400: # 💡 청크 사이즈를 약간 키워 문맥 보존성 향상 (Trade-off 고려)
+        if len(current_chunk) > 400: 
             chunks.append(current_chunk.strip())
             current_chunk = ""
     if current_chunk:
         chunks.append(current_chunk.strip())
     return chunks
 
-def find_warranty_file(directory):
-    """💡 [핵심 추가] 하드코딩 방지: Warranty라는 단어가 포함된 docx 파일을 유연하게 찾습니다."""
-    # 후보 1: 직접적인 후보 리스트
-    candidates = ["Warranty.docx", "Warranty-and-Return-Policy.docx", "warranty.docx"]
-    for c in candidates:
-        path = os.path.join(directory, c)
-        if os.path.exists(path):
-            return path
-            
-    # 후보 2: 패턴 매칭 (Warranty가 포함된 모든 docx 파일 탐색)
-    pattern = os.path.join(directory, "*[Ww]arranty*.docx")
-    found_files = glob.glob(pattern)
-    if found_files:
-        return found_files[0]
-        
-    return None
-
 def build_products_index():
-    logger.info("🚀 [통합 아키텍처] 워런티 & 정제된 상품 데이터 Vector DB 굽기 가동")
+    logger.info("🚀 [통합 아키텍처] 다중 정책 문서 & 메타데이터 적용 Vector DB 굽기 가동")
     
-    # 💡 [방어적 설계] 디렉토리가 없으면 런타임 에러 방지를 위해 자동 생성
     os.makedirs(FAISS_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True) 
 
     documents = []
 
-    # 1. [Staging Layer] 정제된 쇼피파이 데이터 섭취
+    # 1. 💡 [Staging Layer] 메타데이터를 포함한 정제된 상품 데이터 섭취
     clean_csv = os.path.join(DATA_DIR, "cleaned_osaki_products.csv")
     if os.path.exists(clean_csv):
         logger.info(f"📊 정제된 상품 데이터 섭취 중: {os.path.basename(clean_csv)}")
         try:
             df = pd.read_csv(clean_csv)
+            
+            # 💡 [방어적 프로그래밍] 결측치(NaN)로 인한 타입 에러 원천 차단
+            df['price'] = df.get('price', 0.0).fillna(0.0)
+            df['product_type'] = df.get('product_type', 'Unknown').fillna('Unknown')
+            df['vendor'] = df.get('vendor', 'Unknown').fillna('Unknown')
+
             for _, row in df.iterrows():
                 content = str(row['content'])
-                metadata = {"source": str(row['source']), "type": "product"} # 메타데이터 세분화
+                
+                # 💡 [핵심] 풍부해진 메타데이터 주입 (Self-Querying 필터링 기반 마련)
+                metadata = {
+                    "source": str(row['source']), 
+                    "type": "product",
+                    "price": float(row['price']),
+                    "product_type": str(row['product_type']),
+                    "vendor": str(row['vendor'])
+                }
                 documents.append(Document(page_content=content, metadata=metadata))
         except Exception as e:
             logger.error(f"🚨 CSV 처리 실패: {e}")
@@ -79,20 +74,23 @@ def build_products_index():
         logger.error(f"🚨 {clean_csv} 파일이 없습니다. 파이프라인을 중단합니다.")
         return 
 
-    # 2. 💡 [Raw Layer] 유연한 워런티 파일 탐색 적용
-    warranty_path = find_warranty_file(RAW_DIR)
+    # 2. 💡 [Raw Layer] 하드코딩 제거: raw_data 내의 모든 .docx 자동 섭취
+    policy_files = glob.glob(os.path.join(RAW_DIR, "*.docx"))
     
-    if warranty_path:
-        logger.info(f"📄 워런티 정책 문서 탐지 성공: {os.path.basename(warranty_path)}")
-        try:
-            chunks = extract_text_from_docx(warranty_path)
-            for chunk in chunks:
-                metadata = {"source": "warranty_policy", "type": "policy"}
-                documents.append(Document(page_content=chunk, metadata=metadata))
-        except Exception as e:
-            logger.error(f"🚨 워런티 문서 처리 실패: {e}")
+    if policy_files:
+        for file_path in policy_files:
+            file_name = os.path.basename(file_path)
+            logger.info(f"📄 정책 문서 섭취 중: {file_name}")
+            try:
+                chunks = extract_text_from_docx(file_path)
+                for chunk in chunks:
+                    # 💡 파일명 자체를 출처(source)로 사용하여 메타데이터 생성
+                    metadata = {"source": file_name, "type": "policy"}
+                    documents.append(Document(page_content=chunk, metadata=metadata))
+            except Exception as e:
+                logger.error(f"🚨 {file_name} 문서 처리 실패: {e}")
     else:
-        logger.warning(f"⚠️ raw_data 폴더 내에 워런티(.docx) 파일을 찾을 수 없습니다. 정책 데이터가 생략됩니다.")
+        logger.warning(f"⚠️ {RAW_DIR} 폴더 내에 정책 문서(.docx)를 찾을 수 없습니다.")
 
     if not documents:
         logger.error("🚨 인덱싱할 데이터가 존재하지 않습니다.")
@@ -106,7 +104,7 @@ def build_products_index():
 
         save_path = os.path.join(FAISS_DIR, "osaki_products")
         vector_db.save_local(save_path)
-        logger.info(f"🎉 성공! 벡터 DB가 '{save_path}'에 구축되었습니다.")
+        logger.info(f"🎉 성공! 확장된 메타데이터와 다중 정책이 포함된 DB가 '{save_path}'에 구축되었습니다.")
         
     except Exception as e:
         logger.error(f"🚨 벡터 DB 생성 중 치명적 에러: {e}")
