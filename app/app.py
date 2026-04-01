@@ -6,13 +6,42 @@ import os
 
 # 1. 페이지 기본 설정
 st.set_page_config(
-    page_title="Titan Chair AI Copilot",
+    page_title="Osaki & Titan AI Agent",
     page_icon="💺",
     layout="centered",
     initial_sidebar_state="expanded"
 )
 
-# 2. 💡 [UI/UX 핵심] Custom CSS 주입
+# 💡 [아키텍처 확장] Multi-tenant 브랜드 설정 딕셔너리 (Config)
+# 실제 쇼피파이 CDN에 올라가 있는 로고 이미지 주소로 변경하여 사용하십시오.
+BRAND_CONFIG = {
+    "titanchair": {
+        "title": "Titan Chair AI Agent 💺",
+        "logo": "https://cdn.shopify.com/s/files/1/0086/1297/0558/files/titan_logo.png",
+        "domain": "https://titanchair.com"
+    },
+    "osakiusa": {
+        "title": "Osaki USA AI Agent 🌸",
+        "logo": "https://cdn.shopify.com/s/files/1/0579/8379/5374/files/osakiUSA.com_logo_black_a697883f-7819-4742-b773-af131474f374.png?v=1732232858", 
+        "domain": "https://osakiusa.com"
+    },
+    "osakimassagechair": {
+        "title": "Osaki Massage Chair AI 🛋️",
+        "logo": "https://cdn.shopify.com/s/files/1/0727/1609/1700/files/logo.png?v=1677278904", 
+        "domain": "https://osakimassagechair.com"
+    },
+    "osaki-titan": {
+        "title": "Osaki & Titan Agent 🤝",
+        "logo": "https://cdn.shopify.com/s/files/1/0716/6856/4151/files/Logo.png?v=1761063496", 
+        "domain": "https://osaki-titan.com"
+    }
+}
+
+# 💡 [핵심] URL에서 '?brand=브랜드명' 파라미터를 읽어옵니다. 없으면 기본값은 'titanchair'
+current_brand_key = st.query_params.get("brand", "titanchair").lower()
+current_brand = BRAND_CONFIG.get(current_brand_key, BRAND_CONFIG["titanchair"])
+
+# 2. Custom CSS 주입
 st.markdown("""
 <style>
     header {visibility: hidden;}
@@ -34,21 +63,19 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. 💡 [네트워크 아키텍처 핵심] 도커와 로컬 환경 동시 대응
-# 도커 환경이면 서비스 이름인 'backend'를 쓰고, 로컬 테스트 시에는 'localhost'를 사용합니다.
+# 3. 네트워크 및 세션 설정
 BACKEND_HOST = os.getenv("BACKEND_HOST", "backend") 
 API_URL = f"http://{BACKEND_HOST}:8000/api/v1/chat"
 
-# 세션 관리 초기화
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 4. 사이드바 UI 구성
+# 4. 사이드바 UI 구성 (💡 동적 로고 적용)
 with st.sidebar:
-    st.image("https://cdn.shopify.com/s/files/1/0086/1297/0558/files/titan_logo.png", width=150)
-    st.markdown("### 🤖 AI Copilot Status")
+    st.image(current_brand["logo"], width=150)
+    st.markdown("### 🤖 AI Agent Status")
     st.markdown("---")
     st.markdown("💡 **Capabilities:**")
     st.markdown("- 💺 Product Specs & Pricing")
@@ -60,8 +87,8 @@ with st.sidebar:
         st.session_state.session_id = str(uuid.uuid4())
         st.rerun()
 
-# 5. 메인 화면 UI
-st.markdown("<h1 class='main-title'>Titan Chair AI Copilot 💺</h1>", unsafe_allow_html=True)
+# 5. 메인 화면 UI (💡 동적 타이틀 적용)
+st.markdown(f"<h1 class='main-title'>{current_brand['title']}</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: #7F8C8D;'>Ask anything about our massage chairs, warranties, or troubleshooting.</p>", unsafe_allow_html=True)
 
 for msg in st.session_state.messages:
@@ -71,45 +98,37 @@ for msg in st.session_state.messages:
 
 # 6. 채팅 입력 및 스트리밍 처리
 if prompt := st.chat_input("How can I help you with your massage chair today?"):
-    # 1. 사용자 메시지 화면 출력 및 세션 저장
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="🧑‍💻"):
         st.markdown(prompt)
 
-    # 2. AI 응답 스트리밍 영역
     with st.chat_message("assistant", avatar="🤖"):
         message_placeholder = st.empty()
         full_response = ""
         
         try:
-            # 💡 [아키텍처 최적화] Sliding Window 기법
-            # 전체 대화가 아닌 '최근 N개의 대화'만 잘라서 전송 (토큰 낭비 방지)
             MAX_HISTORY = 4
             recent_history = st.session_state.messages[-(MAX_HISTORY+1):-1] if len(st.session_state.messages) > 1 else []
 
+            # 💡 [데이터 주입] 백엔드에 현재 도메인 전달
             payload = {
                 "user_query": prompt,
                 "session_id": st.session_state.session_id,
-                "chat_history": recent_history
+                "chat_history": recent_history,
+                "current_domain": current_brand["domain"] 
             }
             
-            # 💡 [UX & 안정성 핵심] 로딩 스피너 및 타임아웃(Timeout) 적용
-            with st.spinner("🧠 Scanning Titan AI Knowledge Base..."):
-                # stream=True 시 연결 타임아웃만 10초로 제한하여 무한 대기 방지
+            with st.spinner("🧠 Scanning AI Knowledge Base..."):
                 response = requests.post(API_URL, json=payload, stream=True, timeout=10)
             
-            # HTTP 4xx, 5xx 에러를 명시적으로 캐치
             response.raise_for_status()
 
-            # 💡 [성능 최적화] 청크 사이즈를 지정하여 네트워크 버퍼링 방지
             for chunk in response.iter_content(chunk_size=1024):
                 if chunk:
                     decoded_chunk = chunk.decode("utf-8")
                     full_response += decoded_chunk
-                    # 시각적 피드백: 깜빡이는 커서(▌) 효과 주입
                     message_placeholder.markdown(full_response + "▌")
             
-            # 최종 완성본 출력 (커서 제거)
             message_placeholder.markdown(full_response)
                     
         except requests.exceptions.Timeout:
@@ -122,5 +141,4 @@ if prompt := st.chat_input("How can I help you with your massage chair today?"):
             message_placeholder.error(error_msg)
             full_response = error_msg
 
-    # 3. AI 최종 응답 세션 저장
     st.session_state.messages.append({"role": "assistant", "content": full_response})

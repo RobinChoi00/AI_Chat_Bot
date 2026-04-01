@@ -24,65 +24,21 @@ load_dotenv(override=True)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- [0] Technician quick-route constants ---
-OTA_SUPPORT_URL = "https://www.otasupport.com/"
+# --- [0] Helper constants ---
 TECHNICIAN_KEYWORDS = {
-    "repair",
-    "fix",
-    "troubleshoot",
-    "troubleshooting",
-    "assembly",
-    "disassembly",
-    "manual",
-    "service",
-    "technician",
-    "engineer",
-    # Keep Korean keywords for backward compatibility with legacy user queries.
-    "수리",
-    "조립",
-    "매뉴얼",
-    "엔지니어",
+    "repair", "fix", "troubleshoot", "troubleshooting",
+    "assembly", "disassembly", "manual", "service",
+    "technician", "engineer", "수리", "조립", "매뉴얼", "엔지니어",
 }
 
 PRODUCT_QUERY_KEYWORDS = {
-    "massage chair",
-    "chair",
-    "model",
-    "product",
-    "products",
-    "recommend",
-    "buy",
-    "price",
-    "4d",
-    "3d",
-    "zero gravity",
-    "osaki",
-    "titan",
+    "massage chair", "chair", "model", "product", "products",
+    "recommend", "buy", "price", "4d", "3d", "zero gravity", "osaki", "titan",
 }
-
-
-def is_technician_help_query(query: str) -> bool:
-    lowered = query.lower()
-    return any(keyword in lowered for keyword in TECHNICIAN_KEYWORDS)
-
 
 def is_product_query(query: str) -> bool:
     lowered = query.lower()
     return any(keyword in lowered for keyword in PRODUCT_QUERY_KEYWORDS)
-
-
-def build_technician_guide_message() -> str:
-    return (
-        "For repair or technician support, please use the official OTA Support portal:\n"
-        f"- [OTA Support]({OTA_SUPPORT_URL})\n\n"
-        "How to find the right repair resource:\n"
-        "1) Open the link above.\n"
-        "2) Select the correct brand (Osaki / Titan / AmaMedic).\n"
-        "3) Search your exact chair model name.\n"
-        "4) Open the model page and use the available assembly/repair videos and documents.\n\n"
-        "If you still cannot find your model, please contact support at 1-888-848-2630 (Ext. 3)."
-    )
-
 
 def stream_text_response(session_id: str, user_query: str, response_text: str):
     """Stream plain text response and persist chat log."""
@@ -110,6 +66,7 @@ class ChatRequest(BaseModel):
     user_query: str
     session_id: str = "default_session"
     chat_history: Optional[List[Message]] = [] 
+    current_domain: str = "https://titanchair.com" # 💡 [신규] 프론트엔드 전달 도메인
 
 class ChatResponse(BaseModel):
     answer: str
@@ -129,12 +86,10 @@ try:
     logger.info("🚀 Loading 3-core AI engines into memory...")
     embeddings = OpenAIEmbeddings(api_key=api_key)
     
-    # Load all three vector stores with the same format.
     vs_products = LC_FAISS.load_local(str(index_dir / "osaki_products"), embeddings, allow_dangerous_deserialization=True)
     vs_qa = LC_FAISS.load_local(str(index_dir / "freshdesk_qa"), embeddings, allow_dangerous_deserialization=True)
     vs_web = LC_FAISS.load_local(str(index_dir / "web_data"), embeddings, allow_dangerous_deserialization=True)
     
-    # Fast intent router model (gpt-4o-mini).
     router_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=api_key)
     ROUTER_PROMPT = """
     You are a highly intelligent routing system. Analyze the user's question and strictly output ONLY ONE of the following routing keys:
@@ -186,14 +141,7 @@ app.add_middleware(
 async def chat_endpoint(request: ChatRequest):
     user_query = request.user_query
 
-    # Technician/repair requests are immediately routed to OTA Support guidance.
-    if is_technician_help_query(user_query):
-        logger.info("🛠️ Technician query detected -> OTA Support quick route.")
-        quick_reply = build_technician_guide_message()
-        return StreamingResponse(
-            stream_text_response(request.session_id, user_query, quick_reply),
-            media_type="text/event-stream"
-        )
+    # 💡 [핵심 수술] 레거시 가로채기(Short-circuit) 로직 완전 삭제 완료
 
     if not all([vs_products, vs_qa, vs_web, router_chain]):
         raise HTTPException(status_code=500, detail="AI Engine is not fully loaded.")
@@ -216,34 +164,37 @@ async def chat_endpoint(request: ChatRequest):
 
         context = "\n\n---\n\n".join([doc.page_content for doc in docs])
 
+        # 💡 [신규] 프론트엔드에서 넘어온 도메인 변수 확보 (마지막 / 제거)
+        target_domain = request.current_domain.rstrip('/')
+
         # Structured control prompt for strict grounding and safe output.
-        system_prompt = f"""You are an elite, highly precise Professional Customer Support and Sales Agent for Titan Chair LLC and Osaki Massage Chairs.
+        system_prompt = f"""You are an elite AI Copilot for Titan Chair LLC and Osaki, serving both general customers and internal field technicians.
 
 [CORE DIRECTIVE - STRICT GROUNDING]
-Your absolute primary directive is to answer the user's inquiry based SOLELY and EXCLUSIVELY on the [Context] provided below.
-You are strictly FORBIDDEN from utilizing pre-trained knowledge for factual claims (prices, specifications, policies).
+Answer the user's inquiry based SOLELY and EXCLUSIVELY on the [Context] provided below. Do not hallucinate.
 
-[SALES & RECOMMENDATION PROTOCOL] 
-If the user asks for a general recommendation (e.g., "Recommend a massage chair", "Which one should I buy?", "What do you have?"):
-1. DO NOT decline or apologize. 
-2. Proactively act as a friendly, expert sales agent. Pick 1 to 3 massage chairs currently available in the [Context].
-3. Briefly highlight their key features, price, and provide the Direct Purchase Link.
-4. End your response by asking an engaging follow-up question to narrow down their preference (e.g., "Do you have a specific budget or a preferred feature like 4D massage in mind?").
+[MULTI-TENANT LINK ROUTING (동적 도메인 치환)]
+The user is currently browsing this website: {target_domain}
+💡 ESSENTIAL: Whenever you provide a "Direct Purchase Link" from the [Context], you MUST change its base domain to match {target_domain}.
+For example, if the context says "https://titanchair.com/products/titan-4d-ion", you must rewrite it and output "{target_domain}/products/titan-4d-ion".
+
+[B2B TECHNICIAN PROTOCOL (수리기사 모드)]
+If the user asks about repair, troubleshooting, assembly, parts, or manuals for a specific chair:
+1. Assume the user is our internal field technician or a customer needing deep technical support.
+2. 💡 ESSENTIAL: You MUST provide the specific "Repair & Manuals" deep link from the [Context] so they can find the exact parts and videos immediately.
+3. Be direct, professional, and concise.
+
+[B2C CUSTOMER PROTOCOL (일반 고객 모드)]
+If the user asks for general recommendations, features, or pricing:
+1. Act as a friendly sales assistant. Highlight the features and prices of 1 to 3 chairs from the [Context].
+2. 💡 ESSENTIAL: Provide the "Direct Purchase Link" (rewritten to {target_domain}) if recommending a product.
+3. 🚫 PROHIBITED: NEVER show the "Repair & Manuals" link to a general buyer asking for recommendations.
 
 [ANTI-HALLUCINATION PROTOCOL]
 1. VERIFY: Read the [Context] carefully. 
-2. ANSWER FACTUAL QUERIES: For specific factual questions, if the information is present, synthesize it clearly.
-3. DECLINE (STRICT): If the user asks for a SPECIFIC fact (e.g., a specific dimension, warranty coverage, or a model not listed) that is NOT in the [Context], you MUST output EXACTLY this phrase:
+2. DECLINE (STRICT): If the user asks for a SPECIFIC fact (e.g., a specific dimension, warranty coverage) that is NOT in the [Context], you MUST output EXACTLY:
    "I apologize, but I do not have specific information regarding that in my current documentation. Please contact our support team at 1-888-848-2630 (Ext. 3) for precise assistance."
-4. PROHIBITION: NEVER invent warranty exclusions, part numbers, prices, or policies.
-
-[TECHNICIAN COPILOT MODE - STRICT ROUTING]
-If the user's prompt includes keywords like "assembly", "repair", "video", or "manual" along with a specific massage chair model, bypass standard CS responses and IMMEDIATELY provide the exact video download link from the [Video Database] below.
-Format EXACTLY like this: "Here is the official [Assembly/Repair] video for [Model Name]: [Link]"
-
-[Video Database]:
-- Titan Prime 3D : https://www.otasupport.com/api/download?fileId=1qJUblQGZksbVBFzbbsh9miUy3eBxg11L
-- Osaki Maestro : https://www.otasupport.com/api/download?fileId=1XReuOFDBwigbOANoNNigLN9F81gan7o7
+3. PROHIBITION: NEVER invent warranty exclusions, part numbers, prices, or policies.
 
 [Context]:
 {context}
