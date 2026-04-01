@@ -44,10 +44,31 @@ TECHNICIAN_KEYWORDS = {
     "엔지니어",
 }
 
+PRODUCT_QUERY_KEYWORDS = {
+    "massage chair",
+    "chair",
+    "model",
+    "product",
+    "products",
+    "recommend",
+    "buy",
+    "price",
+    "4d",
+    "3d",
+    "zero gravity",
+    "osaki",
+    "titan",
+}
+
 
 def is_technician_help_query(query: str) -> bool:
     lowered = query.lower()
     return any(keyword in lowered for keyword in TECHNICIAN_KEYWORDS)
+
+
+def is_product_query(query: str) -> bool:
+    lowered = query.lower()
+    return any(keyword in lowered for keyword in PRODUCT_QUERY_KEYWORDS)
 
 
 def build_technician_guide_message() -> str:
@@ -117,7 +138,7 @@ try:
     router_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=api_key)
     ROUTER_PROMPT = """
     You are a highly intelligent routing system. Analyze the user's question and strictly output ONLY ONE of the following routing keys:
-    - "PRODUCTS": If asking about product specifications, manuals, WARRANTY, return policies, guarantees, dimensions, or parts. (MUST use this for ANY warranty/policy questions).
+    - "PRODUCTS": If asking about product specifications, models, recommendations, purchase intent, manuals, WARRANTY, return policies, guarantees, dimensions, pricing, or parts. (MUST use this for ANY warranty/policy questions).
     - "QA": If asking about specific technical troubleshooting, previous customer support logs, or delivery tracking. (DO NOT use for warranty/policy).
     - "WEB": If asking about current sales, events, health benefits, FAQ, or general website info.
 
@@ -178,8 +199,11 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=500, detail="AI Engine is not fully loaded.")
 
     try:
-        # Step 1: Run the intent router.
-        routing_decision = router_chain.invoke({"question": user_query}).strip().upper()
+        # Step 1: Run intent routing with deterministic product override.
+        if is_product_query(user_query):
+            routing_decision = "PRODUCTS"
+        else:
+            routing_decision = router_chain.invoke({"question": user_query}).strip().upper()
         logger.info(f"🔀 Router decision: target store -> [{routing_decision}]")
 
         # Step 2: Query only one store to optimize latency and cost.
