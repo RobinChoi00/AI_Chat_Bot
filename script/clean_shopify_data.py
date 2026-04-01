@@ -69,11 +69,34 @@ def clean_shopify_for_rag():
             # 자식 옵션(Variant) 텍스트화
             variants_info = []
             for _, row in group.iterrows():
-                opt1 = row.get('Option1 Value', 'Standard')
                 price = row.get('Variant Price', 'N/A')
-                sku = row.get('Variant SKU', 'Unknown')
+                
+                # 💡 [신규] 재고(Inventory) 수량 추출
+                # CSV 원본의 컬럼명이 'Variant Inventory Qty'가 맞는지 반드시 확인하십시오!
+                inventory = row.get('Variant Inventory Qty', 'Unknown')
+                
+                try:
+                    inv_count = int(float(inventory))
+                    stock_status = f"{inv_count} in stock" if inv_count > 0 else "Out of Stock"
+                except (ValueError, TypeError):
+                    stock_status = "Stock info unavailable"
+                
+                # 💡 Option 1, 2, 3 동적 추출
+                opts = []
+                for i in range(1, 4):
+                    opt_name = row.get(f'Option{i} Name', '')
+                    opt_val = row.get(f'Option{i} Value', '')
+                    
+                    # 옵션 이름과 값이 모두 존재하고 비어있지 않은 경우에만 추가
+                    if pd.notna(opt_name) and pd.notna(opt_val) and str(opt_val).strip() != '':
+                        opts.append(f"{opt_name}: {opt_val}")
+                
+                # 추출한 옵션들을 슬래시(/)로 예쁘게 연결
+                opt_string = " / ".join(opts) if opts else "Standard Option"
+                
+                # 💡 [핵심] 텍스트 끝에 재고(Availability) 상태를 강력하게 주입!
                 if pd.notna(price):
-                    variants_info.append(f"- Option: {opt1} | Price: ${price} | SKU: {sku}")
+                    variants_info.append(f"- [{opt_string}] => Total Price: ${price} | Availability: {stock_status}")
                     
             variants_text = "\n".join(variants_info)
             final_text = f"Product Name: {title}\nDescription: {desc}\n[Available Options & Prices]\n{variants_text}"
