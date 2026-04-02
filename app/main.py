@@ -4,6 +4,8 @@ import time
 import hmac
 import hashlib
 import base64
+import re
+import threading
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +24,9 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS as LC_FAISS
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.documents import Document
+
+faiss_lock = threading.Lock()
 
 load_dotenv(override=True)
 
@@ -248,28 +253,72 @@ If the user asks for general recommendations, features, or pricing:
 
 
 # ==========================================
-# 💡 [아키텍처 확장] 웹후크용 백그라운드 워커 (Guardrail 적용)
+# 💡 [아키텍처 확장] 웹후크용 백그라운드 워커 (Upsert & Guardrail 적용)
 # ==========================================
 def update_faiss_index_background(payload: dict):
     """
-    쇼피파이로부터 받은 페이로드를 파싱하여 FAISS 벡터 DB를 갱신하는 비동기 작업(Background Job).
+    쇼피파이 데이터를 파싱하여 구형 벡터를 도려내고 신규 벡터를 꽂아넣는 핵심 Upsert 로직.
     """
-    # 1. 상품 상태 확인
     product_status = payload.get('status', 'unknown').lower()
     item_title = payload.get('title', 'Unknown Item')
+    item_id = str(payload.get('id', ''))
     
-    # 2. 방어벽: Active가 아니면 스킵 (Draft, Archived 데이터 유출 방지)
+    # 1. 방어벽: Active 상태가 아니면 차단
     if product_status != 'active':
-        logger.info(f"⏸️ [Skip Update] 상품 '{item_title}'의 상태가 '{product_status}'입니다. AI 뇌 업데이트를 차단합니다.")
-        return # 👈 여기서 함수를 강제 종료(Short-circuit)시켜 아래 로직 실행 방지
+        logger.info(f"⏸️ [Skip Update] Product '{item_title}' status is '{product_status}'. Update aborted.")
+        return
         
-    # 3. Active 상태인 경우에만 FAISS 인덱스 업데이트 진행
-    logger.info(f"🔄 [Background Task] RAG 데이터베이스 갱신 시작... 타겟 상품: {item_title}")
+    logger.info(f"🔄 [Background Task] Starting RAG database update... Target product: {item_title}")
     
-    # TODO: 실제 FAISS 인덱스 갱신 및 기존 데이터 삭제(Delete) 로직 추가 예정
-    time.sleep(5) # 무거운 임베딩 작업을 시뮬레이션
-    
-    logger.info("✅ [Background Task] RAG 데이터베이스 갱신 완료 및 메모리 적재 성공!")
+    try:
+        # 2. 쇼피파이 JSON 파싱 및 데이터 정제(Parsing & Cleansing)
+        body_html = payload.get('body_html', '') or ''
+        clean_body = re.sub('<[^<]+>', '', body_html) # HTML 태그 제거
+        
+        variants = payload.get('variants', [])
+        price = variants[0].get('price', 'N/A') if variants else 'N/A'
+        
+        handle = payload.get('handle', '')
+        product_url = f"https://titanchair.com/products/{handle}"
+        
+        # AI가 읽을 최종 텍스트 조립
+        page_content = f"Product Name: {item_title}\nPrice: ${price}\nDescription: {clean_body}\nDirect Purchase Link: {product_url}"
+        
+        # 메타데이터 (향후 추적 및 삭제를 위한 고유 식별자)
+        metadata = {
+            "source": product_url,
+            "title": item_title,
+            "shopify_id": item_id
+        }
+        new_doc = Document(page_content=page_content, metadata=metadata)
+        
+        # 3. 락(Lock) 획득 후 안전하게 FAISS 조작 (Thread-Safe Operation)
+        global vs_products
+        with faiss_lock:
+            if vs_products is not None:
+                # 3-1. 기존 구형 데이터 탐색 및 삭제 (Delete)
+                ids_to_delete = []
+                for doc_id, doc in vs_products.docstore._dict.items():
+                    # 상품명(title)이 정확히 일치하거나 텍스트 안에 포함되어 있으면 구형 데이터로 간주
+                    if doc.metadata.get('title') == item_title or item_title in doc.page_content:
+                        ids_to_delete.append(doc_id)
+                        
+                if ids_to_delete:
+                    vs_products.delete(ids_to_delete)
+                    logger.info(f"🗑️ [FAISS] Successfully deleted {len(ids_to_delete)} existing records for product '{item_title}'.")
+                
+                # 3-2. 최신 데이터 임베딩 및 삽입 (Add)
+                vs_products.add_documents([new_doc])
+                logger.info(f"➕ [FAISS] Successfully embedded and added new product '{item_title}'.")
+                
+                # 3-3. 디스크에 영구 보존 (Save to Disk)
+                vs_products.save_local(str(index_dir / "osaki_products"))
+                logger.info("💾 [FAISS] Latest index permanently saved to local disk.")
+            else:
+                logger.error("🚨 [FAISS] Update failed: 'vs_products' engine is not loaded.")
+                
+    except Exception as e:
+        logger.error(f"🚨 [Background Task] Fatal error during FAISS update: {e}")
 
 
 # ==========================================
