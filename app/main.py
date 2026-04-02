@@ -178,6 +178,7 @@ async def chat_endpoint(request: ChatRequest):
         target_domain = request.current_domain.rstrip('/')
 
         # Structured control prompt for strict grounding and safe output.
+        # 💡 [신규] B2C CUSTOMER PROTOCOL에 Instant Checkout Link 제공 지침 추가
         system_prompt = f"""You are an elite AI Copilot for Titan Chair LLC and Osaki, serving both general customers and internal field technicians.
 
 [CORE DIRECTIVE - STRICT GROUNDING]
@@ -198,7 +199,8 @@ If the user asks about repair, troubleshooting, assembly, parts, or manuals for 
 If the user asks for general recommendations, features, or pricing:
 1. Act as a friendly sales assistant. Highlight the features and prices of 1 to 3 chairs from the [Context].
 2. 💡 ESSENTIAL: Provide the "Direct Purchase Link" (rewritten to {target_domain}) if recommending a product.
-3. 🚫 PROHIBITED: NEVER show the "Repair & Manuals" link to a general buyer asking for recommendations.
+3. 💡 ESSENTIAL: If the user explicitly expresses intent to buy (e.g., "I want to buy", "checkout", "purchase"), you MUST provide the "Instant Checkout Link" from the [Context] to route them directly to the cart.
+4. 🚫 PROHIBITED: NEVER show the "Repair & Manuals" link to a general buyer asking for recommendations.
 
 [ANTI-HALLUCINATION PROTOCOL]
 1. VERIFY: Read the [Context] carefully. 
@@ -278,11 +280,15 @@ def update_faiss_index_background(payload: dict):
         variants = payload.get('variants', [])
         price = variants[0].get('price', 'N/A') if variants else 'N/A'
         
+        # 💡 [신규] 다이렉트 결제를 위한 Variant ID 추출
+        variant_id = variants[0].get('id', '') if variants else ''
+        
         handle = payload.get('handle', '')
         product_url = f"https://titanchair.com/products/{handle}"
+        checkout_url = f"https://titanchair.com/cart/{variant_id}:1" # 👈 다이렉트 결제 링크 (Cart Permalink)
         
-        # AI가 읽을 최종 텍스트 조립
-        page_content = f"Product Name: {item_title}\nPrice: ${price}\nDescription: {clean_body}\nDirect Purchase Link: {product_url}"
+        # 💡 [신규] AI가 읽을 최종 텍스트 조립 (Instant Checkout Link 추가)
+        page_content = f"Product Name: {item_title}\nPrice: ${price}\nDescription: {clean_body}\nDirect Purchase Link: {product_url}\nInstant Checkout Link: {checkout_url}"
         
         # 메타데이터 (향후 추적 및 삭제를 위한 고유 식별자)
         metadata = {
