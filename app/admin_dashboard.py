@@ -18,7 +18,6 @@ cookie_manager = stx.CookieManager(key="admin_cookie_manager")
 # Authorized Credentials
 VALID_CREDENTIALS = {
     "admin": "titan1212",
-    "jiwoong": "osaki1234"
 }
 
 # 💡 [핵심] 쿠키 기반 영구 로그인 검증 로직
@@ -84,7 +83,7 @@ def load_data():
     return df
 
 # 3. Main Dashboard UI
-st.title("📊 Titan AI Copilot - Intelligence Dashboard")
+st.title("📊 Titan AI Agent - Intelligence Dashboard")
 st.markdown("Real-time AI Chatbot Monitoring System for Management and Marketing Teams.")
 
 df = load_data()

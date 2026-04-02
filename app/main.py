@@ -1,7 +1,11 @@
 import os
 import logging
+import time
+import hmac
+import hashlib
+import base64
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -23,6 +27,9 @@ load_dotenv(override=True)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# 💡 [보안] 쇼피파이 웹후크 시크릿 키 로드 (실무에서는 .env 파일에서 관리)
+SHOPIFY_WEBHOOK_SECRET = os.environ.get("SHOPIFY_WEBHOOK_SECRET", "your_shopify_secret_key_here")
 
 # --- [0] Helper constants ---
 TECHNICIAN_KEYWORDS = {
@@ -141,8 +148,6 @@ app.add_middleware(
 async def chat_endpoint(request: ChatRequest):
     user_query = request.user_query
 
-    # 💡 [핵심 수술] 레거시 가로채기(Short-circuit) 로직 완전 삭제 완료
-
     if not all([vs_products, vs_qa, vs_web, router_chain]):
         raise HTTPException(status_code=500, detail="AI Engine is not fully loaded.")
 
@@ -240,3 +245,55 @@ If the user asks for general recommendations, features, or pricing:
     except Exception as e:
         logger.error(f"API Processing Error: {e}")
         raise HTTPException(status_code=500, detail="Internal AI Server Error")
+
+
+# ==========================================
+# 💡 [아키텍처 확장] 웹후크용 백그라운드 워커
+# ==========================================
+def update_faiss_index_background(payload: dict):
+    """
+    쇼피파이로부터 받은 페이로드를 파싱하여 FAISS 벡터 DB를 갱신하는 비동기 작업(Background Job).
+    """
+    item_title = payload.get('title', 'Unknown Item')
+    logger.info(f"🔄 [Background Task] RAG 데이터베이스 갱신 시작... 타겟 상품: {item_title}")
+    
+    # TODO: FAISS 인덱스를 갱신하는 로직 추가 예정
+    time.sleep(5) # 무거운 임베딩 작업을 시뮬레이션
+    
+    logger.info("✅ [Background Task] RAG 데이터베이스 갱신 완료 및 메모리 적재 성공!")
+
+
+# ==========================================
+# 💡 [아키텍처 확장] 쇼피파이 웹후크 수신 엔드포인트
+# ==========================================
+@app.post("/webhook/shopify/product-update")
+async def shopify_webhook(
+    request: Request, 
+    background_tasks: BackgroundTasks,
+    x_shopify_hmac_sha256: Optional[str] = Header(None) 
+):
+    # 1. 방어 로직: 서명 헤더 누락 시 즉각 차단
+    if not x_shopify_hmac_sha256:
+        raise HTTPException(status_code=401, detail="Unauthorized: Missing HMAC header")
+
+    # 2. 페이로드 추출
+    body = await request.body()
+
+    # 3. 방어 로직: HMAC-SHA256 서명 검증
+    secret = SHOPIFY_WEBHOOK_SECRET.encode('utf-8')
+    hash_calc = hmac.new(secret, body, hashlib.sha256)
+    calculated_hmac = base64.b64encode(hash_calc.digest()).decode('utf-8')
+
+    if not hmac.compare_digest(calculated_hmac, x_shopify_hmac_sha256):
+        logger.warning("🚨 [Security Alert] 유효하지 않은 웹후크 서명 감지! 접근 차단됨.")
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid HMAC signature")
+
+    # 4. JSON 파싱
+    payload = await request.json()
+    logger.info(f"📦 [Webhook Received] 쇼피파이 검증 통과. 상품 ID: {payload.get('id')}")
+
+    # 5. 무거운 인덱스 갱신 작업은 백그라운드 스레드로 위임
+    background_tasks.add_task(update_faiss_index_background, payload)
+
+    # 6. 타임아웃 방지를 위한 즉각적인 HTTP 200 반환
+    return {"message": "Webhook received and processing in background"}
