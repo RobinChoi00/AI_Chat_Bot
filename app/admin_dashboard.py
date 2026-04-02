@@ -11,27 +11,44 @@ st.set_page_config(
     layout="wide"
 )
 
-# 💡 [보안] 초간단 하드코딩 비밀번호 (실무에서는 환경변수나 OAuth를 써야 합니다)
-# 테스트용 비밀번호: admin123
-def check_password():
-    def password_entered():
-        if st.session_state["password"] == "titan1212":
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # 보안을 위해 비밀번호 삭제
-        else:
-            st.session_state["password_correct"] = False
+# 💡 [보안] 허용된 ID와 비밀번호 목록 (Dictionary 구조)
+# 실무에서는 절대 이렇게 하드코딩하지 않지만, MVP 런칭을 위해 임시 구성합니다.
+VALID_CREDENTIALS = {
+    "admin": "titan1212",    # 💡 지웅님이 설정했던 비밀번호 유지
+    "jiwoong": "osaki1234"   # 💡 지웅님 개인 계정 추가
+}
 
-    if "password_correct" not in st.session_state:
-        st.text_input("🔒 Enter Admin Password", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        st.text_input("🔒 Enter Admin Password", type="password", on_change=password_entered, key="password")
-        st.error("😕 Password incorrect")
+# 💡 [핵심] 세션 기반 ID/PW 검증 로직
+def check_login():
+    # 세션에 로그인 상태가 없으면 False로 초기화
+    if "logged_in" not in st.session_state:
+        st.session_state["logged_in"] = False
+
+    # 로그인되지 않은 상태라면 중앙 정렬된 로그인 폼을 보여줌
+    if not st.session_state["logged_in"]:
+        st.markdown("<h2 style='text-align: center;'>🔒 Titan AI Admin Login</h2>", unsafe_allow_html=True)
+        
+        # UI 레이아웃 가운데 정렬을 위해 3등분 컬럼 사용
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            st.markdown("---")
+            input_id = st.text_input("👤 User ID")
+            input_pw = st.text_input("🔑 Password", type="password")
+            
+            # 로그인 버튼 클릭 시 이벤트 처리
+            if st.button("Login", use_container_width=True):
+                # ID가 존재하고, 비밀번호가 일치하는지 검증 (Authentication)
+                if input_id in VALID_CREDENTIALS and VALID_CREDENTIALS[input_id] == input_pw:
+                    st.session_state["logged_in"] = True
+                    st.rerun() # 화면 새로고침하여 대시보드 본문 렌더링
+                else:
+                    st.error("🚨 Invalid User ID or Password.")
         return False
     return True
 
-if not check_password():
-    st.stop() # 비밀번호가 틀리면 여기서 화면 렌더링을 멈춥니다.
+# 로그인 검증 실패 시 여기서 화면 렌더링을 완전히 차단(Block)
+if not check_login():
+    st.stop()
 
 # 2. DB 연결 및 데이터 로드 함수
 DB_PATH = os.path.join(os.getcwd(), "db_data", "chat_history.db")
