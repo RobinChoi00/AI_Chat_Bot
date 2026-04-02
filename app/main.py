@@ -248,16 +248,25 @@ If the user asks for general recommendations, features, or pricing:
 
 
 # ==========================================
-# 💡 [아키텍처 확장] 웹후크용 백그라운드 워커
+# 💡 [아키텍처 확장] 웹후크용 백그라운드 워커 (Guardrail 적용)
 # ==========================================
 def update_faiss_index_background(payload: dict):
     """
     쇼피파이로부터 받은 페이로드를 파싱하여 FAISS 벡터 DB를 갱신하는 비동기 작업(Background Job).
     """
+    # 1. 상품 상태 확인
+    product_status = payload.get('status', 'unknown').lower()
     item_title = payload.get('title', 'Unknown Item')
+    
+    # 2. 방어벽: Active가 아니면 스킵 (Draft, Archived 데이터 유출 방지)
+    if product_status != 'active':
+        logger.info(f"⏸️ [Skip Update] 상품 '{item_title}'의 상태가 '{product_status}'입니다. AI 뇌 업데이트를 차단합니다.")
+        return # 👈 여기서 함수를 강제 종료(Short-circuit)시켜 아래 로직 실행 방지
+        
+    # 3. Active 상태인 경우에만 FAISS 인덱스 업데이트 진행
     logger.info(f"🔄 [Background Task] RAG 데이터베이스 갱신 시작... 타겟 상품: {item_title}")
     
-    # TODO: FAISS 인덱스를 갱신하는 로직 추가 예정
+    # TODO: 실제 FAISS 인덱스 갱신 및 기존 데이터 삭제(Delete) 로직 추가 예정
     time.sleep(5) # 무거운 임베딩 작업을 시뮬레이션
     
     logger.info("✅ [Background Task] RAG 데이터베이스 갱신 완료 및 메모리 적재 성공!")
