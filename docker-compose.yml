@@ -7,11 +7,11 @@ services:
       dockerfile: Dockerfile.backend
     ports:
       - "8000:8000"
-    restart: always  # 💡 [24/7 무중단 운영] 서버/프로세스가 죽으면 무조건 자동 부활
+    restart: always
     volumes:
       - ./.env:/app/.env
-      - ./faiss_index:/app/faiss_index  # 💡 호스트의 뇌를 컨테이너로 연결
-      - ./db_data:/app/db_data
+      - ./faiss_index:/app/faiss_index
+      - ./db_data:/app/db_data  # 💡 [핵심] 채팅 로그가 저장되는 공유 저장소
     networks:
       - ai_network
 
@@ -21,9 +21,25 @@ services:
       dockerfile: Dockerfile.frontend
     ports:
       - "8501:8501"
-    restart: always  # 💡 [24/7 무중단 운영] 프론트엔드도 불사조 세팅 적용
+    restart: always
     depends_on:
       - backend
+    networks:
+      - ai_network
+
+  # 👇 👇 [신규 추가: 관리자 대시보드 서비스] 👇 👇
+  admin_dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend  # Streamlit 앱이므로 프론트엔드 도커파일을 재사용합니다.
+    command: streamlit run app/admin_dashboard.py --server.port 8502
+    ports:
+      - "8502:8502"
+    restart: always
+    depends_on:
+      - backend
+    volumes:
+      - ./db_data:/app/db_data  # 💡 [중요] 백엔드와 동일한 db_data를 바라봐야 실시간 집계가 됩니다.
     networks:
       - ai_network
 
