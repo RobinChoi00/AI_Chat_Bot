@@ -15,7 +15,7 @@ st.set_page_config(
 # 테스트용 비밀번호: admin123
 def check_password():
     def password_entered():
-        if st.session_state["password"] == "admin123":
+        if st.session_state["password"] == "titan1212":
             st.session_state["password_correct"] = True
             del st.session_state["password"]  # 보안을 위해 비밀번호 삭제
         else:
