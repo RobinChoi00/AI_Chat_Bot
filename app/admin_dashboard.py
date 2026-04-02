@@ -12,12 +12,8 @@ st.set_page_config(
     layout="wide"
 )
 
-# 💡 [보안/아키텍처] 브라우저 쿠키 매니저 초기화
-@st.cache_resource
-def get_cookie_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_cookie_manager()
+# 💡 [보안/아키텍처] 브라우저 쿠키 매니저 초기화 (UI 컴포넌트는 캐싱하지 않음)
+cookie_manager = stx.CookieManager(key="admin_cookie_manager")
 
 # Authorized Credentials
 VALID_CREDENTIALS = {
