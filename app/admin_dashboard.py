@@ -2,8 +2,10 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import os
+import json # 💡 [추가] JSON 파싱을 위한 모듈
 from datetime import datetime
 import extra_streamlit_components as stx
+from dotenv import load_dotenv
 
 # 1. Page Configuration
 st.set_page_config(
@@ -15,10 +17,20 @@ st.set_page_config(
 # 💡 [보안/아키텍처] 브라우저 쿠키 매니저 초기화 (UI 컴포넌트는 캐싱하지 않음)
 cookie_manager = stx.CookieManager(key="admin_cookie_manager")
 
-# Authorized Credentials
-VALID_CREDENTIALS = {
-    "admin": "titan1212",
-}
+# ==========================================
+# 💡 [보안] 환경변수에서 관리자 자격 증명 동적 로드 (하드코딩 방어)
+# ==========================================
+load_dotenv(override=True)
+
+try:
+    # .env 파일에서 ADMIN_CREDENTIALS 값을 가져옵니다. (없으면 빈 딕셔너리 반환)
+    creds_str = os.environ.get("ADMIN_CREDENTIALS", "{}")
+    VALID_CREDENTIALS = json.loads(creds_str)
+except json.JSONDecodeError:
+    VALID_CREDENTIALS = {}
+    st.error("🚨 [Security Configuration Error] Invalid credentials format in .env file.")
+
+# ==========================================
 
 # 💡 [핵심] 쿠키 기반 영구 로그인 검증 로직
 def check_login():

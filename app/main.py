@@ -138,7 +138,7 @@ class ChatLog(Base):
 Base.metadata.create_all(bind=engine)
 
 # --- [3] FastAPI app setup ---
-app = FastAPI(title="Titan AI Copilot API", version="2.0")
+app = FastAPI(title="Titan AI Agent API", version="2.0")
 
 app.add_middleware(
     CORSMiddleware,
