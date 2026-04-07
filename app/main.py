@@ -32,7 +32,8 @@ from config import (
     AGENT_MODEL,
     ROUTER_MODEL,
     LLM_TEMPERATURE,
-    FAISS_SEARCH_K
+    FAISS_SEARCH_K,
+    REPAIR_MANUAL_URL
 )
 
 faiss_lock = threading.Lock()
@@ -207,7 +208,7 @@ EXECUTION:
 3. MANDATORY FOOTER: You MUST end with this exact block. Do not modify:
 
 Please check our official Repair & Manuals page for detailed guides and parts here:
-👉 https://titanchair.com/pages/repair-manuals
+👉 {REPAIR_MANUAL_URL}
 
 {SUPPORT_CONTACT_MSG}
 </ROUTING_STATE_1>
@@ -235,6 +236,9 @@ EXECUTION:
 2. Output EXACTLY this strict fallback template:
 
 "I apologize, but I do not have the precise information for that request in my current database to ensure 100% accuracy. 
+Please check our official Repair & Manuals page for detailed guides here:
+👉 {REPAIR_MANUAL_URL}
+
 {SUPPORT_CONTACT_MSG}"
 </ROUTING_STATE_4>
 
