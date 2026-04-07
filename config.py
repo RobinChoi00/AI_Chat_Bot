@@ -6,12 +6,15 @@
 SUPPORT_PHONE_NUMBER = "1-888-848-2630 (Ext. 3)"
 SUPPORT_BUSINESS_HOURS = "Mon-Fri, 9:30 AM - 6:30 PM / Sat, 10:00 AM - 4:00 PM CST"
 
-# 챗봇 응답용 결합 텍스트 (이 변수 하나만 main.py에서 가져다 씀)
-SUPPORT_CONTACT_MSG = f"If you need further assistance, please contact our support team at {SUPPORT_PHONE_NUMBER}. [Business Hours: {SUPPORT_BUSINESS_HOURS}]"
+# 💡 [수술 완료] 대괄호를 제거하고 AI가 생략하지 못하도록 완벽한 자연어 문장으로 결합했습니다.
+SUPPORT_CONTACT_MSG = f"If you need further assistance, please contact our support team at {SUPPORT_PHONE_NUMBER}. Our business hours are {SUPPORT_BUSINESS_HOURS}."
 
 # 프론트엔드에서 도메인을 넘겨주지 않았을 때 사용할 기본 폴백(Fallback) 도메인
 DEFAULT_TARGET_DOMAIN = "https://titanchair.com"
+
+# 수리 매뉴얼 링크 중앙 관리
 REPAIR_MANUAL_URL = "https://www.otasupport.com"
+
 
 # ==========================================
 # 2. AI Engine & System Settings (시스템 튜닝 설정)
