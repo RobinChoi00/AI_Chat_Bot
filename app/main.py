@@ -25,6 +25,10 @@ from langchain_community.vectorstores import FAISS as LC_FAISS
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
+from config import SUPPORT_CONTACT_MSG
+
+def handle_support_query():
+    return SUPPORT_CONTACT_MSG
 
 faiss_lock = threading.Lock()
 
