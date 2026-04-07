@@ -215,7 +215,7 @@ RULES:
    "I apologize, but I do not have the specific diagnostic steps for that issue in my current documentation. 
    Please check our official Repair & Manuals page for detailed guides here:
    🔗 https://titanchair.com/pages/repair-manuals
-   
+
    {SUPPORT_CONTACT_MSG}"
 3. ZERO INVENTION: NEVER invent warranty exclusions, part numbers, prices, policies, or URLs.
 </ANTI_HALLUCINATION_GUARDRAILS>
@@ -239,12 +239,24 @@ RULES:
                     temperature=0.1,
                     stream=True 
                 )
+                
+                # 1. AI가 한 글자씩 스트리밍으로 뱉어내는 부분
                 for chunk in stream_response:
                     if chunk.choices[0].delta.content is not None:
                         content = chunk.choices[0].delta.content
                         full_response += content 
                         yield content
                 
+                # 💡 [핵심 수술] AI의 말이 완전히 끝난 후, 파이썬이 강제로 꼬리말을 전송(Yield)합니다.
+                # 영업용 질문이 아닌, 수리/에러/기술 지원 질문일 때만 꼬리말을 붙입니다.
+                is_tech_query = any(kw in user_query.lower() for kw in ["error", "repair", "troubleshoot", "manual", "code", "not working"])
+                
+                if is_tech_query:
+                    footer_text = f"\n\n{SUPPORT_CONTACT_MSG}"
+                    yield footer_text           # 프론트엔드 화면으로 강제 전송
+                    full_response += footer_text # DB 저장용 기록에도 완벽히 추가
+                
+                # 3. 데이터베이스에 전체 대화 로그 저장
                 db = SessionLocal()
                 new_log = ChatLog(
                     session_id=request.session_id,
