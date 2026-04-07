@@ -11,7 +11,7 @@ SUPPORT_CONTACT_MSG = f"If you need further assistance, please contact our suppo
 
 # 프론트엔드에서 도메인을 넘겨주지 않았을 때 사용할 기본 폴백(Fallback) 도메인
 DEFAULT_TARGET_DOMAIN = "https://titanchair.com"
-
+REPAIR_MANUAL_URL = "https://www.otasupport.com"
 
 # ==========================================
 # 2. AI Engine & System Settings (시스템 튜닝 설정)
