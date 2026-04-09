@@ -17,12 +17,13 @@ def remove_html_tags(text):
 def clean_shopify_for_rag():
     print("🚀 Shopify 자식 옵션(Variants) 보존 및 RAG 평탄화 파이프라인 가동...")
     
-    csv_files = list(RAW_DIR.glob("*.csv"))
-    if not csv_files:
-        print(f"🚨 {RAW_DIR} 폴더에 원본 CSV 파일이 없습니다!")
-        return
+    # 💡 [아키텍처] 엉뚱한 파일 스캔을 막기 위해 타겟 파일명을 정확히 못 박습니다.
+    raw_csv_path = RAW_DIR / "products_export.csv"
     
-    raw_csv_path = csv_files[0]
+    if not raw_csv_path.exists():
+        print(f"🚨 타겟 파일이 없습니다: {raw_csv_path}")
+        return
+        
     print(f"📄 타겟 원본 데이터 로드 중: {raw_csv_path.name}")
     
     df = pd.read_csv(raw_csv_path, low_memory=False)
