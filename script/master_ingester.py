@@ -33,12 +33,27 @@ class MasterIngester:
         for file_name, skip_rows in {"Auto-Check.csv": 1, "fault_judgment.csv": 5}.items():
             file_path = os.path.join(RAW_DIR, file_name)
             if not os.path.exists(file_path): continue
-            df = pd.read_csv(file_path, skiprows=skip_rows, encoding='utf-8-sig').fillna("")
+            
+            # 💡 [아키텍처] 판다스의 강제 형변환(Float)을 막고 원본 텍스트(63) 그대로 보존합니다.
+            df = pd.read_csv(file_path, skiprows=skip_rows, encoding='utf-8-sig', dtype=str).fillna("")
+            
+            # 💡 [아키텍처] 대소문자 무시 & 앞뒤 공백 제거로 더러운 헤더를 깔끔하게 평탄화(Normalization)
+            df.columns = df.columns.str.strip().str.lower()
+            
             for _, row in df.iterrows():
-                code_no = str(row.get("Code No.", row.get("No.", ""))).strip()
+                # 번호 추출 (No. 또는 Code No.)
+                code_no = str(row.get("code no.", row.get("no.", ""))).strip()
                 if not code_no or code_no.lower() == 'nan': continue
-                content = f"[Error Code]: {code_no}\n[Symptom]: {row.get('Phenomenon','')}\n[Troubleshooting]: {row.get('Troubleshooting Steps','')}"
-                self.domain_docs["freshdesk_qa"].append(Document(page_content=content.strip(), metadata={"type": "error_code", "error_code": code_no}))
+                
+                # 💡 [핵심] 컬럼명이 달라도 모두 잡아내는 동적 매핑 로직
+                symptom = str(row.get("phenomenon", row.get("problem description", ""))).strip()
+                troubleshooting = str(row.get("troubleshooting steps", row.get("steps of shooting the trouble", ""))).strip()
+                
+                # 빈 데이터 필터링 방어 로직
+                if not symptom and not troubleshooting: continue
+                
+                content = f"[Error Code]: {code_no}\n[Symptom]: {symptom}\n[Troubleshooting]: {troubleshooting}"
+                self.domain_docs["freshdesk_qa"].append(Document(page_content=content, metadata={"type": "error_code", "error_code": code_no}))
 
     def process_qa_reports(self):
         print("🔍 [2/7] CS Q&A CSV 파싱 중... -> [freshdesk_qa] 할당")
