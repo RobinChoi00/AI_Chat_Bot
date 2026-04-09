@@ -62,6 +62,62 @@ def is_product_query(query: str) -> bool:
     lowered = query.lower()
     return any(keyword in lowered for keyword in PRODUCT_QUERY_KEYWORDS)
 
+def normalize_error_code(code: str) -> Optional[str]:
+    """Normalize numeric error code text (e.g. 63, 63.0 -> 63)."""
+    raw = str(code).strip()
+    match = re.fullmatch(r"\d+(?:\.\d+)?", raw)
+    if not match:
+        return None
+    if "." not in raw:
+        return raw
+    integer, decimal = raw.split(".", 1)
+    if decimal.strip("0") == "":
+        return integer
+    return f"{integer}.{decimal.rstrip('0')}"
+
+def extract_error_code_targets(query: str) -> set[str]:
+    """Extract normalized error code values from the user query."""
+    lowered = query.lower()
+    targets = set()
+    for pattern in [
+        r"(?:error\s*code|code|err)\s*[:#-]?\s*(\d+(?:\.\d+)?)",
+        r"\berror\b[^\d]{0,20}(\d+(?:\.\d+)?)",
+    ]:
+        for value in re.findall(pattern, lowered, flags=re.IGNORECASE):
+            normalized = normalize_error_code(value)
+            if normalized:
+                targets.add(normalized)
+    return targets
+
+def is_tech_query(query: str) -> bool:
+    lowered = query.lower()
+    return bool(extract_error_code_targets(lowered)) or any(keyword in lowered for keyword in TECHNICIAN_KEYWORDS)
+
+def get_exact_error_code_docs(query: str, qa_store, k: int) -> List[Document]:
+    """Find QA docs that exactly match extracted error code values."""
+    targets = extract_error_code_targets(query)
+    if not targets or qa_store is None:
+        return []
+
+    matched_docs: List[Document] = []
+    for doc in qa_store.docstore._dict.values():
+        metadata = doc.metadata or {}
+        metadata_code = normalize_error_code(str(metadata.get("error_code", "")))
+
+        if metadata_code and metadata_code in targets:
+            matched_docs.append(doc)
+            continue
+
+        content_match = re.search(r"\[Error Code\]:\s*(\d+(?:\.\d+)?)", doc.page_content or "", flags=re.IGNORECASE)
+        if content_match:
+            content_code = normalize_error_code(content_match.group(1))
+            if content_code and content_code in targets:
+                matched_docs.append(doc)
+
+        if len(matched_docs) >= k:
+            break
+    return matched_docs
+
 def stream_text_response(session_id: str, user_query: str, response_text: str):
     """Stream plain text response and persist chat log."""
     yield response_text
@@ -168,8 +224,10 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=500, detail="AI Engine is not fully loaded.")
 
     try:
-        # Step 1: Run intent routing with deterministic product override.
-        if is_product_query(user_query):
+        # Step 1: Run intent routing (tech support takes precedence).
+        if is_tech_query(user_query):
+            routing_decision = "QA"
+        elif is_product_query(user_query):
             routing_decision = "PRODUCTS"
         else:
             routing_decision = router_chain.invoke({"question": user_query}).strip().upper()
@@ -179,7 +237,22 @@ async def chat_endpoint(request: ChatRequest):
         if "PRODUCTS" in routing_decision:
             docs = vs_products.similarity_search(user_query, k=FAISS_SEARCH_K) # 💡 수정
         elif "QA" in routing_decision:
-            docs = vs_qa.similarity_search(user_query, k=FAISS_SEARCH_K)       # 💡 수정
+            exact_docs = get_exact_error_code_docs(user_query, vs_qa, FAISS_SEARCH_K)
+            semantic_docs = vs_qa.similarity_search(user_query, k=FAISS_SEARCH_K) # 💡 수정
+
+            if exact_docs:
+                seen_contents = set()
+                docs = []
+                for doc in exact_docs + semantic_docs:
+                    key = doc.page_content
+                    if key in seen_contents:
+                        continue
+                    seen_contents.add(key)
+                    docs.append(doc)
+                    if len(docs) >= FAISS_SEARCH_K:
+                        break
+            else:
+                docs = semantic_docs
         else:
             docs = vs_web.similarity_search(user_query, k=FAISS_SEARCH_K)      # 💡 수정
 
