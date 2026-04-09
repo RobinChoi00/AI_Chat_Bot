@@ -118,6 +118,50 @@ def get_exact_error_code_docs(query: str, qa_store, k: int) -> List[Document]:
             break
     return matched_docs
 
+def build_deterministic_error_response(doc: Document, user_query: str) -> str:
+    """Build a non-LLM fallback response when exact error code data exists."""
+    content = doc.page_content or ""
+    error_code_match = re.search(r"\[Error Code\]:\s*(.+)", content, flags=re.IGNORECASE)
+    symptom_match = re.search(r"\[Symptom\]:\s*(.+)", content, flags=re.IGNORECASE)
+    troubleshooting_match = re.search(r"\[Troubleshooting\]:\s*(.+)", content, flags=re.IGNORECASE | re.DOTALL)
+
+    display_code = (error_code_match.group(1).strip() if error_code_match else None) or "the reported code"
+    symptom = symptom_match.group(1).strip() if symptom_match else ""
+    troubleshooting = troubleshooting_match.group(1).strip() if troubleshooting_match else ""
+
+    steps = []
+    if troubleshooting:
+        split_steps = re.split(r"\s*\d+\.\s*", troubleshooting)
+        for part in split_steps:
+            clean = part.strip(" -\n\t\r")
+            if clean:
+                steps.append(clean)
+
+    lines = [
+        "I'm sorry you're experiencing this issue. Let's try to resolve it.",
+        f"",
+        f"For error code {display_code}, here are the available troubleshooting details:",
+    ]
+
+    if symptom:
+        lines.append(f"- Symptom: {symptom}")
+
+    if steps:
+        lines.append("- Troubleshooting Steps:")
+        for idx, step in enumerate(steps, start=1):
+            lines.append(f"  {idx}. {step}")
+    elif troubleshooting:
+        lines.append(f"- Troubleshooting: {troubleshooting}")
+
+    lines.extend([
+        "",
+        "Please check our official Repair & Manuals page for detailed guides and parts here:",
+        f"👉 {REPAIR_MANUAL_URL}",
+        "",
+        SUPPORT_CONTACT_MSG
+    ])
+    return "\n".join(lines)
+
 def stream_text_response(session_id: str, user_query: str, response_text: str):
     """Stream plain text response and persist chat log."""
     yield response_text
@@ -234,6 +278,7 @@ async def chat_endpoint(request: ChatRequest):
         logger.info(f"🔀 Router decision: target store -> [{routing_decision}]")
 
         # Step 2: Query only one store to optimize latency and cost.
+        exact_docs: List[Document] = []
         if "PRODUCTS" in routing_decision:
             docs = vs_products.similarity_search(user_query, k=FAISS_SEARCH_K) # 💡 수정
         elif "QA" in routing_decision:
@@ -255,6 +300,15 @@ async def chat_endpoint(request: ChatRequest):
                 docs = semantic_docs
         else:
             docs = vs_web.similarity_search(user_query, k=FAISS_SEARCH_K)      # 💡 수정
+
+        # Step 3: Deterministic shortcut for exact error-code matches.
+        # This avoids LLM fallback responses when trusted QA data already exists.
+        if "QA" in routing_decision and exact_docs:
+            deterministic_response = build_deterministic_error_response(exact_docs[0], user_query)
+            return StreamingResponse(
+                stream_text_response(request.session_id, user_query, deterministic_response),
+                media_type="text/event-stream",
+            )
 
         context = "\n\n---\n\n".join([doc.page_content for doc in docs])
 
