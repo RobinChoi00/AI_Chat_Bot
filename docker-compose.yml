@@ -8,10 +8,13 @@ services:
     ports:
       - "8000:8000"
     restart: always
+    # 💡 [보안/동기화 아키텍처] 모든 서비스에 환경변수를 메모리로 직접 주입합니다.
+    env_file:
+      - .env
     volumes:
-      - ./.env:/app/.env
+      # - ./.env:/app/.env  👈 [제거됨] 파일 시스템 기반 주입은 보안과 동기화에 취약합니다.
       - ./faiss_index:/app/faiss_index
-      - ./db_data:/app/db_data  # 💡 [핵심] 채팅 로그가 저장되는 공유 저장소
+      - ./db_data:/app/db_data  
     networks:
       - ai_network
 
@@ -22,24 +25,27 @@ services:
     ports:
       - "8501:8501"
     restart: always
+    env_file:
+      - .env  # 💡 프론트엔드 API 키 참조를 위해 추가
     depends_on:
       - backend
     networks:
       - ai_network
 
-  # 👇 👇 [신규 추가: 관리자 대시보드 서비스] 👇 👇
   admin_dashboard:
     build:
       context: .
-      dockerfile: Dockerfile.frontend  # Streamlit 앱이므로 프론트엔드 도커파일을 재사용합니다.
+      dockerfile: Dockerfile.frontend  
     command: streamlit run app/admin_dashboard.py --server.port 8502
     ports:
       - "8502:8502"
     restart: always
+    env_file:
+      - .env  # 💡 관리자 대시보드 환경변수 주입 추가
     depends_on:
       - backend
     volumes:
-      - ./db_data:/app/db_data  # 💡 [중요] 백엔드와 동일한 db_data를 바라봐야 실시간 집계가 됩니다.
+      - ./db_data:/app/db_data  
     networks:
       - ai_network
 
