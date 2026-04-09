@@ -375,7 +375,7 @@ Please check our official Repair & Manuals page for detailed guides here:
 </ROUTING_STATE_4>
 
 <context>
-{{context}}
+{context}
 </context>
 """
         messages_payload = [{"role": "system", "content": system_prompt}]
