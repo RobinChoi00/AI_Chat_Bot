@@ -61,6 +61,12 @@ PRODUCT_QUERY_KEYWORDS = {
     "recommend", "buy", "price", "4d", "3d", "zero gravity", "osaki", "titan",
 }
 
+TRACKING_KEYWORDS = {
+    "where is my order", "order status", "tracking", "track", "delivery",
+    "shipment", "shipping", "when can i get", "when will it arrive",
+    "운송장", "배송", "주문번호", "택배", "도착", "출고"
+}
+
 def get_store_key_prefix(target_domain: str) -> str:
     lowered = (target_domain or "").lower()
     if "titanchair.com" in lowered:
@@ -105,6 +111,20 @@ def _normalize_track123_events(events: List[Dict[str, Any]]) -> List[Dict[str, s
             "hub": _pick_first_non_empty(event, ["facility", "hub", "center"]) or "",
         })
     return normalized
+
+def extract_order_identifier(user_query: str) -> str:
+    """Extract likely order identifier from natural language."""
+    query = user_query or ""
+    patterns = [
+        r"\b[A-Za-z]{2,12}\d{4,}\b",     # TIDM15934
+        r"#?[A-Za-z0-9]+-\d+\b",         # ABC-12345
+        r"#?\d{4,}\b",                   # 12345
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, query)
+        if match:
+            return match.group().replace("#", "").strip()
+    return ""
 
 def enrich_tracking_from_track123(tracking_number: str, store_config: Dict[str, str]) -> Dict[str, Any]:
     """Fetch richer location/hub/ETA data from Track123 if configured."""
@@ -188,15 +208,23 @@ def fetch_shopify_order_status(order_number: str, email: str, target_domain: str
       }
     }
     """
-    clean_order = order_number.replace("#", "")
-    variables = {"query": f"name:'{clean_order}' AND email:'{email}'"}
-
     try:
-        response = requests.post(url, json={"query": query, "variables": variables}, headers=headers, timeout=5)
-        response.raise_for_status()
-        data = response.json()
+        clean_order = order_number.replace("#", "").strip()
+        order_candidates = [clean_order]
+        digits_only = "".join(re.findall(r"\d+", clean_order))
+        if digits_only and digits_only != clean_order:
+            order_candidates.append(digits_only)
 
-        edges = data.get("data", {}).get("orders", {}).get("edges", [])
+        edges = []
+        for candidate in order_candidates:
+            variables = {"query": f"name:'{candidate}' AND email:'{email}'"}
+            response = requests.post(url, json={"query": query, "variables": variables}, headers=headers, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            edges = data.get("data", {}).get("orders", {}).get("edges", [])
+            if edges:
+                break
+
         if not edges:
             return {"error": "Order not found, or the email does not match our records."}
 
@@ -371,6 +399,12 @@ def build_deterministic_tracking_response(tracking_data: Dict[str, Any], target_
 def is_product_query(query: str) -> bool:
     lowered = query.lower()
     return any(keyword in lowered for keyword in PRODUCT_QUERY_KEYWORDS)
+
+def is_tracking_query(query: str) -> bool:
+    lowered = query.lower()
+    if extract_order_identifier(query) and re.search(r'[\w\.-]+@[\w\.-]+\.\w+', query):
+        return True
+    return any(keyword in lowered for keyword in TRACKING_KEYWORDS)
 
 def normalize_error_code(code: str) -> Optional[str]:
     raw = str(code).strip()
@@ -566,6 +600,8 @@ async def chat_endpoint(request: ChatRequest):
         # Step 1: Intent Routing
         if is_tech_query(user_query):
             routing_decision = "QA"
+        elif is_tracking_query(user_query):
+            routing_decision = "TRACKING"
         elif is_product_query(user_query):
             routing_decision = "PRODUCTS"
         else:
@@ -577,16 +613,15 @@ async def chat_endpoint(request: ChatRequest):
 
         # Step 2: 💡 [핵심] Native API 기반의 동적 멀티테넌트 데이터 패칭 로직
         if "TRACKING" in routing_decision:
-            order_match = re.search(r'#?[A-Za-z0-9]+-\d+|\d{4,}', user_query)
+            order_id = extract_order_identifier(user_query)
             email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', user_query)
             
-            if order_match and email_match:
-                clean_order = order_match.group().replace("#", "")
+            if order_id and email_match:
                 email = email_match.group()
                 
                 # 쇼피파이 API 직접 통신 (JSON 데이터 반환)
-                logger.info(f"🚚 [Direct API] Fetching tracking data for Order: {clean_order}, Email: {email} on {target_domain}")
-                tracking_data = fetch_shopify_order_status(clean_order, email, target_domain)
+                logger.info(f"🚚 [Direct API] Fetching tracking data for Order: {order_id}, Email: {email} on {target_domain}")
+                tracking_data = fetch_shopify_order_status(order_id, email, target_domain)
                 tracking_response = build_deterministic_tracking_response(tracking_data, target_domain)
                 return StreamingResponse(
                     stream_text_response(request.session_id, user_query, tracking_response),
