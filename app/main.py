@@ -116,7 +116,9 @@ def extract_order_identifier(user_query: str) -> str:
     """Extract likely order identifier from natural language."""
     query = user_query or ""
     patterns = [
+        r"#(?=[A-Za-z0-9]{4,24}\b)(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]+\b",  # #X46YIAC5A
         r"\b[A-Za-z]{2,12}\d{4,}\b",     # TIDM15934
+        r"\b(?=[A-Za-z0-9]{6,24}\b)(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]+\b", # X46YIAC5A
         r"#?[A-Za-z0-9]+-\d+\b",         # ABC-12345
         r"#?\d{4,}\b",                   # 12345
     ]
