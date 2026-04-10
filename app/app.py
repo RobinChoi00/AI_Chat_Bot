@@ -4,6 +4,43 @@ import json
 import uuid
 import os
 
+# --- [UI Component] 배송 타임라인 렌더링 함수 ---
+def render_tracking_timeline(tracking_number, company, status, tracking_url):
+    """
+    배송 상태 JSON 데이터를 받아 동적인 HTML 타임라인을 Streamlit에 주입합니다.
+    """
+    step1 = "active" if status == "PROCESSING" else "completed"
+    step2 = "active" if status == "IN_TRANSIT" else ("completed" if status == "FULFILLED" else "")
+    step3 = "active" if status == "FULFILLED" else ""
+    
+    html_content = f"""
+    <div style="background-color: #f8f9fa; border-radius: 12px; padding: 20px; margin: 15px 0; border: 1px solid #e9ecef; font-family: sans-serif;">
+        <h4 style="margin-top: 0; color: #212529;">📦 실시간 배송 조회 ({company})</h4>
+        <p style="color: #6c757d; font-size: 0.9em;">운송장 번호: <strong>{tracking_number}</strong></p>
+        
+        <div style="border-left: 3px solid #dee2e6; padding-left: 20px; margin-left: 10px; margin-top: 20px;">
+            <div style="margin-bottom: 20px; position: relative; color: {'#28a745' if step1=='completed' else '#007bff' if step1=='active' else '#6c757d'}; font-weight: {'bold' if step1 else 'normal'};">
+                <div style="position: absolute; left: -28px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: {'#28a745' if step1=='completed' else '#007bff' if step1=='active' else '#dee2e6'};"></div>
+                ✅ 주문 및 출고 준비
+            </div>
+            <div style="margin-bottom: 20px; position: relative; color: {'#28a745' if step2=='completed' else '#007bff' if step2=='active' else '#6c757d'}; font-weight: {'bold' if step2 else 'normal'};">
+                <div style="position: absolute; left: -28px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: {'#28a745' if step2=='completed' else '#007bff' if step2=='active' else '#dee2e6'};"></div>
+                🚚 화물 터미널 이동 및 배송 중
+            </div>
+            <div style="position: relative; color: {'#007bff' if step3=='active' else '#6c757d'}; font-weight: {'bold' if step3 else 'normal'};">
+                <div style="position: absolute; left: -28px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: {'#007bff' if step3=='active' else '#dee2e6'};"></div>
+                🏡 고객님 댁 도착 (설치 완료)
+            </div>
+        </div>
+        
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #dee2e6; text-align: center;">
+            <a href="{tracking_url}" target="_blank" style="background-color: #000; color: #fff; padding: 10px 20px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">{company} 공식 홈페이지에서 상세보기 ➡️</a>
+        </div>
+    </div>
+    """
+    st.markdown(html_content, unsafe_allow_html=True)
+
+
 # 1. 페이지 기본 설정
 st.set_page_config(
     page_title="Osaki & Titan AI Agent",
@@ -12,8 +49,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 💡 [아키텍처 확장] Multi-tenant 브랜드 설정 딕셔너리 (Config)
-# 실제 쇼피파이 CDN에 올라가 있는 로고 이미지 주소로 변경하여 사용하십시오.
+# Multi-tenant 브랜드 설정 딕셔너리
 BRAND_CONFIG = {
     "titanchair": {
         "title": "Titan Chair AI Agent 💺",
@@ -37,24 +73,50 @@ BRAND_CONFIG = {
     }
 }
 
-# 💡 [핵심] URL에서 '?brand=브랜드명' 파라미터를 읽어옵니다. 없으면 기본값은 'titanchair'
 current_brand_key = st.query_params.get("brand", "titanchair").lower()
 current_brand = BRAND_CONFIG.get(current_brand_key, BRAND_CONFIG["titanchair"])
 
-# 2. Custom CSS 주입
+# 2. Custom CSS 주입 (애니메이션 효과 추가)
 st.markdown("""
 <style>
+    /* 기본 헤더/푸터 숨김 */
     header {visibility: hidden;}
     footer {visibility: hidden;}
-    .stChatMessage {
-        border-radius: 10px;
-        padding: 10px;
-        margin-bottom: 10px;
+    
+    /* 💡 [애니메이션 정의] 아래에서 위로 부드럽게 떠오르며 나타남 */
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(15px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
     }
+
+    /* 💡 채팅 말풍선에 애니메이션 적용 */
+    .stChatMessage {
+        border-radius: 12px;
+        padding: 15px;
+        margin-bottom: 15px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05); /* 은은한 그림자 추가 */
+        animation: fadeInUp 0.4s ease-out forwards; /* 0.4초 동안 애니메이션 실행 */
+    }
+    
+    /* 사용자 말풍선과 AI 말풍선 배경색 분리 (가독성 향상) */
+    [data-testid="stChatMessage"]:nth-child(odd) {
+        background-color: #f8f9fa; /* 사용자: 아주 연한 회색 */
+    }
+    [data-testid="stChatMessage"]:nth-child(even) {
+        background-color: #ffffff; /* AI: 완전한 흰색 */
+        border: 1px solid #e9ecef;
+    }
+
     .main-title {
         text-align: center;
         font-family: 'Helvetica Neue', sans-serif;
-        font-weight: 700;
+        font-weight: 600;
         color: #2C3E50;
         padding-bottom: 10px;
         border-bottom: 2px solid #EAECEE;
@@ -72,7 +134,7 @@ if "session_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 4. 사이드바 UI 구성 (💡 동적 로고 적용)
+# 4. 사이드바 UI 구성
 with st.sidebar:
     st.image(current_brand["logo"], width=150)
     st.markdown("### 🤖 AI Agent Status")
@@ -80,24 +142,39 @@ with st.sidebar:
     st.markdown("💡 **Capabilities:**")
     st.markdown("- 💺 Product Specs & Pricing")
     st.markdown("- 🛠️ Assembly & Troubleshooting")
-    st.markdown("- 📜 Warranty Policies")
+    st.markdown("- 📦 Real-time Order Tracking")
     
     if st.button("🗑️ Clear Chat History", use_container_width=True):
         st.session_state.messages = []
         st.session_state.session_id = str(uuid.uuid4())
         st.rerun()
 
-# 5. 메인 화면 UI (💡 동적 타이틀 적용)
+# 5. 메인 화면 UI 및 과거 대화 기록 렌더링 (💡 가로채기 1번)
 st.markdown(f"<h1 class='main-title'>{current_brand['title']}</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #7F8C8D;'>Ask anything about our massage chairs, warranties, or troubleshooting.</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #7F8C8D;'>Ask anything about our massage chairs, warranties, or order tracking.</p>", unsafe_allow_html=True)
 
 for msg in st.session_state.messages:
     avatar = "🧑‍💻" if msg["role"] == "user" else "🤖"
     with st.chat_message(msg["role"], avatar=avatar):
-        st.markdown(msg["content"])
+        # 💡 [핵심] 과거 기록 중 JSON 트래킹 데이터가 있으면 텍스트 대신 위젯을 다시 그립니다.
+        content = msg["content"]
+        if msg["role"] == "assistant" and "```json\n{" in content and "tracking_number" in content:
+            try:
+                json_str = content.split("```json\n")[1].split("\n```")[0]
+                data = json.loads(json_str)
+                render_tracking_timeline(
+                    tracking_number=data.get("tracking_number", ""),
+                    company=data.get("company", ""),
+                    status=data.get("status", "PROCESSING"),
+                    tracking_url=data.get("tracking_url", "#")
+                )
+            except Exception:
+                st.markdown(content) # JSON 파싱 실패 시 원본 텍스트 출력
+        else:
+            st.markdown(content)
 
-# 6. 채팅 입력 및 스트리밍 처리
-if prompt := st.chat_input("How can I help you with your massage chair today?"):
+# 6. 채팅 입력 및 스트리밍 처리 (💡 가로채기 2번)
+if prompt := st.chat_input("Where is my order #1234?"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="🧑‍💻"):
         st.markdown(prompt)
@@ -110,7 +187,6 @@ if prompt := st.chat_input("How can I help you with your massage chair today?"):
             MAX_HISTORY = 4
             recent_history = st.session_state.messages[-(MAX_HISTORY+1):-1] if len(st.session_state.messages) > 1 else []
 
-            # 💡 [데이터 주입] 백엔드에 현재 도메인 전달
             payload = {
                 "user_query": prompt,
                 "session_id": st.session_state.session_id,
@@ -118,7 +194,7 @@ if prompt := st.chat_input("How can I help you with your massage chair today?"):
                 "current_domain": current_brand["domain"] 
             }
             
-            with st.spinner("🧠 Scanning AI Knowledge Base..."):
+            with st.spinner("🧠 Processing..."):
                 response = requests.post(API_URL, json=payload, stream=True, timeout=10)
             
             response.raise_for_status()
@@ -127,9 +203,29 @@ if prompt := st.chat_input("How can I help you with your massage chair today?"):
                 if chunk:
                     decoded_chunk = chunk.decode("utf-8")
                     full_response += decoded_chunk
+                    # 스트리밍 중에는 텍스트 그대로 보여줌
                     message_placeholder.markdown(full_response + "▌")
             
-            message_placeholder.markdown(full_response)
+            # 💡 [핵심] 스트리밍이 완전히 끝난 후, JSON 포맷인지 검사하여 화면을 갈아끼웁니다.
+            if "```json\n{" in full_response and "tracking_number" in full_response:
+                try:
+                    json_str = full_response.split("```json\n")[1].split("\n```")[0]
+                    data = json.loads(json_str)
+                    
+                    # 기존에 스트리밍되던 못생긴 JSON 텍스트를 지우고 예쁜 UI로 대체
+                    message_placeholder.empty()
+                    with message_placeholder.container():
+                        render_tracking_timeline(
+                            tracking_number=data.get("tracking_number", ""),
+                            company=data.get("company", ""),
+                            status=data.get("status", "PROCESSING"),
+                            tracking_url=data.get("tracking_url", "#")
+                        )
+                except Exception:
+                    message_placeholder.markdown(full_response)
+            else:
+                # 일반 텍스트 대화인 경우 
+                message_placeholder.markdown(full_response)
                     
         except requests.exceptions.Timeout:
             error_msg = "🚨 Timeout Error: The AI server response is delayed. Please try again."
@@ -141,4 +237,5 @@ if prompt := st.chat_input("How can I help you with your massage chair today?"):
             message_placeholder.error(error_msg)
             full_response = error_msg
 
+    # DB 및 과거 기록 렌더링을 위해 세션에 저장
     st.session_state.messages.append({"role": "assistant", "content": full_response})
