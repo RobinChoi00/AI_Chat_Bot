@@ -3,6 +3,7 @@ import requests
 import json
 import uuid
 import os
+import re
 
 # --- [UI Component] 배송 타임라인 렌더링 함수 ---
 def render_tracking_timeline(tracking_number, company, status, tracking_url):
@@ -39,6 +40,68 @@ def render_tracking_timeline(tracking_number, company, status, tracking_url):
     </div>
     """
     st.markdown(html_content, unsafe_allow_html=True)
+
+def parse_tracking_response(content: str):
+    """Parse deterministic tracking text response from backend."""
+    required_markers = ["- Current Status:", "- Current Location:", "- Current Hub:", "- Estimated Delivery:"]
+    if not all(marker in content for marker in required_markers):
+        return None
+
+    def extract(label: str):
+        match = re.search(rf"{re.escape(label)}\s*(.+)", content)
+        return match.group(1).strip() if match else ""
+
+    events = []
+    if "Recent Tracking Timeline:" in content:
+        timeline_text = content.split("Recent Tracking Timeline:", 1)[1]
+        for line in timeline_text.splitlines():
+            if line.strip().startswith("- "):
+                events.append(line.strip()[2:])
+
+    return {
+        "status": extract("- Current Status:"),
+        "location": extract("- Current Location:"),
+        "hub": extract("- Current Hub:"),
+        "eta": extract("- Estimated Delivery:"),
+        "last_event": extract("- Last Carrier Event:"),
+        "carrier": extract("- Carrier:"),
+        "tracking_number": extract("- Tracking Number:"),
+        "tracking_url": extract("- Live Tracking URL:"),
+        "events": events[:3],
+    }
+
+def render_tracking_summary_card(parsed: dict):
+    """Render modern tracking summary card."""
+    tracking_url = parsed.get("tracking_url", "")
+    status = parsed.get("status", "UNKNOWN")
+
+    st.markdown(
+        f"""
+        <div class="tracking-card">
+            <div class="tracking-card-head">
+                <div class="tracking-title">📦 Real-time Delivery Update</div>
+                <div class="tracking-status">{status}</div>
+            </div>
+            <div class="tracking-grid">
+                <div class="tracking-item"><span>Current Location</span><strong>{parsed.get("location", "-")}</strong></div>
+                <div class="tracking-item"><span>Current Hub</span><strong>{parsed.get("hub", "-")}</strong></div>
+                <div class="tracking-item"><span>Estimated Delivery</span><strong>{parsed.get("eta", "-")}</strong></div>
+                <div class="tracking-item"><span>Last Event</span><strong>{parsed.get("last_event", "-")}</strong></div>
+                <div class="tracking-item"><span>Carrier</span><strong>{parsed.get("carrier", "-")}</strong></div>
+                <div class="tracking-item"><span>Tracking Number</span><strong>{parsed.get("tracking_number", "-")}</strong></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if parsed.get("events"):
+        st.markdown("**Recent Timeline**")
+        for row in parsed["events"]:
+            st.markdown(f"- {row}")
+
+    if tracking_url:
+        st.markdown(f"[Open carrier tracking page]({tracking_url})")
 
 
 # 1. 페이지 기본 설정
@@ -79,11 +142,13 @@ current_brand = BRAND_CONFIG.get(current_brand_key, BRAND_CONFIG["titanchair"])
 # 2. Custom CSS 주입 (애니메이션 효과 추가)
 st.markdown("""
 <style>
-    /* 기본 헤더/푸터 숨김 */
     header {visibility: hidden;}
     footer {visibility: hidden;}
-    
-    /* 💡 [애니메이션 정의] 아래에서 위로 부드럽게 떠오르며 나타남 */
+
+    .stApp {
+        background: radial-gradient(circle at top, #111827 0%, #020617 60%, #01040f 100%);
+    }
+
     @keyframes fadeInUp {
         from {
             opacity: 0;
@@ -95,32 +160,103 @@ st.markdown("""
         }
     }
 
-    /* 💡 채팅 말풍선에 애니메이션 적용 */
     .stChatMessage {
         border-radius: 12px;
         padding: 15px;
         margin-bottom: 15px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05); /* 은은한 그림자 추가 */
-        animation: fadeInUp 0.4s ease-out forwards; /* 0.4초 동안 애니메이션 실행 */
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        animation: fadeInUp 0.4s ease-out forwards;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(15, 23, 42, 0.75);
     }
-    
-    /* 사용자 말풍선과 AI 말풍선 배경색 분리 (가독성 향상) */
+
     [data-testid="stChatMessage"]:nth-child(odd) {
-        background-color: #f8f9fa; /* 사용자: 아주 연한 회색 */
+        background-color: rgba(30, 41, 59, 0.85);
     }
     [data-testid="stChatMessage"]:nth-child(even) {
-        background-color: #ffffff; /* AI: 완전한 흰색 */
-        border: 1px solid #e9ecef;
+        background-color: rgba(15, 23, 42, 0.85);
+    }
+
+    [data-testid="stChatMessageContent"] p,
+    [data-testid="stChatMessageContent"] li {
+        color: #e2e8f0 !important;
     }
 
     .main-title {
         text-align: center;
         font-family: 'Helvetica Neue', sans-serif;
-        font-weight: 600;
-        color: #2C3E50;
+        font-weight: 700;
+        color: #f8fafc;
         padding-bottom: 10px;
-        border-bottom: 2px solid #EAECEE;
-        margin-bottom: 30px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+        margin-bottom: 20px;
+    }
+
+    .sub-copy {
+        text-align: center;
+        color: #94a3b8;
+        margin-top: -8px;
+        margin-bottom: 24px;
+    }
+
+    .tracking-card {
+        background: linear-gradient(145deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.9));
+        border: 1px solid rgba(125, 211, 252, 0.3);
+        border-radius: 14px;
+        padding: 14px;
+        margin: 8px 0 10px;
+    }
+
+    .tracking-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+    }
+
+    .tracking-title {
+        color: #e0f2fe;
+        font-weight: 700;
+    }
+
+    .tracking-status {
+        color: #0f172a;
+        background: #7dd3fc;
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+    }
+
+    .tracking-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+    }
+
+    .tracking-item {
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 10px;
+        padding: 8px 10px;
+    }
+
+    .tracking-item span {
+        display: block;
+        font-size: 11px;
+        color: #93c5fd;
+        margin-bottom: 2px;
+    }
+
+    .tracking-item strong {
+        color: #f8fafc;
+        font-size: 13px;
+    }
+
+    @media (max-width: 768px) {
+        .tracking-grid {
+            grid-template-columns: 1fr;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -151,13 +287,18 @@ with st.sidebar:
 
 # 5. 메인 화면 UI 및 과거 대화 기록 렌더링 (💡 가로채기 1번)
 st.markdown(f"<h1 class='main-title'>{current_brand['title']}</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #7F8C8D;'>Ask anything about our massage chairs, warranties, or order tracking.</p>", unsafe_allow_html=True)
+st.markdown("<p class='sub-copy'>Ask anything about our massage chairs, warranties, or order tracking.</p>", unsafe_allow_html=True)
 
 for msg in st.session_state.messages:
     avatar = "🧑‍💻" if msg["role"] == "user" else "🤖"
     with st.chat_message(msg["role"], avatar=avatar):
-        # 💡 [핵심] 과거 기록 중 JSON 트래킹 데이터가 있으면 텍스트 대신 위젯을 다시 그립니다.
         content = msg["content"]
+        if msg["role"] == "assistant":
+            parsed = parse_tracking_response(content)
+            if parsed:
+                render_tracking_summary_card(parsed)
+                continue
+
         if msg["role"] == "assistant" and "```json\n{" in content and "tracking_number" in content:
             try:
                 json_str = content.split("```json\n")[1].split("\n```")[0]
@@ -169,7 +310,7 @@ for msg in st.session_state.messages:
                     tracking_url=data.get("tracking_url", "#")
                 )
             except Exception:
-                st.markdown(content) # JSON 파싱 실패 시 원본 텍스트 출력
+                st.markdown(content)
         else:
             st.markdown(content)
 
@@ -203,16 +344,18 @@ if prompt := st.chat_input("Where is my order #1234?"):
                 if chunk:
                     decoded_chunk = chunk.decode("utf-8")
                     full_response += decoded_chunk
-                    # 스트리밍 중에는 텍스트 그대로 보여줌
                     message_placeholder.markdown(full_response + "▌")
             
-            # 💡 [핵심] 스트리밍이 완전히 끝난 후, JSON 포맷인지 검사하여 화면을 갈아끼웁니다.
-            if "```json\n{" in full_response and "tracking_number" in full_response:
+            parsed = parse_tracking_response(full_response)
+            if parsed:
+                message_placeholder.empty()
+                with message_placeholder.container():
+                    render_tracking_summary_card(parsed)
+            elif "```json\n{" in full_response and "tracking_number" in full_response:
                 try:
                     json_str = full_response.split("```json\n")[1].split("\n```")[0]
                     data = json.loads(json_str)
                     
-                    # 기존에 스트리밍되던 못생긴 JSON 텍스트를 지우고 예쁜 UI로 대체
                     message_placeholder.empty()
                     with message_placeholder.container():
                         render_tracking_timeline(
@@ -224,7 +367,6 @@ if prompt := st.chat_input("Where is my order #1234?"):
                 except Exception:
                     message_placeholder.markdown(full_response)
             else:
-                # 일반 텍스트 대화인 경우 
                 message_placeholder.markdown(full_response)
                     
         except requests.exceptions.Timeout:
