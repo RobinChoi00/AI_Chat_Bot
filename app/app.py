@@ -315,7 +315,7 @@ for msg in st.session_state.messages:
             st.markdown(content)
 
 # 6. 채팅 입력 및 스트리밍 처리 (💡 가로채기 2번)
-if prompt := st.chat_input("Where is my order #1234?"):
+if prompt := st.chat_input("What can i help you today?"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="🧑‍💻"):
         st.markdown(prompt)
