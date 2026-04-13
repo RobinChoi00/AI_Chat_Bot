@@ -256,10 +256,13 @@ def fetch_shopify_order_status(order_number: str, email: str, target_domain: str
             }
 
         tracking_info = node["fulfillments"][0]["trackingInfo"][0]
+        raw_company = tracking_info.get("company", "")
+        raw_number = tracking_info.get("number", "")
+        resolved_company = resolve_carrier_name(raw_company, raw_number)
         tracking_data = {
             "status": status,
-            "company": tracking_info.get("company", "알 수 없는 택배사"),
-            "tracking_number": tracking_info.get("number", ""),
+            "company": resolved_company,
+            "tracking_number": raw_number,
             "tracking_url": tracking_info.get("url", ""),
             "current_location": "Carrier network",
             "current_hub": "In transit hub (latest carrier scan)",
@@ -282,6 +285,35 @@ def fetch_shopify_order_status(order_number: str, email: str, target_domain: str
     except Exception as e:
         logger.error(f"🚨 Shopify API Error: {e}")
         return {"error": "A temporary logistics server communication error occurred."}
+
+CARRIER_PATTERNS = [
+    (r"^1Z[A-Z0-9]{16}$", "UPS", "ups"),
+    (r"^9[2-5]\d{20,}$", "USPS", "usps"),
+    (r"^(94|93|92|95)\d{18,}$", "USPS", "usps"),
+    (r"^\d{20,22}$", "USPS", "usps"),
+    (r"^\d{12,15}$", "FedEx", "fedex"),
+    (r"^\d{9}$", "FedEx Ground", "fedex"),
+    (r"^C\d{8,}$", "OnTrac", "ontrac"),
+    (r"^1LS\d+$", "LaserShip", "lasership"),
+    (r"^TBA\d+$", "Amazon Logistics", "amazon-logistics-us"),
+    (r"^\d{10}$", "DHL", "dhl"),
+]
+
+def infer_carrier_from_tracking_number(tracking_number: str) -> tuple:
+    """Infer carrier name and slug from tracking number pattern."""
+    tn = (tracking_number or "").strip().upper()
+    for pattern, name, slug in CARRIER_PATTERNS:
+        if re.match(pattern, tn, re.IGNORECASE):
+            return name, slug
+    return "", "ups"
+
+def resolve_carrier_name(company: str, tracking_number: str) -> str:
+    """Return a meaningful carrier name, inferring from tracking number if Shopify returns 'Other'."""
+    c = (company or "").strip()
+    if c and c.lower() not in ("other", "unknown", "알 수 없는 택배사"):
+        return c
+    inferred_name, _ = infer_carrier_from_tracking_number(tracking_number)
+    return inferred_name or company or "Unknown carrier"
 
 def infer_aftership_slug(company: str) -> str:
     """Map common carrier names to AfterShip slugs."""
