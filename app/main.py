@@ -415,9 +415,14 @@ def is_product_query(query: str) -> bool:
 
 def is_tracking_query(query: str) -> bool:
     lowered = query.lower()
-    if extract_order_identifier(query) and re.search(r'[\w\.-]+@[\w\.-]+\.\w+', query):
+    has_order = bool(extract_order_identifier(query))
+    has_email = bool(re.search(r'[\w\.-]+@[\w\.-]+\.\w+', query))
+    has_keyword = any(keyword in lowered for keyword in TRACKING_KEYWORDS)
+    if has_order and has_email:
         return True
-    return any(keyword in lowered for keyword in TRACKING_KEYWORDS)
+    if has_email and has_keyword:
+        return True
+    return has_keyword
 
 def normalize_error_code(code: str) -> Optional[str]:
     raw = str(code).strip()
@@ -640,14 +645,37 @@ async def chat_endpoint(request: ChatRequest):
                     stream_text_response(request.session_id, user_query, tracking_response),
                     media_type="text/event-stream",
                 )
+            elif email and not order_id:
+                logger.info(f"🚚 [Direct API] Email-only tracking for: {email} on {target_domain}")
+                tracking_data = fetch_shopify_order_status("", email, target_domain)
+                tracking_response = build_deterministic_tracking_response(tracking_data, target_domain)
+                return StreamingResponse(
+                    stream_text_response(request.session_id, user_query, tracking_response),
+                    media_type="text/event-stream",
+                )
+            elif order_id and not email:
+                logger.warning("🛡️ [Guardrail] Order found but email missing.")
+                missing_info_response = "\n".join([
+                    f"I found order number {order_id}. To look up your delivery status, I also need:",
+                    "- Email address used at checkout",
+                    "",
+                    f"Example: \"{order_id} and my email is you@example.com\"",
+                    "",
+                    SUPPORT_CONTACT_MSG,
+                ])
+                return StreamingResponse(
+                    stream_text_response(request.session_id, user_query, missing_info_response),
+                    media_type="text/event-stream",
+                )
             else:
                 logger.warning("🛡️ [Guardrail] Missing order/email in tracking request.")
                 missing_info_response = "\n".join([
-                    "To provide real-time delivery location and ETA, I need both:",
-                    "- Order number",
-                    "- Email used at checkout",
+                    "To provide real-time delivery location and ETA, I need at least one of:",
+                    "- Order number + Email used at checkout",
+                    "- Or just the email used at checkout",
                     "",
                     "Example: \"My order is #12345 and my email is you@example.com\"",
+                    "Or: \"My email is you@example.com, where is my order?\"",
                     "",
                     SUPPORT_CONTACT_MSG,
                 ])

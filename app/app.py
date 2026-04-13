@@ -138,9 +138,9 @@ BRAND_CONFIG = {
 
 DOMAIN_TO_BRAND = {
     "titanchair": "titanchair",
+    "osakichair": "titanchair",
     "osakiusa": "osakiusa",
     "osakimassagechair": "osakimassagechair",
-    "osakichair": "osakimassagechair",
     "osaki-titan": "osaki-titan",
 }
 
