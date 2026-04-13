@@ -225,7 +225,18 @@ def fetch_shopify_order_status(order_number: str, email: str, target_domain: str
             data = response.json()
             edges = data.get("data", {}).get("orders", {}).get("edges", [])
             if edges:
+                logger.info(f"✅ Order found by name:'{candidate}' + email")
                 break
+
+        if not edges:
+            logger.info(f"🔍 Name-based search failed. Trying email-only fallback for: {email}")
+            variables = {"query": f"email:'{email}'"}
+            response = requests.post(url, json={"query": query, "variables": variables}, headers=headers, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            edges = data.get("data", {}).get("orders", {}).get("edges", [])
+            if edges:
+                logger.info(f"✅ Order found by email-only fallback: {email}")
 
         if not edges:
             return {"error": "Order not found, or the email does not match our records."}
