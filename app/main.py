@@ -258,7 +258,8 @@ def fetch_shopify_order_status(order_number: str, email: str, target_domain: str
         tracking_info = node["fulfillments"][0]["trackingInfo"][0]
         raw_company = tracking_info.get("company", "")
         raw_number = tracking_info.get("number", "")
-        resolved_company = resolve_carrier_name(raw_company, raw_number)
+        raw_url = tracking_info.get("url", "")
+        resolved_company = resolve_carrier_name(raw_company, raw_number, raw_url)
         tracking_data = {
             "status": status,
             "company": resolved_company,
@@ -292,28 +293,57 @@ CARRIER_PATTERNS = [
     (r"^(94|93|92|95)\d{18,}$", "USPS", "usps"),
     (r"^\d{20,22}$", "USPS", "usps"),
     (r"^\d{12,15}$", "FedEx", "fedex"),
-    (r"^\d{9}$", "FedEx Ground", "fedex"),
     (r"^C\d{8,}$", "OnTrac", "ontrac"),
     (r"^1LS\d+$", "LaserShip", "lasership"),
     (r"^TBA\d+$", "Amazon Logistics", "amazon-logistics-us"),
-    (r"^\d{10}$", "DHL", "dhl"),
 ]
 
-def infer_carrier_from_tracking_number(tracking_number: str) -> tuple:
-    """Infer carrier name and slug from tracking number pattern."""
-    tn = (tracking_number or "").strip().upper()
-    for pattern, name, slug in CARRIER_PATTERNS:
-        if re.match(pattern, tn, re.IGNORECASE):
-            return name, slug
-    return "", "ups"
+CARRIER_URL_KEYWORDS = {
+    "fedex.com": "FedEx",
+    "ups.com": "UPS",
+    "usps.com": "USPS",
+    "dhl.com": "DHL",
+    "aitworldwide": "AIT Logistics",
+    "abf.com": "ABF Freight",
+    "arcb.com": "ABF Freight",
+    "metro-logistics": "Metropolitan Logistics",
+    "metropolitan": "Metropolitan Logistics",
+    "rrts.com": "Roadrunner Freight",
+    "roadrunner": "Roadrunner Freight",
+    "estes-express": "Estes Express",
+    "ontrac.com": "OnTrac",
+    "lasership": "LaserShip",
+    "amazon": "Amazon Logistics",
+}
 
-def resolve_carrier_name(company: str, tracking_number: str) -> str:
-    """Return a meaningful carrier name, inferring from tracking number if Shopify returns 'Other'."""
+def infer_carrier_from_url(tracking_url: str) -> str:
+    """Infer carrier from tracking URL domain (most reliable for freight)."""
+    url_lower = (tracking_url or "").lower()
+    for keyword, carrier_name in CARRIER_URL_KEYWORDS.items():
+        if keyword in url_lower:
+            return carrier_name
+    return ""
+
+def infer_carrier_from_tracking_number(tracking_number: str) -> str:
+    """Infer carrier name from tracking number pattern (fallback)."""
+    tn = (tracking_number or "").strip().upper()
+    for pattern, name, _ in CARRIER_PATTERNS:
+        if re.match(pattern, tn, re.IGNORECASE):
+            return name
+    return ""
+
+def resolve_carrier_name(company: str, tracking_number: str, tracking_url: str = "") -> str:
+    """Return a meaningful carrier name using multiple signals."""
     c = (company or "").strip()
-    if c and c.lower() not in ("other", "unknown", "알 수 없는 택배사"):
+    if c and c.lower() not in ("other", "unknown", "알 수 없는 택배사", ""):
         return c
-    inferred_name, _ = infer_carrier_from_tracking_number(tracking_number)
-    return inferred_name or company or "Unknown carrier"
+    from_url = infer_carrier_from_url(tracking_url)
+    if from_url:
+        return from_url
+    from_number = infer_carrier_from_tracking_number(tracking_number)
+    if from_number:
+        return from_number
+    return company or "Unknown carrier"
 
 def infer_aftership_slug(company: str) -> str:
     """Map common carrier names to AfterShip slugs."""
