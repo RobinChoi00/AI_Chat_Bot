@@ -136,7 +136,31 @@ BRAND_CONFIG = {
     }
 }
 
-current_brand_key = st.query_params.get("brand", "titanchair").lower()
+DOMAIN_TO_BRAND = {
+    "titanchair": "titanchair",
+    "osakiusa": "osakiusa",
+    "osakimassagechair": "osakimassagechair",
+    "osakichair": "osakimassagechair",
+    "osaki-titan": "osaki-titan",
+}
+
+def _detect_brand_from_host(host: str) -> str:
+    host = (host or "").lower()
+    for keyword, brand_key in DOMAIN_TO_BRAND.items():
+        if keyword in host:
+            return brand_key
+    return "titanchair"
+
+_explicit_brand = st.query_params.get("brand", "").strip().lower()
+if _explicit_brand:
+    current_brand_key = _explicit_brand
+elif hasattr(st, "context") and st.context.headers.get("Host", ""):
+    _host = st.context.headers.get("Host", "")
+    _detected = _detect_brand_from_host(_host)
+    current_brand_key = _detected if _detected != "titanchair" else "titanchair"
+else:
+    current_brand_key = "titanchair"
+
 current_brand = BRAND_CONFIG.get(current_brand_key, BRAND_CONFIG["titanchair"])
 
 # 2. Custom CSS 주입 (애니메이션 효과 추가)
