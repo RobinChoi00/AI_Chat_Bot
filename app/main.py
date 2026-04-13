@@ -633,11 +633,9 @@ async def chat_endpoint(request: ChatRequest):
         if "TRACKING" in routing_decision:
             order_id = extract_order_identifier(user_query)
             email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', user_query)
-            
-            if order_id and email_match:
-                email = email_match.group()
-                
-                # 쇼피파이 API 직접 통신 (JSON 데이터 반환)
+            email = email_match.group() if email_match else ""
+
+            if order_id and email:
                 logger.info(f"🚚 [Direct API] Fetching tracking data for Order: {order_id}, Email: {email} on {target_domain}")
                 tracking_data = fetch_shopify_order_status(order_id, email, target_domain)
                 tracking_response = build_deterministic_tracking_response(tracking_data, target_domain)
@@ -654,7 +652,7 @@ async def chat_endpoint(request: ChatRequest):
                     media_type="text/event-stream",
                 )
             elif order_id and not email:
-                logger.warning("🛡️ [Guardrail] Order found but email missing.")
+                logger.warning(f"🛡️ [Guardrail] Order {order_id} found but email missing.")
                 missing_info_response = "\n".join([
                     f"I found order number {order_id}. To look up your delivery status, I also need:",
                     "- Email address used at checkout",
