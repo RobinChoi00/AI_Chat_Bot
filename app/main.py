@@ -475,6 +475,34 @@ def is_product_query(query: str) -> bool:
     lowered = query.lower()
     return any(keyword in lowered for keyword in PRODUCT_QUERY_KEYWORDS)
 
+ACCESSORY_KEYWORDS = {
+    "mat", "pad", "cover", "cleaner", "gun", "cushion", "shawl",
+    "module", "fragrance", "scraping", "foot spa", "knee", "neck massager",
+    "hand massager", "eye massager", "gua sha", "tens",
+}
+ACCESSORY_PRICE_CEILING = 1000.0
+
+def _extract_price_from_doc(content: str) -> float:
+    match = re.search(r"Total Price: \$([0-9,]+\.?\d*)", content)
+    return float(match.group(1).replace(",", "")) if match else 0.0
+
+def rerank_product_docs(docs: List[Document], user_query: str, k: int) -> List[Document]:
+    query_lower = user_query.lower()
+    if any(kw in query_lower for kw in ACCESSORY_KEYWORDS):
+        return docs[:k]
+
+    chairs, accessories = [], []
+    for doc in docs:
+        price = _extract_price_from_doc(doc.page_content)
+        if price >= ACCESSORY_PRICE_CEILING:
+            chairs.append((doc, price))
+        else:
+            accessories.append((doc, price))
+
+    chairs.sort(key=lambda x: x[1], reverse=True)
+    result = [d for d, _ in chairs] + [d for d, _ in accessories]
+    return result[:k]
+
 def is_tracking_query(query: str) -> bool:
     lowered = query.lower()
     has_order = bool(extract_order_identifier(query))
@@ -759,7 +787,8 @@ async def chat_endpoint(request: ChatRequest):
         else:
             # 일반 RAG 검색 파이프라인
             if "PRODUCTS" in routing_decision:
-                docs = vs_products.similarity_search(user_query, k=FAISS_SEARCH_K) 
+                raw_docs = vs_products.similarity_search(user_query, k=FAISS_SEARCH_K * 3)
+                docs = rerank_product_docs(raw_docs, user_query, k=FAISS_SEARCH_K)
             elif "QA" in routing_decision:
                 exact_docs = get_exact_error_code_docs(user_query, vs_qa, FAISS_SEARCH_K)
                 semantic_docs = vs_qa.similarity_search(user_query, k=FAISS_SEARCH_K) 
@@ -809,7 +838,12 @@ EXECUTION:
 
 <ROUTING_STATE_2: SALES_AND_PRODUCT>
 TRIGGER: User asks for recommendations, pricing, features.
-EXECUTION: Highlight 2-3 key features. Provide the rewritten "Direct Purchase Link".
+EXECUTION:
+1. ALWAYS prioritize recommending premium, latest-model full-body massage chairs from the <context>.
+2. Do NOT recommend accessories (seat pads, mats, covers, massage guns, cleaners) unless the user SPECIFICALLY asks for them.
+3. When recommending, present 2-3 chairs sorted from highest to lowest price. For each chair, highlight 2-3 key differentiating features.
+4. If multiple price tiers exist in <context>, lead with the highest-value option and follow with mid-range alternatives.
+5. Provide the rewritten "Direct Purchase Link" for each product.
 </ROUTING_STATE_2>
 
 <ROUTING_STATE_5: ORDER_TRACKING>
