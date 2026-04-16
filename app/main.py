@@ -579,11 +579,11 @@ def build_deterministic_error_response(doc: Document, user_query: str, target_do
     ])
     return "\n".join(lines)
 
-def stream_text_response(session_id: str, user_query: str, response_text: str):
+def stream_text_response(session_id: str, user_query: str, response_text: str, domain: str = "unknown"):
     yield response_text
     try:
         db = SessionLocal()
-        new_log = ChatLog(session_id=session_id, user_query=user_query, bot_response=response_text)
+        new_log = ChatLog(session_id=session_id, user_query=user_query, bot_response=response_text, domain=domain)
         db.add(new_log)
         db.commit()
         db.close()
@@ -648,11 +648,23 @@ class ChatLog(Base):
     __tablename__ = "chat_logs"
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(String, index=True)
+    domain = Column(String, index=True, default="unknown")
     user_query = Column(Text)
     bot_response = Column(Text)
     created_at = Column(DateTime, default=lambda: datetime.now(pytz.timezone('America/Chicago')))
 
 Base.metadata.create_all(bind=engine)
+
+with engine.connect() as conn:
+    import sqlite3 as _sq
+    raw = conn.connection.connection if hasattr(conn.connection, 'connection') else conn.connection
+    cursor = raw.cursor()
+    cursor.execute("PRAGMA table_info(chat_logs)")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+    if "domain" not in existing_cols:
+        cursor.execute("ALTER TABLE chat_logs ADD COLUMN domain TEXT DEFAULT 'unknown'")
+        raw.commit()
+        logger.info("✅ Migrated chat_logs: added 'domain' column")
 
 # --- [3] FastAPI app setup ---
 app = FastAPI(title="Titan AI Agent API", version="2.0")
@@ -702,7 +714,7 @@ async def chat_endpoint(request: ChatRequest):
                 tracking_data = fetch_shopify_order_status(order_id, email, target_domain)
                 tracking_response = build_deterministic_tracking_response(tracking_data, target_domain)
                 return StreamingResponse(
-                    stream_text_response(request.session_id, user_query, tracking_response),
+                    stream_text_response(request.session_id, user_query, tracking_response, domain=target_domain),
                     media_type="text/event-stream",
                 )
             elif email and not order_id:
@@ -710,7 +722,7 @@ async def chat_endpoint(request: ChatRequest):
                 tracking_data = fetch_shopify_order_status("", email, target_domain)
                 tracking_response = build_deterministic_tracking_response(tracking_data, target_domain)
                 return StreamingResponse(
-                    stream_text_response(request.session_id, user_query, tracking_response),
+                    stream_text_response(request.session_id, user_query, tracking_response, domain=target_domain),
                     media_type="text/event-stream",
                 )
             elif order_id and not email:
@@ -724,7 +736,7 @@ async def chat_endpoint(request: ChatRequest):
                     SUPPORT_CONTACT_MSG,
                 ])
                 return StreamingResponse(
-                    stream_text_response(request.session_id, user_query, missing_info_response),
+                    stream_text_response(request.session_id, user_query, missing_info_response, domain=target_domain),
                     media_type="text/event-stream",
                 )
             else:
@@ -740,7 +752,7 @@ async def chat_endpoint(request: ChatRequest):
                     SUPPORT_CONTACT_MSG,
                 ])
                 return StreamingResponse(
-                    stream_text_response(request.session_id, user_query, missing_info_response),
+                    stream_text_response(request.session_id, user_query, missing_info_response, domain=target_domain),
                     media_type="text/event-stream",
                 )
         
@@ -769,7 +781,7 @@ async def chat_endpoint(request: ChatRequest):
             if "QA" in routing_decision and exact_docs:
                 deterministic_response = build_deterministic_error_response(exact_docs[0], user_query, target_domain)
                 return StreamingResponse(
-                    stream_text_response(request.session_id, user_query, deterministic_response),
+                    stream_text_response(request.session_id, user_query, deterministic_response, domain=target_domain),
                     media_type="text/event-stream",
                 )
 
@@ -833,7 +845,7 @@ EXECUTION:
                         yield content
                 
                 db = SessionLocal()
-                new_log = ChatLog(session_id=request.session_id, user_query=user_query, bot_response=full_response)
+                new_log = ChatLog(session_id=request.session_id, user_query=user_query, bot_response=full_response, domain=target_domain)
                 db.add(new_log)
                 db.commit()
                 db.close()
