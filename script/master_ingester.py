@@ -96,6 +96,23 @@ class MasterIngester:
             for data in web_data:
                 self.domain_docs["web_data"].append(Document(page_content=data['content'], metadata={"source": data.get("source", "web")}))
 
+    def process_curated_knowledge(self):
+        print("🔍 [5.5/7] 큐레이션 지식 데이터 파싱 중... -> [web_data] 할당")
+        file_path = os.path.join(DATA_DIR, "curated_knowledge.json")
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding="utf-8") as f:
+                entries = json.load(f)
+            for entry in entries:
+                self.domain_docs["web_data"].append(Document(
+                    page_content=entry['content'],
+                    metadata={
+                        "source": entry.get("source", "curated"),
+                        "category": entry.get("category", "general"),
+                        "type": "curated_knowledge"
+                    }
+                ))
+            print(f"   ✅ 큐레이션 지식 {len(entries)}건 로드 완료")
+
     # ==========================================
     # 🧠 3번 뇌: osaki_products (상품 스펙 전용)
     # ==========================================
@@ -175,6 +192,7 @@ if __name__ == "__main__":
     # [Policy/Web 뇌세포]
     ingester.process_word_policies()    # Warranty.docx, Sales Policy.docx (glob으로 한 번에 2개 섭취)
     ingester.process_web_data()         # web_crawled_data.json
+    ingester.process_curated_knowledge()# curated_knowledge.json (추천/FAQ/기능교육)
     
     # [Products/Specs 뇌세포]
     ingester.process_shopify_data()     # cleaned_osaki_products.csv
