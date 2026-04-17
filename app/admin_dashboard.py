@@ -513,6 +513,18 @@ with tab_by_brand:
                 st.markdown("**Recent Conversations**")
                 st.dataframe(recent_logs, use_container_width=True, hide_index=True)
 
+                brand_export_cols = ['created_at', 'session_id', 'user_query', 'bot_response']
+                brand_export_df = brand_df[[c for c in brand_export_cols if c in brand_df.columns]]
+                brand_csv = brand_export_df.to_csv(index=False).encode('utf-8-sig')
+                brand_tag = brand_name.replace(" ", "_").lower()
+                st.download_button(
+                    label=f"⬇️ Download {brand_name} CSV",
+                    data=brand_csv,
+                    file_name=f"chat_logs_{brand_tag}_{datetime.today().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    key=f"dl_{brand_tag}",
+                )
+
 
 # ─── Tab 3: Chat Logs (table view) ───────
 with tab_logs:
@@ -537,10 +549,23 @@ with tab_logs:
         )
         log_filtered = log_filtered[mask]
 
-    st.caption(f"Showing {len(log_filtered):,} records")
+    dl_col1, dl_col2 = st.columns([3, 1])
+    with dl_col1:
+        st.caption(f"Showing {len(log_filtered):,} records")
+    with dl_col2:
+        display_cols = ['created_at', 'brand', 'session_id', 'user_query', 'bot_response']
+        export_df = log_filtered[[c for c in display_cols if c in log_filtered.columns]]
+        csv_data = export_df.to_csv(index=False).encode('utf-8-sig')
+        brand_tag = log_brand_filter.replace(" ", "_").lower() if log_brand_filter != "All" else "all_brands"
+        st.download_button(
+            label="⬇️ Download CSV",
+            data=csv_data,
+            file_name=f"chat_logs_{brand_tag}_{datetime.today().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
-    display_cols = ['created_at', 'brand', 'session_id', 'user_query', 'bot_response']
-    display_df = log_filtered[[c for c in display_cols if c in log_filtered.columns]]
+    display_df = export_df
     st.dataframe(display_df, use_container_width=True, height=500, hide_index=True)
 
 
