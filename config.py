@@ -3,11 +3,39 @@
 # ==========================================
 # 1. Business Logic & UI Strings (비즈니스 설정)
 # ==========================================
-SUPPORT_PHONE_NUMBER = "1-888-848-2630 (Ext. 3)"
 SUPPORT_BUSINESS_HOURS = "Mon-Fri, 9:30 AM - 6:30 PM / Sat, 10:00 AM - 4:00 PM CST"
 
-# 💡 [수술 완료] 대괄호를 제거하고 AI가 생략하지 못하도록 완벽한 자연어 문장으로 결합했습니다.
-SUPPORT_CONTACT_MSG = f"If you need further assistance, please contact our support team at {SUPPORT_PHONE_NUMBER}. Our business hours are {SUPPORT_BUSINESS_HOURS}."
+WARRANTY_PHONE = "+1-888-848-2630"
+
+SALES_PHONE_BY_DOMAIN = {
+    "osakiusa":          "+1-888-501-5988",
+    "titanchair":        "1-888-848-2630",
+    "osakimassagechair": "+1-214-613-1630",
+}
+
+SUPPORT_CONTACT_MSG = f"If you need further assistance, please contact our support team at {WARRANTY_PHONE}. Our business hours are {SUPPORT_BUSINESS_HOURS}."
+
+
+def get_contact_msg(routing: str, target_domain: str) -> str:
+    """Return the correct footer based on intent (Sales vs Warranty) and domain."""
+    is_sales = "PRODUCTS" in routing.upper()
+
+    if is_sales:
+        domain_lower = (target_domain or "").lower()
+        phone = WARRANTY_PHONE
+        for key, number in SALES_PHONE_BY_DOMAIN.items():
+            if key in domain_lower:
+                phone = number
+                break
+        return (
+            f"For sales inquiries, please contact us at {phone}. "
+            f"Our business hours are {SUPPORT_BUSINESS_HOURS}."
+        )
+
+    return (
+        f"If you need further assistance, please contact our support team at {WARRANTY_PHONE}. "
+        f"Our business hours are {SUPPORT_BUSINESS_HOURS}."
+    )
 
 # 프론트엔드에서 도메인을 넘겨주지 않았을 때 사용할 기본 폴백(Fallback) 도메인
 DEFAULT_TARGET_DOMAIN = "https://titanchair.com"

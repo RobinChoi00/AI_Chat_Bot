@@ -35,7 +35,8 @@ from config import (
     ROUTER_MODEL,
     LLM_TEMPERATURE,
     FAISS_SEARCH_K,
-    REPAIR_MANUAL_URL
+    REPAIR_MANUAL_URL,
+    get_contact_msg,
 )
 
 faiss_lock = threading.Lock()
@@ -423,6 +424,7 @@ def enrich_tracking_from_aftership(company: str, tracking_number: str) -> Dict[s
 
 def build_deterministic_tracking_response(tracking_data: Dict[str, Any], target_domain: str) -> str:
     """Render tracking data in a fixed, user-friendly format."""
+    footer = get_contact_msg("TRACKING", target_domain)
     if tracking_data.get("error"):
         return "\n".join([
             "I couldn't verify this order with the provided information.",
@@ -430,7 +432,7 @@ def build_deterministic_tracking_response(tracking_data: Dict[str, Any], target_
             "",
             tracking_data["error"],
             "",
-            SUPPORT_CONTACT_MSG,
+            footer,
         ])
 
     status = tracking_data.get("status", "UNKNOWN")
@@ -468,7 +470,7 @@ def build_deterministic_tracking_response(tracking_data: Dict[str, Any], target_
             event_message = event.get("event", "Carrier update")
             lines.append(f"- {event_time} | {event_location} | {event_message}")
 
-    lines.extend(["", SUPPORT_CONTACT_MSG])
+    lines.extend(["", footer])
     return "\n".join(lines)
 
 def is_product_query(query: str) -> bool:
@@ -585,6 +587,7 @@ def build_deterministic_error_response(doc: Document, user_query: str, target_do
 
     path = urlparse(REPAIR_MANUAL_URL).path
     dynamic_repair_url = f"{target_domain}{path}"
+    footer = get_contact_msg("QA", target_domain)
 
     lines = [
         "I'm sorry you're experiencing this issue. Let's try to resolve it.",
@@ -603,7 +606,7 @@ def build_deterministic_error_response(doc: Document, user_query: str, target_do
         "Please check our official Repair & Manuals page for detailed guides and parts here:",
         f"👉 {dynamic_repair_url}",
         "",
-        SUPPORT_CONTACT_MSG
+        footer
     ])
     return "\n".join(lines)
 
@@ -755,13 +758,14 @@ async def chat_endpoint(request: ChatRequest):
                 )
             elif order_id and not email:
                 logger.warning(f"🛡️ [Guardrail] Order {order_id} found but email missing.")
+                tracking_footer = get_contact_msg("TRACKING", target_domain)
                 missing_info_response = "\n".join([
                     f"I found order number {order_id}. To look up your delivery status, I also need:",
                     "- Email address used at checkout",
                     "",
                     f"Example: \"{order_id} and my email is you@example.com\"",
                     "",
-                    SUPPORT_CONTACT_MSG,
+                    tracking_footer,
                 ])
                 return StreamingResponse(
                     stream_text_response(request.session_id, user_query, missing_info_response, domain=target_domain),
@@ -769,6 +773,7 @@ async def chat_endpoint(request: ChatRequest):
                 )
             else:
                 logger.warning("🛡️ [Guardrail] Missing order/email in tracking request.")
+                tracking_footer = get_contact_msg("TRACKING", target_domain)
                 missing_info_response = "\n".join([
                     "To provide real-time delivery location and ETA, I need at least one of:",
                     "- Order number + Email used at checkout",
@@ -777,7 +782,7 @@ async def chat_endpoint(request: ChatRequest):
                     "Example: \"My order is #12345 and my email is you@example.com\"",
                     "Or: \"My email is you@example.com, where is my order?\"",
                     "",
-                    SUPPORT_CONTACT_MSG,
+                    tracking_footer,
                 ])
                 return StreamingResponse(
                     stream_text_response(request.session_id, user_query, missing_info_response, domain=target_domain),
@@ -816,7 +821,9 @@ async def chat_endpoint(request: ChatRequest):
 
             context = "\n\n---\n\n".join([doc.page_content for doc in docs])
 
-        # Step 3: 💡 [핵심] 프롬프트를 JSON 강제 출력 모드로 복원 (UI 렌더링용)
+        # Step 3: 라우팅 결과에 따라 Sales / Warranty 연락처를 동적 결정
+        dynamic_footer = get_contact_msg(routing_decision, target_domain)
+
         system_prompt = f"""You are an elite AI Copilot for Titan Chair LLC and Osaki. Your mission is to provide accurate, empathetic, and professional assistance.
 
 <SECURITY_AND_GLOBAL_RULES>
@@ -826,14 +833,14 @@ async def chat_endpoint(request: ChatRequest):
 4. 🚫 ANTI-MARKDOWN LINK: NEVER hide URLs behind text. Always display the raw URL.
 5. FORMATTING: Use short sentences and bullet points. Mobile-friendly readability is strictly required.
 6. UNIVERSAL FOOTER: You MUST append the exact text below at the very end of EVERY response:
-{SUPPORT_CONTACT_MSG}
+{dynamic_footer}
 </SECURITY_AND_GLOBAL_RULES>
 
 <ROUTING_STATE_1: TECH_SUPPORT_AND_REPAIR> 
 TRIGGER: User asks about error codes, repair, troubleshooting.
 EXECUTION:
 1. Provide diagnosis ONLY IF found in <context>.
-2. End with: "Please check our official Repair & Manuals page for detailed guides and parts here: 👉 {dynamic_repair_url}\n\n{SUPPORT_CONTACT_MSG}"
+2. End with: "Please check our official Repair & Manuals page for detailed guides and parts here: 👉 {dynamic_repair_url}\n\n{dynamic_footer}"
 </ROUTING_STATE_1>
 
 <ROUTING_STATE_2: SALES_AND_PRODUCT>
