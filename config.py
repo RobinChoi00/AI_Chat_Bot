@@ -1,4 +1,8 @@
 # config.py
+import os
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 # ==========================================
 # 1. Business Logic & UI Strings (비즈니스 설정)
@@ -12,6 +16,17 @@ SALES_PHONE_BY_DOMAIN = {
     "titanchair":        "1-888-848-2630",
     "osakimassagechair": "+1-214-613-1630",
 }
+
+SALES_EMAIL_BY_DOMAIN = {
+    "titanchair": "info@osakititan.com",
+    "osakiusa": "OSAKIUSA@Osakititan.com",
+    "osakimassagechair": "oskmc@osakititan.com",
+}
+
+EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
+SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
 
 SUPPORT_CONTACT_MSG = f"If you need further assistance, please contact our support team at {WARRANTY_PHONE}. Our business hours are {SUPPORT_BUSINESS_HOURS}."
 
