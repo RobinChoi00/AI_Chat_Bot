@@ -124,42 +124,73 @@ class MasterIngester:
             for _, row in df.iterrows():
                 self.domain_docs["osaki_products"].append(Document(page_content=str(row.get('content', '')), metadata={"source": row.get('source', 'shopify')}))
 
-    # 🌟 [누락 복원 완료] 7번째 파이프라인: 두 CSV를 결합(Inner Join)하는 극한의 로직
+    # 🌟 [수정완료] 7번째 파이프라인: Brand+Name 조인키로 정확한 스펙 매칭
     def process_specifications(self):
         print("🔍 [7/7] 원본 쇼피파이 & 스펙 시트 융합(Join) 중... -> [osaki_products] 할당")
         spec_csv = os.path.join(RAW_DIR, "Specification_Massage Chair - Massage Chair.csv")
         shopify_csv = os.path.join(RAW_DIR, "products_export.csv")
+
+        # Friendly column name mapping: removes \r\n line breaks in column headers
+        SPEC_RENAME = {
+            "Width\r\n(inches)": "Width (inches)",
+            "Length\r\n(inches)": "Length (inches)",
+            "Height\r\n(inches)": "Height (inches)",
+            "Chair\r\nWeight\r\n(lb)": "Chair Weight (lb)",
+            "Maximum\r\n User Weight\r\n(lb)": "Maximum User Weight (lb)",
+            "Track\r\nLength\r\n(Full Metal)\r\n(inches)": "Track Length (inches)",
+            "Footrest Extension\r\n Length\r\n(inches)": "Footrest Extension (inches)",
+            "Inside of\r\nShoulder\r\nWidth\r\n(inches)": "Shoulder Width (inches)",
+            "Seat\r\nWidth\r\n(inches)": "Seat Width (inches)",
+            "Minimum\r\nDoor\r\nWidth\r\n(inches)": "Minimum Door Width (inches)",
+        }
+
+        SKIP_COLS = {'join_key', 'Body (HTML)', 'Handle', 'Image Src', 'Image Position',
+                     'Variant Image', 'Variant Grams', 'Variant Fulfillment Service',
+                     'full_name_spec', 'Brand', 'Name', 'Manufacturer', 'Manufacturer Code',
+                     'Update (YYYYMM)', 'Design Rep.', 'Video Rep.', 'Coder Rep.'}
         
         if os.path.exists(spec_csv) and os.path.exists(shopify_csv):
-            # 1. 💡 [아키텍처] 다중 헤더 무시하고 4번째 줄(skiprows=3)을 헤더로 스펙 데이터 로드
+            # 1. skiprows=3: row 3 is the true column header (Brand, Name, ...)
             df_spec = pd.read_csv(spec_csv, skiprows=3, low_memory=False).fillna("N/A")
-            df_spec.columns = df_spec.columns.str.strip() # 컬럼 공백 제거 방어 로직
-            
-            # 2. 쇼피파이 데이터 로드
+            df_spec.columns = (df_spec.columns.str.strip()
+                                .str.replace(r'\r\n', '\r\n', regex=False))
+            df_spec.rename(columns=SPEC_RENAME, inplace=True)
+            df_spec.columns = df_spec.columns.str.strip()
+
+            # 2. Shopify data
             df_shopify = pd.read_csv(shopify_csv, low_memory=False).fillna("N/A")
 
-            # 3. 조인을 위한 텍스트 정규화 함수
+            # 3. Normalise for join
             def normalize_text(text):
-                if pd.isna(text) or text == "N/A": return ""
+                if pd.isna(text) or str(text) == "N/A": return ""
                 return str(text).lower().replace("massage chair", "").replace("-", "").replace(" ", "").strip()
 
-            # 4. 🚨 [수정 완료] 양쪽 데이터에 모두 'join_key'를 완벽하게 생성합니다!
+            # 4. Build full model name from Brand + Name (fixes the previous Name-only mismatch)
+            df_spec['full_name_spec'] = (
+                df_spec['Brand'].fillna('').astype(str) + ' ' +
+                df_spec['Name'].fillna('').astype(str)
+            ).str.strip()
+            df_spec['join_key'] = df_spec['full_name_spec'].apply(normalize_text)
             df_shopify['join_key'] = df_shopify['Title'].apply(normalize_text)
-            df_spec['join_key'] = df_spec['Name'].apply(normalize_text) 
 
-            # 5. 두 데이터를 이름 기준으로 완벽하게 병합 (Inner Join)
+            # 5. Inner join
             merged_df = pd.merge(df_shopify, df_spec, on='join_key', how='inner')
+            print(f"   ✅ Spec join: {len(merged_df)} rows matched.")
             
             for _, row in merged_df.iterrows():
                 model_name = str(row.get('Title', 'Unknown'))
                 specs_text = []
                 for col_name, value in row.items():
-                    # 너무 길거나 불필요한 HTML 이미지 태그 등은 과감히 제거
-                    if col_name not in ['join_key', 'Body (HTML)', 'Handle', 'Image Src'] and value != "N/A" and str(value).strip():
-                        specs_text.append(f"- {col_name}: {value}")
+                    if col_name in SKIP_COLS: continue
+                    val_str = str(value).strip()
+                    if not val_str or val_str in ("N/A", "nan"): continue
+                    specs_text.append(f"- {col_name}: {val_str}")
                 
                 content = f"Specifications for Model [{model_name}]:\n" + "\n".join(specs_text)
-                self.domain_docs["osaki_products"].append(Document(page_content=content, metadata={"source": "specification_join", "title": model_name, "type": "specification"}))
+                self.domain_docs["osaki_products"].append(Document(
+                    page_content=content,
+                    metadata={"source": "specification_join", "title": model_name, "type": "specification"}
+                ))
 
     # ==========================================
     # 🚀 다중 벡터 DB 동시 빌드 (Multi-Index Generation)

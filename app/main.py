@@ -522,12 +522,25 @@ ACCESSORY_KEYWORDS = {
     "mat", "pad", "cover", "cleaner", "gun", "cushion", "shawl",
     "module", "fragrance", "scraping", "foot spa", "knee", "neck massager",
     "hand massager", "eye massager", "gua sha", "tens",
+    "vending", "swivel", "caddo", "bundle", "patio", "zena",
+    "seat cushion", "massage gun", "foot soaking", "arm massager",
 }
 ACCESSORY_PRICE_CEILING = 1000.0
+
+NON_CHAIR_TITLE_KEYWORDS = {
+    "vending", "swivel", "caddo", "patio", "bundle", "zena",
+    "nayax", "cleaner", "cover", "gun", "cushion", "shawl",
+    "fragrance", "spa", "scraper", "gua sha", "tens",
+}
 
 def _extract_price_from_doc(content: str) -> float:
     match = re.search(r"Total Price: \$([0-9,]+\.?\d*)", content)
     return float(match.group(1).replace(",", "")) if match else 0.0
+
+def _is_non_chair_doc(content: str) -> bool:
+    content_lower = content.lower()
+    first_line = content_lower.split("\n")[0]
+    return any(kw in first_line for kw in NON_CHAIR_TITLE_KEYWORDS)
 
 def rerank_product_docs(docs: List[Document], user_query: str, k: int) -> List[Document]:
     query_lower = user_query.lower()
@@ -536,6 +549,8 @@ def rerank_product_docs(docs: List[Document], user_query: str, k: int) -> List[D
 
     chairs, accessories = [], []
     for doc in docs:
+        if _is_non_chair_doc(doc.page_content):
+            continue
         price = _extract_price_from_doc(doc.page_content)
         if price >= ACCESSORY_PRICE_CEILING:
             chairs.append((doc, price))
@@ -546,16 +561,43 @@ def rerank_product_docs(docs: List[Document], user_query: str, k: int) -> List[D
     result = [d for d, _ in chairs] + [d for d, _ in accessories]
     return result[:k]
 
+_SHIPPING_PRICE_PATTERN = re.compile(r'delivery\s+(price|cost|fee|to\s+\w+)', re.IGNORECASE)
+_PRODUCT_DESC_PRICE_PATTERN = re.compile(r'\$[\d,]+(\.\d+)?\s*\+?\s*(free\s+shipping|shipping)', re.IGNORECASE)
+
 def is_tracking_query(query: str) -> bool:
     lowered = query.lower()
     has_order = bool(extract_order_identifier(query))
     has_email = bool(re.search(r'[\w\.-]+@[\w\.-]+\.\w+', query))
     has_keyword = any(keyword in lowered for keyword in TRACKING_KEYWORDS)
+
+    # "delivery price/cost/to country" without order/email → NOT tracking (route to WEB)
+    if _SHIPPING_PRICE_PATTERN.search(query) and not has_order and not has_email:
+        return False
+    # Product descriptions like "Chair Name $2,999 + Free Shipping" → NOT tracking
+    if _PRODUCT_DESC_PRICE_PATTERN.search(query):
+        return False
+
     if has_order and has_email:
         return True
     if has_email and has_keyword:
         return True
     return has_keyword
+
+def _is_email_followup_for_tracking(query: str, chat_history: List[Any]) -> bool:
+    """Detect multi-turn: user provides email after bot asked for it in tracking context."""
+    if not re.search(r'[\w\.-]+@[\w\.-]+\.\w+', query):
+        return False
+    if not chat_history:
+        return False
+    last_bot = next((m.content for m in reversed(chat_history) if m.role == "assistant"), "")
+    tracking_prompts = [
+        "email address used at checkout",
+        "email used at checkout",
+        "i also need:",
+        "look up your delivery status",
+        "order number and email",
+    ]
+    return any(phrase in last_bot.lower() for phrase in tracking_prompts)
 
 def normalize_error_code(code: str) -> Optional[str]:
     raw = str(code).strip()
@@ -766,11 +808,17 @@ async def chat_endpoint(request: ChatRequest):
             routing_decision = "QA"
         elif is_tracking_query(user_query):
             routing_decision = "TRACKING"
+        elif _is_email_followup_for_tracking(user_query, request.chat_history or []):
+            routing_decision = "TRACKING"
         elif is_product_query(user_query):
             routing_decision = "PRODUCTS"
         else:
             routing_decision = router_chain.invoke({"question": user_query}).strip().upper()
         logger.info(f"🔀 Router decision: target store -> [{routing_decision}]")
+
+        # Detect if user included their email (for sales lead capture)
+        email_in_query_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', user_query)
+        customer_email_for_lead = email_in_query_match.group() if email_in_query_match else ""
 
         exact_docs: List[Document] = []
         context = ""
@@ -885,13 +933,15 @@ EXECUTION:
 </ROUTING_STATE_1>
 
 <ROUTING_STATE_2: SALES_AND_PRODUCT>
-TRIGGER: User asks for recommendations, pricing, features.
+TRIGGER: User asks for recommendations, pricing, features, or specs.
 EXECUTION:
 1. ALWAYS prioritize recommending premium, latest-model full-body massage chairs from the <context>.
-2. Do NOT recommend accessories (seat pads, mats, covers, massage guns, cleaners) unless the user SPECIFICALLY asks for them.
+2. Do NOT recommend accessories (seat pads, mats, covers, massage guns, cleaners, vending chairs, swivel chairs, bundles) unless the user SPECIFICALLY asks for them.
 3. When recommending, present 2-3 chairs sorted from highest to lowest price. For each chair, highlight 2-3 key differentiating features.
 4. If multiple price tiers exist in <context>, lead with the highest-value option and follow with mid-range alternatives.
 5. Provide the rewritten "Direct Purchase Link" for each product.
+6. SPECIFICATIONS (CRITICAL): Always provide EXACT numerical values from <context> (inches, lbs, kg, etc.). NEVER approximate, estimate, or generalize spec numbers. If a spec is not in <context>, explicitly say "I don't have that exact specification — please check our website."
+7. EMAIL LEAD CAPTURE: At the end of every product recommendation or sales response, add: "💌 Interested in a personalized recommendation or exclusive pricing? Leave your email address and our team will get back to you within 24 hours!"
 </ROUTING_STATE_2>
 
 <ROUTING_STATE_5: ORDER_TRACKING>
@@ -931,6 +981,15 @@ EXECUTION:
                 db.add(new_log)
                 db.commit()
                 db.close()
+
+                # Fire sales lead email if user provided email on a PRODUCTS query
+                if "PRODUCTS" in routing_decision and customer_email_for_lead:
+                    logger.info(f"📧 [Sales Lead] Firing email for {customer_email_for_lead} on {target_domain}")
+                    threading.Thread(
+                        target=send_sales_lead_email,
+                        args=(customer_email_for_lead, user_query, full_response[:500], target_domain),
+                        daemon=True,
+                    ).start()
 
             except Exception as e:
                 logger.error(f"Streaming Error: {e}")
