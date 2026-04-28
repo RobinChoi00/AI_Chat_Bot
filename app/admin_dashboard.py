@@ -410,11 +410,12 @@ ctrl1, ctrl2, ctrl3 = st.columns([2, 2, 1])
 with ctrl1:
     selected_label = st.selectbox("🌐 Filter by Brand", list(DOMAIN_LABELS.keys()))
 with ctrl2:
+    # 달력 시작일은 2023년 1월 1일로, 종료일은 '오늘'로 고정
     date_range = st.date_input(
         "📅 Date Range",
-        value=(df['date'].min(), df['date'].max()),
-        min_value=df['date'].min(),
-        max_value=df['date'].max(),
+        value=(df['date'].min(), df['date'].max()), # 기본 선택값은 여전히 DB 기준
+        min_value=datetime(2026, 3, 16).date(),     # 선택 가능한 가장 오래된 과거
+        max_value=datetime.today().date()          # 선택 가능한 가장 먼 미래 (오늘)
     )
 with ctrl3:
     st.markdown("<br>", unsafe_allow_html=True)
