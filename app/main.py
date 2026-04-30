@@ -154,20 +154,26 @@ def _normalize_track123_events(events: List[Dict[str, Any]]) -> List[Dict[str, s
         })
     return normalized
 
+_YEAR_PATTERN = re.compile(r'^20[12]\d$')  # 2010–2029
+
 def extract_order_identifier(user_query: str) -> str:
     """Extract likely order identifier from natural language."""
     query = user_query or ""
     patterns = [
         r"#(?=[A-Za-z0-9]{4,24}\b)(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]+\b",  # #X46YIAC5A
-        r"\b[A-Za-z]{2,12}\d{4,}\b",     # TIDM15934
+        r"\b[A-Za-z]{2,12}\d{4,}\b",     # TIDM15934, OSKUS11308
         r"\b(?=[A-Za-z0-9]{6,24}\b)(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]+\b", # X46YIAC5A
         r"#?[A-Za-z0-9]+-\d+\b",         # ABC-12345
-        r"#?\d{4,}\b",                   # 12345
+        r"#?\d{5,}\b",                   # 5+ digit numbers (exclude 4-digit years)
     ]
     for pattern in patterns:
         match = re.search(pattern, query)
         if match:
-            return match.group().replace("#", "").strip()
+            value = match.group().replace("#", "").strip()
+            # Skip bare 4-digit calendar years
+            if _YEAR_PATTERN.match(value):
+                continue
+            return value
     return ""
 
 def enrich_tracking_from_track123(tracking_number: str, store_config: Dict[str, str]) -> Dict[str, Any]:
@@ -599,6 +605,15 @@ def _is_email_followup_for_tracking(query: str, chat_history: List[Any]) -> bool
     ]
     return any(phrase in last_bot.lower() for phrase in tracking_prompts)
 
+def _is_email_followup_for_sales(query: str, chat_history: List[Any]) -> bool:
+    """Detect multi-turn: user provides email after bot asked for it in sales lead context."""
+    if not re.search(r'[\w\.-]+@[\w\.-]+\.\w+', query):
+        return False
+    if not chat_history:
+        return False
+    last_bot = next((m.content for m in reversed(chat_history) if m.role == "assistant"), "")
+    return "leave your email" in last_bot.lower() or "💌" in last_bot
+
 def normalize_error_code(code: str) -> Optional[str]:
     raw = str(code).strip()
     match = re.fullmatch(r"\d+(?:\.\d+)?", raw)
@@ -806,6 +821,8 @@ async def chat_endpoint(request: ChatRequest):
         # Step 1: Intent Routing
         if is_tech_query(user_query):
             routing_decision = "QA"
+        elif _is_email_followup_for_sales(user_query, request.chat_history or []):
+            routing_decision = "SALES_LEAD"
         elif is_tracking_query(user_query):
             routing_decision = "TRACKING"
         elif _is_email_followup_for_tracking(user_query, request.chat_history or []):
@@ -822,6 +839,41 @@ async def chat_endpoint(request: ChatRequest):
 
         exact_docs: List[Document] = []
         context = ""
+
+        # Step 2-0: SALES_LEAD — email received after bot's 24h offer → confirm + fire email
+        if routing_decision == "SALES_LEAD":
+            sales_footer = get_contact_msg("PRODUCTS", target_domain)
+            if customer_email_for_lead:
+                # Collect the user's most recent product-related message from history
+                prev_product_query = user_query
+                for m in reversed(request.chat_history or []):
+                    if m.role == "user" and not re.search(r'[\w\.-]+@[\w\.-]+\.\w+', m.content):
+                        prev_product_query = m.content
+                        break
+                threading.Thread(
+                    target=send_sales_lead_email,
+                    args=(customer_email_for_lead, prev_product_query, "", target_domain),
+                    daemon=True,
+                ).start()
+                logger.info(f"📧 [Sales Lead] Email captured: {customer_email_for_lead} on {target_domain}")
+                confirmation = "\n".join([
+                    f"Thank you! ✅ We've received your email at **{customer_email_for_lead}**.",
+                    "",
+                    "Our team will reach out within **24 hours** with personalized recommendations and exclusive pricing.",
+                    "",
+                    sales_footer,
+                ])
+            else:
+                confirmation = "\n".join([
+                    "I didn't catch your email address. Could you please share it again?",
+                    "Example: yourname@email.com",
+                    "",
+                    sales_footer,
+                ])
+            return StreamingResponse(
+                stream_text_response(request.session_id, user_query, confirmation, domain=target_domain),
+                media_type="text/event-stream",
+            )
 
         # Step 2: 💡 [핵심] Native API 기반의 동적 멀티테넌트 데이터 패칭 로직
         if "TRACKING" in routing_decision:
@@ -941,7 +993,8 @@ EXECUTION:
 4. If multiple price tiers exist in <context>, lead with the highest-value option and follow with mid-range alternatives.
 5. Provide the rewritten "Direct Purchase Link" for each product.
 6. SPECIFICATIONS (CRITICAL): Always provide EXACT numerical values from <context> (inches, lbs, kg, etc.). NEVER approximate, estimate, or generalize spec numbers. If a spec is not in <context>, explicitly say "I don't have that exact specification — please check our website."
-7. EMAIL LEAD CAPTURE: At the end of every product recommendation or sales response, add: "💌 Interested in a personalized recommendation or exclusive pricing? Leave your email address and our team will get back to you within 24 hours!"
+7. PRICING (CRITICAL — NO FABRICATION): ONLY show the price that is explicitly stated in <context> for that specific product. NEVER invent "Original Price" vs "Current Price" comparisons. NEVER fabricate discounts by comparing two DIFFERENT products' prices. If a user asks for discounts or cheaper options, show the actual listed price from <context> and say "Contact our sales team for the best available pricing."
+8. EMAIL LEAD CAPTURE: At the end of every product recommendation or sales response, add: "💌 Interested in a personalized recommendation or exclusive pricing? Leave your email address and our team will get back to you within 24 hours!"
 </ROUTING_STATE_2>
 
 <ROUTING_STATE_5: ORDER_TRACKING>
