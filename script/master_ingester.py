@@ -124,23 +124,34 @@ class MasterIngester:
             for _, row in df.iterrows():
                 self.domain_docs["osaki_products"].append(Document(page_content=str(row.get('content', '')), metadata={"source": row.get('source', 'shopify')}))
 
-    # 🌟 [수정완료] 7번째 파이프라인: 2단계 스마트 매칭으로 최대 스펙 커버리지 확보
+    # 🌟 [수정완료] 7번째 파이프라인: Excel 우선 읽기 + 2단계 스마트 매칭
     def process_specifications(self):
         print("🔍 [7/7] 원본 쇼피파이 & 스펙 시트 융합(Join) 중... -> [osaki_products] 할당")
-        spec_csv = os.path.join(RAW_DIR, "Specification_Massage Chair - Massage Chair.csv")
+        spec_xlsx = os.path.join(RAW_DIR, "Specification_Massage Chair.xlsx")
+        spec_csv  = os.path.join(RAW_DIR, "Specification_Massage Chair - Massage Chair.csv")
         shopify_csv = os.path.join(RAW_DIR, "products_export.csv")
 
         SPEC_RENAME = {
             "Width\r\n(inches)": "Width (inches)",
+            "Width\n(inches)": "Width (inches)",
             "Length\r\n(inches)": "Length (inches)",
+            "Length\n(inches)": "Length (inches)",
             "Height\r\n(inches)": "Height (inches)",
+            "Height\n(inches)": "Height (inches)",
             "Chair\r\nWeight\r\n(lb)": "Chair Weight (lb)",
+            "Chair\nWeight\n(lb)": "Chair Weight (lb)",
             "Maximum\r\n User Weight\r\n(lb)": "Maximum User Weight (lb)",
+            "Maximum\n User Weight\n(lb)": "Maximum User Weight (lb)",
             "Track\r\nLength\r\n(Full Metal)\r\n(inches)": "Track Length (inches)",
+            "Track\nLength\n(Full Metal)\n(inches)": "Track Length (inches)",
             "Footrest Extension\r\n Length\r\n(inches)": "Footrest Extension (inches)",
+            "Footrest Extension\n Length\n(inches)": "Footrest Extension (inches)",
             "Inside of\r\nShoulder\r\nWidth\r\n(inches)": "Shoulder Width (inches)",
+            "Inside of\nShoulder\nWidth\n(inches)": "Shoulder Width (inches)",
             "Seat\r\nWidth\r\n(inches)": "Seat Width (inches)",
+            "Seat\nWidth\n(inches)": "Seat Width (inches)",
             "Minimum\r\nDoor\r\nWidth\r\n(inches)": "Minimum Door Width (inches)",
+            "Minimum\nDoor\nWidth\n(inches)": "Minimum Door Width (inches)",
         }
 
         SKIP_COLS = {'join_key', 'Body (HTML)', 'Handle', 'Image Src', 'Image Position',
@@ -148,96 +159,104 @@ class MasterIngester:
                      'full_name_spec', 'Brand', 'Name', 'Manufacturer', 'Manufacturer Code',
                      'Update (YYYYMM)', 'Design Rep.', 'Video Rep.', 'Coder Rep.'}
 
-        if os.path.exists(spec_csv) and os.path.exists(shopify_csv):
-            # 1. skiprows=3: row 3 is the true column header (Brand, Name, ...)
+        spec_source_exists = os.path.exists(spec_xlsx) or os.path.exists(spec_csv)
+        if not (spec_source_exists and os.path.exists(shopify_csv)):
+            print("   ⚠️  Spec file or Shopify CSV not found. Skipping.")
+            return
+
+        # 1. Excel 우선, 없으면 CSV 폴백
+        if os.path.exists(spec_xlsx):
+            print(f"   📊 Excel 파일 읽기: {os.path.basename(spec_xlsx)} (sheet='Massage Chair')")
+            df_spec = pd.read_excel(spec_xlsx, sheet_name="Massage Chair",
+                                    skiprows=3, engine="openpyxl").fillna("N/A")
+        else:
+            print(f"   📄 CSV 파일 읽기 (Excel 없음): {os.path.basename(spec_csv)}")
             df_spec = pd.read_csv(spec_csv, skiprows=3, low_memory=False).fillna("N/A")
-            df_spec.columns = (df_spec.columns.str.strip()
-                                .str.replace(r'\r\n', '\r\n', regex=False))
-            df_spec.rename(columns=SPEC_RENAME, inplace=True)
-            df_spec.columns = df_spec.columns.str.strip()
 
-            # 2. Shopify data (deduplicate by Title to avoid repeated rows per variant)
-            df_shopify = pd.read_csv(shopify_csv, low_memory=False).fillna("N/A")
-            df_shopify = df_shopify.drop_duplicates(subset=['Title'])
+        df_spec.columns = df_spec.columns.str.strip()
+        df_spec.rename(columns=SPEC_RENAME, inplace=True)
+        df_spec.columns = df_spec.columns.str.strip()
+        # 빈 행 제거 (Brand 또는 Name이 없는 행)
+        df_spec = df_spec[df_spec['Brand'].astype(str).str.strip().replace('N/A', '') != '']
+        print(f"   총 {len(df_spec)}개 스펙 모델 로드됨.")
 
-            # 3. Normalise for join
-            # - Strips "massage chair", "os-" model prefix, 3D/4D/5D variant suffixes,
-            #   punctuation and whitespace so titles like "Osaki Nova II 3D+" match
-            #   the spec entry "Osaki Nova II".
-            import re as _re
-            def normalize_text(text):
-                if pd.isna(text) or str(text) == "N/A": return ""
-                s = str(text).lower()
-                s = s.replace("massage chair", "")
-                s = _re.sub(r'\bos-', '', s)          # strip "OS-" model prefix
-                s = _re.sub(r'[^a-z0-9]', '', s)      # keep alphanumeric only
-                return s.strip()
+        # 2. Shopify data (deduplicate by Title to avoid repeated rows per variant)
+        df_shopify = pd.read_csv(shopify_csv, low_memory=False).fillna("N/A")
+        df_shopify = df_shopify.drop_duplicates(subset=['Title'])
 
-            # 4. Build full model name from Brand + Name
-            df_spec['full_name_spec'] = (
-                df_spec['Brand'].fillna('').astype(str) + ' ' +
-                df_spec['Name'].fillna('').astype(str)
-            ).str.strip()
-            df_spec['join_key'] = df_spec['full_name_spec'].apply(normalize_text)
-            df_shopify['join_key'] = df_shopify['Title'].apply(normalize_text)
+        # 3. Normalise for join
+        # - Strips "massage chair", "os-" model prefix, 3D/4D/5D variant suffixes,
+        #   punctuation and whitespace so titles like "Osaki Nova II 3D+" match
+        #   the spec entry "Osaki Nova II".
+        import re as _re
+        def normalize_text(text):
+            if pd.isna(text) or str(text) == "N/A": return ""
+            s = str(text).lower()
+            s = s.replace("massage chair", "")
+            s = _re.sub(r'\bos-', '', s)          # strip "OS-" model prefix
+            s = _re.sub(r'[^a-z0-9]', '', s)      # keep alphanumeric only
+            return s.strip()
 
-            # ── Phase 1: exact join ──────────────────────────────────────────
-            merged_exact = pd.merge(df_shopify, df_spec, on='join_key', how='inner')
-            matched_shop_keys = set(merged_exact['join_key'])
-            print(f"   Phase 1 (exact):    {len(merged_exact)} rows matched.")
+        # 4. Build full model name from Brand + Name
+        df_spec['full_name_spec'] = (
+            df_spec['Brand'].fillna('').astype(str) + ' ' +
+            df_spec['Name'].fillna('').astype(str)
+        ).str.strip()
+        df_spec['join_key'] = df_spec['full_name_spec'].apply(normalize_text)
+        df_shopify['join_key'] = df_shopify['Title'].apply(normalize_text)
 
-            # ── Phase 2: bidirectional substring fallback ────────────────────
-            # Handles cases where extra tokens are appended OR prepended:
-            #   "Osaki Nova II 3D+"  ↔  "Osaki Nova II"     (suffix extra)
-            #   "Titan Forge"        ↔  "Titan Forge 3D"    (spec has extra)
-            unmatched_shop = df_shopify[~df_shopify['join_key'].isin(matched_shop_keys)]
-            spec_keys = df_spec['join_key'].tolist()
+        # ── Phase 1: exact join ──────────────────────────────────────────
+        merged_exact = pd.merge(df_shopify, df_spec, on='join_key', how='inner')
+        matched_shop_keys = set(merged_exact['join_key'])
+        print(f"   Phase 1 (exact):    {len(merged_exact)} rows matched.")
 
-            # Dimension-stripped keys for Phase 3
-            def strip_dims(key):
-                return _re.sub(r'\d+d\+?', '', key)
+        # ── Phase 2: bidirectional substring fallback ────────────────────
+        # Handles cases where extra tokens are appended OR prepended:
+        #   "Osaki Nova II 3D+"  ↔  "Osaki Nova II"     (suffix extra)
+        #   "Titan Forge"        ↔  "Titan Forge 3D"    (spec has extra)
+        unmatched_shop = df_shopify[~df_shopify['join_key'].isin(matched_shop_keys)]
+        spec_keys = df_spec['join_key'].tolist()
 
-            fuzzy_rows = []
-            fuzzy_matched_shop = set()
-            for _, shop_row in unmatched_shop.iterrows():
-                shop_key = shop_row['join_key']
-                best_idx, best_len = None, 0
-                for i, spec_key in enumerate(spec_keys):
-                    if not spec_key or len(spec_key) < 6:
-                        continue
-                    # bidirectional: spec in shop OR shop in spec
-                    if (spec_key in shop_key or shop_key in spec_key) and len(spec_key) > best_len:
-                        best_idx, best_len = i, len(spec_key)
-                    # Phase 3: try again after stripping Nd patterns (3D, 4D, 5D…)
-                    elif strip_dims(spec_key) and len(strip_dims(spec_key)) >= 6:
-                        sk_stripped = strip_dims(spec_key)
-                        sh_stripped = strip_dims(shop_key)
-                        if (sk_stripped in sh_stripped or sh_stripped in sk_stripped) and len(sk_stripped) > best_len:
-                            best_idx, best_len = i, len(sk_stripped)
-                if best_idx is not None:
-                    fuzzy_rows.append({**shop_row.to_dict(), **df_spec.iloc[best_idx].to_dict()})
-                    fuzzy_matched_shop.add(shop_row['join_key'])
+        def strip_dims(key):
+            return _re.sub(r'\d+d\+?', '', key)
 
-            fuzzy_df = pd.DataFrame(fuzzy_rows) if fuzzy_rows else pd.DataFrame()
-            print(f"   Phase 2 (fuzzy):    {len(fuzzy_df)} additional rows matched.")
+        fuzzy_rows = []
+        for _, shop_row in unmatched_shop.iterrows():
+            shop_key = shop_row['join_key']
+            best_idx, best_len = None, 0
+            for i, spec_key in enumerate(spec_keys):
+                if not spec_key or len(spec_key) < 6:
+                    continue
+                if (spec_key in shop_key or shop_key in spec_key) and len(spec_key) > best_len:
+                    best_idx, best_len = i, len(spec_key)
+                elif strip_dims(spec_key) and len(strip_dims(spec_key)) >= 6:
+                    sk_stripped = strip_dims(spec_key)
+                    sh_stripped = strip_dims(shop_key)
+                    if (sk_stripped in sh_stripped or sh_stripped in sk_stripped) and len(sk_stripped) > best_len:
+                        best_idx, best_len = i, len(sk_stripped)
+            if best_idx is not None:
+                fuzzy_rows.append({**shop_row.to_dict(), **df_spec.iloc[best_idx].to_dict()})
 
-            merged_df = pd.concat([merged_exact, fuzzy_df], ignore_index=True)
-            print(f"   ✅ Total spec join: {len(merged_df)} rows matched.")
+        fuzzy_df = pd.DataFrame(fuzzy_rows) if fuzzy_rows else pd.DataFrame()
+        print(f"   Phase 2 (fuzzy):    {len(fuzzy_df)} additional rows matched.")
 
-            for _, row in merged_df.iterrows():
-                model_name = str(row.get('Title', 'Unknown'))
-                specs_text = []
-                for col_name, value in row.items():
-                    if col_name in SKIP_COLS: continue
-                    val_str = str(value).strip()
-                    if not val_str or val_str in ("N/A", "nan"): continue
-                    specs_text.append(f"- {col_name}: {val_str}")
+        merged_df = pd.concat([merged_exact, fuzzy_df], ignore_index=True)
+        print(f"   ✅ Total spec join: {len(merged_df)} rows matched.")
 
-                content = f"Specifications for Model [{model_name}]:\n" + "\n".join(specs_text)
-                self.domain_docs["osaki_products"].append(Document(
-                    page_content=content,
-                    metadata={"source": "specification_join", "title": model_name, "type": "specification"}
-                ))
+        for _, row in merged_df.iterrows():
+            model_name = str(row.get('Title', 'Unknown'))
+            specs_text = []
+            for col_name, value in row.items():
+                if col_name in SKIP_COLS: continue
+                val_str = str(value).strip()
+                if not val_str or val_str in ("N/A", "nan"): continue
+                specs_text.append(f"- {col_name}: {val_str}")
+
+            content = f"Specifications for Model [{model_name}]:\n" + "\n".join(specs_text)
+            self.domain_docs["osaki_products"].append(Document(
+                page_content=content,
+                metadata={"source": "specification_join", "title": model_name, "type": "specification"}
+            ))
 
     # ==========================================
     # 🚀 다중 벡터 DB 동시 빌드 (Multi-Index Generation)

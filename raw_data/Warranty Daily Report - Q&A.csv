@@ -1,0 +1,129 @@
+Most popular Questions and Problems,,
+Category - Power,Questions,Possible Solutions
+Chair has no power,"Is there any lights(led, panels, power switch) on, does the chair make any sounds","power cable not plugged in, power cord is damaged, switched outlet, blown fuse, main board damaged due to power surge,power switch is off"
+Remote is dead,Are you able to control the chair with the side panels buttons? Do you hear a clicking noise when you flip the switch?,Clicking noise = Remote replacement. No clicking noise = Power PCB/Fuse.
+Chair has no power,Have you checked the fuses? Do you have a power surge? Is the switch on the back flipped?,Give directions on how to check the fuses depending on the chair. Check different outlets in the house if possible. Check power cord.
+Wireless charging is not working,Have you removed your phone's case? Have you tried multiple devices? Does your phone have wireless charging?,"Charge phone w/out case, replace wireless charging pad, replace side panel(very rare)"
+Red blinking light.,Where is this red light located? Does the chair get any power? Are you getting any error codes?,Advise the blinking light means the chair has power.
+USB charging is not working,Have you tried multiple charging cables? ,"Replace charging cable, replace usb charging port/board"
+chair turning off after 9 mins,please use all features in manual mode to see if theres any specific motion that triggers the power outage,"this could be a main pcb issue, although it is also likely a certain aspect of the chair is shorting the pcb itself"
+Red light is constantly blinking,Ask if it blinks while in use or if it is off but not unplugged,If the light is blinking only when the chair is not in explain that the chair is fine and the blinking indicates chair is in standby. If blinking and chair is not coming on check on mech replacement as the light indicates errors but no code on chair
+Chair does not power on,Ask customr to check fuses on the chair and verify if the chair makes noises but does not turn on,If chair power turns on and clicking is heard replace main and power PCB if replacing the fuses did fix the issue 
+fuse is blown,please send a photo of the fuse to ensure it was blown,"if fuse was blown, we can easily send out a replacement the cx can use to swap"
+, ,
+,,
+,,
+, ,
+,,
+,,
+,,
+Category - Mech,,
+mech does not move,"Can you remove backpad/innler liner, does the mech move in manual mode? Does mech make abnormal sounds?","Strap/innler liner tangled in mech(cut strap and retest), replace mech if it appears damaged"
+Noises coming from inside chair,Does the mech still move or is it stuck? Request for a video of the noise with the rollers exposed.,"Replace mech, if mech is stuck in the middle 3D sensor can be replaced, if mech is stuck at the top try pulling the mech to put it back on the 3D track."
+Mech stopped during operation,Ask the customer for pictures of where on the chair the mech stopped and see if they can move it manually and have customer remove back pad and inner liner and picture the roller mech,If the mech is not tangled in the strap or appears to have damage send replacement mech if mech is not damaged and can be moved manually send replacement main PCB amd Comm cables.
+One side feels stronger than the other.,How long ago you noticed this change? Did you hear anything break inside of the chair?,Open the back pad and inner liner and see how damaged the arms are. Replace the mech.
+mech working sporaddically,"does this happen in both auto and manual, or just a singular mode?","when this happens, 9 times out of 10 its simply the main pcb"
+Mech intensity is not changing.,"What auto modes are you using? Have you tried manual mode? If so, does it change?",Explain some auto modes are predefined and the intesnity will not change. 
+Rollers are not heating up,Have you activated the heated roller function? Can you feel around the rollers for any heat after removing the backpad?,"Replace heating elements, no issue explain heat is mild, check internal wiring to pcb(maybe replace pcb if needed)"
+Only kneading function is failing,Is this happening on manual/auto modes?,Replace kneading motor or full mech
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+Category - Footrest,,
+Error 68/Footrest stuck extended,Try disconnecting and reconnecting footrest connections,Replace footrest or footrest extension/retraction sensor
+Footrest noises.,Does said noise occur when the foot rollers are or the air bags are on?,Isolate the problem. Tell the customer to go on manual and use only air bags or foot rollers or another function and see what part needs to be replaced.
+Footrest airbags not inflating,Ask customer to check the footrest air connection and make sure it is securly connected and airbags on the calf to make sure they are not damaged,If connection is secure and bags have no damage send a tech to check for kinked or loose airlines inside the chair to the footrest
+Object obstructing,Is there an object pressuring the back plate? Is anything on the side panels?,"Clear the area area, remove any hanging cables that might trigger the sensor. Replace footrest."
+Footrest is not raising up/lowering down,Can you verify if you can raise/lower it via the side panel buttons or the remote? Have you tried power cycling the chair? Is the footrest actuator properly connected?,
+White connectors are hard to connect.,Are they broken? Can you take a picture of them so I can ensure you they are good? ,"Make a video or take a picture for better refence. If said part is broken, we can ship it out and they can swap it on their own. Easy pull in or out."
+, ,
+Footrest snapped off.,Are you able to use it at all? Did anyone stood on it?,"Instruct the customer the footrest cannot handle much weight, therefore we cannot step on it. They will have to buy a new footrest since this is user error."
+Footrest makes popping sound when lowering/raising,Can you check for any obsturctions under the footrest?,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+Category - Remote,,
+shoulders cant adjust,are you tapping or holding the arrows when it prompts to adjust?,"most times, the customer taps very quickly when it should be a press and hold to adjust the shoulders"
+Remote does not power on,Check to make sure chair is able to be turned on and if possible check voice to see if the customer gets a response,If voice responds and chair powers up replace the remote but if they get no response for the chair and it does not seem to power on replace main and power PCB
+tablet isnt charging,can you ensure there are no obstructions in between the tablet and the charging prongs?,very likely there is some debris or something in the way. other times its as simple as not being plugged in correctly
+Tablet only showing settings ,(Present on the Grand Duo/Apex Chair) Have you paired the remote to the chair?,Almost always the remote is not paired to the massage chair via Low Energy Bluetooth
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+Category - Air,,
+chair has no air at all,"Please ensure the air hose connecting from the footrest to the base of the chair is securely connected. Additionally, if you hear any hissing noises in a specific area, let me know.","the airhose from the footrest to base is not connected, connecting it restores air throughout the chair, if specific area, the hissing tells which hose is disconnected from the specific airbag"
+Airbags on one side of chair do not work,Ask if the customer hear's any hissing sounds. Ask if any other airbags are not working.,"If hissing is heard, send airbag where the sound is coming from. Send tech to check for kinked hoses or faulty valves."
+Airbags do not deflate,Ask if airbags eventually deflate when chair turns off. Ask which/how many airbags do not deflate.,"If airbags do not deflate eventually, replace Main PCB. If airbags do eventually deflate or if only one airbag is affected, possible bad airbag or valve."
+Armrest airbags not inflating,First see if the customer or WG assembled if customer assembled have them check the airline connections to the chair from the armrest,If armrest connections are secure or WG assembled dispatch a tech to check lines for kinks or loose connections
+The air compressor is too loud,Are you using the chair on carpet/rug? Did you move the chair to a new surface/location? Can you take a video of the sound?,"Compare sound of chair to showroom model, advise to place rug underneath chair"
+Specific airbag doesn't work on only manual mode,Is your software up todate? Does it work on automodes?,Change settings via engineering mode
+Airbags are too intense,Can you verify what program this is happening? Have you tried adjusting the settings?,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+Category - Heat,,
+Heat on chair not working,Ask if turning on heat without sitting in the chair for a few minutes and feeling the area where heat should be generated. Ask if backpad wire is securely connected.,"If heat is felt, explain chairs do not heat up to the level of a carseat and is much more subtle. If no heat is detected and the wire is firmly connected, replace backpad."
+Heat is not working on newly delivered chair,Ask customer if they can disconnect and reconnect the power cord to the backpad and check the connection to the footrest for calf heat  ,If the heat is properly connected have it verified by tech and replace back pad if no heat is detected by the tech
+Calf heating not working.,Are you able to feel anyhting after 5 minutes? Are you able to control the intensity? Are you able to turn it on manual?,"Check connections and advise the heating is mild. Ultimately, replace footrest."
+Massage chair does not heat up enough,"What temperature is expected for the chair, and can you provide a temperature reading of the failing heated section?",
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+Category - Misc.,,
+Voice control picks up ghosts/random voices.,Is the chair located in an area where a lot of people might be close by? Is the chair near by TV? Do you turn off/unplug the chair from the wall after usage?,Go on settings turn off the voice control feature if they do not like it. Unplug the chair from the wall after being used. When the chair picks up random voices is just working as intended.
+Voice control does not work.,What exact commands are you using? Are you using commands from the list or making it by your own? How loud are you speaking to the mic?,Make sure they are using the right commands and speak clearly to it and also help them locate the mic.
+Voice control dead.,What exact commands are you using? Are you using commands from the list or making it by your own? How loud are you speaking to the mic?,Check side panel connection sometimes specific cable WG does not connect. Repalce VC PCB.
+Chair does not remember my height.,Are you able to adjust the shoulder and footrest manually?,Explain that any of our chairs remember the customer height so the chair will always back scan and adjust the footrest before every massage.
+Bluetooth not connecting,Have customer test the phone they are connecting to make sure it connects with other devices and also try another phone,If chair is not showing up on customers bluetooth and no issues are presnet with the phone send replacement blue tooth PCB 
+Speakers sound disruptive.,Have you used any other apps such YouTube and Spotify? Have you tried playing music/videos from another device?,Replace speakers.
+The chair does not return to start position,What mode are you experiencing this in? Does the chair return to the starting position when you power it off/restart?,"Check if the chair has a setting for this and toggle it, no issue found it's normal for some chairs"
+Back pad has no zipper head.,Have you used a paper clip to insert the hole?,Instruct the customer our zippers may not have a tab but you can use a paperclip in order to remove any backpads. Make a video.
+Damage to newly delivered chair,Get pictures showing the damage to the chair and verify if it can be repaired.,If damage looks to be repairable send the customer the parts for repair and a tech ASAP if damage looks extensive reach out to replace the chair
+Cannot update software ,Are you connected to wifi? What happens when you try to update the software?,Check if firewall settings are active?
