@@ -1041,8 +1041,17 @@ EXECUTION:
             messages_payload.append({"role": MSG.role, "content": MSG.content})
         messages_payload.append({"role": "user", "content": user_query})
 
+        # Mandatory email lead capture footer for product/general routes
+        LEAD_CAPTURE_LINE = (
+            "💌 Interested in a personalized recommendation or exclusive pricing? "
+            "Leave your email address and our team will get back to you within 24 hours!"
+        )
+        is_product_route = routing_decision in ("PRODUCTS", "GENERAL_PRODUCT_INFO")
+        # Detect if user is sending an email (avoid asking again)
+        user_sent_email = bool(re.search(r'[\w\.-]+@[\w\.-]+\.\w+', user_query))
+
         def generate_stream():
-            full_response = "" 
+            full_response = ""
             try:
                 stream_response = openai_client.chat.completions.create(
                     model=AGENT_MODEL,           
@@ -1056,7 +1065,19 @@ EXECUTION:
                         content = chunk.choices[0].delta.content
                         full_response += content 
                         yield content
-                
+
+                # POST-PROCESS: enforce email lead capture footer for product responses
+                # (LLM sometimes omits the mandatory line, so we append it deterministically)
+                if (
+                    is_product_route
+                    and not user_sent_email
+                    and "💌" not in full_response
+                    and "leave your email" not in full_response.lower()
+                ):
+                    appended = f"\n\n{LEAD_CAPTURE_LINE}"
+                    full_response += appended
+                    yield appended
+
                 db = SessionLocal()
                 new_log = ChatLog(session_id=request.session_id, user_query=user_query, bot_response=full_response, domain=target_domain)
                 db.add(new_log)
