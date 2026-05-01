@@ -19,7 +19,7 @@ SALES_PHONE_BY_DOMAIN = {
 
 SALES_EMAIL_BY_DOMAIN = {
     "titanchair": "info@osakititan.com",
-    "osakiusa": "OSAKIUSA@Osakititan.com",
+    "osakiusa": "osakiusa@osakititan.com",
     "osakimassagechair": "oskmc@osakititan.com",
 }
 

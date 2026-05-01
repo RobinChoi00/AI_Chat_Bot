@@ -45,40 +45,55 @@ from config import (
 
 
 
-def send_sales_lead_email(customer_email, query_content, product_info, domain):
-    """
-    세일즈 팀에게 고객 리드 정보를 이메일로 전송합니다.
-    """
-    target_email = SALES_EMAIL_BY_DOMAIN.get(domain.lower(), "info@osakititan.com")
-    
+def _resolve_sales_email(domain: str) -> str:
+    """Return the correct sales inbox for a given target_domain URL string."""
+    domain_lower = (domain or "").lower()
+    for key, email in SALES_EMAIL_BY_DOMAIN.items():
+        if key in domain_lower:
+            return email
+    return list(SALES_EMAIL_BY_DOMAIN.values())[0]  # fallback: first brand
+
+def send_sales_lead_email(customer_email: str, query_content: str, product_info: str, domain: str) -> bool:
+    """세일즈 팀에게 고객 리드 정보를 이메일로 전송합니다."""
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        logger.error("🚨 [Email Error] EMAIL_SENDER or EMAIL_PASSWORD is not set in .env")
+        return False
+
+    target_email = _resolve_sales_email(domain)
+    logger.info(f"📧 [Email Prep] domain='{domain}' → target='{target_email}'")
+
     subject = f"[AI Lead] New Sales Inquiry from {customer_email}"
-    body = f"""
-    새로운 잠재 고객 리드가 접수되었습니다.
-    
-    - 고객 이메일: {customer_email}
-    - 문의 도메인: {domain}
-    - 고객 문의 내용: {query_content}
-    - 추천/관심 제품 정보: {product_info}
-    
-    이 메일은 AI 에이전트에 의해 자동 발송되었습니다.
-    """
-    
+    body = (
+        f"New sales lead from AI chatbot.\n\n"
+        f"Customer Email : {customer_email}\n"
+        f"Site           : {domain}\n"
+        f"Customer Query : {query_content}\n"
+        f"Bot Response   : {product_info}\n\n"
+        f"-- Sent automatically by AI Agent --"
+    )
+
     msg = MIMEMultipart()
     msg['From'] = EMAIL_SENDER
     msg['To'] = target_email
     msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'plain'))
-    
+    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
     try:
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.ehlo()
             server.starttls()
+            server.ehlo()
             server.login(EMAIL_SENDER, EMAIL_PASSWORD)
             server.send_message(msg)
-        logger.info(f"📧 [Email Sent] Sales lead forwarded to {target_email}")
+        logger.info(f"✅ [Email Sent] Sales lead → {target_email}")
         return True
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error(f"🚨 [Email Auth Failed] Check EMAIL_SENDER/PASSWORD in .env: {e}")
+    except smtplib.SMTPException as e:
+        logger.error(f"🚨 [Email SMTP Error] {e}")
     except Exception as e:
-        logger.error(f"🚨 [Email Error] Failed to send email: {e}")
-        return False
+        logger.error(f"🚨 [Email Unknown Error] {e}")
+    return False
 
 faiss_lock = threading.Lock()
 load_dotenv(override=True)
