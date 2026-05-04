@@ -31,6 +31,32 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
 
+import json as _json
+try:
+    from app.agent_tools import (
+        HybridRetriever,
+        TOOL_SCHEMAS,
+        tool_search_chair_specs,
+        tool_recommend_chairs,
+        tool_get_repair_help,
+        tool_get_warranty_or_policy,
+        tool_lookup_order_status,
+        tool_capture_sales_lead,
+        tool_escalate_to_human,
+    )
+except ImportError:
+    from agent_tools import (  # type: ignore
+        HybridRetriever,
+        TOOL_SCHEMAS,
+        tool_search_chair_specs,
+        tool_recommend_chairs,
+        tool_get_repair_help,
+        tool_get_warranty_or_policy,
+        tool_lookup_order_status,
+        tool_capture_sales_lead,
+        tool_escalate_to_human,
+    )
+
 # 💡 [비즈니스 & 시스템 설정 임포트]
 from config import (
     SUPPORT_CONTACT_MSG,
@@ -763,7 +789,13 @@ try:
     vs_products = LC_FAISS.load_local(str(index_dir / "osaki_products"), embeddings, allow_dangerous_deserialization=True)
     vs_qa = LC_FAISS.load_local(str(index_dir / "freshdesk_qa"), embeddings, allow_dangerous_deserialization=True)
     vs_web = LC_FAISS.load_local(str(index_dir / "web_data"), embeddings, allow_dangerous_deserialization=True)
-    
+
+    # Build hybrid retrievers (BM25 + dense) for the Agent's tool layer
+    products_retriever = HybridRetriever(vs_products, list(vs_products.docstore._dict.values()))
+    qa_retriever = HybridRetriever(vs_qa, list(vs_qa.docstore._dict.values()))
+    web_retriever = HybridRetriever(vs_web, list(vs_web.docstore._dict.values()))
+    logger.info("✅ Hybrid retrievers (BM25+Dense) initialized.")
+
     router_llm = ChatOpenAI(model=ROUTER_MODEL, temperature=0, api_key=api_key)
     
     ROUTER_PROMPT = """
@@ -781,6 +813,7 @@ try:
 except Exception as e:
     logger.error(f"🚨 Initialization Failed: {e}")
     vs_products, vs_qa, vs_web, router_chain = None, None, None, None
+    products_retriever = qa_retriever = web_retriever = None
 
 # --- [2.5] SQLite chat log persistence ---
 DB_DIR = project_root / "db_data"
@@ -824,9 +857,258 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- [4] Core API endpoint ---
-@app.post("/api/v1/chat") 
+# --- [4] Core API endpoint (Agent / Tool Calling) ---
+
+AGENT_SYSTEM_PROMPT = """You are an elite AI agent for Titan Chair LLC and Osaki — premium massage chair brands.
+
+# YOUR PERSONA
+- Warm, knowledgeable, never robotic.
+- Always speak in the same language the user used.
+- Use SHORT sentences, bullet points, mobile-friendly formatting.
+
+# CORE RULES (NEVER VIOLATE)
+1. ZERO HALLUCINATION. Never invent specs, prices, dimensions, or tracking data.
+   Use TOOLS to retrieve facts. If a tool returns NO_RESULTS, say so honestly.
+2. NEVER fabricate "Original Price" vs "Current Price" comparisons or invent discounts.
+   Show only the actual price returned by the tool.
+3. For ANY question about a specific chair model — ALWAYS call `search_chair_specs`
+   before answering. Even if you "know" the answer, the tool is authoritative.
+4. The user is browsing on {target_domain}. Rewrite ANY purchase URLs to start with this domain.
+   Display raw URLs (no markdown link hiding).
+5. NEVER hide URLs behind text. Always show the raw URL.
+
+# CONTEXT-AWARE BEHAVIOR
+- If the user's message is short or ambiguous (e.g. just "price", "specs", "more info"),
+  look at the recent chat history. If a model was discussed, assume that model.
+  If unclear, ASK ONE clarifying question instead of refusing.
+- If the user volunteers an email address AFTER you offered a sales follow-up
+  (e.g. you previously sent the 💌 line), call `capture_sales_lead` with that email.
+- If the user volunteers an email address while asking about an order/delivery,
+  call `lookup_order_status` with that email — NOT capture_sales_lead.
+
+# TOOL USAGE PLAYBOOK
+- "Tell me about <model>" / "<model> specs" / "<model> dimensions" → search_chair_specs
+- "Recommend a chair" / "best chair for X" → recommend_chairs
+- "Track my order" / "Where is my order?" / order id + email → lookup_order_status
+- "Error code 63" / "How to assemble" / "Won't turn on" → get_repair_help
+- "Warranty?" / "Return policy" / "White glove delivery" → get_warranty_or_policy
+- User gives email after sales offer → capture_sales_lead
+- "Talk to agent" / "Cancel order" / complex issues → escalate_to_human
+
+# RESPONSE STYLE
+- For product / sales answers: end your message with this exact line on its own paragraph:
+  "💌 Interested in a personalized recommendation or exclusive pricing? Leave your email address and our team will get back to you within 24 hours!"
+- For tracking answers (after lookup_order_status): the tool returns a fully-formatted block — display it AS-IS.
+- Always close with the appropriate contact info IF the user might still need help.
+"""
+
+
+def _execute_tool(name: str, args: Dict[str, Any], target_domain: str) -> str:
+    """Dispatch a tool call to its Python handler. Always returns a string."""
+    try:
+        if name == "search_chair_specs":
+            model = args.get("model_name") or ""
+            topic = args.get("spec_topic") or ""
+            return tool_search_chair_specs(
+                products_retriever=products_retriever,
+                query=topic,
+                model_name=model or None,
+            )
+        if name == "recommend_chairs":
+            return tool_recommend_chairs(
+                products_retriever=products_retriever,
+                user_need=args.get("user_need", "premium massage chair"),
+                budget_min=args.get("budget_min"),
+                budget_max=args.get("budget_max"),
+                exclude_models=args.get("exclude_models") or [],
+                num_recommendations=int(args.get("num_recommendations", 3)),
+            )
+        if name == "lookup_order_status":
+            return tool_lookup_order_status(
+                fetch_fn=fetch_shopify_order_status,
+                build_response_fn=build_deterministic_tracking_response,
+                target_domain=target_domain,
+                order_id=args.get("order_id", ""),
+                email=args.get("email", ""),
+            )
+        if name == "get_repair_help":
+            return tool_get_repair_help(
+                qa_retriever=qa_retriever,
+                issue_description=args.get("issue_description", ""),
+                error_code=args.get("error_code") or None,
+            )
+        if name == "get_warranty_or_policy":
+            return tool_get_warranty_or_policy(
+                web_retriever=web_retriever,
+                topic=args.get("topic", "warranty"),
+            )
+        if name == "capture_sales_lead":
+            return tool_capture_sales_lead(
+                send_email_fn=send_sales_lead_email,
+                customer_email=args.get("customer_email", ""),
+                interest_summary=args.get("interest_summary", ""),
+                target_domain=target_domain,
+            )
+        if name == "escalate_to_human":
+            return tool_escalate_to_human(
+                contact_msg_fn=get_contact_msg,
+                target_domain=target_domain,
+                reason=args.get("reason", "general"),
+            )
+        return f"UNKNOWN_TOOL: {name}"
+    except Exception as e:
+        logger.error(f"🚨 Tool execution error [{name}]: {e}")
+        return f"TOOL_ERROR: {e}"
+
+
+@app.post("/api/v1/chat")
 async def chat_endpoint(request: ChatRequest):
+    """
+    Agent-based chat endpoint.
+
+    Flow:
+    1. Build messages = [system, ...chat_history, user_query]
+    2. Loop up to 4 turns of tool calls:
+       - Call OpenAI with tools=TOOL_SCHEMAS
+       - If tool_calls returned: execute each, append results, repeat
+       - Else: stream the final assistant message and break
+    3. Persist log + fire post-processing (lead capture footer)
+    """
+    user_query = request.user_query
+    target_domain = request.current_domain.rstrip('/')
+
+    if not all([vs_products, vs_qa, vs_web]):
+        raise HTTPException(status_code=500, detail="AI Engine is not fully loaded.")
+
+    try:
+        system_prompt = AGENT_SYSTEM_PROMPT.format(target_domain=target_domain)
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+        for msg in (request.chat_history or [])[-12:]:  # cap history to keep context fresh
+            messages.append({"role": msg.role, "content": msg.content})
+        messages.append({"role": "user", "content": user_query})
+
+        MAX_TOOL_TURNS = 4
+
+        def generate_stream():
+            full_response = ""
+            try:
+                # ── Phase 1: tool-call loop (non-streaming) ──────────────────
+                for turn in range(MAX_TOOL_TURNS):
+                    response = openai_client.chat.completions.create(
+                        model=AGENT_MODEL,
+                        messages=messages,
+                        tools=TOOL_SCHEMAS,
+                        tool_choice="auto",
+                        temperature=LLM_TEMPERATURE,
+                    )
+                    msg = response.choices[0].message
+                    tool_calls = getattr(msg, "tool_calls", None) or []
+
+                    if not tool_calls:
+                        # No tool calls → we have a textual answer ready.
+                        # Re-issue as STREAMING for nicer UX.
+                        break
+
+                    # Append the assistant's tool-call message + each tool result
+                    messages.append({
+                        "role": "assistant",
+                        "content": msg.content or "",
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
+                            }
+                            for tc in tool_calls
+                        ],
+                    })
+                    for tc in tool_calls:
+                        try:
+                            args = _json.loads(tc.function.arguments or "{}")
+                        except Exception:
+                            args = {}
+                        result = _execute_tool(tc.function.name, args, target_domain)
+                        logger.info(f"🛠️ Tool [{tc.function.name}] → {len(result)} chars")
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": tc.function.name,
+                            "content": result[:8000],  # truncate giant payloads
+                        })
+                else:
+                    logger.warning("⚠️ Agent hit MAX_TOOL_TURNS without final answer")
+
+                # ── Phase 2: final streaming response ────────────────────────
+                stream = openai_client.chat.completions.create(
+                    model=AGENT_MODEL,
+                    messages=messages,
+                    temperature=LLM_TEMPERATURE,
+                    stream=True,
+                )
+                for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        delta = chunk.choices[0].delta.content
+                        full_response += delta
+                        yield delta
+
+                # ── Post-processing ─────────────────────────────────────────
+                # Enforce email lead capture footer for product/sales-related answers
+                # when the user did NOT include an email in this turn.
+                user_sent_email = bool(re.search(r"[\w\.-]+@[\w\.-]+\.\w+", user_query))
+                response_lower = full_response.lower()
+                is_sales_like = any(
+                    k in response_lower
+                    for k in ("price", "$", "purchase", "model", "chair", "warranty", "feature")
+                )
+                if (
+                    is_sales_like
+                    and not user_sent_email
+                    and "💌" not in full_response
+                    and "leave your email" not in response_lower
+                ):
+                    appended = (
+                        "\n\n💌 Interested in a personalized recommendation or exclusive pricing? "
+                        "Leave your email address and our team will get back to you within 24 hours!"
+                    )
+                    full_response += appended
+                    yield appended
+
+                # Persist chat log
+                try:
+                    db = SessionLocal()
+                    new_log = ChatLog(
+                        session_id=request.session_id,
+                        user_query=user_query,
+                        bot_response=full_response,
+                        domain=target_domain,
+                    )
+                    db.add(new_log)
+                    db.commit()
+                    db.close()
+                except Exception as e:
+                    logger.error(f"DB Save Error: {e}")
+
+            except Exception as e:
+                logger.error(f"🚨 Agent loop error: {e}")
+                yield "🚨 An unexpected error occurred. Please try again."
+
+        return StreamingResponse(generate_stream(), media_type="text/event-stream")
+
+    except Exception as e:
+        logger.error(f"API Processing Error: {e}")
+        raise HTTPException(status_code=500, detail="Internal AI Server Error")
+
+
+# ---------------------------------------------------------------------------
+# Legacy (non-agent) routing helpers retained below for backwards-compatible
+# safety nets. Currently unused by chat_endpoint but kept for possible future
+# guarded fallbacks.
+# ---------------------------------------------------------------------------
+
+async def _legacy_chat_endpoint_DISABLED(request: ChatRequest):
     user_query = request.user_query
     target_domain = request.current_domain.rstrip('/')
     path = urlparse(REPAIR_MANUAL_URL).path
