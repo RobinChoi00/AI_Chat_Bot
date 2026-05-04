@@ -123,6 +123,52 @@ def _extract_title(doc: Document) -> str:
     return doc.metadata.get("title") or doc.page_content.split("\n", 1)[0][:80]
 
 
+# Keywords that map a user's query topic to matching spec column patterns
+_SPEC_TOPIC_KEYWORDS: List[Tuple[List[str], List[str]]] = [
+    # (user query keywords, spec column keywords)
+    (["door", "doorway", "entrance", "minimum door", "minimum entrance"], ["minimum doorway", "door width"]),
+    (["width", "wide"], ["dimension - standing - width", "standing - width"]),
+    (["weight", "how heavy", "lbs", "kg"], ["chair weight", "user weight", "maximum user weight"]),
+    (["height", "tall", "how tall"], ["height"]),
+    (["length", "depth", "how deep", "how long"], ["length"]),
+    (["footrest", "foot extension"], ["footrest extension"]),
+    (["shoulder"], ["shoulder width"]),
+    (["seat"], ["seat width"]),
+    (["price", "cost", "how much"], ["variant price", "price"]),
+    (["track", "sl track", "sl-track"], ["track - type", "track type"]),
+    (["air", "airbag", "air cell"], ["air cell", "airbag"]),
+    (["zero gravity", "0 gravity"], ["zero gravity"]),
+    (["space saving", "space-saving"], ["space saving"]),
+    (["heat", "heating"], ["heat", "heated"]),
+    (["warranty"], ["warranty"]),
+    (["auto program", "auto programs"], ["auto"]),
+    (["manual mode", "manual program"], ["manual"]),
+]
+
+
+def _find_authoritative_lines(doc_content: str, query: str) -> List[str]:
+    """
+    Extract the exact spec lines that directly answer the query topic.
+    Returns a list of matching lines from the document.
+    """
+    query_lower = query.lower()
+    target_col_keywords: List[str] = []
+
+    for user_kws, col_kws in _SPEC_TOPIC_KEYWORDS:
+        if any(kw in query_lower for kw in user_kws):
+            target_col_keywords.extend(col_kws)
+
+    if not target_col_keywords:
+        return []
+
+    hits = []
+    for line in doc_content.split("\n"):
+        line_lower = line.lower()
+        if line.startswith("- ") and any(kw in line_lower for kw in target_col_keywords):
+            hits.append(line.strip())
+    return hits
+
+
 def tool_search_chair_specs(
     *,
     products_retriever: HybridRetriever,
@@ -138,12 +184,25 @@ def tool_search_chair_specs(
     if not docs:
         return "NO_RESULTS: No matching specifications found in the catalog."
 
-    lines = [f"Found {len(docs)} relevant catalog entries:"]
+    lines: List[str] = []
+
     for i, doc in enumerate(docs, 1):
         title = _extract_title(doc)
-        # Truncate huge content but keep meaningful part
-        body = doc.page_content[:1500]
-        lines.append(f"\n--- Result {i}: {title} ---\n{body}")
+
+        # Extract AUTHORITATIVE lines that directly answer the query
+        auth_lines = _find_authoritative_lines(doc.page_content, query)
+        if auth_lines:
+            lines.append(f"\n--- Result {i}: {title} ---")
+            lines.append("AUTHORITATIVE SPEC VALUES (use EXACTLY these numbers, do not paraphrase):")
+            for al in auth_lines:
+                lines.append(f"  {al}")
+            # Also include full body (truncated) for context
+            lines.append("\nFull spec context:")
+            lines.append(doc.page_content[:1200])
+        else:
+            lines.append(f"\n--- Result {i}: {title} ---")
+            lines.append(doc.page_content[:1500])
+
     return "\n".join(lines)
 
 
