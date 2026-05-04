@@ -124,35 +124,12 @@ class MasterIngester:
             for _, row in df.iterrows():
                 self.domain_docs["osaki_products"].append(Document(page_content=str(row.get('content', '')), metadata={"source": row.get('source', 'shopify')}))
 
-    # 🌟 [수정완료] 7번째 파이프라인: Excel 우선 읽기 + 2단계 스마트 매칭
+    # 🌟 [수정완료] 7번째 파이프라인: Excel 멀티 레벨 헤더 정확 파싱 + 2단계 스마트 매칭
     def process_specifications(self):
         print("🔍 [7/7] 원본 쇼피파이 & 스펙 시트 융합(Join) 중... -> [osaki_products] 할당")
         spec_xlsx = os.path.join(RAW_DIR, "Specification_Massage Chair.xlsx")
         spec_csv  = os.path.join(RAW_DIR, "Specification_Massage Chair - Massage Chair.csv")
         shopify_csv = os.path.join(RAW_DIR, "products_export.csv")
-
-        SPEC_RENAME = {
-            "Width\r\n(inches)": "Width (inches)",
-            "Width\n(inches)": "Width (inches)",
-            "Length\r\n(inches)": "Length (inches)",
-            "Length\n(inches)": "Length (inches)",
-            "Height\r\n(inches)": "Height (inches)",
-            "Height\n(inches)": "Height (inches)",
-            "Chair\r\nWeight\r\n(lb)": "Chair Weight (lb)",
-            "Chair\nWeight\n(lb)": "Chair Weight (lb)",
-            "Maximum\r\n User Weight\r\n(lb)": "Maximum User Weight (lb)",
-            "Maximum\n User Weight\n(lb)": "Maximum User Weight (lb)",
-            "Track\r\nLength\r\n(Full Metal)\r\n(inches)": "Track Length (inches)",
-            "Track\nLength\n(Full Metal)\n(inches)": "Track Length (inches)",
-            "Footrest Extension\r\n Length\r\n(inches)": "Footrest Extension (inches)",
-            "Footrest Extension\n Length\n(inches)": "Footrest Extension (inches)",
-            "Inside of\r\nShoulder\r\nWidth\r\n(inches)": "Shoulder Width (inches)",
-            "Inside of\nShoulder\nWidth\n(inches)": "Shoulder Width (inches)",
-            "Seat\r\nWidth\r\n(inches)": "Seat Width (inches)",
-            "Seat\nWidth\n(inches)": "Seat Width (inches)",
-            "Minimum\r\nDoor\r\nWidth\r\n(inches)": "Minimum Door Width (inches)",
-            "Minimum\nDoor\nWidth\n(inches)": "Minimum Door Width (inches)",
-        }
 
         SKIP_COLS = {'join_key', 'Body (HTML)', 'Handle', 'Image Src', 'Image Position',
                      'Variant Image', 'Variant Grams', 'Variant Fulfillment Service',
@@ -164,21 +141,78 @@ class MasterIngester:
             print("   ⚠️  Spec file or Shopify CSV not found. Skipping.")
             return
 
-        # 1. Excel 우선, 없으면 CSV 폴백
+        # 1. Excel 우선 — 멀티 레벨 헤더 (rows 1, 2, 3) 합쳐서 의미 보존
         if os.path.exists(spec_xlsx):
-            print(f"   📊 Excel 파일 읽기: {os.path.basename(spec_xlsx)} (sheet='Massage Chair')")
-            df_spec = pd.read_excel(spec_xlsx, sheet_name="Massage Chair",
-                                    skiprows=3, engine="openpyxl").fillna("N/A")
+            print(f"   📊 Excel 파일 읽기: {os.path.basename(spec_xlsx)} (멀티 헤더)")
+            # rows 0,1,2 모두 읽고 row 3부터 데이터
+            raw = pd.read_excel(spec_xlsx, sheet_name="Massage Chair",
+                                header=None, engine="openpyxl").fillna("")
+            # 헤더 3개 행 (Excel index 1,2,3 → row 0 is empty, row 1=top group,
+            # row 2=mid group, row 3=column header)
+            top_row = raw.iloc[1].ffill()    # forward-fill across columns: "Dimension"...
+            mid_row = raw.iloc[2].ffill()    # "Standing", "Minimum\nDoorway"...
+            col_row = raw.iloc[3]            # "Width (inches)", "Assembled (inches)"...
+
+            def clean(s):
+                return str(s).replace("\r", " ").replace("\n", " ").strip()
+
+            # 의미 있는 결합 컬럼명 만들기 — top + mid + col, 중복 제거
+            combined_columns = []
+            for t, m, c in zip(top_row, mid_row, col_row):
+                t, m, c = clean(t), clean(m), clean(c)
+                parts = []
+                for p in (t, m, c):
+                    if p and p not in parts and p not in ("Model", ""):
+                        parts.append(p)
+                combined_columns.append(" - ".join(parts) if parts else "")
+
+            # 같은 이름 충돌 방지 (서로 다른 그룹 아래 같은 leaf 이름이 있을 수 있음)
+            seen: dict = {}
+            unique_columns = []
+            for col in combined_columns:
+                if not col:
+                    unique_columns.append(f"_unnamed_{len(unique_columns)}")
+                    continue
+                if col in seen:
+                    seen[col] += 1
+                    unique_columns.append(f"{col} ({seen[col]})")
+                else:
+                    seen[col] = 1
+                    unique_columns.append(col)
+
+            # 데이터는 row 4 이후
+            df_spec = raw.iloc[4:].copy()
+            df_spec.columns = unique_columns
+            df_spec = df_spec.replace("", "N/A").fillna("N/A")
+            # 이름 없는 컬럼 제거
+            df_spec = df_spec.loc[:, [c for c in df_spec.columns if not c.startswith("_unnamed_")]]
         else:
             print(f"   📄 CSV 파일 읽기 (Excel 없음): {os.path.basename(spec_csv)}")
             df_spec = pd.read_csv(spec_csv, skiprows=3, low_memory=False).fillna("N/A")
 
-        df_spec.columns = df_spec.columns.str.strip()
-        df_spec.rename(columns=SPEC_RENAME, inplace=True)
-        df_spec.columns = df_spec.columns.str.strip()
+        df_spec.columns = [str(c).strip() for c in df_spec.columns]
+
+        # Brand / Name 컬럼 찾기 (combined name has prefixes from top-row)
+        def find_col(candidates):
+            for c in df_spec.columns:
+                if c.endswith(" - Brand") or c == "Brand":
+                    return c if "Brand" in candidates else None
+            return None
+        # robust resolver
+        brand_col = next((c for c in df_spec.columns if c.split(" - ")[-1].strip() == "Brand"), None)
+        name_col  = next((c for c in df_spec.columns if c.split(" - ")[-1].strip() == "Name"), None)
+        if brand_col and brand_col != "Brand":
+            df_spec.rename(columns={brand_col: "Brand"}, inplace=True)
+        if name_col and name_col != "Name":
+            df_spec.rename(columns={name_col: "Name"}, inplace=True)
+
         # 빈 행 제거 (Brand 또는 Name이 없는 행)
         df_spec = df_spec[df_spec['Brand'].astype(str).str.strip().replace('N/A', '') != '']
         print(f"   총 {len(df_spec)}개 스펙 모델 로드됨.")
+        # 디버그: 도어 관련 컬럼이 살아있는지 확인
+        door_cols = [c for c in df_spec.columns if 'door' in c.lower() or 'minimum' in c.lower()]
+        if door_cols:
+            print(f"   🚪 도어 관련 컬럼 보존됨: {door_cols}")
 
         # 2. Shopify data (deduplicate by Title to avoid repeated rows per variant)
         df_shopify = pd.read_csv(shopify_csv, low_memory=False).fillna("N/A")
@@ -203,6 +237,7 @@ class MasterIngester:
             df_spec['Name'].fillna('').astype(str)
         ).str.strip()
         df_spec['join_key'] = df_spec['full_name_spec'].apply(normalize_text)
+        df_spec['name_key'] = df_spec['Name'].fillna('').astype(str).apply(normalize_text)
         df_shopify['join_key'] = df_shopify['Title'].apply(normalize_text)
 
         # ── Phase 1: exact join ──────────────────────────────────────────
@@ -210,30 +245,60 @@ class MasterIngester:
         matched_shop_keys = set(merged_exact['join_key'])
         print(f"   Phase 1 (exact):    {len(merged_exact)} rows matched.")
 
-        # ── Phase 2: bidirectional substring fallback ────────────────────
-        # Handles cases where extra tokens are appended OR prepended:
-        #   "Osaki Nova II 3D+"  ↔  "Osaki Nova II"     (suffix extra)
-        #   "Titan Forge"        ↔  "Titan Forge 3D"    (spec has extra)
+        # ── Phase 2: multi-strategy fuzzy fallback ──────────────────────
+        # Strategy A: Brand+Name join_key bidirectional substring
+        #   "Osaki Nova II 3D+"  ↔  "Osaki Nova II"
+        #   "Titan Forge"        ↔  "Titan Forge 3D"
+        # Strategy B: spec model NAME alone matches inside shop title
+        #   "Osaki Hypnos 4D Pro AI" ⊃ "Hypnos"  (Brand="Osaki Platinum")
+        # Strategy C: dimension-stripped substring
         unmatched_shop = df_shopify[~df_shopify['join_key'].isin(matched_shop_keys)]
         spec_keys = df_spec['join_key'].tolist()
+        spec_name_keys = df_spec['name_key'].tolist()
+
+        # noise words to ignore inside shop titles when matching name_key
+        NOISE_WORDS = {"plus", "pro", "ai", "smart", "duo", "flex", "le", "lt", "ii", "iii", "xl", "xt"}
 
         def strip_dims(key):
             return _re.sub(r'\d+d\+?', '', key)
 
+        def core_tokens(text):
+            tokens = _re.findall(r"[a-z0-9]+", str(text).lower())
+            return [t for t in tokens if t not in NOISE_WORDS and len(t) >= 3]
+
         fuzzy_rows = []
         for _, shop_row in unmatched_shop.iterrows():
             shop_key = shop_row['join_key']
-            best_idx, best_len = None, 0
+            shop_title_lower = str(shop_row.get('Title', '')).lower()
+            shop_tokens = core_tokens(shop_title_lower)
+
+            best_idx, best_score = None, 0
+
             for i, spec_key in enumerate(spec_keys):
-                if not spec_key or len(spec_key) < 6:
+                if not spec_key or len(spec_key) < 4:
                     continue
-                if (spec_key in shop_key or shop_key in spec_key) and len(spec_key) > best_len:
-                    best_idx, best_len = i, len(spec_key)
-                elif strip_dims(spec_key) and len(strip_dims(spec_key)) >= 6:
-                    sk_stripped = strip_dims(spec_key)
-                    sh_stripped = strip_dims(shop_key)
-                    if (sk_stripped in sh_stripped or sh_stripped in sk_stripped) and len(sk_stripped) > best_len:
-                        best_idx, best_len = i, len(sk_stripped)
+                # Strategy A: bidirectional substring of full join_key
+                if (spec_key in shop_key or shop_key in spec_key) and len(spec_key) > best_score:
+                    best_idx, best_score = i, len(spec_key)
+                    continue
+                # Strategy C: dimension-stripped substring
+                sk_s, sh_s = strip_dims(spec_key), strip_dims(shop_key)
+                if sk_s and len(sk_s) >= 6 and (sk_s in sh_s or sh_s in sk_s) and len(sk_s) > best_score:
+                    best_idx, best_score = i, len(sk_s)
+                    continue
+                # Strategy B: name-only token match (Hypnos case)
+                name_key = spec_name_keys[i]
+                if not name_key or len(name_key) < 4:
+                    continue
+                if name_key in shop_key:
+                    name_tokens = core_tokens(df_spec.iloc[i]['Name'])
+                    spec_brand_tokens = core_tokens(df_spec.iloc[i]['Brand'])
+                    # Require model NAME tokens AND at least one brand token to overlap
+                    name_match = name_tokens and all(t in shop_tokens for t in name_tokens)
+                    brand_match = any(b in shop_tokens for b in spec_brand_tokens)
+                    if name_match and brand_match and len(name_key) > best_score:
+                        best_idx, best_score = i, len(name_key)
+
             if best_idx is not None:
                 fuzzy_rows.append({**shop_row.to_dict(), **df_spec.iloc[best_idx].to_dict()})
 
