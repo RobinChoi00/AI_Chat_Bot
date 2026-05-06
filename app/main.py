@@ -511,8 +511,15 @@ def enrich_tracking_from_aftership(company: str, tracking_number: str) -> Dict[s
         return {}
 
 def build_deterministic_tracking_response(tracking_data: Dict[str, Any], target_domain: str) -> str:
-    """Render tracking data in a fixed, user-friendly format."""
+    """Render tracking data in a fixed, user-friendly format.
+
+    Adds a SUPPRESS_LEAD_FOOTER marker on the last line so the post-processing
+    in chat_endpoint knows NOT to append the sales-lead capture footer
+    (tracking responses must not be followed by a sales pitch).
+    """
     footer = get_contact_msg("TRACKING", target_domain)
+    suppress_marker = "\n<!-- SUPPRESS_LEAD_FOOTER -->"
+
     if tracking_data.get("error"):
         return "\n".join([
             "I couldn't verify this order with the provided information.",
@@ -521,7 +528,7 @@ def build_deterministic_tracking_response(tracking_data: Dict[str, Any], target_
             tracking_data["error"],
             "",
             footer,
-        ])
+        ]) + suppress_marker
 
     status = tracking_data.get("status", "UNKNOWN")
     company = tracking_data.get("company", "Unknown carrier")
@@ -532,6 +539,24 @@ def build_deterministic_tracking_response(tracking_data: Dict[str, Any], target_
     eta = tracking_data.get("eta", "Pending carrier update")
     last_event = tracking_data.get("last_event", "Latest carrier update is pending.")
     events = tracking_data.get("events", []) or []
+
+    # ── Special case: order is still being prepared (no carrier handoff yet) ──
+    # Showing "Carrier: Unknown / Tracking Number: Not available yet" looks
+    # broken to the customer. Use a clearer "in preparation" message instead.
+    if status in ("PROCESSING", "UNFULFILLED") or not tracking_number:
+        lines = [
+            "Good news — we found your order! It's currently being prepared at our warehouse.",
+            "",
+            f"- Order Status: **{status if status != 'UNFULFILLED' else 'PROCESSING'}** (in preparation)",
+            "- A tracking number will be emailed to you as soon as the carrier picks it up.",
+            "- Typical processing time before pickup: **1-3 business days** after the order is placed.",
+            "",
+            "If your order was placed more than 5 business days ago and you still don't see a tracking number,",
+            "please reach out to our support team so we can investigate.",
+            "",
+            footer,
+        ]
+        return "\n".join(lines) + suppress_marker
 
     lines = [
         "Here is your latest delivery update:",
@@ -559,7 +584,7 @@ def build_deterministic_tracking_response(tracking_data: Dict[str, Any], target_
             lines.append(f"- {event_time} | {event_location} | {event_message}")
 
     lines.extend(["", footer])
-    return "\n".join(lines)
+    return "\n".join(lines) + suppress_marker
 
 def is_product_query(query: str) -> bool:
     lowered = query.lower()
@@ -867,19 +892,27 @@ AGENT_SYSTEM_PROMPT = """You are an elite AI agent for Titan Chair LLC and Osaki
 - Use SHORT sentences, bullet points, mobile-friendly formatting.
 
 # CORE RULES (NEVER VIOLATE)
-1. ZERO HALLUCINATION. Never invent specs, prices, dimensions, or tracking data.
-   Use TOOLS to retrieve facts. If a tool returns NO_RESULTS, say so honestly.
+1. ZERO HALLUCINATION. Never invent specs, prices, dimensions, promo codes,
+   discount lists, or tracking data. Use TOOLS to retrieve facts.
+   If a tool returns NO_RESULTS, say so honestly and offer the next-best step.
 2. NEVER fabricate "Original Price" vs "Current Price" comparisons or invent discounts.
    Show only the actual price returned by the tool.
-3. For ANY question about a specific chair model — ALWAYS call `search_chair_specs`
+3. NEVER stall. Do NOT reply with phrases like "Let me check...", "Please hold on",
+   "One moment please" as a standalone answer. If you need data, CALL the tool
+   immediately in the same turn — the user only sees your final message.
+4. For ANY question about a specific chair model — ALWAYS call `search_chair_specs`
    before answering. Even if you "know" the answer, the tool is authoritative.
-4. AUTHORITATIVE SPEC VALUES (CRITICAL): When a tool result contains a section labeled
+5. AUTHORITATIVE SPEC VALUES (CRITICAL): When a tool result contains a section labeled
    "AUTHORITATIVE SPEC VALUES", you MUST use EXACTLY those numbers verbatim.
    Do NOT round, estimate, or substitute a different dimension (e.g. chair width instead
    of doorway width). If the authoritative value says "32", say "32". Not "30", not "31".
-4. The user is browsing on {target_domain}. Rewrite ANY purchase URLs to start with this domain.
+6. The user is browsing on {target_domain}. Rewrite ANY purchase URLs to start with this domain.
    Display raw URLs (no markdown link hiding).
-5. NEVER hide URLs behind text. Always show the raw URL.
+7. NEVER hide URLs behind text. Always show the raw URL.
+8. PROMO CODES & DISCOUNT CAMPAIGNS: do NOT guess which products a code applies to.
+   If you don't have authoritative data, say:
+   "I don't have the exact list of products covered by that code. Please check the
+   active promotions banner on {target_domain} or contact our sales team."
 
 # CONTEXT-AWARE BEHAVIOR
 - If the user's message is short or ambiguous (e.g. just "price", "specs", "more info"),
@@ -889,20 +922,37 @@ AGENT_SYSTEM_PROMPT = """You are an elite AI agent for Titan Chair LLC and Osaki
   (e.g. you previously sent the 💌 line), call `capture_sales_lead` with that email.
 - If the user volunteers an email address while asking about an order/delivery,
   call `lookup_order_status` with that email — NOT capture_sales_lead.
+- A bare order ID (e.g. "OSKMC3166", "TIDM16036") in a tracking conversation
+  means: call `lookup_order_status` with that order_id and ask for the email
+  ONLY if the email isn't already in the recent chat history.
 
 # TOOL USAGE PLAYBOOK
 - "Tell me about <model>" / "<model> specs" / "<model> dimensions" → search_chair_specs
 - "Recommend a chair" / "best chair for X" → recommend_chairs
 - "Track my order" / "Where is my order?" / order id + email → lookup_order_status
-- "Error code 63" / "How to assemble" / "Won't turn on" → get_repair_help
-- "Warranty?" / "Return policy" / "White glove delivery" → get_warranty_or_policy
+- "Error code 63" / "How to assemble" / "Won't turn on" / "not inflating" / "broken" → get_repair_help
+- "Warranty?" / "Return policy" / "White glove delivery" / "Shipping time" / "Installation" → get_warranty_or_policy
+- "Promotion" / "Sale" / "Discount applies to which chairs" → get_warranty_or_policy (topic="promotions")
 - User gives email after sales offer → capture_sales_lead
 - "Talk to agent" / "Cancel order" / complex issues → escalate_to_human
 
+# WHEN TO INCLUDE THE SALES-LEAD FOOTER
+End your message with EXACTLY this line on its own paragraph ONLY when the user
+is exploring or shopping (asking about specs, recommendations, comparisons, prices):
+
+"💌 Interested in a personalized recommendation or exclusive pricing? Leave your email address and our team will get back to you within 24 hours!"
+
+DO NOT include this footer when:
+- The user is tracking an order or asking about delivery status (already a customer).
+- The user is reporting a defect, breakage, or service issue (warranty/repair).
+- The user is just greeting you ("hi", "hello") or saying goodbye / thanks.
+- The user already provided their email in this turn.
+- A tool result contains the marker "SUPPRESS_LEAD_FOOTER" or "FOOTER_HINT: SUPPRESS_LEAD_FOOTER".
+
 # RESPONSE STYLE
-- For product / sales answers: end your message with this exact line on its own paragraph:
-  "💌 Interested in a personalized recommendation or exclusive pricing? Leave your email address and our team will get back to you within 24 hours!"
-- For tracking answers (after lookup_order_status): the tool returns a fully-formatted block — display it AS-IS.
+- For tracking answers (after lookup_order_status): the tool returns a fully-formatted block — display it AS-IS,
+  and DO NOT add the sales-lead footer.
+- For repair / warranty / service answers: include the support phone, but DO NOT add the sales-lead footer.
 - Always close with the appropriate contact info IF the user might still need help.
 """
 
@@ -995,6 +1045,7 @@ async def chat_endpoint(request: ChatRequest):
 
         def generate_stream():
             full_response = ""
+            tools_called: List[str] = []  # track which tools the agent invoked this turn
             try:
                 # ── Phase 1: tool-call loop (non-streaming) ──────────────────
                 for turn in range(MAX_TOOL_TURNS):
@@ -1035,6 +1086,7 @@ async def chat_endpoint(request: ChatRequest):
                         except Exception:
                             args = {}
                         result = _execute_tool(tc.function.name, args, target_domain)
+                        tools_called.append(tc.function.name)
                         logger.info(f"🛠️ Tool [{tc.function.name}] → {len(result)} chars")
                         messages.append({
                             "role": "tool",
@@ -1059,26 +1111,94 @@ async def chat_endpoint(request: ChatRequest):
                         yield delta
 
                 # ── Post-processing ─────────────────────────────────────────
-                # Enforce email lead capture footer for product/sales-related answers
-                # when the user did NOT include an email in this turn.
+                # Decide whether to append the 💌 sales-lead footer.
+                # Rule of thumb: only on genuine shopping/spec turns where the
+                # user has NOT already given an email and is NOT being routed
+                # to service / tracking / human-agent flows.
                 user_sent_email = bool(re.search(r"[\w\.-]+@[\w\.-]+\.\w+", user_query))
                 response_lower = full_response.lower()
-                is_sales_like = any(
-                    k in response_lower
-                    for k in ("price", "$", "purchase", "model", "chair", "warranty", "feature")
+
+                # 1) Tool-name based suppression (most reliable signal)
+                SUPPRESS_TOOLS = {
+                    "lookup_order_status",  # tracking
+                    "get_repair_help",      # service / repair
+                    "escalate_to_human",    # already handed off
+                    "capture_sales_lead",   # already captured
+                }
+                tool_suppress = any(t in tools_called for t in SUPPRESS_TOOLS)
+
+                # get_warranty_or_policy: only suppress for service-y topics, not pre-sales
+                # questions like "white glove delivery" or "shipping time".
+                if "get_warranty_or_policy" in tools_called and any(
+                    kw in response_lower
+                    for kw in (
+                        "warranty", "service@osakititan",
+                        "broken", "damaged", "defect",
+                        "repair", "claim",
+                    )
+                ):
+                    tool_suppress = True
+
+                # 2) Shape-based safety nets (catch hallucinated tracking-style replies)
+                tracking_signals = (
+                    "current status:", "tracking number:", "carrier:",
+                    "estimated delivery:", "in preparation",
                 )
-                if (
-                    is_sales_like
+                tracking_like = any(s in response_lower for s in tracking_signals)
+
+                # Pure greeting / closing — short and friendly with no product content.
+                is_short = len(full_response.strip()) < 240
+                greeting_or_closing = is_short and any(
+                    p in response_lower
+                    for p in (
+                        "you're welcome", "youre welcome", "feel free to ask",
+                        "how can i assist", "how can i help", "enjoy your",
+                        "have a great", "glad to hear", "hello!",
+                    )
+                )
+
+                # 3) Positive shopping signal must outweigh suppression.
+                shopping_signals = (
+                    "$", "price", "specs", "feature", "recommend",
+                    "compare", "model", "purchase", "dimension",
+                )
+                is_shopping = any(s in response_lower for s in shopping_signals)
+
+                should_append_footer = (
+                    is_shopping
                     and not user_sent_email
+                    and not tool_suppress
+                    and not tracking_like
+                    and not greeting_or_closing
                     and "💌" not in full_response
                     and "leave your email" not in response_lower
-                ):
+                )
+
+                if should_append_footer:
                     appended = (
                         "\n\n💌 Interested in a personalized recommendation or exclusive pricing? "
                         "Leave your email address and our team will get back to you within 24 hours!"
                     )
                     full_response += appended
                     yield appended
+
+                # Scrub any internal hint markers that may have leaked into the visible text.
+                if (
+                    "SUPPRESS_LEAD_FOOTER" in full_response
+                    or "FOOTER_HINT" in full_response
+                    or "<!-- SUPPRESS" in full_response
+                ):
+                    cleaned = re.sub(
+                        r"\n?<!--\s*SUPPRESS_LEAD_FOOTER\s*-->",
+                        "",
+                        full_response,
+                    )
+                    cleaned = re.sub(
+                        r"\n?FOOTER_HINT:\s*SUPPRESS_LEAD_FOOTER[^\n]*",
+                        "",
+                        cleaned,
+                    )
+                    full_response = cleaned.rstrip()
 
                 # Persist chat log
                 try:

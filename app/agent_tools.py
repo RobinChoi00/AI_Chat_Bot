@@ -273,12 +273,21 @@ def tool_get_repair_help(
     """Look up repair / error code information."""
     query = f"error code {error_code} {issue_description}" if error_code else issue_description
     docs = qa_retriever.search(query, k=5)
+    suppress = "\nFOOTER_HINT: SUPPRESS_LEAD_FOOTER (this is a service issue, do not pitch sales)."
     if not docs:
-        return "NO_RESULTS: No specific repair guide found."
+        return "NO_RESULTS: No specific repair guide found." + suppress
     lines = ["Relevant repair / error info:"]
     for i, doc in enumerate(docs, 1):
         lines.append(f"\n[{i}] {doc.page_content[:800]}")
+    lines.append(suppress)
     return "\n".join(lines)
+
+
+# Topics that are clearly post-purchase / service-oriented — never pitch sales after.
+_POLICY_SERVICE_TOPICS = (
+    "warranty", "return", "refund", "exchange", "repair", "service",
+    "broken", "damaged", "defect", "claim",
+)
 
 
 def tool_get_warranty_or_policy(
@@ -288,11 +297,19 @@ def tool_get_warranty_or_policy(
 ) -> str:
     """Retrieve warranty / shipping / return / installation policy info."""
     docs = web_retriever.search(topic, k=5)
+    topic_lower = (topic or "").lower()
+    is_service = any(kw in topic_lower for kw in _POLICY_SERVICE_TOPICS)
+    suppress = (
+        "\nFOOTER_HINT: SUPPRESS_LEAD_FOOTER (post-purchase policy question)."
+        if is_service else ""
+    )
     if not docs:
-        return "NO_RESULTS: No policy information found for this topic."
+        return "NO_RESULTS: No policy information found for this topic." + suppress
     lines = [f"Policy info for '{topic}':"]
     for i, doc in enumerate(docs, 1):
         lines.append(f"\n[{i}] {doc.page_content[:800]}")
+    if suppress:
+        lines.append(suppress)
     return "\n".join(lines)
 
 
@@ -336,9 +353,18 @@ def tool_escalate_to_human(
     target_domain: str,
     reason: str = "general",
 ) -> str:
-    """Hand off to a human rep with the appropriate phone for the brand."""
-    routing = "PRODUCTS" if reason in ("sales", "pricing", "discount") else "QA"
-    return contact_msg_fn(routing, target_domain)
+    """Hand off to a human rep with the appropriate phone for the brand.
+
+    Sales-related → brand sales line. Everything else (warranty, repair,
+    cancellation, general) → service/support line. Service answers are
+    flagged with SUPPRESS_LEAD_FOOTER so we don't pitch sales after them.
+    """
+    sales_reasons = {"sales", "pricing", "discount"}
+    routing = "PRODUCTS" if reason in sales_reasons else "QA"
+    msg = contact_msg_fn(routing, target_domain)
+    if reason not in sales_reasons:
+        msg += "\nFOOTER_HINT: SUPPRESS_LEAD_FOOTER (handed off to service)."
+    return msg
 
 
 # ============================================================================
