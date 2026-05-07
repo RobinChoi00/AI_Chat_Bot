@@ -267,10 +267,14 @@ class MasterIngester:
             return [t for t in tokens if t not in NOISE_WORDS and len(t) >= 3]
 
         fuzzy_rows = []
+        matched_spec_idx = set()  # spec rows we successfully matched to a shop product
         for _, shop_row in unmatched_shop.iterrows():
             shop_key = shop_row['join_key']
             shop_title_lower = str(shop_row.get('Title', '')).lower()
-            shop_tokens = core_tokens(shop_title_lower)
+            shop_vendor_lower = str(shop_row.get('Vendor', '')).lower()
+            # Combine title AND vendor tokens — many products have brand in Vendor only
+            # (e.g. Title="4D Orion Duo Mech", Vendor="Osaki").
+            shop_tokens = core_tokens(shop_title_lower) + core_tokens(shop_vendor_lower)
 
             best_idx, best_score = None, 0
 
@@ -286,26 +290,34 @@ class MasterIngester:
                 if sk_s and len(sk_s) >= 6 and (sk_s in sh_s or sh_s in sk_s) and len(sk_s) > best_score:
                     best_idx, best_score = i, len(sk_s)
                     continue
-                # Strategy B: name-only token match (Hypnos case)
+                # Strategy B: name-only token match
                 name_key = spec_name_keys[i]
                 if not name_key or len(name_key) < 4:
                     continue
                 if name_key in shop_key:
                     name_tokens = core_tokens(df_spec.iloc[i]['Name'])
                     spec_brand_tokens = core_tokens(df_spec.iloc[i]['Brand'])
-                    # Require model NAME tokens AND at least one brand token to overlap
+                    # Require model NAME tokens to overlap; brand check is now lenient
+                    # because shop_tokens already includes Vendor.
                     name_match = name_tokens and all(t in shop_tokens for t in name_tokens)
-                    brand_match = any(b in shop_tokens for b in spec_brand_tokens)
+                    brand_match = (
+                        not spec_brand_tokens  # spec has no brand → don't require
+                        or any(b in shop_tokens for b in spec_brand_tokens)
+                    )
                     if name_match and brand_match and len(name_key) > best_score:
                         best_idx, best_score = i, len(name_key)
 
             if best_idx is not None:
                 fuzzy_rows.append({**shop_row.to_dict(), **df_spec.iloc[best_idx].to_dict()})
+                matched_spec_idx.add(best_idx)
 
         fuzzy_df = pd.DataFrame(fuzzy_rows) if fuzzy_rows else pd.DataFrame()
         print(f"   Phase 2 (fuzzy):    {len(fuzzy_df)} additional rows matched.")
 
         merged_df = pd.concat([merged_exact, fuzzy_df], ignore_index=True)
+        # Track which spec rows got matched (by join_key) so we can emit the
+        # remaining ones as standalone spec docs in Phase 3.
+        matched_spec_keys = set(merged_df['join_key'].dropna().astype(str).tolist())
         print(f"   ✅ Total spec join: {len(merged_df)} rows matched.")
 
         for _, row in merged_df.iterrows():
@@ -321,6 +333,36 @@ class MasterIngester:
             self.domain_docs["osaki_products"].append(Document(
                 page_content=content,
                 metadata={"source": "specification_join", "title": model_name, "type": "specification"}
+            ))
+
+        # ── Phase 3: spec-only docs for rows that never matched a Shopify product ──
+        # Without this, models like "Osaki Pro Soho II" (in spec sheet but missing
+        # from products_export.csv) become invisible to the bot. Embedding them
+        # standalone makes them searchable by name even with no shop record.
+        unmatched_specs = df_spec[~df_spec['join_key'].isin(matched_spec_keys)]
+        print(f"   Phase 3 (spec-only): {len(unmatched_specs)} unmatched spec rows emitted as standalone docs.")
+        for _, spec_row in unmatched_specs.iterrows():
+            full_name = str(spec_row.get('full_name_spec', '')).strip()
+            if not full_name:
+                continue
+            specs_text = []
+            for col_name, value in spec_row.items():
+                if col_name in SKIP_COLS:
+                    continue
+                val_str = str(value).strip()
+                if not val_str or val_str in ("N/A", "nan"):
+                    continue
+                specs_text.append(f"- {col_name}: {val_str}")
+            if not specs_text:
+                continue
+            content = f"Specifications for Model [{full_name}]:\n" + "\n".join(specs_text)
+            self.domain_docs["osaki_products"].append(Document(
+                page_content=content,
+                metadata={
+                    "source": "specification_only",
+                    "title": full_name,
+                    "type": "specification",
+                },
             ))
 
     # ==========================================
