@@ -893,13 +893,18 @@ AGENT_SYSTEM_PROMPT = """You are an elite AI agent for Titan Chair LLC and Osaki
 
 # CORE RULES (NEVER VIOLATE)
 1. ZERO HALLUCINATION. Never invent specs, prices, dimensions, promo codes,
-   discount lists, or tracking data. Use TOOLS to retrieve facts.
-   If a tool returns NO_RESULTS, say so honestly and offer the next-best step.
+   discount lists, installation steps, repair instructions, or tracking data.
+   Use TOOLS to retrieve facts. If a tool returns NO_RESULTS, say so honestly
+   and offer to escalate to a human agent.
 2. NEVER fabricate "Original Price" vs "Current Price" comparisons or invent discounts.
    Show only the actual price returned by the tool.
-3. NEVER stall. Do NOT reply with phrases like "Let me check...", "Please hold on",
-   "One moment please" as a standalone answer. If you need data, CALL the tool
-   immediately in the same turn — the user only sees your final message.
+3. NEVER STALL — this is critical. Do NOT reply with phrases like
+   "Let me check...", "Let me get the details", "Please hold on", "One moment please",
+   "I'll look that up for you" as a standalone answer. The user only sees your FINAL
+   message — there is no "next turn" where you do the work. Either:
+     (a) Call the appropriate tool RIGHT NOW in this same turn, OR
+     (b) Ask ONE specific clarifying question (with no filler).
+   Phrases like "One moment, please" without a tool call are a critical violation.
 4. For ANY question about a specific chair model — ALWAYS call `search_chair_specs`
    before answering. Even if you "know" the answer, the tool is authoritative.
 5. AUTHORITATIVE SPEC VALUES (CRITICAL): When a tool result contains a section labeled
@@ -913,6 +918,13 @@ AGENT_SYSTEM_PROMPT = """You are an elite AI agent for Titan Chair LLC and Osaki
    If you don't have authoritative data, say:
    "I don't have the exact list of products covered by that code. Please check the
    active promotions banner on {target_domain} or contact our sales team."
+9. INSTALLATION / ASSEMBLY / REPAIR / TROUBLESHOOTING — NEVER answer from training data.
+   Do NOT produce numbered "installation steps", "general troubleshooting tips", or
+   "general guidance" from your own knowledge. ALWAYS call `get_repair_help` first.
+   If `get_repair_help` returns NO_RESULTS, do NOT invent steps. Instead, say:
+   "I don't have detailed installation instructions for this. Please contact our
+   support team — they can walk you through it." Then call `escalate_to_human`
+   with reason="repair" so we surface the right phone number.
 
 # CONTEXT-AWARE BEHAVIOR
 - If the user's message is short or ambiguous (e.g. just "price", "specs", "more info"),
@@ -955,6 +967,68 @@ DO NOT include this footer when:
 - For repair / warranty / service answers: include the support phone, but DO NOT add the sales-lead footer.
 - Always close with the appropriate contact info IF the user might still need help.
 """
+
+
+# ---------------------------------------------------------------------------
+# Intent heuristics — used to bias the LLM's first tool call. Keeps the agent
+# from drifting into "Let me check..." stalls or training-data hallucinations.
+# ---------------------------------------------------------------------------
+
+# Phrases like "I'm interested in X", "Tell me about X", or a bare model name
+# almost always mean the user wants spec details. Forcing search_chair_specs
+# eliminates the "One moment please..." stall.
+_PRODUCT_INTENT_PATTERNS = [
+    re.compile(r"\b(i'?m|i am)\s+(interested\s+in|looking\s+(at|for))\b", re.IGNORECASE),
+    re.compile(r"\btell\s+me\s+(more\s+)?about\b", re.IGNORECASE),
+    re.compile(r"\b(specs?|specifications?|dimensions?|price|weight|features?)\b.*\b(of|for)\b", re.IGNORECASE),
+    re.compile(r"\b(what\s+is|how\s+much\s+(is|does))\b.*\b(osaki|titan|hypnos|nova|amamedic|maestro|orion|fleetwood|champ|atai|soho|duke|epic|aether|vera)\b", re.IGNORECASE),
+]
+
+# Repair / installation / troubleshooting language. We want to guarantee
+# get_repair_help is called — never let the LLM invent install steps.
+_REPAIR_INTENT_PATTERNS = [
+    re.compile(r"\b(install(ation|ing)?|assembl(e|y|ing)|set\s*up|setup)\b", re.IGNORECASE),
+    re.compile(r"\b(repair|troubleshoot|fix|broken|not\s+working|wo[nN]?'?t\s+(turn|power|start)|stopped\s+working)\b", re.IGNORECASE),
+    re.compile(r"\b(error\s+code|err\s*\d+|e\d{1,3})\b", re.IGNORECASE),
+    re.compile(r"\b(not\s+inflating|leaking|noise|squeak|grind|stuck|jammed)\b", re.IGNORECASE),
+    re.compile(r"\b(replace(ment)?|swap)\s+(the\s+)?(controller|remote|mech|roller|airbag|cable|cord|adapter)\b", re.IGNORECASE),
+]
+
+# Tracking — only force when the message looks like a tracking question and
+# the user already supplied an order id or email (otherwise we'd just spam
+# missing-input errors).
+_TRACKING_INTENT_PATTERNS = [
+    re.compile(r"\b(track|tracking|where\s+is\s+my|order\s+(status|update|tracking)|delivery\s+(status|update))\b", re.IGNORECASE),
+]
+_ORDER_ID_PATTERN = re.compile(r"\b(OSKMC|OSKUS|TIDM|OSK|TI)\d{3,7}\b", re.IGNORECASE)
+_EMAIL_PATTERN = re.compile(r"[\w\.\-+]+@[\w\.\-]+\.\w+")
+
+
+def _infer_forced_tool(user_query: str) -> Optional[str]:
+    """Return the tool name we should force on the first call, or None."""
+    q = (user_query or "").strip()
+    if not q:
+        return None
+
+    has_order_id = bool(_ORDER_ID_PATTERN.search(q))
+    has_email = bool(_EMAIL_PATTERN.search(q))
+
+    # Repair / install patterns take priority — these are the ones the LLM
+    # tends to hallucinate worst.
+    if any(p.search(q) for p in _REPAIR_INTENT_PATTERNS):
+        return "get_repair_help"
+
+    # Tracking — only when we have something to look up.
+    if any(p.search(q) for p in _TRACKING_INTENT_PATTERNS) and (has_order_id or has_email):
+        return "lookup_order_status"
+    if has_order_id and has_email:
+        return "lookup_order_status"
+
+    # Product interest — "I'm interested in <model>" / "Tell me about <model>"
+    if any(p.search(q) for p in _PRODUCT_INTENT_PATTERNS):
+        return "search_chair_specs"
+
+    return None
 
 
 def _execute_tool(name: str, args: Dict[str, Any], target_domain: str) -> str:
@@ -1041,7 +1115,19 @@ async def chat_endpoint(request: ChatRequest):
             messages.append({"role": msg.role, "content": msg.content})
         messages.append({"role": "user", "content": user_query})
 
+        # ── Heuristic intent detection — bias the LLM's first call ──
+        # The LLM frequently skips tools and produces "Let me check..." stalls
+        # or hallucinated install/repair guides. If the query clearly looks like
+        # one of these intents, we set tool_choice to require the right tool
+        # on the FIRST iteration, which empirically eliminates both bugs.
+        forced_first_tool = _infer_forced_tool(user_query)
+
         MAX_TOOL_TURNS = 4
+        STALL_PATTERNS = (
+            "let me check", "let me get the details", "let me find",
+            "please hold on", "one moment", "i'll look that up",
+            "i will look that up", "give me a moment",
+        )
 
         def generate_stream():
             full_response = ""
@@ -1049,20 +1135,55 @@ async def chat_endpoint(request: ChatRequest):
             try:
                 # ── Phase 1: tool-call loop (non-streaming) ──────────────────
                 for turn in range(MAX_TOOL_TURNS):
+                    if turn == 0 and forced_first_tool:
+                        tool_choice: Any = {
+                            "type": "function",
+                            "function": {"name": forced_first_tool},
+                        }
+                        logger.info(f"🎯 Forcing first tool: {forced_first_tool}")
+                    else:
+                        tool_choice = "auto"
+
                     response = openai_client.chat.completions.create(
                         model=AGENT_MODEL,
                         messages=messages,
                         tools=TOOL_SCHEMAS,
-                        tool_choice="auto",
+                        tool_choice=tool_choice,
                         temperature=LLM_TEMPERATURE,
                     )
                     msg = response.choices[0].message
                     tool_calls = getattr(msg, "tool_calls", None) or []
 
                     if not tool_calls:
-                        # No tool calls → we have a textual answer ready.
-                        # Re-issue as STREAMING for nicer UX.
-                        break
+                        # No tool calls. Detect STALL: the LLM produced filler
+                        # like "One moment please" without doing the work.
+                        content_lower = (msg.content or "").lower()
+                        is_stall = (
+                            len(content_lower.strip()) < 200
+                            and any(p in content_lower for p in STALL_PATTERNS)
+                        )
+                        if is_stall and turn < MAX_TOOL_TURNS - 1 and not tools_called:
+                            logger.warning(
+                                f"⚠️ Detected stall: '{(msg.content or '')[:100]}' — forcing tool call"
+                            )
+                            forced_retry_tool = forced_first_tool or "search_chair_specs"
+                            response = openai_client.chat.completions.create(
+                                model=AGENT_MODEL,
+                                messages=messages,
+                                tools=TOOL_SCHEMAS,
+                                tool_choice={
+                                    "type": "function",
+                                    "function": {"name": forced_retry_tool},
+                                },
+                                temperature=LLM_TEMPERATURE,
+                            )
+                            msg = response.choices[0].message
+                            tool_calls = getattr(msg, "tool_calls", None) or []
+                            if not tool_calls:
+                                logger.warning("⚠️ Stall retry still produced no tool call — breaking.")
+                                break
+                        else:
+                            break
 
                     # Append the assistant's tool-call message + each tool result
                     messages.append({
@@ -1139,12 +1260,23 @@ async def chat_endpoint(request: ChatRequest):
                 ):
                     tool_suppress = True
 
-                # 2) Shape-based safety nets (catch hallucinated tracking-style replies)
+                # 2) Shape-based safety nets (catch hallucinated tracking-style replies
+                # and hallucinated repair/install guides where no tool was called)
                 tracking_signals = (
                     "current status:", "tracking number:", "carrier:",
                     "estimated delivery:", "in preparation",
                 )
                 tracking_like = any(s in response_lower for s in tracking_signals)
+
+                # Repair / install / troubleshooting style answer (even if no tool was called)
+                repair_signals = (
+                    "installation", "install the", "assembly", "assemble the",
+                    "troubleshoot", "troubleshooting", "general tips",
+                    "general guidance", "general steps", "preparation:",
+                    "remove the back", "inspect for damage", "manual mode",
+                    "contact our support team", "contact support",
+                )
+                repair_like = any(s in response_lower for s in repair_signals)
 
                 # Pure greeting / closing — short and friendly with no product content.
                 is_short = len(full_response.strip()) < 240
@@ -1160,7 +1292,7 @@ async def chat_endpoint(request: ChatRequest):
                 # 3) Positive shopping signal must outweigh suppression.
                 shopping_signals = (
                     "$", "price", "specs", "feature", "recommend",
-                    "compare", "model", "purchase", "dimension",
+                    "compare", "purchase", "dimension",
                 )
                 is_shopping = any(s in response_lower for s in shopping_signals)
 
@@ -1169,6 +1301,7 @@ async def chat_endpoint(request: ChatRequest):
                     and not user_sent_email
                     and not tool_suppress
                     and not tracking_like
+                    and not repair_like
                     and not greeting_or_closing
                     and "💌" not in full_response
                     and "leave your email" not in response_lower
@@ -1181,6 +1314,21 @@ async def chat_endpoint(request: ChatRequest):
                     )
                     full_response += appended
                     yield appended
+
+                # 4) For repair/service/escalation answers, ensure the support phone is shown.
+                # If the LLM said "contact our support team" but forgot to include the
+                # phone number, append the proper service contact line automatically.
+                needs_support_contact = (
+                    (repair_like or "get_repair_help" in tools_called)
+                    and "888-848-2630" not in full_response
+                    and "888-501-5988" not in full_response
+                    and "service@osakititan" not in full_response
+                )
+                if needs_support_contact:
+                    support_msg = get_contact_msg("QA", target_domain)
+                    appended_support = f"\n\n{support_msg}"
+                    full_response += appended_support
+                    yield appended_support
 
                 # Scrub any internal hint markers that may have leaked into the visible text.
                 if (
