@@ -30,7 +30,6 @@ from langchain_community.vectorstores import FAISS as LC_FAISS
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
-
 import json as _json
 try:
     from app.agent_tools import (
