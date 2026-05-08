@@ -925,6 +925,23 @@ AGENT_SYSTEM_PROMPT = """You are an elite AI agent for Titan Chair LLC and Osaki
    "I don't have detailed installation instructions for this. Please contact our
    support team — they can walk you through it." Then call `escalate_to_human`
    with reason="repair" so we surface the right phone number.
+10. NEVER claim a chair is "best-selling", "most popular", "top-rated",
+    "trending", or "customer favorite" — we have no data source for those rankings.
+    If the user asks "what is your best seller?", call `recommend_chairs` for
+    "premium full-body massage chair", and present the picks as
+    "Here are some popular flagship models:" without ranking claims.
+11. NEVER write the literal text "[Link not available]", "Link not available",
+    "URL not available", or similar placeholder. If a tool result has no URL,
+    just write: "Visit {target_domain} for full details." — never a placeholder.
+12. PRICE ACCURACY — only quote prices that came from a tool result in THIS turn.
+    Do NOT recall prices from training data. If a tool result shows
+    "Variant Price: $5499.00", quote $5,499 — never $375 or $1,000.
+    If no price was returned, say "Please check the current price on {target_domain}".
+13. CARE / USAGE / CLEANING / DAILY-USE questions ("how often should I use",
+    "how to clean", "should I keep it plugged in"): call `get_warranty_or_policy`
+    with topic = "care and usage" first. If nothing relevant returns, give a
+    SHORT, generic answer (1-2 sentences) and direct the user to the user manual
+    or our support team. Do NOT include the 💌 sales footer for these.
 
 # CONTEXT-AWARE BEHAVIOR
 - If the user's message is short or ambiguous (e.g. just "price", "specs", "more info"),
@@ -1218,7 +1235,12 @@ async def chat_endpoint(request: ChatRequest):
                 else:
                     logger.warning("⚠️ Agent hit MAX_TOOL_TURNS without final answer")
 
-                # ── Phase 2: final streaming response ────────────────────────
+                # ── Phase 2: collect the LLM's final response (BUFFERED).
+                # We buffer instead of streaming chunk-by-chunk because we need
+                # to scrub leaked dev URLs ("github.io"), ugly placeholders
+                # ("[Link not available]"), and inject the business-hours footer
+                # BEFORE the user sees the text. Streaming a few hundred chars
+                # is fast enough that the user-perceived latency is unchanged.
                 stream = openai_client.chat.completions.create(
                     model=AGENT_MODEL,
                     messages=messages,
@@ -1227,15 +1249,9 @@ async def chat_endpoint(request: ChatRequest):
                 )
                 for chunk in stream:
                     if chunk.choices and chunk.choices[0].delta.content:
-                        delta = chunk.choices[0].delta.content
-                        full_response += delta
-                        yield delta
+                        full_response += chunk.choices[0].delta.content
 
-                # ── Post-processing ─────────────────────────────────────────
-                # Decide whether to append the 💌 sales-lead footer.
-                # Rule of thumb: only on genuine shopping/spec turns where the
-                # user has NOT already given an email and is NOT being routed
-                # to service / tracking / human-agent flows.
+                # ── Post-processing (operates on full_response only) ─────────
                 user_sent_email = bool(re.search(r"[\w\.-]+@[\w\.-]+\.\w+", user_query))
                 response_lower = full_response.lower()
 
@@ -1308,45 +1324,72 @@ async def chat_endpoint(request: ChatRequest):
                 )
 
                 if should_append_footer:
-                    appended = (
+                    full_response += (
                         "\n\n💌 Interested in a personalized recommendation or exclusive pricing? "
                         "Leave your email address and our team will get back to you within 24 hours!"
                     )
-                    full_response += appended
-                    yield appended
 
-                # 4) For repair/service/escalation answers, ensure the support phone is shown.
-                # If the LLM said "contact our support team" but forgot to include the
-                # phone number, append the proper service contact line automatically.
-                needs_support_contact = (
-                    (repair_like or "get_repair_help" in tools_called)
-                    and "888-848-2630" not in full_response
-                    and "888-501-5988" not in full_response
-                    and "service@osakititan" not in full_response
+                # 4) Strip leaked dev/staging URLs (github.io, localhost, internal).
+                #    These should NEVER reach the customer. Replace with target_domain.
+                bad_url_patterns = [
+                    r"https?://[^\s)\]]+\.github\.io[^\s)\]]*",
+                    r"https?://localhost[^\s)\]]*",
+                    r"https?://127\.0\.0\.1[^\s)\]]*",
+                ]
+                for pat in bad_url_patterns:
+                    full_response = re.sub(pat, target_domain, full_response)
+
+                # 5) Strip ugly placeholder texts like "[Link not available]".
+                placeholder_patterns = [
+                    r"\s*[-–]?\s*(?:More\s+details|Link|URL)\s*:\s*\[?\s*(?:Link\s+|URL\s+)?[Nn]ot\s+[Aa]vailable\s*\]?",
+                    r"\[?\s*[Ll]ink\s+[Nn]ot\s+[Aa]vailable\s*\]?",
+                    r"\[?\s*URL\s+[Nn]ot\s+[Aa]vailable\s*\]?",
+                ]
+                for pat in placeholder_patterns:
+                    full_response = re.sub(pat, "", full_response)
+
+                # 6) Scrub any internal hint markers that may have leaked.
+                full_response = re.sub(
+                    r"\n?<!--\s*SUPPRESS_LEAD_FOOTER\s*-->", "", full_response
                 )
-                if needs_support_contact:
-                    support_msg = get_contact_msg("QA", target_domain)
-                    appended_support = f"\n\n{support_msg}"
-                    full_response += appended_support
-                    yield appended_support
+                full_response = re.sub(
+                    r"\n?FOOTER_HINT:\s*SUPPRESS_LEAD_FOOTER[^\n]*", "", full_response
+                )
 
-                # Scrub any internal hint markers that may have leaked into the visible text.
-                if (
-                    "SUPPRESS_LEAD_FOOTER" in full_response
-                    or "FOOTER_HINT" in full_response
-                    or "<!-- SUPPRESS" in full_response
-                ):
-                    cleaned = re.sub(
-                        r"\n?<!--\s*SUPPRESS_LEAD_FOOTER\s*-->",
-                        "",
-                        full_response,
-                    )
-                    cleaned = re.sub(
-                        r"\n?FOOTER_HINT:\s*SUPPRESS_LEAD_FOOTER[^\n]*",
-                        "",
-                        cleaned,
-                    )
-                    full_response = cleaned.rstrip()
+                # Tidy whitespace from all substitutions above
+                full_response = re.sub(r"[ \t]+\n", "\n", full_response)
+                full_response = re.sub(r"\n{3,}", "\n\n", full_response).rstrip()
+
+                # 7) ALWAYS close with brand-appropriate contact info + business hours.
+                # User explicitly asked for this: every reply ends with hours notice.
+                hours_marker = "business hours are mon-fri"
+                if hours_marker not in full_response.lower():
+                    if (
+                        "get_repair_help" in tools_called
+                        or "escalate_to_human" in tools_called
+                        or "lookup_order_status" in tools_called
+                        or repair_like
+                        or tracking_like
+                    ):
+                        contact_routing = "QA"
+                    elif (
+                        "get_warranty_or_policy" in tools_called
+                        or any(kw in response_lower for kw in ("warranty", "service@osakititan"))
+                    ):
+                        contact_routing = "QA"
+                    else:
+                        contact_routing = "PRODUCTS"
+                    contact_line = get_contact_msg(contact_routing, target_domain)
+                    full_response = full_response.rstrip() + f"\n\n{contact_line}"
+
+                # Now stream out the cleaned response in pseudo-chunks so the UI
+                # still feels responsive. Word boundaries keep markdown intact.
+                CHUNK_SIZE = 40  # chars per chunk; tuned for snappy feel
+                cursor = 0
+                while cursor < len(full_response):
+                    end = min(cursor + CHUNK_SIZE, len(full_response))
+                    yield full_response[cursor:end]
+                    cursor = end
 
                 # Persist chat log
                 try:

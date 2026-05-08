@@ -107,16 +107,38 @@ class HybridRetriever:
 # ============================================================================
 
 def _extract_price(text: str) -> Optional[float]:
-    matches = re.findall(r"\$?(\d{2,3}[,\d]*\.?\d*)", text or "")
+    """Extract the most likely actual chair price from a doc.
+
+    Strategy:
+    1. Prefer 'Variant Price: $X' field if present (Shopify export schema).
+    2. Otherwise scan all $-prefixed numbers and pick the MAX in a reasonable
+       chair price band ($500-$50,000). Picking the min was wrong because docs
+       often contain monthly payment ($199/mo), warranty add-on ($99), or
+       shipping fee ($249) — all of which are far below the real chair price.
+    """
+    if not text:
+        return None
+
+    variant_match = re.search(r"Variant\s+Price[^\n$]*\$?(\d[\d,]*\.?\d*)", text, re.IGNORECASE)
+    if variant_match:
+        try:
+            v = float(variant_match.group(1).replace(",", ""))
+            if 500 <= v <= 50000:
+                return v
+        except ValueError:
+            pass
+
+    # Fall back: pick the MAX $-prefixed price within the chair range.
+    matches = re.findall(r"\$\s*(\d[\d,]*\.?\d*)", text)
     prices = []
     for m in matches:
         try:
             v = float(m.replace(",", ""))
-            if 100 <= v <= 50000:
+            if 500 <= v <= 50000:
                 prices.append(v)
         except ValueError:
             continue
-    return min(prices) if prices else None
+    return max(prices) if prices else None
 
 
 def _extract_title(doc: Document) -> str:
@@ -218,6 +240,13 @@ def tool_recommend_chairs(
     """
     Recommend premium massage chairs based on user need. Filters out accessories
     and applies budget constraints if provided.
+
+    Pricing safety nets:
+    - Anything < $500 is treated as a non-chair / accessory (a 4D chair below
+      $500 is structurally impossible — those came from misparsed lines like
+      monthly-payment promos or shipping fees).
+    - Budget bands are widened slightly so e.g. "around $3000" returns chairs
+      from $2000-$5000 instead of nothing.
     """
     NON_CHAIR_KEYWORDS = {
         "mat", "pad", "cover", "cleaner", "gun", "cushion", "shawl",
@@ -226,6 +255,15 @@ def tool_recommend_chairs(
         "swivel", "caddo", "bundle", "patio", "zena", "office chair",
         "back seat", "soaking spa", "trainer", "j5 jade",
     }
+    MIN_REASONABLE_PRICE = 500.0  # anything below this is not a real chair
+
+    # Slightly widen the band so "around $3000" still returns chairs in the
+    # $2000-$5000 range rather than failing entirely.
+    eff_min = budget_min
+    eff_max = budget_max
+    if budget_max is not None and budget_min is None:
+        eff_min = max(MIN_REASONABLE_PRICE, budget_max * 0.6)
+        eff_max = budget_max * 1.3
 
     docs = products_retriever.search(user_need or "premium 4D massage chair", k=20)
     candidates = []
@@ -243,24 +281,39 @@ def tool_recommend_chairs(
         if any(ex and ex in title_lower for ex in excludes_norm):
             continue
         price = _extract_price(doc.page_content)
-        if price is None:
+        if price is None or price < MIN_REASONABLE_PRICE:
             continue
-        if budget_min is not None and price < budget_min:
+        if eff_min is not None and price < eff_min:
             continue
-        if budget_max is not None and price > budget_max:
+        if eff_max is not None and price > eff_max:
             continue
         candidates.append((title, price, doc.page_content[:500]))
 
     if not candidates:
-        return "NO_RESULTS: No chairs match the given criteria. Suggest broadening budget or relaxing constraints."
+        return (
+            "NO_RESULTS: No chairs match the given criteria. "
+            "Suggest broadening budget (premium massage chairs typically range $1,500-$10,000)."
+        )
 
-    # Sort by price descending, then take top N
-    candidates.sort(key=lambda x: -x[1])
+    # If user gave a target budget, sort by closeness to budget midpoint.
+    # Otherwise sort by price descending (premium models first).
+    if budget_max is not None:
+        target = ((budget_min or budget_max * 0.7) + budget_max) / 2
+        candidates.sort(key=lambda x: abs(x[1] - target))
+    else:
+        candidates.sort(key=lambda x: -x[1])
     picks = candidates[:num_recommendations]
 
-    lines = [f"Top {len(picks)} matching chairs:"]
+    header = f"Top {len(picks)} matching chairs"
+    if budget_max is not None:
+        header += f" (target budget ~${budget_max:,.0f})"
+    header += ":"
+    lines = [header]
     for i, (title, price, body) in enumerate(picks, 1):
         lines.append(f"\n--- Pick {i}: {title} (${price:,.0f}) ---\n{body}")
+    lines.append(
+        "\nIMPORTANT: Quote ONLY the prices shown above. Do NOT recall prices from training data."
+    )
     return "\n".join(lines)
 
 
