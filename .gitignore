@@ -44,4 +44,4 @@ raw_data/*
 .AppleDouble
 .LSOverride
 .vscode/
-.idea/
+.idea/faiss_index/
