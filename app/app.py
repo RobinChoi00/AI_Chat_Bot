@@ -359,9 +359,13 @@ if prompt := st.chat_input("What can i help you today?"):
                 "current_domain": current_brand["domain"] 
             }
             
+            # Timeout note: tool-calling chains can take 15-30s on first turn
+            # (model picks tool → tool fetch → model synthesizes). The previous
+            # 10s timeout was tripping the frontend BEFORE the backend even
+            # finished its agentic loop, causing spurious network errors.
             with st.spinner("🧠 Processing..."):
-                response = requests.post(API_URL, json=payload, stream=True, timeout=10)
-            
+                response = requests.post(API_URL, json=payload, stream=True, timeout=90)
+
             response.raise_for_status()
 
             for chunk in response.iter_content(chunk_size=1024):

@@ -1,18 +1,27 @@
 import os
+import sys
 
 # 💡 [Mac(ARM64) 방어코드] OpenMP 다중 실행 충돌(OMP Error #15)을 강제로 무시합니다.
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'True' 
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 
 load_dotenv()
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "faiss_index", "freshdesk_qa")
 
-print("🔍 FAISS Vector DB 직접 검색 테스트 시작...")
-embeddings = OpenAIEmbeddings()
+# Use the same EMBEDDING_MODEL the chat server runs with — otherwise the
+# vector dimensions won't match and load_local() fails.
+sys.path.insert(0, BASE_DIR)
+try:
+    from config import EMBEDDING_MODEL
+except Exception:
+    EMBEDDING_MODEL = os.environ.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+
+print(f"🔍 FAISS Vector DB 직접 검색 테스트 시작... (embedding={EMBEDDING_MODEL})")
+embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
 
 db = FAISS.load_local(DB_PATH, embeddings, allow_dangerous_deserialization=True)
 

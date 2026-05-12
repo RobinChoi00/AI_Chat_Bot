@@ -1,4 +1,5 @@
 import os
+import sys
 import glob
 import json
 import pandas as pd
@@ -10,14 +11,27 @@ from langchain_core.documents import Document
 
 # 💡 [아키텍처] 마스터 파이프라인 경로 설정
 load_dotenv(override=True)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) 
-RAW_DIR = os.path.join(BASE_DIR, "raw_data")       
-DATA_DIR = os.path.join(BASE_DIR, "data")          
-FAISS_DIR = os.path.join(BASE_DIR, "faiss_index") 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RAW_DIR = os.path.join(BASE_DIR, "raw_data")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+FAISS_DIR = os.path.join(BASE_DIR, "faiss_index")
+
+# Pull the configured embedding model from the central config so re-builds
+# stay in lock-step with what the chat server is querying at runtime.
+sys.path.insert(0, BASE_DIR)
+try:
+    from config import EMBEDDING_MODEL
+except Exception:
+    EMBEDDING_MODEL = os.environ.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+
 
 class MasterIngester:
     def __init__(self):
-        self.embeddings = OpenAIEmbeddings()
+        # 💰 text-embedding-3-small: ~5x cheaper than ada-002 with comparable
+        # or better recall. If you flip back to ada-002 you MUST rebuild this
+        # index since the vector dimensions differ.
+        print(f"🧠 Embedding model: {EMBEDDING_MODEL}")
+        self.embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
         # 💡 [리팩토링 핵심] 도메인별 3개의 바구니(딕셔너리) 생성
         self.domain_docs = {
             "freshdesk_qa": [],   

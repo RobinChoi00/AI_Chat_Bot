@@ -17,11 +17,34 @@ from __future__ import annotations
 import logging
 import re
 import threading
+from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
+
+
+# Read lock for FAISS. Injected by main.py during boot — falls back to a
+# no-op context manager so the module remains importable standalone (tests).
+_faiss_read_lock_factory = None  # type: ignore[assignment]
+
+
+def set_faiss_read_lock_factory(factory) -> None:
+    """Wire up a callable that returns the read-lock context manager.
+
+    main.py calls this with `faiss_rwlock.read` so that every BM25 + dense
+    search performed by HybridRetriever blocks while a webhook is rebuilding
+    the index. Reads remain concurrent with each other.
+    """
+    global _faiss_read_lock_factory
+    _faiss_read_lock_factory = factory
+
+
+def _read_lock_ctx():
+    if _faiss_read_lock_factory is None:
+        return nullcontext()
+    return _faiss_read_lock_factory()
 
 # ============================================================================
 # Hybrid Retrieval (BM25 + Dense)
@@ -58,24 +81,26 @@ class HybridRetriever:
         if not query.strip():
             return []
 
-        # Dense search
-        try:
-            dense_hits = self.vectorstore.similarity_search(query, k=k * 2)
-        except Exception as e:
-            logger.warning(f"dense search failed: {e}")
-            dense_hits = []
-
-        # BM25 search
-        bm25_hits: List[Document] = []
-        if self.bm25 is not None:
+        # Acquire the FAISS read lock for the duration of this search so that
+        # an in-flight webhook update doesn't swap docstore contents mid-read.
+        with _read_lock_ctx():
             try:
-                tokens = self._tokenize(query)
-                scores = self.bm25.get_scores(tokens)
-                # top k*2 by score
-                ranked_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[: k * 2]
-                bm25_hits = [self.docs[i] for i in ranked_idx if scores[i] > 0]
+                dense_hits = self.vectorstore.similarity_search(query, k=k * 2)
             except Exception as e:
-                logger.warning(f"bm25 search failed: {e}")
+                logger.warning(f"dense search failed: {e}")
+                dense_hits = []
+
+            bm25_hits: List[Document] = []
+            if self.bm25 is not None:
+                try:
+                    tokens = self._tokenize(query)
+                    scores = self.bm25.get_scores(tokens)
+                    ranked_idx = sorted(
+                        range(len(scores)), key=lambda i: scores[i], reverse=True
+                    )[: k * 2]
+                    bm25_hits = [self.docs[i] for i in ranked_idx if scores[i] > 0]
+                except Exception as e:
+                    logger.warning(f"bm25 search failed: {e}")
 
         # RRF fusion
         rrf_k = 60  # standard
@@ -276,22 +301,27 @@ def tool_search_chair_specs(
 
     lines: List[str] = []
 
+    # 💰 Token-budget aware: when the query has a clear spec topic and we
+    # already found AUTHORITATIVE lines, we no longer dump the full 1200-char
+    # body too — the LLM only needs the authoritative numbers to answer.
+    # Only the first doc gets the "full context" dump as a safety net.
     for i, doc in enumerate(docs, 1):
         title = _extract_title(doc)
-
-        # Extract AUTHORITATIVE lines that directly answer the query
         auth_lines = _find_authoritative_lines(doc.page_content, query)
+
+        lines.append(f"\n--- Result {i}: {title} ---")
         if auth_lines:
-            lines.append(f"\n--- Result {i}: {title} ---")
             lines.append("AUTHORITATIVE SPEC VALUES (use EXACTLY these numbers, do not paraphrase):")
             for al in auth_lines:
                 lines.append(f"  {al}")
-            # Also include full body (truncated) for context
-            lines.append("\nFull spec context:")
-            lines.append(doc.page_content[:1200])
+            if i == 1:
+                # Single, smaller context dump for the top hit only.
+                lines.append("\nAdditional context:")
+                lines.append(doc.page_content[:600])
         else:
-            lines.append(f"\n--- Result {i}: {title} ---")
-            lines.append(doc.page_content[:1500])
+            # No targeted match → include a trimmed body so the LLM can still
+            # answer general questions about the model.
+            lines.append(doc.page_content[:1000])
 
     return "\n".join(lines)
 

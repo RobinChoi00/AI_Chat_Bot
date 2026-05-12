@@ -72,9 +72,69 @@ MAX_RETRIES = 3
 AGENT_MODEL = "gpt-4o"
 ROUTER_MODEL = "gpt-4o-mini"
 
+# 💰 [Cost Optimization] Embedding model:
+# - text-embedding-3-small : 5x cheaper than ada-002 AND higher quality.
+# - Switching requires rebuilding the FAISS index (`python script/master_ingester.py`)
+#   because vector dimensions differ from ada-002.
+# - Set to "text-embedding-ada-002" if you can't rebuild yet.
+EMBEDDING_MODEL = os.environ.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+
+# OpenAI client behavior (applied via the OpenAI SDK).
+# - timeout: per-call hard ceiling. Tool-calling rounds rarely exceed 30s.
+# - max_retries: SDK handles 429/5xx with exponential backoff automatically.
+OPENAI_REQUEST_TIMEOUT = float(os.environ.get("OPENAI_REQUEST_TIMEOUT", 45))
+OPENAI_MAX_RETRIES = int(os.environ.get("OPENAI_MAX_RETRIES", 3))
+
 # LLM 창의성 통제 (0.0 = 극강의 팩트 위주, 1.0 = 창의적 지어내기)
 # (참고: main.py에서 스트리밍 응답 시 0.1을 쓰고 있으므로 일치시킴)
 LLM_TEMPERATURE = 0.1 
 
 # RAG(FAISS) 검색 설정
 FAISS_SEARCH_K = 5 # 사용자 질문 시 Vector DB에서 가져올 최대 문서(Chunk) 개수
+
+
+# ==========================================
+# 3. Cost Observability — token pricing per 1M tokens (USD)
+# ==========================================
+# Used by the usage logger to estimate per-request cost. Update if OpenAI
+# changes prices. Cached input is billed at 50% of the regular input rate
+# (OpenAI prompt caching).
+MODEL_PRICING_USD_PER_1M = {
+    "gpt-4o":              {"input": 2.50, "cached_input": 1.25, "output": 10.00},
+    "gpt-4o-mini":         {"input": 0.15, "cached_input": 0.075, "output": 0.60},
+    "gpt-4.1":             {"input": 2.00, "cached_input": 0.50, "output": 8.00},
+    "gpt-4.1-mini":        {"input": 0.40, "cached_input": 0.10, "output": 1.60},
+    "text-embedding-3-small": {"input": 0.02, "cached_input": 0.02, "output": 0.0},
+    "text-embedding-3-large": {"input": 0.13, "cached_input": 0.13, "output": 0.0},
+    "text-embedding-ada-002": {"input": 0.10, "cached_input": 0.10, "output": 0.0},
+}
+
+
+# ==========================================
+# 4. Rate Limiting (slowapi)
+# ==========================================
+# Per-IP rate limits to protect against accidental loops / abuse / cost bombs.
+# Override via env if you need to scale up.
+RATE_LIMIT_PER_MINUTE = os.environ.get("RATE_LIMIT_PER_MINUTE", "30/minute")
+RATE_LIMIT_PER_HOUR = os.environ.get("RATE_LIMIT_PER_HOUR", "200/hour")
+
+
+# ==========================================
+# 5. Response cache for repeat FAQ queries
+# ==========================================
+# Common questions ("what's your warranty?", "business hours?") repeat
+# constantly. Caching their answers for a short TTL bypasses the full
+# agent-loop cost. PII-tinted queries (email/order id) bypass the cache.
+CHAT_CACHE_ENABLED = os.environ.get("CHAT_CACHE_ENABLED", "1") == "1"
+CHAT_CACHE_TTL_SECONDS = int(os.environ.get("CHAT_CACHE_TTL_SECONDS", 600))  # 10 min
+CHAT_CACHE_MAX_ENTRIES = int(os.environ.get("CHAT_CACHE_MAX_ENTRIES", 512))
+
+
+# ==========================================
+# 6. CORS — restrict allowed origins in production
+# ==========================================
+# Comma-separated list, or "*" to allow all (dev only).
+CORS_ALLOWED_ORIGINS = os.environ.get(
+    "CORS_ALLOWED_ORIGINS",
+    "*",  # ⚠️ Tighten in production: https://titanchair.com,https://osakiusa.com,...
+).split(",")
