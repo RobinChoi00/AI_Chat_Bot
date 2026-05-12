@@ -191,6 +191,38 @@ def _find_authoritative_lines(doc_content: str, query: str) -> List[str]:
     return hits
 
 
+# Common user-side spellings / typos / OCR noise that should map to the
+# canonical brand or model strings used in the spec sheet.
+_MODEL_ALIASES: List[Tuple[str, str]] = [
+    (r"\bosaka\b", "osaki"),         # "Osaka" → "Osaki"
+    (r"\bosakii\b", "osaki"),        # double-i typo
+    (r"\botomic\b", "otamic"),       # "Otomic" → "Otamic"
+    (r"\bottomic\b", "otamic"),
+    (r"\bottoman\b", "otamic"),
+    (r"\botamic\s+le\b", "otamic le"),
+    (r"\bhipnos\b", "hypnos"),       # "Hipnos" → "Hypnos"
+    (r"\bsojo\b", "soho"),           # "Sojo" → "Soho"
+    (r"\bxrest\b", "xrest"),
+    # OCR confusion: digit '0' instead of letter 'O' in product codes
+    # e.g. "09-4000cs" → "os-4000cs"
+    (r"\b0(\d)-?", r"os-\1"),
+    (r"\b0s-", "os-"),
+    (r"\bo5-", "os-"),
+]
+
+
+def _normalize_model_query(text: str) -> str:
+    """Apply common typo / OCR fixes to user-provided model names."""
+    if not text:
+        return text
+    t = text
+    for pat, repl in _MODEL_ALIASES:
+        t = re.sub(pat, repl, t, flags=re.IGNORECASE)
+    # Collapse multiple spaces / dashes
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
 def tool_search_chair_specs(
     *,
     products_retriever: HybridRetriever,
@@ -200,11 +232,47 @@ def tool_search_chair_specs(
     """
     Look up spec details for one or more chairs. Use when the user asks about
     dimensions, weight, door size, features, price etc. of a specific model.
+
+    Resilience layers (in order):
+      1. Exact query with model_name as hint
+      2. Typo-normalized query (Osaka→Osaki, 09-→OS-, etc.)
+      3. Looser search using only the model name (drop the spec topic)
+      4. Final fallback: searching just on the alphanumeric core of the model
     """
-    search_query = f"{model_name} {query}".strip() if model_name else query
-    docs = products_retriever.search(search_query, k=5, model_hint=model_name)
+    norm_model = _normalize_model_query(model_name) if model_name else None
+    base_query = f"{model_name} {query}".strip() if model_name else query
+
+    docs = products_retriever.search(base_query, k=5, model_hint=model_name)
+
+    # Try typo-normalized form if the original returned nothing useful
+    if not docs and norm_model and norm_model.lower() != (model_name or "").lower():
+        retry_query = f"{norm_model} {query}".strip()
+        logger.info(f"[search_chair_specs] retrying with normalized: {retry_query!r}")
+        docs = products_retriever.search(retry_query, k=5, model_hint=norm_model)
+
+    # Try just the model name (drop the spec topic) — sometimes the topic noise
+    # hurts retrieval (e.g. "parts" doesn't help find a spec sheet)
+    if not docs and (model_name or norm_model):
+        bare = norm_model or model_name
+        logger.info(f"[search_chair_specs] retrying with bare model: {bare!r}")
+        docs = products_retriever.search(bare, k=5, model_hint=bare)
+
+    # Final fallback: pull out alphanumeric core (e.g. "4000cs", "soho", "otamic")
+    if not docs and (model_name or norm_model):
+        core_tokens = re.findall(r"[a-zA-Z]{3,}|\d{3,}", (norm_model or model_name))
+        if core_tokens:
+            core_query = " ".join(core_tokens)
+            logger.info(f"[search_chair_specs] retrying with core tokens: {core_query!r}")
+            docs = products_retriever.search(core_query, k=5, model_hint=core_query)
+
     if not docs:
-        return "NO_RESULTS: No matching specifications found in the catalog."
+        return (
+            "NO_RESULTS: No matching specifications found in the catalog. "
+            "Possible reasons: (a) the model is an older/discontinued unit, "
+            "(b) the spelling differs from our records. "
+            "Suggest asking the customer to share the exact model name from "
+            "the chair's serial-number sticker, and offer to escalate to support."
+        )
 
     lines: List[str] = []
 
@@ -400,6 +468,25 @@ def tool_capture_sales_lead(
     return f"SUCCESS: Forwarded {customer_email} to sales team. They will respond within 24 hours."
 
 
+def tool_get_showroom_info(*, target_domain: str) -> str:
+    """Return the physical headquarters / showroom address.
+
+    Customers asking "where is your showroom", "do you have a store", "company
+    location", "address" etc. should be answered with this single source of truth.
+    """
+    try:
+        # Imported here so the tools module stays decoupled from config side-effects.
+        from config import COMPANY_ADDRESS
+    except Exception:
+        COMPANY_ADDRESS = "1001 W Crosby Rd, Carrollton, TX 75006"
+    return (
+        "Headquarters / Showroom:\n"
+        f"Address: {COMPANY_ADDRESS}\n"
+        "We recommend calling ahead to confirm availability before your visit. "
+        "Use the SHOWROOM_ADDRESS value above verbatim in your reply."
+    )
+
+
 def tool_escalate_to_human(
     *,
     contact_msg_fn,
@@ -575,6 +662,22 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                     },
                 },
                 "required": ["reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_showroom_info",
+            "description": (
+                "Return the official Carrollton, TX headquarters / showroom address. "
+                "Use this whenever the customer asks where the showroom / store / office / "
+                "company is located, or wants to visit / see chairs in person."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
             },
         },
     },

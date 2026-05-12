@@ -42,6 +42,7 @@ try:
         tool_lookup_order_status,
         tool_capture_sales_lead,
         tool_escalate_to_human,
+        tool_get_showroom_info,
     )
 except ImportError:
     from agent_tools import (  # type: ignore
@@ -54,11 +55,14 @@ except ImportError:
         tool_lookup_order_status,
         tool_capture_sales_lead,
         tool_escalate_to_human,
+        tool_get_showroom_info,
     )
 
 # 💡 [비즈니스 & 시스템 설정 임포트]
 from config import (
     SUPPORT_CONTACT_MSG,
+    SUPPORT_BUSINESS_HOURS,
+    COMPANY_ADDRESS,
     DEFAULT_TARGET_DOMAIN,
     AGENT_MODEL,
     ROUTER_MODEL,
@@ -941,6 +945,25 @@ AGENT_SYSTEM_PROMPT = """You are an elite AI agent for Titan Chair LLC and Osaki
     with topic = "care and usage" first. If nothing relevant returns, give a
     SHORT, generic answer (1-2 sentences) and direct the user to the user manual
     or our support team. Do NOT include the 💌 sales footer for these.
+14. SHOWROOM / OFFICE / VISIT / ADDRESS questions — ALWAYS call `get_showroom_info`.
+    Never say "I don't have showroom information". The canonical address is:
+    1001 W Crosby Rd, Carrollton, TX 75006. Suggest the customer call ahead.
+15. MODEL NAME ALIASES — customers often misspell. Treat these as the same model
+    and ALWAYS pass them to `search_chair_specs`; never refuse for a typo alone:
+       • "Osaka" ≡ "Osaki"      • "Hipnos" ≡ "Hypnos"
+       • "Otomic / Ottoman" ≡ "Otamic"    • "Sojo" ≡ "Soho"
+       • "09-XXXX" / "0S-XXXX" / "O5-XXXX" ≡ "OS-XXXX" (OCR confusion of 0/O)
+    If the tool still returns NO_RESULTS after the typo fallback, say:
+    "I couldn't find that exact model in our catalog. Could you share the
+    model number from the chair's serial-number sticker? In the meantime,
+    our support team can look it up directly."  → then call `escalate_to_human`
+    with reason="general".
+16. BUSINESS HOURS — Always end every answer (whether sales, warranty, repair,
+    tracking, FAQ, greeting, anything) with our contact line including hours:
+       "Our business hours are Mon-Fri, 9:30 AM - 6:30 PM / Sat, 10:00 AM - 4:00 PM CST."
+    Never paraphrase the hours (do NOT say "10am-6pm" — exact text only).
+    If you're unsure which phone number to use, prefer the support line
+    (+1-888-848-2630). The system will rewrite if needed.
 
 # CONTEXT-AWARE BEHAVIOR
 - If the user's message is short or ambiguous (e.g. just "price", "specs", "more info"),
@@ -1019,6 +1042,15 @@ _TRACKING_INTENT_PATTERNS = [
 _ORDER_ID_PATTERN = re.compile(r"\b(OSKMC|OSKUS|TIDM|OSK|TI)\d{3,7}\b", re.IGNORECASE)
 _EMAIL_PATTERN = re.compile(r"[\w\.\-+]+@[\w\.\-]+\.\w+")
 
+# Showroom / company-location intents — force the showroom tool so customers
+# always get the canonical Carrollton, TX address, never a "I don't have".
+_SHOWROOM_INTENT_PATTERNS = [
+    re.compile(r"\b(showroom|show\s*room)\b", re.IGNORECASE),
+    re.compile(r"\b(where\s+(is|are)\s+(?:your|the)\s+(?:office|store|company|headquarters|hq)|company\s+location|store\s+location|office\s+location|headquarters)\b", re.IGNORECASE),
+    re.compile(r"\b(can\s+i\s+visit|come\s+see\s+(?:the\s+)?chairs?|try\s+(?:the\s+)?chairs?\s+in\s+person|in[-\s]?store)\b", re.IGNORECASE),
+    re.compile(r"\b(your|company)\s+(address|location)\b", re.IGNORECASE),
+]
+
 
 def _infer_forced_tool(user_query: str) -> Optional[str]:
     """Return the tool name we should force on the first call, or None."""
@@ -1028,6 +1060,10 @@ def _infer_forced_tool(user_query: str) -> Optional[str]:
 
     has_order_id = bool(_ORDER_ID_PATTERN.search(q))
     has_email = bool(_EMAIL_PATTERN.search(q))
+
+    # Showroom / location — high priority because the answer is a single static fact.
+    if any(p.search(q) for p in _SHOWROOM_INTENT_PATTERNS):
+        return "get_showroom_info"
 
     # Repair / install patterns take priority — these are the ones the LLM
     # tends to hallucinate worst.
@@ -1099,6 +1135,8 @@ def _execute_tool(name: str, args: Dict[str, Any], target_domain: str) -> str:
                 target_domain=target_domain,
                 reason=args.get("reason", "general"),
             )
+        if name == "get_showroom_info":
+            return tool_get_showroom_info(target_domain=target_domain)
         return f"UNKNOWN_TOOL: {name}"
     except Exception as e:
         logger.error(f"🚨 Tool execution error [{name}]: {e}")
@@ -1354,15 +1392,65 @@ async def chat_endpoint(request: ChatRequest):
                 full_response = re.sub(
                     r"\n?FOOTER_HINT:\s*SUPPRESS_LEAD_FOOTER[^\n]*", "", full_response
                 )
+                # Scrub the showroom tool's "use ... verbatim" instruction line
+                full_response = re.sub(
+                    r"\n?Use the SHOWROOM_ADDRESS value above verbatim[^\n]*", "", full_response
+                )
+
+                # 6b) Strip any LLM-rephrased business hours line that gives WRONG
+                # times (the LLM sometimes invents "10 am to 6 pm" etc.). Keep
+                # the canonical line that we'll append below.
+                #
+                # Match common paraphrases like:
+                #   "available Monday to Friday from 10am to 6pm"
+                #   "They are available Monday to Friday, from 10 am to 6 pm CST."
+                #   "Hours: Mon-Fri 10am-6pm"
+                wrong_hours_patterns = [
+                    r"(?:[Tt]hey\s+are\s+|[Ww]e\s+are\s+)?[Aa]vailable\s+"
+                    r"(?:Monday|Mon)[\s,]*(?:to|through|-|–)[\s,]*(?:Friday|Fri)[^.\n]*"
+                    r"\d{1,2}\s*[:.]?\d{0,2}\s*[ap]\.?m\.?[^.\n]*?CST[^.\n]*\.?",
+                    r"Hours?\s*:\s*(?:Monday|Mon)[^.\n]*\d{1,2}\s*[ap]\.?m\.?[^.\n]*",
+                ]
+                for pat in wrong_hours_patterns:
+                    new_text = re.sub(pat, "", full_response, flags=re.IGNORECASE)
+                    if new_text != full_response:
+                        logger.info("[post] Scrubbed LLM-paraphrased wrong business hours.")
+                        full_response = new_text
 
                 # Tidy whitespace from all substitutions above
                 full_response = re.sub(r"[ \t]+\n", "\n", full_response)
                 full_response = re.sub(r"\n{3,}", "\n\n", full_response).rstrip()
 
+                # 6c) Showroom safety net: if the user clearly asked about showroom
+                # / company location / address and the response doesn't already
+                # contain the canonical address, inject it.
+                user_query_lower = (user_query or "").lower()
+                asked_for_showroom = any(
+                    kw in user_query_lower
+                    for kw in (
+                        "showroom", "show room",
+                        "where is your office", "where are your office",
+                        "where is your store", "where are your store",
+                        "company location", "store location", "office location",
+                        "headquarters", "your address", "company address",
+                        "can i visit", "come see", "in store", "in-store",
+                        "try the chair in person", "see the chair in person",
+                    )
+                )
+                if asked_for_showroom and "carrollton" not in full_response.lower():
+                    showroom_line = (
+                        f"\n\nYou're welcome to visit our showroom:\n"
+                        f"📍 {COMPANY_ADDRESS}\n"
+                        f"We recommend calling ahead to confirm availability."
+                    )
+                    full_response = full_response.rstrip() + showroom_line
+
                 # 7) ALWAYS close with brand-appropriate contact info + business hours.
                 # User explicitly asked for this: every reply ends with hours notice.
-                hours_marker = "business hours are mon-fri"
-                if hours_marker not in full_response.lower():
+                # We use the FULL canonical hours string as the marker so that any
+                # LLM paraphrase still triggers an append of the official line.
+                canonical_hours_check = SUPPORT_BUSINESS_HOURS.lower()
+                if canonical_hours_check not in full_response.lower():
                     if (
                         "get_repair_help" in tools_called
                         or "escalate_to_human" in tools_called

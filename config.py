@@ -30,6 +30,10 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
 
 SUPPORT_CONTACT_MSG = f"If you need further assistance, please contact our support team at {WARRANTY_PHONE}. Our business hours are {SUPPORT_BUSINESS_HOURS}."
 
+# 본사/쇼룸 주소 — 고객이 showroom / location / visit / address 질문 시 사용
+COMPANY_ADDRESS = "1001 W Crosby Rd, Carrollton, TX 75006"
+SHOWROOM_LOCATION = COMPANY_ADDRESS
+
 
 def get_contact_msg(routing: str, target_domain: str) -> str:
     """Return the correct footer based on intent (Sales vs Warranty) and domain."""
