@@ -45,3 +45,4 @@ raw_data/*
 .LSOverride
 .vscode/
 .idea/faiss_index/
+db_data/
