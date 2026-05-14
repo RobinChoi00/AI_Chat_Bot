@@ -10,6 +10,19 @@ chair turning off after 9 mins,please use all features in manual mode to see if 
 Red light is constantly blinking,Ask if it blinks while in use or if it is off but not unplugged,If the light is blinking only when the chair is not in explain that the chair is fine and the blinking indicates chair is in standby. If blinking and chair is not coming on check on mech replacement as the light indicates errors but no code on chair
 Chair does not power on,Ask customr to check fuses on the chair and verify if the chair makes noises but does not turn on,If chair power turns on and clicking is heard replace main and power PCB if replacing the fuses did fix the issue 
 fuse is blown,please send a photo of the fuse to ensure it was blown,"if fuse was blown, we can easily send out a replacement the cx can use to swap"
+(Pinnacle 5D Specific) Chair Unresponsive,Is the chairs remote connected properly/Have you tried reseating the connection?,Reconnecting the remote/Replacing remote wire to pcb & Remote
+Cyber Blinking Red Light,Does the mech move temporarily? Does the chair get power?,Repace comm cables
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
 , ,
 ,,
 ,,
@@ -26,6 +39,20 @@ mech working sporaddically,"does this happen in both auto and manual, or just a 
 Mech intensity is not changing.,"What auto modes are you using? Have you tried manual mode? If so, does it change?",Explain some auto modes are predefined and the intesnity will not change. 
 Rollers are not heating up,Have you activated the heated roller function? Can you feel around the rollers for any heat after removing the backpad?,"Replace heating elements, no issue explain heat is mild, check internal wiring to pcb(maybe replace pcb if needed)"
 Only kneading function is failing,Is this happening on manual/auto modes?,Replace kneading motor or full mech
+one side is lower than the other side,please send a video or photo of the mech,"sometimes this is how the mechs are manufactured, but in some cases a mech swap will fix this issue"
+mech feels like it dropped,do you hear any clicking noises? what did the fall sound like?,"this issue appears in all of the chairs but primarily chairs like the epic and champ 2, 3d sensor or mech usually fixes it"
+Mech works for a few minutes before freezing,Ask for Onekey test if available on the model. Ask for video of the mech freezing. See if anything is caught in the mech.,"Problem may be mech, comm cables, or main pcb"
+Mech on Paragon won't move up or down but still massages,Ask where the mech is.,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
 ,,
 ,,
 ,,
@@ -40,7 +67,7 @@ Category - Footrest,,
 Error 68/Footrest stuck extended,Try disconnecting and reconnecting footrest connections,Replace footrest or footrest extension/retraction sensor
 Footrest noises.,Does said noise occur when the foot rollers are or the air bags are on?,Isolate the problem. Tell the customer to go on manual and use only air bags or foot rollers or another function and see what part needs to be replaced.
 Footrest airbags not inflating,Ask customer to check the footrest air connection and make sure it is securly connected and airbags on the calf to make sure they are not damaged,If connection is secure and bags have no damage send a tech to check for kinked or loose airlines inside the chair to the footrest
-Object obstructing,Is there an object pressuring the back plate? Is anything on the side panels?,"Clear the area area, remove any hanging cables that might trigger the sensor. Replace footrest."
+Object obstructing,Is there an object pressuring the back plate? Is anything on the side panels?,"Clear the area area, disconnect and reconnect footrest, remove any hanging cables that might trigger the sensor. Replace footrest."
 Footrest is not raising up/lowering down,Can you verify if you can raise/lower it via the side panel buttons or the remote? Have you tried power cycling the chair? Is the footrest actuator properly connected?,
 White connectors are hard to connect.,Are they broken? Can you take a picture of them so I can ensure you they are good? ,"Make a video or take a picture for better refence. If said part is broken, we can ship it out and they can swap it on their own. Easy pull in or out."
 , ,
@@ -56,11 +83,43 @@ Footrest makes popping sound when lowering/raising,Can you check for any obsturc
 ,,
 ,,
 ,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
 Category - Remote,,
 shoulders cant adjust,are you tapping or holding the arrows when it prompts to adjust?,"most times, the customer taps very quickly when it should be a press and hold to adjust the shoulders"
 Remote does not power on,Check to make sure chair is able to be turned on and if possible check voice to see if the customer gets a response,If voice responds and chair powers up replace the remote but if they get no response for the chair and it does not seem to power on replace main and power PCB
 tablet isnt charging,can you ensure there are no obstructions in between the tablet and the charging prongs?,very likely there is some debris or something in the way. other times its as simple as not being plugged in correctly
 Tablet only showing settings ,(Present on the Grand Duo/Apex Chair) Have you paired the remote to the chair?,Almost always the remote is not paired to the massage chair via Low Energy Bluetooth
+,,If voice responds and chair powers up replace the remote but if they get no response for the chair and it does not seem to power on replace main and power PCB
+Remote powers off during massage.,"Can you check if the sleep timer is on? When it turns off, does the whole chair shuts down?","Check settings to see if this feature is on, otherwise replace remote and remote wire to PCB."
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
+,,
 ,,
 ,,
 ,,
@@ -84,8 +143,8 @@ Armrest airbags not inflating,First see if the customer or WG assembled if custo
 The air compressor is too loud,Are you using the chair on carpet/rug? Did you move the chair to a new surface/location? Can you take a video of the sound?,"Compare sound of chair to showroom model, advise to place rug underneath chair"
 Specific airbag doesn't work on only manual mode,Is your software up todate? Does it work on automodes?,Change settings via engineering mode
 Airbags are too intense,Can you verify what program this is happening? Have you tried adjusting the settings?,
-,,
-,,
+airbag deflating slowly,do you hear hissing noises? does this happen in all modes?,usually this is due to a kinked hose that can happen after manufacturing or wg delivery
+Air bags are too intense,"After adjusting the intesity, does it still hurt? Is it like this on every mode?",Inform the customer the chair is working as intended and they can use a bleeder valve to lower the pressure (not covered by the warranty).
 ,,
 ,,
 ,,
@@ -127,3 +186,8 @@ The chair does not return to start position,What mode are you experiencing this 
 Back pad has no zipper head.,Have you used a paper clip to insert the hole?,Instruct the customer our zippers may not have a tab but you can use a paperclip in order to remove any backpads. Make a video.
 Damage to newly delivered chair,Get pictures showing the damage to the chair and verify if it can be repaired.,If damage looks to be repairable send the customer the parts for repair and a tech ASAP if damage looks extensive reach out to replace the chair
 Cannot update software ,Are you connected to wifi? What happens when you try to update the software?,Check if firewall settings are active?
+Grand Duo does not play preloaded sounds,Is your bluetooth connected to your phone/tablet? ,Verify bluetooth is selected correctly via settings
+Flashing lights on all buttons of the side panel of the Horizon,Are you having any issues with your remote?,"If yes, change Main PCB. If no, wiring harness of side panel buttons may be loose or faulty."
+The 3d intensity knob does not work,Can you verify what programs you are attempting to use? Ask them to put chair in manual and feel if the rollers shift at all during the massage when turning the dial. Ensure the dial is getting power.,"If rollers do not shift but the dial is getting power, replace mech."
+Master/X-Rest shoulder massagers won't fully go down to the shoulders,Ask if both mechanisms are having difficulty moving down and see if they move at all.,"If one shoulder mech is just not moving, replacing shoulder mech. If both shoulders mechs go down but stop early, replace Main PCB."
+Unable to get verification code for the account verification,Did you check your spam folder? The codes usually arrive there. Is the chair connected to internet?,
