@@ -37,14 +37,18 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
       args:
-        # Point Next.js at the backend (server-side URL for SSR; adjust for prod)
-        NEXT_PUBLIC_API_BASE_URL: http://backend:8000
+        # Public URL baked into client-side JS bundle at build time.
+        # Server-side Route Handlers use BACKEND_INTERNAL_URL (Docker network).
+        NEXT_PUBLIC_API_BASE_URL: https://api.osakichair.com
     ports:
       - "3000:3000"
     restart: always
     environment:
       - TZ=America/Chicago
-      - NEXT_PUBLIC_API_BASE_URL=http://backend:8000
+      - NEXT_PUBLIC_API_BASE_URL=https://api.osakichair.com
+      - BACKEND_INTERNAL_URL=http://backend:8000
+    env_file:
+      - .env
     depends_on:
       - backend
     logging:
