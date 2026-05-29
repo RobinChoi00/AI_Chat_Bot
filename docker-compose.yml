@@ -1,5 +1,13 @@
 version: '3.8'
 
+# Production services
+# Backend:  FastAPI on port 8000
+# Frontend: Next.js on port 3000
+#
+# Streamlit services (app.py / admin_dashboard.py) have been ARCHIVED to
+# legacy/streamlit/ and are NOT started in production.
+# Run them manually for dev/debug: see legacy/streamlit/README.md
+
 services:
   backend:
     build: 
@@ -9,14 +17,13 @@ services:
       - "8000:8000"
     restart: always
     environment:
-      # 💡 [데이터 정합성] AWS(UTC) 환경에서 시스템 시간을 로컬 시간대와 강제 동기화
       - TZ=America/Chicago
     env_file:
       - .env
     volumes:
       - ./faiss_index:/app/faiss_index
-      - ./db_data:/app/db_data  
-    # 💡 [인프라 안정성] EC2 디스크 용량 고갈(Out of Disk) 방지를 위한 로그 제한
+      - ./db_data:/app/db_data
+      - ./uploaded_evidence:/app/uploaded_evidence
     logging:
       driver: "json-file"
       options:
@@ -26,16 +33,18 @@ services:
       - ai_network
 
   frontend:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile.frontend
+      args:
+        # Point Next.js at the backend (server-side URL for SSR; adjust for prod)
+        NEXT_PUBLIC_API_BASE_URL: http://backend:8000
     ports:
-      - "8501:8501"
+      - "3000:3000"
     restart: always
     environment:
       - TZ=America/Chicago
-    env_file:
-      - .env
+      - NEXT_PUBLIC_API_BASE_URL=http://backend:8000
     depends_on:
       - backend
     logging:
@@ -46,29 +55,37 @@ services:
     networks:
       - ai_network
 
-  admin_dashboard:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend  
-    command: streamlit run app/admin_dashboard.py --server.port 8502
-    ports:
-      - "8502:8502"
-    restart: always
-    environment:
-      - TZ=America/Chicago
-    env_file:
-      - .env
-    depends_on:
-      - backend
-    volumes:
-      - ./db_data:/app/db_data  
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    networks:
-      - ai_network
+  # ---------------------------------------------------------------------------
+  # LEGACY — Streamlit services (archived, not started by default)
+  # Uncomment only for internal dev/debug use.
+  # ---------------------------------------------------------------------------
+  # streamlit_chat:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.backend   # reuses Python image
+  #   command: streamlit run legacy/streamlit/app.py --server.port=8501 --server.address=0.0.0.0
+  #   ports:
+  #     - "8501:8501"
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     - backend
+  #   networks:
+  #     - ai_network
+
+  # streamlit_admin:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.backend
+  #   command: streamlit run legacy/streamlit/admin_dashboard.py --server.port=8502 --server.address=0.0.0.0
+  #   ports:
+  #     - "8502:8502"
+  #   env_file:
+  #     - .env
+  #   volumes:
+  #     - ./db_data:/app/db_data
+  #   networks:
+  #     - ai_network
 
 networks:
   ai_network:

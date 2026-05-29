@@ -12,11 +12,17 @@ load_dotenv()
 
 class FreshdeskETL:
     def __init__(self):
-        self.domain = os.environ.get("FRESHDESK_DOMAIN")
-        self.api_key = os.environ.get("FRESHDESK_API_KEY")
+        domain = os.environ.get("FRESHDESK_DOMAIN")
+        api_key = os.environ.get("FRESHDESK_API_KEY")
+        if not domain:
+            raise EnvironmentError("FRESHDESK_DOMAIN 환경 변수가 설정되지 않았습니다.")
+        if not api_key:
+            raise EnvironmentError("FRESHDESK_API_KEY 환경 변수가 설정되지 않았습니다.")
+        self.domain: str = domain
+        self.api_key: str = api_key
         self.base_url = f"https://{self.domain}/api/v2"
-        self.auth = (self.api_key, 'X')
-        self.headers = {'Content-Type': 'application/json'}
+        self.auth: tuple[str, str] = (self.api_key, "X")
+        self.headers = {"Content-Type": "application/json"}
 
     def fetch_conversations(self, ticket_id):
         url = f"{self.base_url}/tickets/{ticket_id}/conversations"

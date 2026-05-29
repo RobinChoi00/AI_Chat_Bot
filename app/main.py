@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from openai import OpenAI
 from dotenv import load_dotenv
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, cast
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
@@ -32,6 +32,7 @@ try:
     from app.agent_tools import (
         HybridRetriever,
         TOOL_SCHEMAS,
+        WARRANTY_TOOL_SCHEMAS,
         tool_search_chair_specs,
         tool_recommend_chairs,
         tool_get_repair_help,
@@ -40,6 +41,9 @@ try:
         tool_capture_sales_lead,
         tool_escalate_to_human,
         tool_get_showroom_info,
+        tool_start_warranty_workflow,
+        tool_answer_warranty_question,
+        tool_attach_warranty_evidence,
     )
     from app.cost_guard import (
         UsageRecorder,
@@ -50,10 +54,12 @@ try:
         limiter,
         make_cache_key,
     )
+    from app.warranty_workflow import WarrantyEngine
 except ImportError:
     from agent_tools import (  # type: ignore
         HybridRetriever,
         TOOL_SCHEMAS,
+        WARRANTY_TOOL_SCHEMAS,
         tool_search_chair_specs,
         tool_recommend_chairs,
         tool_get_repair_help,
@@ -62,6 +68,9 @@ except ImportError:
         tool_capture_sales_lead,
         tool_escalate_to_human,
         tool_get_showroom_info,
+        tool_start_warranty_workflow,
+        tool_answer_warranty_question,
+        tool_attach_warranty_evidence,
     )
     from cost_guard import (  # type: ignore
         UsageRecorder,
@@ -72,6 +81,7 @@ except ImportError:
         limiter,
         make_cache_key,
     )
+    from warranty_workflow import WarrantyEngine  # type: ignore
 
 # 💡 [비즈니스 & 시스템 설정 임포트]
 from config import (
@@ -160,7 +170,7 @@ if _missing:
         "Refusing to start. See .env.example for the full list."
     )
 
-SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET")  # validated above
+SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET") or ""  # validated above
 
 # Soft-check email transport — log a warning if disabled so it's obvious.
 if not (os.getenv("EMAIL_SENDER") and os.getenv("EMAIL_PASSWORD")):
@@ -676,7 +686,7 @@ try:
         f"🚀 Loading 3-core AI engines into memory… "
         f"(embedding={EMBEDDING_MODEL}, llm={AGENT_MODEL})"
     )
-    embeddings = OpenAIEmbeddings(api_key=api_key, model=EMBEDDING_MODEL)
+    embeddings = OpenAIEmbeddings(api_key=cast(Any, api_key), model=EMBEDDING_MODEL)
 
     # NOTE: load_local with a mismatched embedding model will fail with a
     # cryptic dimension error from FAISS. Surface a clearer message so the
@@ -693,9 +703,11 @@ try:
         ) from e
 
     # Build hybrid retrievers (BM25 + dense) for the Agent's tool layer
-    products_retriever = HybridRetriever(vs_products, list(vs_products.docstore._dict.values()))
-    qa_retriever = HybridRetriever(vs_qa, list(vs_qa.docstore._dict.values()))
-    web_retriever = HybridRetriever(vs_web, list(vs_web.docstore._dict.values()))
+    # NOTE: `_dict` is a LangChain InMemoryDocstore implementation detail; the
+    # public API doesn't expose iteration so we access it via getattr.
+    products_retriever = HybridRetriever(vs_products, list(getattr(vs_products.docstore, "_dict", {}).values()))
+    qa_retriever = HybridRetriever(vs_qa, list(getattr(vs_qa.docstore, "_dict", {}).values()))
+    web_retriever = HybridRetriever(vs_web, list(getattr(vs_web.docstore, "_dict", {}).values()))
 
     # Wire up the FAISS read lock so every retriever search briefly acquires
     # the shared RWLock — webhook-driven index updates (writer) wait for in-
@@ -832,11 +844,18 @@ from slowapi import _rate_limit_exceeded_handler  # noqa: E402
 
 app = FastAPI(title="Titan AI Agent API", version="2.1")
 
+# Warranty endpoints (Phase D-lite + E-lite)
+try:
+    from app.warranty_router import router as warranty_router
+except ImportError:
+    from warranty_router import router as warranty_router  # type: ignore
+app.include_router(warranty_router)
+
 # 🚦 Rate limiting: shared Limiter from cost_guard. We attach the SlowAPI
 # middleware/handler so that exceeding the per-IP budget returns HTTP 429
 # (instead of leaking a stack trace) with a clear Retry-After header.
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, cast(Any, _rate_limit_exceeded_handler))
 
 # 🌐 CORS: origins read from CORS_ALLOWED_ORIGINS env (comma-separated).
 # Default still permits "*" so dev environments keep working; production
@@ -866,6 +885,28 @@ AGENT_SYSTEM_PROMPT_STATIC = """You are an elite AI agent for Titan Chair LLC an
 - Warm, knowledgeable, never robotic.
 - Always speak in the same language the user used.
 - Use SHORT sentences, bullet points, mobile-friendly formatting.
+
+# SCOPE GUARD — MANDATORY
+You serve EXCLUSIVELY as a customer service and sales agent for Osaki and Titan massage chairs.
+Topics in scope: massage chairs, chair specs/models/pricing, orders, delivery, warranty claims,
+repairs/troubleshooting, company info, showroom, and related after-sales support.
+If the user asks about ANYTHING outside this scope (cooking, sports, politics, coding, travel,
+other products, general knowledge, creative writing, etc.) you MUST decline:
+  "I'm specialized in Osaki and Titan massage chair support. I'm not able to help with that,
+   but I'm happy to assist with anything about our chairs, orders, or services!"
+DO NOT partially answer, hedge, or provide any information outside this scope.
+
+# WARRANTY WORKFLOW RULES (CRITICAL — NEVER VIOLATE)
+W1. When tool result begins with WARRANTY_TICKET_STARTED, WARRANTY_CONTINUE, or WARRANTY_TERMINAL_REACHED,
+    you are inside a guided warranty intake workflow. Follow the INSTRUCTION section exactly.
+W2. Present the PROMPT to the customer verbatim (you may paraphrase for tone, but NEVER change the meaning).
+W3. When the customer answers, extract the intent and call warranty_answer with the closest answer_key.
+    Do NOT guess or invent the next step — the tool decides.
+W4. When WARRANTY_TERMINAL_REACHED with ACTION=awaiting_admin:
+    - DO NOT promise replacement, part shipment, tech dispatch, compensation, or refund.
+    - The PROMPT already says "our team will review" — use that language exactly.
+    - The customer_message will be delivered ONLY after an admin approves it.
+W5. NEVER skip the warranty_answer tool to jump to a conclusion. Every step must go through the tool.
 
 # CORE RULES (NEVER VIOLATE)
 1. ZERO HALLUCINATION. Never invent specs, prices, dimensions, promo codes,
@@ -1029,6 +1070,17 @@ _TRACKING_INTENT_PATTERNS = [
 _ORDER_ID_PATTERN = re.compile(r"\b(OSKMC|OSKUS|TIDM|OSK|TI)\d{3,7}\b", re.IGNORECASE)
 _EMAIL_PATTERN = re.compile(r"[\w\.\-+]+@[\w\.\-]+\.\w+")
 
+# Warranty claim intents — force warranty_start when the customer is clearly
+# reporting a defect, damage, or asking to file a warranty case.
+_WARRANTY_CLAIM_PATTERNS = [
+    re.compile(r"\b(warranty\s*(claim|request|ticket|issue|case|service|form)|file\s+a\s+warranty|under\s+warranty|submit\s+warranty)\b", re.IGNORECASE),
+    re.compile(r"\b(defect(ive)?|malfunction(ing)?)\b", re.IGNORECASE),
+    re.compile(r"\b(delivery\s+(damage[d]?|issue|problem|wrong)|damaged\s+in\s+transit|box\s+was\s+(damage[d]?|opened|crushed))\b", re.IGNORECASE),
+    re.compile(r"\b(i\s+want|i\s+need|i\s+'d\s+like|please)\s+(a\s+)?(replacement|refund|exchange|RMA|repair\s+service|compensation)\b", re.IGNORECASE),
+    re.compile(r"\b(my|the)\s+(chair|unit|product|massage\s+chair)\s+(is\s+)?(not\s+working|broken|defective|damaged|stopped)\b", re.IGNORECASE),
+    re.compile(r"\bfile\s+(a\s+)?(claim|warranty|ticket|complaint)\b", re.IGNORECASE),
+]
+
 # Showroom / company-location intents — force the showroom tool so customers
 # always get the canonical Carrollton, TX address, never a "I don't have".
 _SHOWROOM_INTENT_PATTERNS = [
@@ -1052,6 +1104,10 @@ def _infer_forced_tool(user_query: str) -> Optional[str]:
     if any(p.search(q) for p in _SHOWROOM_INTENT_PATTERNS):
         return "get_showroom_info"
 
+    # Warranty claim — force the intake workflow before falling through to repair help.
+    if any(p.search(q) for p in _WARRANTY_CLAIM_PATTERNS):
+        return "start_warranty_workflow"
+
     # Repair / install patterns take priority — these are the ones the LLM
     # tends to hallucinate worst.
     if any(p.search(q) for p in _REPAIR_INTENT_PATTERNS):
@@ -1072,6 +1128,11 @@ def _infer_forced_tool(user_query: str) -> Optional[str]:
 
 def _execute_tool(name: str, args: Dict[str, Any], target_domain: str) -> str:
     """Dispatch a tool call to its Python handler. Always returns a string."""
+    # Retrievers are None only if init failed; the chat endpoint already
+    # short-circuits with HTTP 500 before reaching here, but we re-assert
+    # for the type checker so call-sites can pass them safely.
+    if products_retriever is None or qa_retriever is None or web_retriever is None:
+        return "TOOL_ERROR: Retrieval engine is not loaded."
     try:
         if name == "search_chair_specs":
             model = args.get("model_name") or ""
@@ -1124,6 +1185,31 @@ def _execute_tool(name: str, args: Dict[str, Any], target_domain: str) -> str:
             )
         if name == "get_showroom_info":
             return tool_get_showroom_info(target_domain=target_domain)
+        if name in ("warranty_start", "start_warranty_workflow"):
+            return tool_start_warranty_workflow(
+                session_id=args.get("_session_id", ""),
+                domain=target_domain,
+            )
+        if name in ("warranty_answer", "answer_warranty_question"):
+            ticket_id = args.get("ticket_id", "")
+            answer_key = args.get("answer_key", "")
+            result_str = tool_answer_warranty_question(
+                ticket_id=ticket_id,
+                answer_key=answer_key,
+            )
+            # Structured warranty-state log (downstream monitoring)
+            logger.info(
+                f"🎫 warranty_answer dispatched — "
+                f"ticket={ticket_id} answer_key={answer_key} "
+                f"awaiting_admin={'AWAITING_ADMIN_REVIEW=TRUE' in result_str}"
+            )
+            return result_str
+        if name == "attach_warranty_evidence":
+            return tool_attach_warranty_evidence(
+                ticket_id=args.get("ticket_id", ""),
+                evidence_type=args.get("evidence_type", "other"),
+                original_filename=args.get("original_filename", ""),
+            )
         return f"UNKNOWN_TOOL: {name}"
     except Exception as e:
         logger.error(f"🚨 Tool execution error [{name}]: {e}")
@@ -1197,12 +1283,36 @@ async def chat_endpoint(
     if not all([vs_products, vs_qa, vs_web]):
         raise HTTPException(status_code=500, detail="AI Engine is not fully loaded.")
 
+    # ── Active warranty ticket detection ──
+    # If this session already has an open warranty claim, we inject the current
+    # node into the system prompt and force warranty_answer as the first tool.
+    # This keeps the backend fully in control of the state machine.
+    _active_warranty_ticket = None
+    _active_warranty_node = None
+    try:
+        _active_warranty_ticket = WarrantyEngine.get_active_session_ticket(chat_request.session_id)
+        if _active_warranty_ticket is not None:
+            _ticket_id_str = str(_active_warranty_ticket.ticket_id)
+            _active_warranty_node = WarrantyEngine.get_current_node(_ticket_id_str)
+            logger.info(
+                f"🎫 Active warranty — session={chat_request.session_id} "
+                f"ticket={_ticket_id_str} "
+                f"node={_active_warranty_node.get('node_id') if _active_warranty_node else 'none'} "
+                f"status={_active_warranty_ticket.status}"
+            )
+    except Exception as _we:
+        logger.warning(f"⚠️ Warranty ticket lookup failed: {_we}")
+
     # ── Heuristic intent detection (computed once, reused below) ──
     # The LLM frequently skips tools and produces "Let me check..." stalls
     # or hallucinated install/repair guides. If the query clearly looks like
     # one of these intents, we either short-circuit entirely (showroom) or
     # set tool_choice to require the right tool on the first iteration.
-    forced_first_tool = _infer_forced_tool(user_query)
+    # Active warranty session overrides all other forced tools.
+    if _active_warranty_ticket and _active_warranty_node:
+        forced_first_tool = "answer_warranty_question"
+    else:
+        forced_first_tool = _infer_forced_tool(user_query)
 
     # ── 💰 Zero-LLM short-circuit for showroom / location questions ──
     if forced_first_tool == "get_showroom_info":
@@ -1227,7 +1337,7 @@ async def chat_endpoint(
     # ── 💰 Response cache: serve FAQ-style repeats with zero LLM calls ──
     cache_key = make_cache_key(user_query, target_domain, chat_request.chat_history)
     cached_reply = cache_get(cache_key)
-    if cached_reply:
+    if cached_reply and cache_key:
         logger.info(f"⚡ Cache HIT: served from response cache (key={cache_key[:60]}…)")
         background_tasks.add_task(
             _persist_chat_log,
@@ -1247,7 +1357,34 @@ async def chat_endpoint(
 
     try:
         system_prompt = build_system_prompt(target_domain)
-        messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+
+        # ── Inject active warranty context (ticket + current node) ──
+        if _active_warranty_ticket and _active_warranty_node:
+            node = _active_warranty_node
+            options = node.get("options", [])
+            opts_text = "\n".join(
+                f"  - answer_key={o.get('answer_key')} | {o['label']}"
+                for o in options
+            ) if options else "  (free text — accept any input)"
+            system_prompt += (
+                f"\n\n# ACTIVE WARRANTY TICKET — YOU ARE MID-WORKFLOW\n"
+                f"TICKET_ID: {_active_warranty_ticket.ticket_id}\n"
+                f"CURRENT_NODE: {node['node_id']}\n"
+                f"NODE_TYPE: {node.get('type', '?')}\n"
+                f"CURRENT_QUESTION: {node['prompt']}\n"
+                f"VALID_OPTIONS:\n{opts_text}\n\n"
+                f"YOUR TASK:\n"
+                f"1. The customer's message is their answer to CURRENT_QUESTION.\n"
+                f"2. Map their answer to the closest VALID answer_key.\n"
+                f"3. Call answer_warranty_question(ticket_id='{_active_warranty_ticket.ticket_id}', answer_key=<matched_key>).\n"
+                f"4. If the customer asks a clarifying question instead of answering, answer it "
+                f"briefly then re-ask CURRENT_QUESTION.\n"
+                f"5. DO NOT make warranty decisions. DO NOT show the sales footer."
+            )
+
+        # Typed as List[Any] so we can pass plain dicts (matching the OpenAI
+        # SDK's TypedDict shape) without basedpyright rejecting Dict[str, Any].
+        messages: List[Any] = [{"role": "system", "content": system_prompt}]
         for msg in (chat_request.chat_history or [])[-12:]:  # cap history to keep context fresh
             messages.append({"role": msg.role, "content": msg.content})
         messages.append({"role": "user", "content": user_query})
@@ -1277,18 +1414,24 @@ async def chat_endpoint(
                     # the LLM will probably not use. If the LLM still wants
                     # another tool, it'll request it on the next turn (we keep
                     # tools available until at least one has executed).
+                    # In warranty mode, restrict to warranty-only tool schemas.
+                    active_schema = WARRANTY_TOOL_SCHEMAS if _active_warranty_ticket else TOOL_SCHEMAS
+
                     if tools_called:
-                        tools_payload: Optional[List[Dict[str, Any]]] = None
+                        tools_payload: Optional[List[Any]] = None
                         tool_choice: Any = "none"
                     elif turn == 0 and forced_first_tool:
-                        tools_payload = TOOL_SCHEMAS
+                        tools_payload = active_schema
                         tool_choice = {
                             "type": "function",
                             "function": {"name": forced_first_tool},
                         }
-                        logger.info(f"🎯 Forcing first tool: {forced_first_tool}")
+                        logger.info(
+                            f"🎯 Forcing first tool: {forced_first_tool} "
+                            f"(warranty_mode={_active_warranty_ticket is not None})"
+                        )
                     else:
-                        tools_payload = TOOL_SCHEMAS
+                        tools_payload = active_schema
                         tool_choice = "auto"
 
                     create_kwargs: Dict[str, Any] = {
@@ -1317,11 +1460,17 @@ async def chat_endpoint(
                             logger.warning(
                                 f"⚠️ Detected stall: '{(msg.content or '')[:100]}' — forcing tool call"
                             )
-                            forced_retry_tool = forced_first_tool or "search_chair_specs"
+                            # In warranty mode, retry with answer_warranty_question; never
+                            # fall back to search_chair_specs mid-warranty flow.
+                            forced_retry_tool = (
+                                "answer_warranty_question"
+                                if _active_warranty_ticket
+                                else (forced_first_tool or "search_chair_specs")
+                            )
                             response = openai_client.chat.completions.create(
                                 model=AGENT_MODEL,
                                 messages=messages,
-                                tools=TOOL_SCHEMAS,
+                                tools=active_schema,
                                 tool_choice={
                                     "type": "function",
                                     "function": {"name": forced_retry_tool},
@@ -1363,6 +1512,9 @@ async def chat_endpoint(
                             args = _json.loads(tc.function.arguments or "{}")
                         except Exception:
                             args = {}
+                        # Inject session_id for warranty_start (LLM can't know it)
+                        if tc.function.name in ("warranty_start", "start_warranty_workflow"):
+                            args["_session_id"] = chat_request.session_id
                         result = _execute_tool(tc.function.name, args, target_domain)
                         tools_called.append(tc.function.name)
                         logger.info(f"🛠️ Tool [{tc.function.name}] → {len(result)} chars")
@@ -1646,25 +1798,27 @@ async def cost_summary(days: int = 7) -> Dict[str, Any]:
         if not rows:
             return {"days": days, "requests": 0, "summary": "no usage in window"}
 
-        total_cost = sum(float(r.estimated_cost_usd or 0) for r in rows)
-        total_calls = sum(r.call_count or 0 for r in rows)
-        total_prompt = sum(r.prompt_tokens or 0 for r in rows)
-        total_cached = sum(r.cached_tokens or 0 for r in rows)
-        total_completion = sum(r.completion_tokens or 0 for r in rows)
-        cache_hits = sum(1 for r in rows if r.cache_hit)
+        # Cast SQLAlchemy column attribute reads into plain Python types so
+        # basedpyright stops treating each `r.field` as a Column descriptor.
+        total_cost = sum(float(cast(str, r.estimated_cost_usd) or 0) for r in rows)
+        total_calls = sum(cast(int, r.call_count) or 0 for r in rows)
+        total_prompt = sum(cast(int, r.prompt_tokens) or 0 for r in rows)
+        total_cached = sum(cast(int, r.cached_tokens) or 0 for r in rows)
+        total_completion = sum(cast(int, r.completion_tokens) or 0 for r in rows)
+        cache_hits = sum(1 for r in rows if cast(int, r.cache_hit) > 0)
 
         by_model: Dict[str, Dict[str, float]] = {}
         for r in rows:
-            bucket = by_model.setdefault(r.model or "(unknown)", {
+            bucket = by_model.setdefault(cast(str, r.model) or "(unknown)", {
                 "requests": 0, "calls": 0, "prompt": 0, "cached": 0,
                 "completion": 0, "cost_usd": 0.0,
             })
             bucket["requests"] += 1
-            bucket["calls"] += r.call_count or 0
-            bucket["prompt"] += r.prompt_tokens or 0
-            bucket["cached"] += r.cached_tokens or 0
-            bucket["completion"] += r.completion_tokens or 0
-            bucket["cost_usd"] += float(r.estimated_cost_usd or 0)
+            bucket["calls"] += cast(int, r.call_count) or 0
+            bucket["prompt"] += cast(int, r.prompt_tokens) or 0
+            bucket["cached"] += cast(int, r.cached_tokens) or 0
+            bucket["completion"] += cast(int, r.completion_tokens) or 0
+            bucket["cost_usd"] += float(cast(str, r.estimated_cost_usd) or 0)
 
         return {
             "days": days,
@@ -1725,7 +1879,8 @@ def update_faiss_index_background(payload: dict, shop_domain: Optional[str] = No
         # docstore and silently return wrong results.
         with faiss_rwlock.write():
             if vs_products is not None:
-                ids_to_delete = [doc_id for doc_id, doc in vs_products.docstore._dict.items() if doc.metadata.get('title') == item_title or item_title in doc.page_content]
+                _docs_dict = getattr(vs_products.docstore, "_dict", {})
+                ids_to_delete = [doc_id for doc_id, doc in _docs_dict.items() if doc.metadata.get('title') == item_title or item_title in doc.page_content]
                 if ids_to_delete:
                     vs_products.delete(ids_to_delete)
                 vs_products.add_documents([new_doc])

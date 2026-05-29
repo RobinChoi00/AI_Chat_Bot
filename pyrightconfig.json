@@ -1,0 +1,6 @@
+{
+  "extraPaths": [".", "app"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "reportMissingTypeStubs": false
+}

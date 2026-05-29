@@ -280,11 +280,11 @@ def tool_search_chair_specs(
     if not docs and (model_name or norm_model):
         bare = norm_model or model_name
         logger.info(f"[search_chair_specs] retrying with bare model: {bare!r}")
-        docs = products_retriever.search(bare, k=5, model_hint=bare)
+        docs = products_retriever.search(bare or "", k=5, model_hint=bare or "")
 
     # Final fallback: pull out alphanumeric core (e.g. "4000cs", "soho", "otamic")
     if not docs and (model_name or norm_model):
-        core_tokens = re.findall(r"[a-zA-Z]{3,}|\d{3,}", (norm_model or model_name))
+        core_tokens = re.findall(r"[a-zA-Z]{3,}|\d{3,}", (norm_model or model_name or ""))
         if core_tokens:
             core_query = " ".join(core_tokens)
             logger.info(f"[search_chair_specs] retrying with core tokens: {core_query!r}")
@@ -517,6 +517,244 @@ def tool_get_showroom_info(*, target_domain: str) -> str:
     )
 
 
+def _format_warranty_node(ticket_id: str, node: dict, is_start: bool = False) -> str:
+    """Format a non-terminal warranty node for the LLM to paraphrase."""
+    header = "WARRANTY_TICKET_STARTED" if is_start else "WARRANTY_CONTINUE"
+    lines = [
+        header,
+        f"TICKET_ID: {ticket_id}",
+        f"CURRENT_NODE: {node['node_id']}",
+        f"NODE_TYPE: {node.get('type', '?')}",
+        f"PROMPT: {node['prompt']}",
+    ]
+    options = node.get("options", [])
+    if options:
+        lines.append("OPTIONS (present these to customer):")
+        for opt in options:
+            lines.append(f"  - answer_key={opt.get('answer_key', '?')} | Label: {opt['label']}")
+    else:
+        lines.append("OPTIONS: (free text — accept any input)")
+    lines += [
+        "",
+        "INSTRUCTION: Present the PROMPT to the customer in a warm, friendly tone.",
+        "When the customer responds, map their answer to the closest answer_key and call answer_warranty_question.",
+        "DO NOT make any warranty decision yourself. SUPPRESS_LEAD_FOOTER",
+    ]
+    return "\n".join(lines)
+
+
+def _format_warranty_result(ticket_id: str, result: dict) -> str:
+    """Format a warranty transition result for the LLM to paraphrase."""
+    next_node = result["next_node"]
+    is_terminal = result["is_terminal"]
+
+    if is_terminal:
+        action = next_node.get("action", "awaiting_admin")
+        terminal_class = result.get("terminal_class", "awaiting_admin_review")
+        evidence = result.get("evidence_required", [])
+        evidence_email = result.get("evidence_email", "")
+        internal_note = next_node.get("internal_note", "")
+        lines = [
+            "WARRANTY_TERMINAL_REACHED",
+            f"TICKET_ID: {ticket_id}",
+            f"ACTION: {action}",
+            f"TERMINAL_CLASS: {terminal_class}",
+            f"PROMPT_FOR_CUSTOMER: {next_node['prompt']}",
+        ]
+        if evidence:
+            lines.append(f"EVIDENCE_REQUIRED: {', '.join(evidence)}")
+        if evidence_email:
+            lines.append(f"EVIDENCE_SEND_TO: {evidence_email}")
+        lines.append(f"INTERNAL_NOTE: {internal_note}")
+        lines += [""]
+        if terminal_class == "awaiting_admin_review":
+            lines.append(
+                "INSTRUCTION: Deliver the PROMPT_FOR_CUSTOMER verbatim. "
+                "DO NOT promise replacement, tech dispatch, compensation, refund, or any approval. "
+                "The prompt already says 'our team will review' — keep that language exactly. "
+                "AWAITING_ADMIN_REVIEW=TRUE"
+            )
+        elif terminal_class == "send_info":
+            lines.append(
+                "INSTRUCTION: Deliver the PROMPT_FOR_CUSTOMER. "
+                "This is a self-service step — you may briefly explain the how-to if helpful."
+            )
+        elif terminal_class in ("awaiting_evidence", "request_evidence"):
+            lines.append(
+                f"INSTRUCTION: Ask customer to send the evidence to {evidence_email or 'service@osakititan.com'}. "
+                "Tell them someone will follow up after review."
+            )
+        else:
+            lines.append("INSTRUCTION: Deliver the PROMPT_FOR_CUSTOMER verbatim.")
+        lines.append("SUPPRESS_LEAD_FOOTER")
+        return "\n".join(lines)
+
+    # Non-terminal: next question
+    lines = [
+        "WARRANTY_CONTINUE",
+        f"TICKET_ID: {ticket_id}",
+        f"CURRENT_NODE: {next_node['node_id']}",
+        f"NODE_TYPE: {next_node.get('type', '?')}",
+        f"PROMPT: {next_node['prompt']}",
+    ]
+    options = next_node.get("options", [])
+    if options:
+        lines.append("OPTIONS (present these to customer):")
+        for opt in options:
+            lines.append(f"  - answer_key={opt.get('answer_key', '?')} | Label: {opt['label']}")
+    else:
+        lines.append("OPTIONS: (free text — accept any input)")
+    lines += [
+        "",
+        "INSTRUCTION: Present PROMPT and OPTIONS to customer in a warm, friendly tone.",
+        "When they respond, call warranty_answer with the matching answer_key.",
+        "DO NOT make any warranty decision yourself. SUPPRESS_LEAD_FOOTER",
+    ]
+    return "\n".join(lines)
+
+
+def tool_start_warranty_workflow(*, session_id: str, domain: str) -> str:
+    """Start a new warranty intake session and return the first question node."""
+    # Runtime validation
+    if not session_id or not isinstance(session_id, str):
+        return "WARRANTY_INPUT_ERROR: session_id must be a non-empty string."
+
+    try:
+        import sys, os as _os
+        sys.path.insert(0, _os.path.dirname(__file__))
+        from warranty_workflow import WarrantyEngine
+    except Exception as e:
+        return f"WARRANTY_UNAVAILABLE: {e}"
+
+    try:
+        ticket_id, node = WarrantyEngine.start_session(session_id, domain or "unknown")
+        logger.info(f"🎫 Warranty started — session={session_id} ticket={ticket_id} domain={domain}")
+        return _format_warranty_node(ticket_id, node, is_start=True)
+    except Exception as e:
+        logger.error(f"start_warranty_workflow error: {e}")
+        return f"WARRANTY_ERROR: {e}"
+
+
+# Backward-compat alias (main.py references 'warranty_start' internally)
+tool_warranty_start = tool_start_warranty_workflow
+
+
+def tool_answer_warranty_question(*, ticket_id: str, answer_key: str) -> str:
+    """Submit the customer's answer to the current warranty node and advance the workflow."""
+    # Runtime validation
+    if not ticket_id or not isinstance(ticket_id, str):
+        return "WARRANTY_INPUT_ERROR: ticket_id must be a non-empty string."
+    if not answer_key or not isinstance(answer_key, str):
+        return "WARRANTY_INPUT_ERROR: answer_key must be a non-empty string."
+
+    try:
+        import sys, os as _os
+        sys.path.insert(0, _os.path.dirname(__file__))
+        from warranty_workflow import WarrantyEngine
+    except Exception as e:
+        return f"WARRANTY_UNAVAILABLE: {e}"
+
+    try:
+        result = WarrantyEngine.submit_answer(ticket_id, answer_key)
+        logger.info(
+            f"🎫 Warranty answer — ticket={ticket_id} answer_key={answer_key} "
+            f"next_node={result.get('next_node_id')} terminal={result.get('is_terminal')} "
+            f"terminal_class={result.get('terminal_class')} "
+            f"awaiting_admin={result.get('terminal_class') == 'awaiting_admin_review'}"
+        )
+        return _format_warranty_result(ticket_id, result)
+    except ValueError as e:
+        # Answer didn't match — give the LLM the valid options so it can ask again
+        try:
+            current_node = WarrantyEngine.get_current_node(ticket_id)
+        except Exception:
+            current_node = None
+        options_hint = ""
+        if current_node and current_node.get("options"):
+            opts = [f"answer_key={o.get('answer_key')} | {o['label']}"
+                    for o in current_node["options"]]
+            options_hint = "\nVALID OPTIONS:\n  - " + "\n  - ".join(opts)
+        return (
+            f"WARRANTY_ANSWER_MISMATCH: {e}{options_hint}\n"
+            f"INSTRUCTION: Ask the customer to clarify which option they meant and retry."
+        )
+    except Exception as e:
+        logger.error(f"answer_warranty_question error: {e}")
+        return f"WARRANTY_ERROR: {e}"
+
+
+# Backward-compat alias
+tool_warranty_answer = tool_answer_warranty_question
+
+
+def tool_attach_warranty_evidence(
+    *,
+    ticket_id: str,
+    evidence_type: str,
+    original_filename: str = "",
+    mime_type: str = "",
+    file_size_bytes: int = 0,
+) -> str:
+    """
+    Record evidence metadata for a warranty ticket.
+
+    In this phase, no actual file is uploaded here — the binary upload
+    is handled by POST /api/v1/warranty/{ticket_id}/evidence.
+    This tool allows the LLM to acknowledge the evidence requirement
+    and record what the customer has described submitting.
+    """
+    _ALLOWED_EVIDENCE_TYPES = {
+        "damage_photos", "video_of_issue", "proof_of_purchase",
+        "photo_of_chair", "photo_of_defect", "proof_of_delivery",
+        "assembly_photo", "remote_photo", "other",
+    }
+    # Runtime validation
+    if not ticket_id or not isinstance(ticket_id, str):
+        return "WARRANTY_INPUT_ERROR: ticket_id must be a non-empty string."
+    if not evidence_type or not isinstance(evidence_type, str):
+        return "WARRANTY_INPUT_ERROR: evidence_type must be a non-empty string."
+    if evidence_type not in _ALLOWED_EVIDENCE_TYPES:
+        return (
+            f"WARRANTY_INPUT_ERROR: Unknown evidence_type {evidence_type!r}. "
+            f"Allowed: {sorted(_ALLOWED_EVIDENCE_TYPES)}"
+        )
+
+    try:
+        import sys, os as _os
+        sys.path.insert(0, _os.path.dirname(__file__))
+        from warranty_workflow import WarrantyEngine
+    except Exception as e:
+        return f"WARRANTY_UNAVAILABLE: {e}"
+
+    try:
+        ev = WarrantyEngine.record_evidence(
+            ticket_id=ticket_id,
+            evidence_type=evidence_type,
+            file_path="",           # not uploaded yet
+            original_filename=original_filename,
+            mime_type=mime_type,
+            file_size_bytes=file_size_bytes,
+        )
+        logger.info(
+            f"📎 Evidence noted — ticket={ticket_id} type={evidence_type} "
+            f"file={original_filename or '(not uploaded yet)'}"
+        )
+        return (
+            f"EVIDENCE_NOTED\n"
+            f"TICKET_ID: {ticket_id}\n"
+            f"EVIDENCE_TYPE: {evidence_type}\n"
+            f"FILENAME: {original_filename or '(to be uploaded)'}\n"
+            f"RECORD_ID: {ev.id}\n"
+            f"INSTRUCTION: Let the customer know their evidence has been noted. "
+            f"Ask them to upload the file via the evidence upload link or email it to service@osakititan.com."
+        )
+    except ValueError as e:
+        return f"WARRANTY_ERROR: {e}"
+    except Exception as e:
+        logger.error(f"attach_warranty_evidence error: {e}")
+        return f"WARRANTY_ERROR: {e}"
+
+
 def tool_escalate_to_human(
     *,
     contact_msg_fn,
@@ -541,7 +779,7 @@ def tool_escalate_to_human(
 # Tool schemas (passed to OpenAI as `tools=[...]`)
 # ============================================================================
 
-TOOL_SCHEMAS: List[Dict[str, Any]] = [
+TOOL_SCHEMAS: List[Any] = [
     {
         "type": "function",
         "function": {
@@ -698,6 +936,93 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "start_warranty_workflow",
+            "description": (
+                "Start a structured warranty intake process when a customer reports "
+                "a product defect, delivery damage, installation difficulty, or any "
+                "issue that may be covered under warranty. "
+                "Call this instead of get_repair_help when the customer is reporting "
+                "a problem that may need a replacement part, technician, or compensation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_hint": {
+                        "type": "string",
+                        "description": "Brief one-sentence description of what the customer reported.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "answer_warranty_question",
+            "description": (
+                "Submit the customer's answer to the current warranty question and advance "
+                "the workflow to the next step. Use the answer_key that best matches what "
+                "the customer said. The tool will return the next question or a terminal action."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ticket_id": {
+                        "type": "string",
+                        "description": "The WARRANTY_TICKET_ID from the active warranty session.",
+                    },
+                    "answer_key": {
+                        "type": "string",
+                        "description": (
+                            "The answer_key of the option that matches the customer's response. "
+                            "Must exactly match one of the answer_key values listed in OPTIONS."
+                        ),
+                    },
+                },
+                "required": ["ticket_id", "answer_key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "attach_warranty_evidence",
+            "description": (
+                "Note that the customer has described or is about to submit evidence "
+                "(photo, video, receipt) for their warranty ticket. "
+                "Call this when a terminal node requires evidence and the customer "
+                "indicates they have the file ready. "
+                "This records metadata only — the actual file upload is done separately."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ticket_id": {
+                        "type": "string",
+                        "description": "The WARRANTY_TICKET_ID from the active warranty session.",
+                    },
+                    "evidence_type": {
+                        "type": "string",
+                        "enum": [
+                            "damage_photos", "video_of_issue", "proof_of_purchase",
+                            "photo_of_chair", "photo_of_defect", "proof_of_delivery",
+                            "assembly_photo", "remote_photo", "other",
+                        ],
+                        "description": "Category of evidence the customer is submitting.",
+                    },
+                    "original_filename": {
+                        "type": "string",
+                        "description": "Filename the customer mentioned, if any. Empty if not stated.",
+                    },
+                },
+                "required": ["ticket_id", "evidence_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_showroom_info",
             "description": (
                 "Return the official Carrollton, TX headquarters / showroom address. "
@@ -711,4 +1036,19 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
             },
         },
     },
+]
+
+# ---------------------------------------------------------------------------
+# Warranty-mode tool subset
+# When an active warranty ticket is in progress, the agent must only use
+# these tools so it cannot veer into free-form decisions.
+# ---------------------------------------------------------------------------
+WARRANTY_TOOL_SCHEMAS: List[Any] = [
+    s for s in TOOL_SCHEMAS
+    if s["function"]["name"] in {
+        "answer_warranty_question",
+        "attach_warranty_evidence",
+        "escalate_to_human",
+        "get_warranty_or_policy",
+    }
 ]

@@ -230,7 +230,7 @@ def make_cache_key(
             role = getattr(m, "role", None) or (m.get("role") if isinstance(m, dict) else None)
             content = getattr(m, "content", None) or (m.get("content") if isinstance(m, dict) else "")
             if role == "user":
-                prev_user = _normalise_query(content)[:120]
+                prev_user = _normalise_query(content or "")[:120]
                 break
 
     return f"v1|{target_domain}|{prev_user}|{norm}"

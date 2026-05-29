@@ -37,7 +37,15 @@ raw_data/*
 !raw_data/Warranty.docx
 
 # ==========================================
-# 4. OS Specific & IDE (운영체제 및 에디터 찌꺼기)
+# 4. Frontend (Next.js)
+# ==========================================
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+frontend/out/
+
+# ==========================================
+# 5. OS Specific & IDE (운영체제 및 에디터 찌꺼기)
 # ==========================================
 # 지원자님의 작업 환경(Mac)에서 자동으로 생성되는 숨김 파일 차단
 .DS_Store
