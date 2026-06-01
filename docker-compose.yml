@@ -18,6 +18,7 @@ services:
     restart: always
     environment:
       - TZ=America/Chicago
+      - PYTHONPATH=/app:/app/app
     env_file:
       - .env
     volumes:

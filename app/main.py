@@ -869,6 +869,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.get("/health")
+def health_check():
+    """Lightweight liveness probe for Docker / Nginx / load balancers."""
+    return {"status": "ok"}
+
+
 # --- [4] Core API endpoint (Agent / Tool Calling) ---
 
 # ---------------------------------------------------------------------------
