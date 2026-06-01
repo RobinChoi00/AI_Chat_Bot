@@ -1,0 +1,47 @@
+# requirements-prod.txt
+# =====================
+# FastAPI backend (Docker / production) only.
+#
+# Used by Dockerfile.backend — NOT the full dev freeze in requirements.txt.
+#
+# Excluded (dev / legacy / ingest scripts only):
+#   torch, transformers, sentence-transformers, scipy, scikit-learn
+#   streamlit, extra-streamlit-components, playwright
+#   pandas, openpyxl, python-docx, pyarrow, pillow, altair, …
+#
+# For local dev with Streamlit + full tooling: pip install -r requirements.txt
+# For server-side FAISS ingest (master_ingester): pip install -r requirements-ingest.txt
+
+# --- Web API ---
+fastapi==0.135.1
+uvicorn==0.42.0
+starlette==0.52.1
+pydantic==2.12.5
+pydantic-settings==2.13.1
+python-multipart==0.0.29
+
+# --- Config & HTTP ---
+python-dotenv==1.2.2
+requests==2.32.5
+
+# --- Database ---
+SQLAlchemy==2.0.48
+pytz==2026.1.post1
+
+# --- OpenAI + LangChain RAG ---
+openai==2.29.0
+langchain-openai==1.1.11
+langchain-community==0.4.1
+langchain-core==1.2.20
+langchain-text-splitters==1.1.1
+tiktoken==0.12.0
+
+# --- Vector search (OpenAI embeddings + FAISS; no local PyTorch models) ---
+faiss-cpu==1.13.2
+numpy==2.4.3
+rank-bm25==0.2.2
+
+# --- Rate limiting, retries, cache ---
+slowapi==0.1.9
+tenacity==9.1.4
+cachetools==7.0.5

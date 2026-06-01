@@ -1,3 +1,5 @@
+# Full dev/local freeze (Streamlit, PyTorch, ingest tools, etc.).
+# Docker production backend uses requirements-prod.txt instead.
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.3
 aiosignal==1.4.0

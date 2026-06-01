@@ -1,0 +1,13 @@
+# requirements-ingest.txt
+# =======================
+# Run on the server (or locally) when rebuilding FAISS indexes:
+#   pip install -r requirements-ingest.txt
+#   python script/master_ingester.py
+#
+# Includes prod deps plus data-ingest libraries. Not installed in Docker backend image.
+
+-r requirements-prod.txt
+
+pandas==2.3.3
+openpyxl==3.1.5
+python-docx==1.2.0
