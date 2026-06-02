@@ -1,6 +1,6 @@
 {
-  "version": "1.0",
-  "updated": "2026-05-28",
+  "version": "1.1",
+  "updated": "2026-06-01",
   "description": "Defines the accepted evidence types for warranty cases, and maps each terminal node to its required and optional evidence.",
 
   "evidence_types": {
@@ -116,7 +116,9 @@
     "defect_recline_actuator_terminal":        { "required": ["video_of_issue"],                                            "optional": [] },
     "defect_recline_main_pcb_wire_terminal":   { "required": ["video_of_issue"],                                            "optional": [] },
     "defect_recline_main_pcb_terminal":        { "required": ["video_of_issue"],                                            "optional": [] },
-    "defect_footrest_noise_terminal":          { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_footrest_extend_terminal":         { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_footrest_foot_rollers_terminal":   { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_footrest_calf_roller_terminal":    { "required": ["video_of_issue"],                                            "optional": [] },
 
     "install_send_video":                      { "required": [],                                                             "optional": [] },
     "defect_air_hose_fix_terminal":            { "required": [],                                                             "optional": [] },

@@ -1,7 +1,7 @@
 {
-  "version": "1.0",
-  "source": "WARRANTY FLOW CHART - MICHAEL - MICHAEL (1).pdf",
-  "updated": "2026-05-28",
+  "version": "1.1",
+  "source": "WARRANTY FLOW CHART - MICHAEL - MICHAEL (2).pdf",
+  "updated": "2026-06-01",
   "description": "Osaki/Titan warranty intake workflow. The backend engine controls ALL branching. The LLM only paraphrases 'prompt' fields into customer-friendly language. The LLM must NEVER decide on replacement, compensation, tech dispatch, or refund — those are admin-only actions reached through 'awaiting_admin' terminals.",
   "root": "root",
   "nodes": {
@@ -92,7 +92,7 @@
       "type": "terminal",
       "action": "awaiting_admin",
       "prompt": "Thank you for the information. Our team will follow up on your delivery situation.",
-      "internal_note": "Tracking provided and no visible box damage. Admin to look up tracking with carrier and provide update.",
+      "internal_note": "Tracking provided and no visible box damage. Look up order in Netsuite, contact the carrier, and provide a status update to the customer.",
       "evidence_required": []
     },
 
@@ -780,20 +780,37 @@
 
     "defect_footrest_which": {
       "type": "question",
-      "prompt": "What specifically is the issue with the footrest?",
+      "prompt": "What specifically is the issue with the footrest / legrest?",
       "options": [
-        {"label": "Footrest won't raise or lower (recline issue)",       "answer_key": "recline_issue",   "next": "defect_recline_which"},
-        {"label": "Air / inflation not working in the footrest",         "answer_key": "air_issue",       "next": "defect_air_footrest_raise"},
-        {"label": "Footrest is making a noise",                          "answer_key": "noise",           "next": "defect_footrest_noise_terminal"},
-        {"label": "Physical / cosmetic damage to the footrest",          "answer_key": "physical_damage", "next": "defect_cosmetic_photo_terminal"}
+        {"label": "Legrest does NOT extend",                    "answer_key": "legrest_not_extend",    "next": "defect_footrest_extend_terminal"},
+        {"label": "Airbags are NOT inflating in the footrest",  "answer_key": "air_not_inflating",     "next": "defect_air_footrest_raise"},
+        {"label": "Legrest not lowering or raising",            "answer_key": "legrest_not_lowering",  "next": "defect_recline_which"},
+        {"label": "Foot rollers NOT working",                   "answer_key": "foot_rollers",          "next": "defect_footrest_foot_rollers_terminal"},
+        {"label": "Calf roller NOT working",                    "answer_key": "calf_roller",           "next": "defect_footrest_calf_roller_terminal"}
       ]
     },
 
-    "defect_footrest_noise_terminal": {
+    "defect_footrest_extend_terminal": {
       "type": "terminal",
       "action": "awaiting_admin",
-      "prompt": "Our team will review the footrest noise issue and arrange the appropriate service.",
-      "internal_note": "Footrest making noise. Inspect actuator and track mechanism. May need actuator replacement.",
+      "prompt": "Our team will review the leg extension issue and arrange the appropriate repair or replacement.",
+      "internal_note": "Legrest does not extend. Admin to inspect extension actuator/mechanism and arrange repair or replacement.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_footrest_foot_rollers_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review the foot roller issue and arrange the appropriate service.",
+      "internal_note": "Foot rollers not working. Admin to diagnose roller motor/mechanism and send replacement parts or schedule service.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_footrest_calf_roller_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review the calf roller issue and arrange the appropriate service.",
+      "internal_note": "Calf roller not working. Admin to diagnose calf roller motor/mechanism and send replacement parts or schedule service.",
       "evidence_required": ["video_of_issue"]
     }
 
