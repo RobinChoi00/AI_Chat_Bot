@@ -10,10 +10,9 @@
  * - Content-Disposition is forwarded so the browser can offer a filename.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { getBackendUrl } from "@/lib/backendUrl";
 
-const BACKEND = (
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
-).replace(/\/$/, "");
+const BACKEND = getBackendUrl();
 
 function requireAdminKey(): string {
   const key = process.env.ADMIN_API_KEY;

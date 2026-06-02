@@ -1,10 +1,8 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
 
 export default function AdminLoginPage() {
-  const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError]       = useState<string | null>(null);
@@ -23,12 +21,14 @@ export default function AdminLoginPage() {
       });
 
       if (res.ok) {
-        router.push("/admin/warranty");
-        router.refresh();
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setError((data as { detail?: string }).detail ?? "Invalid username or password.");
+        // Full navigation ensures the new httpOnly session cookie is sent
+        // on the next request (client router transitions can miss it).
+        window.location.assign("/admin/warranty");
+        return;
       }
+
+      const data = await res.json().catch(() => ({}));
+      setError((data as { detail?: string }).detail ?? "Invalid username or password.");
     } catch {
       setError("Network error. Please try again.");
     } finally {

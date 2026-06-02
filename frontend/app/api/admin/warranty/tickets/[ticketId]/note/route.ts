@@ -5,10 +5,9 @@
  * ADMIN_API_KEY is read from process.env here — never exposed to the browser.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { getBackendUrl } from "@/lib/backendUrl";
 
-const BACKEND = (
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
-).replace(/\/$/, "");
+const BACKEND = getBackendUrl();
 
 function requireAdminKey(): string {
   const key = process.env.ADMIN_API_KEY;

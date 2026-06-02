@@ -10,10 +10,9 @@ import Link from "next/link";
 import AdminTicketQueue from "@/components/admin/AdminTicketQueue";
 import AdminQueueFilters from "@/components/admin/AdminQueueFilters";
 import type { TicketListResponse } from "@/lib/adminTypes";
+import { getBackendUrl } from "@/lib/backendUrl";
 
-const BACKEND = (
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
-).replace(/\/$/, "");
+const BACKEND = getBackendUrl();
 
 async function fetchTickets(status?: string): Promise<TicketListResponse> {
   const adminKey = process.env.ADMIN_API_KEY;
@@ -27,6 +26,7 @@ async function fetchTickets(status?: string): Promise<TicketListResponse> {
   const res = await fetch(`${BACKEND}/admin/warranty/tickets?${qs}`, {
     headers: { "X-Admin-Key": adminKey },
     cache: "no-store",
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (res.status === 401 || res.status === 503) {

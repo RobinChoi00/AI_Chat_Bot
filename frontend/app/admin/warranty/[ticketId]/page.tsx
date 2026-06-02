@@ -12,10 +12,9 @@ import AdminTicketDetail from "@/components/admin/AdminTicketDetail";
 import AdminDecisionPanel from "@/components/admin/AdminDecisionPanel";
 import AdminNoteForm from "@/components/admin/AdminNoteForm";
 import type { TicketDetailResponse } from "@/lib/adminTypes";
+import { getBackendUrl } from "@/lib/backendUrl";
 
-const BACKEND = (
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
-).replace(/\/$/, "");
+const BACKEND = getBackendUrl();
 
 /** Remove file_path from evidence items — must never reach the browser. */
 function stripFilePaths(data: unknown): unknown {
@@ -37,7 +36,7 @@ async function fetchTicket(ticketId: string): Promise<TicketDetailResponse> {
 
   const res = await fetch(
     `${BACKEND}/admin/warranty/tickets/${encodeURIComponent(ticketId)}`,
-    { headers: { "X-Admin-Key": adminKey }, cache: "no-store" }
+    { headers: { "X-Admin-Key": adminKey }, cache: "no-store", signal: AbortSignal.timeout(15_000) }
   );
 
   if (res.status === 404) notFound();
