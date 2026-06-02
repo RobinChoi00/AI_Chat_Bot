@@ -21,7 +21,9 @@ pip-log.txt
 # ==========================================
 # 원본 CSV 데이터나 생성된 FAISS 인덱스는 Git에 올리지 않습니다.
 # (서버 배포 후 데이터 수집 스크립트를 돌려 새로 생성하는 것이 원칙입니다)
-data/
+data/*
+!data/warranty_flowchart.json
+!data/warranty_evidence_specs.json
 faiss_index/
 *.jsonl
 *.faiss

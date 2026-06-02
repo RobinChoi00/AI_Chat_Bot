@@ -21,8 +21,10 @@ __pycache__/
 faiss_index/
 db_data/
 
-# 인덱서 전용 데이터 — 컨테이너 앱은 FAISS만 사용
-data/
+# 인덱서 전용 대용량 데이터 — 컨테이너 앱은 FAISS 볼륨 + warranty JSON만 사용
+data/*
+!data/warranty_flowchart.json
+!data/warranty_evidence_specs.json
 raw_data/
 
 # 비밀·로컬 설정은 이미지에 포함 금지 (compose env_file로 주입)

@@ -1,0 +1,128 @@
+{
+  "version": "1.0",
+  "updated": "2026-05-28",
+  "description": "Defines the accepted evidence types for warranty cases, and maps each terminal node to its required and optional evidence.",
+
+  "evidence_types": {
+    "damage_photos": {
+      "label": "Photos of the Damage",
+      "description": "Clear photos showing the physical damage to the chair",
+      "formats": ["jpg", "jpeg", "png", "webp"],
+      "min_count": 1,
+      "max_count": 10,
+      "instructions": "Take clear, well-lit photos of the damaged area from multiple angles"
+    },
+    "box_photos": {
+      "label": "Photos of the Shipping Box",
+      "description": "Photos of the damaged outer shipping box",
+      "formats": ["jpg", "jpeg", "png", "webp"],
+      "min_count": 1,
+      "max_count": 6,
+      "instructions": "Photograph all sides of the shipping box that show damage, dents, or markings"
+    },
+    "video_of_issue": {
+      "label": "Video Demonstrating the Issue",
+      "description": "Short video showing the malfunction while the chair is in operation",
+      "formats": ["mp4", "mov", "avi", "webm"],
+      "min_count": 0,
+      "max_count": 3,
+      "instructions": "Record a 30–60 second video demonstrating the problem with the chair powered on"
+    },
+    "signed_delivery_receipt": {
+      "label": "Signed Delivery Receipt",
+      "description": "A copy of the delivery receipt signed at time of delivery",
+      "formats": ["jpg", "jpeg", "png", "pdf"],
+      "min_count": 0,
+      "max_count": 2,
+      "instructions": "Scan or clearly photograph the signed delivery receipt showing the damage notation or 'cleared' signature"
+    },
+    "photo_of_remote": {
+      "label": "Photo of the Remote Control",
+      "description": "Photo showing the remote control and its screen/buttons",
+      "formats": ["jpg", "jpeg", "png"],
+      "min_count": 1,
+      "max_count": 3,
+      "instructions": "Photograph the remote control from the front, showing the screen and all buttons"
+    },
+    "photo_of_cable": {
+      "label": "Photo of the Damaged Cable",
+      "description": "Photo clearly showing the damaged or cut cable",
+      "formats": ["jpg", "jpeg", "png"],
+      "min_count": 1,
+      "max_count": 3,
+      "instructions": "Photograph the damaged or cut cable, making the damage clearly visible"
+    },
+    "photo_of_fuse": {
+      "label": "Photo of the Fuse",
+      "description": "Photo of the fuse compartment showing the fuse condition",
+      "formats": ["jpg", "jpeg", "png"],
+      "min_count": 1,
+      "max_count": 2,
+      "instructions": "Photograph the fuse holder open, showing whether the fuse is intact or blown"
+    },
+    "photo_of_power_area": {
+      "label": "Photo of the Power Connection Area",
+      "description": "Photo of the back-of-chair power connection and switch area",
+      "formats": ["jpg", "jpeg", "png"],
+      "min_count": 1,
+      "max_count": 3,
+      "instructions": "Photograph the power cord connection, power switch, and fuse area on the back of the chair"
+    }
+  },
+
+  "terminal_evidence_map": {
+    "delivery_lookup_by_name_terminal":        { "required": [],                                                             "optional": [] },
+    "delivery_no_box_damage_terminal":         { "required": [],                                                             "optional": [] },
+    "delivery_signed_cleared_terminal":        { "required": ["damage_photos"],                                              "optional": [] },
+    "delivery_replace_claim_terminal":         { "required": ["damage_photos", "box_photos"],                                "optional": ["signed_delivery_receipt"] },
+    "delivery_minor_comp_terminal":            { "required": ["damage_photos"],                                              "optional": [] },
+
+    "defect_air_tech_terminal":                { "required": ["video_of_issue"],                                             "optional": [] },
+    "defect_air_pump_terminal":                { "required": ["video_of_issue"],                                             "optional": [] },
+    "defect_air_arms_tech_terminal":           { "required": ["video_of_issue"],                                             "optional": [] },
+    "defect_air_shoulders_tech_terminal":      { "required": ["video_of_issue"],                                             "optional": [] },
+    "defect_air_footrest_wg_tech_terminal":    { "required": [],                                                             "optional": ["video_of_issue"] },
+    "defect_air_side_wg_tech_terminal":        { "required": [],                                                             "optional": ["video_of_issue"] },
+    "defect_air_base_wg_tech_terminal":        { "required": [],                                                             "optional": ["video_of_issue"] },
+
+    "defect_cosmetic_photo_terminal":          { "required": ["damage_photos"],                                              "optional": [] },
+    "defect_cosmetic_wg_terminal":             { "required": ["damage_photos"],                                              "optional": ["box_photos"] },
+    "defect_cosmetic_signed_cleared_terminal": { "required": ["damage_photos"],                                              "optional": [] },
+    "defect_cosmetic_box_photos_terminal":     { "required": ["damage_photos", "box_photos"],                                "optional": ["signed_delivery_receipt"] },
+    "defect_cosmetic_replace_terminal":        { "required": ["damage_photos"],                                              "optional": ["signed_delivery_receipt"] },
+
+    "defect_remote_blank_screen_terminal":     { "required": ["photo_of_remote"],                                           "optional": [] },
+    "defect_remote_cable_terminal":            { "required": ["photo_of_cable"],                                            "optional": [] },
+    "defect_remote_partial_terminal":          { "required": ["photo_of_remote", "video_of_issue"],                         "optional": [] },
+    "defect_remote_fuse_terminal":             { "required": ["photo_of_fuse"],                                             "optional": [] },
+    "defect_remote_intermittent_terminal":     { "required": ["photo_of_remote"],                                           "optional": [] },
+    "defect_remote_pcb_check_terminal":        { "required": ["photo_of_remote", "video_of_issue"],                         "optional": [] },
+
+    "defect_rolling_noise_updown_terminal":    { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_rolling_noise_massage_terminal":   { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_rolling_pops_terminal":            { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_rolling_no_movement_terminal":     { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_rolling_worked_terminal":          { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_rolling_power_no_move_terminal":   { "required": ["video_of_issue"],                                            "optional": [] },
+
+    "defect_power_remote_replace_terminal":    { "required": ["photo_of_remote", "video_of_issue"],                         "optional": [] },
+    "defect_power_main_pcb_terminal":          { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_power_actuator_terminal":          { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_power_main_pcb_wire_terminal":     { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_power_pcb_fuse_terminal":          { "required": ["video_of_issue", "photo_of_power_area"],                     "optional": [] },
+    "defect_power_clicking_terminal":          { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_power_no_click_terminal":          { "required": ["video_of_issue"],                                            "optional": [] },
+
+    "defect_recline_actuator_terminal":        { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_recline_main_pcb_wire_terminal":   { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_recline_main_pcb_terminal":        { "required": ["video_of_issue"],                                            "optional": [] },
+    "defect_footrest_noise_terminal":          { "required": ["video_of_issue"],                                            "optional": [] },
+
+    "install_send_video":                      { "required": [],                                                             "optional": [] },
+    "defect_air_hose_fix_terminal":            { "required": [],                                                             "optional": [] },
+    "defect_air_side_reconnect_terminal":      { "required": [],                                                             "optional": [] },
+    "defect_air_base_hose_terminal":           { "required": [],                                                             "optional": [] },
+    "defect_cosmetic_side_fixed_terminal":     { "required": [],                                                             "optional": [] },
+    "defect_remote_connection_terminal":       { "required": [],                                                             "optional": [] }
+  }
+}

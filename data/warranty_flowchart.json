@@ -1,0 +1,801 @@
+{
+  "version": "1.0",
+  "source": "WARRANTY FLOW CHART - MICHAEL - MICHAEL (1).pdf",
+  "updated": "2026-05-28",
+  "description": "Osaki/Titan warranty intake workflow. The backend engine controls ALL branching. The LLM only paraphrases 'prompt' fields into customer-friendly language. The LLM must NEVER decide on replacement, compensation, tech dispatch, or refund — those are admin-only actions reached through 'awaiting_admin' terminals.",
+  "root": "root",
+  "nodes": {
+
+    "root": {
+      "type": "question",
+      "prompt": "Welcome to Osaki & Titan support! Is this a Warranty issue or a Sales inquiry?",
+      "options": [
+        {"label": "Warranty", "answer_key": "warranty", "next": "issue_type"},
+        {"label": "Sales",    "answer_key": "sales",    "next": "sales_routing"}
+      ]
+    },
+
+    "sales_routing": {
+      "type": "terminal",
+      "action": "sales_handoff",
+      "prompt": "How can I help you today?",
+      "internal_note": "Route to sales flow / sales agent. This is not a warranty case.",
+      "evidence_required": []
+    },
+
+    "issue_type": {
+      "type": "question",
+      "prompt": "What type of warranty issue are you experiencing?",
+      "options": [
+        {"label": "Installation Issue",    "answer_key": "installation", "next": "install_model"},
+        {"label": "Delivery Issue",        "answer_key": "delivery",     "next": "delivery_tracking_q"},
+        {"label": "Defect / Malfunction",  "answer_key": "defect",       "next": "defect_problem_type"}
+      ]
+    },
+
+    "install_model": {
+      "type": "question_text",
+      "prompt": "What model is your massage chair? (e.g., OS-4000T, Titan Pro Commander)",
+      "answer_key": "model_name",
+      "next": "install_send_video"
+    },
+
+    "install_send_video": {
+      "type": "terminal",
+      "action": "send_info",
+      "prompt": "I will send you the installation guide and YouTube video link for your specific model right away.",
+      "internal_note": "Look up the installation YouTube video for the stated model and send the link to the customer.",
+      "evidence_required": []
+    },
+
+    "delivery_tracking_q": {
+      "type": "question",
+      "prompt": "Do you have a tracking number for your delivery?",
+      "options": [
+        {"label": "No, I don't have a tracking number", "answer_key": "no_tracking",  "next": "delivery_get_name"},
+        {"label": "Yes, I have my tracking number",     "answer_key": "has_tracking", "next": "delivery_get_tracking_number"}
+      ]
+    },
+
+    "delivery_get_name": {
+      "type": "question_text",
+      "prompt": "No problem! Please provide the full name used on the order and we will look it up for you.",
+      "answer_key": "order_name",
+      "next": "delivery_lookup_by_name_terminal"
+    },
+
+    "delivery_lookup_by_name_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Thank you! Our team will look up your order and contact the carrier for an update. We will be in touch shortly.",
+      "internal_note": "No tracking number provided. Look up order in Netsuite using customer name. Contact carrier to get tracking and status update.",
+      "evidence_required": []
+    },
+
+    "delivery_get_tracking_number": {
+      "type": "question_text",
+      "prompt": "Please share your tracking number and we will check the status right away.",
+      "answer_key": "tracking_number",
+      "next": "delivery_visible_damage_q"
+    },
+
+    "delivery_visible_damage_q": {
+      "type": "question",
+      "prompt": "When the chair was delivered, was there any visible damage to the outer shipping box?",
+      "options": [
+        {"label": "Yes, the box was visibly damaged", "answer_key": "yes_box_damage", "next": "delivery_signed_q"},
+        {"label": "No, the box appeared fine",        "answer_key": "no_box_damage",  "next": "delivery_no_box_damage_terminal"}
+      ]
+    },
+
+    "delivery_no_box_damage_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Thank you for the information. Our team will follow up on your delivery situation.",
+      "internal_note": "Tracking provided and no visible box damage. Admin to look up tracking with carrier and provide update.",
+      "evidence_required": []
+    },
+
+    "delivery_signed_q": {
+      "type": "question",
+      "prompt": "When you received the delivery, was the receipt signed as 'Cleared' (no damage noted) or 'Damaged' (damage was noted on the receipt)?",
+      "options": [
+        {"label": "Signed as Cleared (no damage noted on receipt)", "answer_key": "signed_cleared", "next": "delivery_signed_cleared_terminal"},
+        {"label": "Signed as Damaged (damage was noted)",           "answer_key": "signed_damaged", "next": "delivery_damage_when_opened_q"}
+      ]
+    },
+
+    "delivery_signed_cleared_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Since the delivery was signed as clear, obtaining compensation can be difficult. However, please send us photos of the damage and our team will review your case.",
+      "internal_note": "Damage present but delivery was signed as cleared. Hard to get compensation. Admin to review photos and decide course of action.",
+      "evidence_required": ["damage_photos"],
+      "evidence_email": "service@osakititan.com"
+    },
+
+    "delivery_damage_when_opened_q": {
+      "type": "question",
+      "prompt": "Was the damage to the chair visible as soon as you opened the box?",
+      "options": [
+        {"label": "Yes, it was visible immediately upon unboxing", "answer_key": "visible_at_unboxing", "next": "delivery_replace_claim_terminal"},
+        {"label": "No, it was noticed later",                      "answer_key": "noticed_later",       "next": "delivery_minor_comp_terminal"}
+      ]
+    },
+
+    "delivery_replace_claim_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Please send photos of both the damaged box and the damage to the chair. Our team will review and arrange either a repair or replacement at no cost to you.",
+      "internal_note": "Signed as damaged + visible at unboxing. Admin action: send replacement part/chair and file carrier claim. Request signed delivery receipt and photos.",
+      "evidence_required": ["damage_photos", "box_photos", "signed_delivery_receipt"],
+      "evidence_email": "service@osakititan.com"
+    },
+
+    "delivery_minor_comp_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Please send us photos of the damage. If the damage is minor, our team may be able to offer a compensation.",
+      "internal_note": "Damage noticed after delivery, signed as damaged. If minor: admin to offer small compensation. Admin to review photos and decide.",
+      "evidence_required": ["damage_photos"],
+      "evidence_email": "service@osakititan.com"
+    },
+
+    "defect_problem_type": {
+      "type": "question",
+      "prompt": "What type of problem are you experiencing with your chair?",
+      "options": [
+        {"label": "Air / Inflation not working",                          "answer_key": "air",      "next": "defect_air_location"},
+        {"label": "Cosmetic damage (physical damage to appearance)",      "answer_key": "cosmetic", "next": "defect_cosmetic_location"},
+        {"label": "Remote / controller issue",                            "answer_key": "remote",   "next": "defect_remote_power_q"},
+        {"label": "Full rolling massage mechanism issue",                 "answer_key": "rolling",  "next": "defect_rolling_problem_type"},
+        {"label": "Power issue (chair won't turn on or has power problems)", "answer_key": "power", "next": "defect_power_remote_on_q"},
+        {"label": "Recline / position adjustment not working",            "answer_key": "recline",  "next": "defect_recline_which"},
+        {"label": "Footrest issue",                                       "answer_key": "footrest", "next": "defect_footrest_which"}
+      ]
+    },
+
+    "defect_air_location": {
+      "type": "question",
+      "prompt": "Which part of the chair is not inflating properly?",
+      "options": [
+        {"label": "Feet / Calves",    "answer_key": "feet_calves",    "next": "defect_air_feet_worked_q"},
+        {"label": "Arms",             "answer_key": "arms",            "next": "defect_air_arms_worked_q"},
+        {"label": "Shoulders / Hips", "answer_key": "shoulders_hips", "next": "defect_air_shoulders_hissing_q"},
+        {"label": "Footrest",         "answer_key": "footrest",        "next": "defect_air_footrest_raise"},
+        {"label": "Side Panel",       "answer_key": "side_panel",      "next": "defect_air_side_panel_check"},
+        {"label": "Base",             "answer_key": "base",            "next": "defect_air_base_check"}
+      ]
+    },
+
+    "defect_air_feet_worked_q": {
+      "type": "question",
+      "prompt": "Has the air in the feet / calves area ever worked before?",
+      "options": [
+        {"label": "Yes, it worked before but stopped", "answer_key": "yes_worked",   "next": "defect_air_feet_inflate_test"},
+        {"label": "No, it has never worked",           "answer_key": "never_worked", "next": "defect_air_pump_terminal"}
+      ]
+    },
+
+    "defect_air_feet_inflate_test": {
+      "type": "instruction",
+      "prompt": "Please raise the footrest, then turn on the leg air from the remote. Now disconnect the air hose and check if air is blowing out. Is air coming out when you disconnect the hose?",
+      "options": [
+        {"label": "Yes, air is blowing from the hose", "answer_key": "air_blowing", "next": "defect_air_feet_hose_check"},
+        {"label": "No, no air coming out",             "answer_key": "no_air",      "next": "defect_air_pump_terminal"}
+      ]
+    },
+
+    "defect_air_feet_hose_check": {
+      "type": "instruction",
+      "prompt": "Please check all air hoses in the feet / calves area for any kinks or disconnected hoses. Are all hoses clear and properly connected?",
+      "options": [
+        {"label": "Found a kinked or disconnected hose", "answer_key": "hose_issue", "next": "defect_air_hose_fix_terminal"},
+        {"label": "All hoses look clear and connected",  "answer_key": "hoses_ok",   "next": "defect_air_tech_terminal"}
+      ]
+    },
+
+    "defect_air_hose_fix_terminal": {
+      "type": "terminal",
+      "action": "send_info",
+      "prompt": "Please clear any kinked hoses or reconnect any disconnected ones. This should restore the air inflation.",
+      "internal_note": "Hose was kinked or disconnected. DIY fix — no parts needed.",
+      "evidence_required": []
+    },
+
+    "defect_air_tech_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Thank you for checking! Our team will review your case and arrange the appropriate service.",
+      "internal_note": "Air blowing from hose but not inflating. Hoses clear. Under warranty: tech needed — likely airbag leak or loose internal connection.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_air_pump_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review your case and arrange the necessary service.",
+      "internal_note": "Air never worked OR no air blowing from hose. Most likely air pump needs replacement.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_air_arms_worked_q": {
+      "type": "question",
+      "prompt": "Has the air in the arm area ever worked before?",
+      "options": [
+        {"label": "Yes, it worked before but stopped", "answer_key": "yes_worked",   "next": "defect_air_arms_hissing_q"},
+        {"label": "No, it has never worked",           "answer_key": "never_worked", "next": "defect_air_pump_terminal"}
+      ]
+    },
+
+    "defect_air_arms_hissing_q": {
+      "type": "instruction",
+      "prompt": "Please remove the side panel and turn on the arm air massage. Disconnect the air hose from the base where it connects to the side panel. When the air is on, do you hear air blowing or a hissing sound?",
+      "options": [
+        {"label": "Yes, I hear air blowing or hissing", "answer_key": "yes_hissing", "next": "defect_air_arms_tech_terminal"},
+        {"label": "No sound, no air at all",            "answer_key": "no_hissing",  "next": "defect_air_pump_terminal"}
+      ]
+    },
+
+    "defect_air_arms_tech_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review and arrange the necessary service.",
+      "internal_note": "Air blowing from base hose but not inflating arms. Under warranty: tech needed — airbag leak or loose connection in arms.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_air_shoulders_hissing_q": {
+      "type": "instruction",
+      "prompt": "Please turn on the shoulder / hip air massage. Do you hear any air blowing or a hissing sound in the shoulder / hip area?",
+      "options": [
+        {"label": "Yes, I hear air or hissing", "answer_key": "yes_hissing", "next": "defect_air_shoulders_tech_terminal"},
+        {"label": "No, no sound at all",        "answer_key": "no_hissing",  "next": "defect_air_pump_terminal"}
+      ]
+    },
+
+    "defect_air_shoulders_tech_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review and arrange the necessary service for the shoulder / hip airbag.",
+      "internal_note": "Hissing heard = airbag has a leak or loose connection in shoulders/hips. Under warranty: tech needed.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_air_footrest_raise": {
+      "type": "instruction",
+      "prompt": "Please raise the footrest, turn on the leg air from the remote, and disconnect the air hose to check if air is blowing through it. Is air coming out when you disconnect the hose?",
+      "options": [
+        {"label": "Yes, air is blowing from the hose", "answer_key": "air_blowing", "next": "defect_air_footrest_white_glove_q"},
+        {"label": "No, no air coming out",             "answer_key": "no_air",      "next": "defect_air_pump_terminal"}
+      ]
+    },
+
+    "defect_air_footrest_white_glove_q": {
+      "type": "question",
+      "prompt": "Was this chair installed or delivered by White Glove delivery service?",
+      "options": [
+        {"label": "Yes, White Glove delivery", "answer_key": "yes_white_glove", "next": "defect_air_footrest_wg_tech_terminal"},
+        {"label": "No, standard delivery",     "answer_key": "no_white_glove",  "next": "defect_air_footrest_hose_check_q"}
+      ]
+    },
+
+    "defect_air_footrest_wg_tech_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will send a technician to address this. It may be related to the installation.",
+      "internal_note": "White Glove installation + air blowing but footrest not inflating. Good chance air hose is sandwiched or blocked during install. Send tech to correct.",
+      "evidence_required": []
+    },
+
+    "defect_air_footrest_hose_check_q": {
+      "type": "instruction",
+      "prompt": "Please check if the air hose connected to the footrest area is clear — not kinked, sandwiched, or blocked. Is the hose clear?",
+      "options": [
+        {"label": "Found a blocked or kinked hose", "answer_key": "hose_issue", "next": "defect_air_hose_fix_terminal"},
+        {"label": "Hose is clear",                  "answer_key": "hose_clear", "next": "defect_air_tech_terminal"}
+      ]
+    },
+
+    "defect_air_side_panel_check": {
+      "type": "instruction",
+      "prompt": "Please remove the side panel and turn on the air massage. Disconnect the air hose from the base where it connects to the side panel. Is air blowing from the base hose when you disconnect it?",
+      "options": [
+        {"label": "Yes, air blows from the base hose", "answer_key": "air_blowing", "next": "defect_air_side_white_glove_q"},
+        {"label": "No air coming out",                 "answer_key": "no_air",      "next": "defect_air_pump_terminal"}
+      ]
+    },
+
+    "defect_air_side_white_glove_q": {
+      "type": "question",
+      "prompt": "Was this chair installed or delivered by White Glove delivery service?",
+      "options": [
+        {"label": "Yes, White Glove delivery", "answer_key": "yes_white_glove", "next": "defect_air_side_wg_tech_terminal"},
+        {"label": "No, standard delivery",     "answer_key": "no_white_glove",  "next": "defect_air_side_reconnect_terminal"}
+      ]
+    },
+
+    "defect_air_side_wg_tech_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will send a technician to address the side panel air connection.",
+      "internal_note": "White Glove installation + air from base OK but not reaching side panel. Tech to correct hose connection.",
+      "evidence_required": []
+    },
+
+    "defect_air_side_reconnect_terminal": {
+      "type": "terminal",
+      "action": "send_info",
+      "prompt": "Please try reconnecting the air hose from the base to the side panel fitting securely. This should restore the air in that area.",
+      "internal_note": "Non-WG. Air from base hose OK. Side panel hose likely disconnected. DIY reconnect.",
+      "evidence_required": []
+    },
+
+    "defect_air_base_check": {
+      "type": "instruction",
+      "prompt": "When you turn on the air massage, do you hear the air pump running or a hissing sound from the base area?",
+      "options": [
+        {"label": "Yes, I hear the pump or hissing", "answer_key": "pump_running", "next": "defect_air_base_white_glove_q"},
+        {"label": "No sound at all",                 "answer_key": "no_sound",     "next": "defect_air_pump_terminal"}
+      ]
+    },
+
+    "defect_air_base_white_glove_q": {
+      "type": "question",
+      "prompt": "Was this chair installed or delivered by White Glove delivery service?",
+      "options": [
+        {"label": "Yes, White Glove delivery", "answer_key": "yes_white_glove", "next": "defect_air_base_wg_tech_terminal"},
+        {"label": "No, standard delivery",     "answer_key": "no_white_glove",  "next": "defect_air_base_hose_terminal"}
+      ]
+    },
+
+    "defect_air_base_wg_tech_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will send a technician to address the base air issue.",
+      "internal_note": "White Glove installation + pump running but base not inflating. Tech to correct.",
+      "evidence_required": []
+    },
+
+    "defect_air_base_hose_terminal": {
+      "type": "terminal",
+      "action": "send_info",
+      "prompt": "Please check all base air hose connections for any kinks or loose fittings, and try reconnecting them securely.",
+      "internal_note": "Non-WG. Pump running. Check/reconnect base hoses. DIY fix.",
+      "evidence_required": []
+    },
+
+    "defect_cosmetic_location": {
+      "type": "question",
+      "prompt": "Where is the cosmetic damage located on the chair?",
+      "options": [
+        {"label": "Footrest",                   "answer_key": "footrest",  "next": "defect_cosmetic_photo_terminal"},
+        {"label": "Side Panel",                 "answer_key": "side_panel","next": "defect_cosmetic_side_check"},
+        {"label": "Base",                       "answer_key": "base",      "next": "defect_cosmetic_photo_terminal"},
+        {"label": "Backrest or other area",     "answer_key": "other",     "next": "defect_cosmetic_when_opened_q"}
+      ]
+    },
+
+    "defect_cosmetic_photo_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Please send photos of the damage to service@osakititan.com. Our team will assess and determine the best resolution.",
+      "internal_note": "Cosmetic damage on footrest or base. Request photos. Admin to decide repair vs. replace.",
+      "evidence_required": ["damage_photos"],
+      "evidence_email": "service@osakititan.com"
+    },
+
+    "defect_cosmetic_side_check": {
+      "type": "instruction",
+      "prompt": "First, please verify that the side panels are fully and correctly installed. Are the side panels properly in place?",
+      "options": [
+        {"label": "Panels were not properly installed — now fixed", "answer_key": "panels_fixed",  "next": "defect_cosmetic_side_fixed_terminal"},
+        {"label": "Panels are installed correctly but still damaged", "answer_key": "still_damaged", "next": "defect_cosmetic_photo_terminal"}
+      ]
+    },
+
+    "defect_cosmetic_side_fixed_terminal": {
+      "type": "terminal",
+      "action": "send_info",
+      "prompt": "Please check if the issue is resolved now that the panels are properly installed.",
+      "internal_note": "Side panel was not installed correctly. Customer fixed it. Verify resolved — no further action needed unless issue persists.",
+      "evidence_required": []
+    },
+
+    "defect_cosmetic_when_opened_q": {
+      "type": "question",
+      "prompt": "Was the damage visible as soon as you opened the box?",
+      "options": [
+        {"label": "Yes, it was visible when first unboxed", "answer_key": "visible_at_unboxing", "next": "defect_cosmetic_white_glove_q"},
+        {"label": "No, it was noticed later after use",     "answer_key": "noticed_later",       "next": "defect_cosmetic_delivery_signed_q"}
+      ]
+    },
+
+    "defect_cosmetic_white_glove_q": {
+      "type": "question",
+      "prompt": "Was this chair installed or delivered by White Glove delivery service?",
+      "options": [
+        {"label": "Yes, White Glove delivery", "answer_key": "yes_white_glove", "next": "defect_cosmetic_wg_terminal"},
+        {"label": "No, standard delivery",     "answer_key": "no_white_glove",  "next": "defect_cosmetic_delivery_signed_q"}
+      ]
+    },
+
+    "defect_cosmetic_wg_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Please send photos of the damage. Our team will review and arrange a resolution with the White Glove service provider at no cost to you.",
+      "internal_note": "White Glove delivery + cosmetic damage visible at unboxing. File claim with WG company. Send replacement/repair. Request damage and box photos.",
+      "evidence_required": ["damage_photos", "box_photos"],
+      "evidence_email": "service@osakititan.com"
+    },
+
+    "defect_cosmetic_delivery_signed_q": {
+      "type": "question",
+      "prompt": "When you received your delivery, was the delivery receipt signed as 'Cleared' (no damage noted) or 'Damaged'?",
+      "options": [
+        {"label": "Signed as Cleared", "answer_key": "signed_cleared", "next": "defect_cosmetic_signed_cleared_terminal"},
+        {"label": "Signed as Damaged", "answer_key": "signed_damaged", "next": "defect_cosmetic_box_damage_q"}
+      ]
+    },
+
+    "defect_cosmetic_signed_cleared_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Since the delivery was signed as clear, compensation can be difficult to secure. However, please send us photos and our team will review what we can do.",
+      "internal_note": "Damage found but delivery signed as cleared. Hard to get compensation. Admin to review photos and decide.",
+      "evidence_required": ["damage_photos"],
+      "evidence_email": "service@osakititan.com"
+    },
+
+    "defect_cosmetic_box_damage_q": {
+      "type": "question",
+      "prompt": "Was there visible damage to the shipping box when the chair was delivered?",
+      "options": [
+        {"label": "Yes, the box was visibly damaged", "answer_key": "yes_box_damaged", "next": "defect_cosmetic_box_photos_terminal"},
+        {"label": "No, the box looked fine",          "answer_key": "no_box_damage",   "next": "defect_cosmetic_replace_terminal"}
+      ]
+    },
+
+    "defect_cosmetic_box_photos_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Please send photos of both the damaged box and the chair damage. Although the damage may not have been noted on the receipt, we will attempt to file a claim with the trucking company on your behalf.",
+      "internal_note": "Signed damaged + visible box damage. Request box photos, chair photos, signed delivery receipt. Try to get compensated from trucking company.",
+      "evidence_required": ["damage_photos", "box_photos", "signed_delivery_receipt"],
+      "evidence_email": "service@osakititan.com"
+    },
+
+    "defect_cosmetic_replace_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Please send us photos of the damage. Our team will review and determine whether a repair or replacement is appropriate at no cost to you.",
+      "internal_note": "Signed damaged + box appeared fine. Admin to send replacement part/chair and file claim.",
+      "evidence_required": ["damage_photos", "signed_delivery_receipt"],
+      "evidence_email": "service@osakititan.com"
+    },
+
+    "defect_remote_power_q": {
+      "type": "question",
+      "prompt": "Does the remote control have power? Is anything showing on the screen?",
+      "options": [
+        {"label": "Yes, the remote has power / screen shows something", "answer_key": "has_power", "next": "defect_remote_screen_q"},
+        {"label": "No, remote is completely unresponsive / blank screen", "answer_key": "no_power", "next": "defect_remote_no_power_checks"}
+      ]
+    },
+
+    "defect_remote_screen_q": {
+      "type": "question",
+      "prompt": "Which best describes the remote issue?",
+      "options": [
+        {"label": "All commands respond, but the screen is blank",    "answer_key": "blank_screen_commands_ok",  "next": "defect_remote_blank_screen_terminal"},
+        {"label": "The remote cable appears damaged or cut",          "answer_key": "cable_damaged",            "next": "defect_remote_cable_terminal"},
+        {"label": "Certain commands do not respond at all",           "answer_key": "commands_not_responding",  "next": "defect_remote_partial_terminal"}
+      ]
+    },
+
+    "defect_remote_blank_screen_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will arrange a replacement remote for you.",
+      "internal_note": "Remote commands work but screen is blank. Send new remote.",
+      "evidence_required": ["photo_of_remote"]
+    },
+
+    "defect_remote_cable_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will send a replacement cable and remote for you.",
+      "internal_note": "Remote cable is damaged or cut. Send new cable with remote.",
+      "evidence_required": ["photo_of_cable"]
+    },
+
+    "defect_remote_partial_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review and determine whether a remote or PCB replacement is needed.",
+      "internal_note": "Certain commands not responding. Replace remote or PCB — admin to diagnose which.",
+      "evidence_required": ["photo_of_remote", "video_of_issue"]
+    },
+
+    "defect_remote_no_power_checks": {
+      "type": "instruction",
+      "prompt": "Let's troubleshoot step by step. Please check:\n1. Is the fuse blown or broken?\n2. Is the cable connection from the chair to the remote secure?\n3. Does the remote work intermittently — sometimes on, sometimes off?",
+      "options": [
+        {"label": "The fuse appears blown or broken",            "answer_key": "fuse_broken",     "next": "defect_remote_fuse_terminal"},
+        {"label": "The cable connection seems loose or bad",     "answer_key": "bad_connection",  "next": "defect_remote_connection_terminal"},
+        {"label": "Remote works intermittently",                 "answer_key": "intermittent",    "next": "defect_remote_intermittent_terminal"},
+        {"label": "All checked — nothing obvious found",         "answer_key": "all_checked_ok",  "next": "defect_remote_pcb_check_terminal"}
+      ]
+    },
+
+    "defect_remote_fuse_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will send you a replacement fuse.",
+      "internal_note": "Fuse is broken. Send replacement fuse.",
+      "evidence_required": ["photo_of_fuse"]
+    },
+
+    "defect_remote_connection_terminal": {
+      "type": "terminal",
+      "action": "send_info",
+      "prompt": "Please try unplugging the chair's cable connection and plugging it back in firmly. This often resolves remote connectivity issues.",
+      "internal_note": "Bad connection. Customer to unplug and replug chair cable. DIY fix.",
+      "evidence_required": []
+    },
+
+    "defect_remote_intermittent_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will arrange a replacement remote for you.",
+      "internal_note": "Remote works intermittently. Send new remote.",
+      "evidence_required": ["photo_of_remote"]
+    },
+
+    "defect_remote_pcb_check_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will further diagnose and arrange the appropriate solution.",
+      "internal_note": "Fuse OK, connection OK, not intermittent. Likely remote or Power PCB issue. Admin to check if remote turns on from back switch and diagnose accordingly.",
+      "evidence_required": ["photo_of_remote", "video_of_issue"]
+    },
+
+    "defect_rolling_problem_type": {
+      "type": "question",
+      "prompt": "Which of the following best describes the problem with the massage mechanism?",
+      "options": [
+        {"label": "Makes a loud noise when the mechanism moves up or down", "answer_key": "noise_up_down",    "next": "defect_rolling_noise_updown_terminal"},
+        {"label": "Makes noise while giving the massage",                   "answer_key": "noise_massaging", "next": "defect_rolling_noise_massage_terminal"},
+        {"label": "Pops or clicks during the massage",                      "answer_key": "pops",            "next": "defect_rolling_pops_terminal"},
+        {"label": "Massage heads not moving properly",                      "answer_key": "heads_not_moving","next": "defect_rolling_heads_q"}
+      ]
+    },
+
+    "defect_rolling_noise_updown_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review this issue. We may need to inspect the mechanism and track.",
+      "internal_note": "Mech makes loud noise when moving up/down. Diagnostic steps: 1. Check strap not tangled with mech head. 2. Track may be damaged — need tech to inspect. 3. Check frame is not bent. 4. If track OK, mech needs replacement.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_rolling_noise_massage_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review this noise issue with the massage mechanism.",
+      "internal_note": "Noise while massaging. Diagnostic: 1. Remove backpad — check for holes in backpad or backrest lining; replace if within warranty. 2. Verify strap not tangled with massage head.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_rolling_pops_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review this popping / clicking issue.",
+      "internal_note": "Pops when massaging. Diagnostic: 1. Check backpad is not bunched up — zip or velcro properly. 2. Check for holes in backrest lining or backpad.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_rolling_heads_q": {
+      "type": "question",
+      "prompt": "Please answer about the massage heads:\n1. When you turn the chair OFF, do the massage heads move at all?\n2. Have the massage heads ever worked properly?\n3. Do the heads seem to have power but barely move?",
+      "options": [
+        {"label": "Heads do not move at all (even when powering off)", "answer_key": "no_movement",         "next": "defect_rolling_no_movement_terminal"},
+        {"label": "Heads worked before but have now stopped",          "answer_key": "worked_before_stopped","next": "defect_rolling_worked_terminal"},
+        {"label": "Heads seem to have power but barely move",          "answer_key": "power_but_no_move",   "next": "defect_rolling_power_no_move_terminal"}
+      ]
+    },
+
+    "defect_rolling_no_movement_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review and arrange the necessary service for the massage mechanism.",
+      "internal_note": "Massage heads do not move at all when powered off. Check fuse and powercord first; if both OK, likely Power PCB issue.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_rolling_worked_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will diagnose and arrange the appropriate repair.",
+      "internal_note": "Heads worked before, now stopped. Check fuse and powercord; if OK, likely Power PCB. For older chairs: unplug power, unplug black & grey cables from back, replug, power on.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_rolling_power_no_move_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will assess and arrange the necessary repair for the massage mechanism.",
+      "internal_note": "Has power, slight motion, but won't move fully. Change mech or up/down motor. If Air 3D/4D model: broken air system may prevent mech from moving — check air too.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_power_remote_on_q": {
+      "type": "question",
+      "prompt": "Does the chair's remote control turn ON when you press the power button?",
+      "options": [
+        {"label": "Yes, remote turns on", "answer_key": "remote_on",  "next": "defect_power_on_controls_q"},
+        {"label": "No, remote does not turn on", "answer_key": "remote_off", "next": "defect_power_off_checks"}
+      ]
+    },
+
+    "defect_power_on_controls_q": {
+      "type": "question",
+      "prompt": "With the remote on, what do you observe? (Select the best match)",
+      "options": [
+        {"label": "Remote turns on but does not respond to any commands",         "answer_key": "no_response",          "next": "defect_power_remote_replace_terminal"},
+        {"label": "The quick control panel works but the main remote does not",   "answer_key": "quick_control_ok",     "next": "defect_power_remote_replace_terminal"},
+        {"label": "Turned on the back switch and heard something from the chair", "answer_key": "back_switch_sound",    "next": "defect_power_main_pcb_terminal"},
+        {"label": "One or more recline functions (backrest, ZG, footrest) not working", "answer_key": "recline_not_working", "next": "defect_power_recline_move_q"}
+      ]
+    },
+
+    "defect_power_remote_replace_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will arrange a replacement remote for you.",
+      "internal_note": "Remote on but doesn't respond to commands, OR quick control works but main remote doesn't. Replace remote.",
+      "evidence_required": ["photo_of_remote", "video_of_issue"]
+    },
+
+    "defect_power_main_pcb_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review and arrange the appropriate PCB repair or replacement.",
+      "internal_note": "Back power switch turned on + sound heard from chair = Main PCB issue. Replace Main PCB.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_power_recline_move_q": {
+      "type": "instruction",
+      "prompt": "When you turn the chair OFF, does the non-functioning recline part (backrest, Zero Gravity, or footrest) move back to its default position on its own?",
+      "options": [
+        {"label": "Yes, it moves back to its default position when powered off", "answer_key": "moves_on_off",  "next": "defect_power_actuator_terminal"},
+        {"label": "No, it stays stuck in its current position",                  "answer_key": "stays_stuck",  "next": "defect_power_main_pcb_wire_terminal"}
+      ]
+    },
+
+    "defect_power_actuator_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will arrange a replacement actuator for the non-functioning recline.",
+      "internal_note": "Other recline motors return to default on power-off. The non-working actuator needs replacement.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_power_main_pcb_wire_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will diagnose and arrange the necessary PCB or wiring repair.",
+      "internal_note": "Non-functioning part stays stuck when powered off. Change Main PCB and verify wire connection to non-working actuator is properly connected.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_power_off_checks": {
+      "type": "instruction",
+      "prompt": "Let's troubleshoot step by step. Please check the following:\n1. Is the powercord firmly plugged into both the chair and the wall outlet?\n2. Does the wall outlet have power? (Test with another device)\n3. Is the fuse on the chair intact?\n4. Toggle the power switch on the back of the chair OFF then ON — do you hear a clicking sound?",
+      "options": [
+        {"label": "Powercord connection appears to be the issue",         "answer_key": "powercord_issue", "next": "defect_power_pcb_fuse_terminal"},
+        {"label": "The wall outlet has no power",                         "answer_key": "outlet_no_power", "next": "defect_power_pcb_fuse_terminal"},
+        {"label": "The fuse appears blown or broken",                     "answer_key": "fuse_blown",      "next": "defect_power_pcb_fuse_terminal"},
+        {"label": "Heard a clicking sound when toggling the back switch", "answer_key": "clicking_sound",  "next": "defect_power_clicking_terminal"},
+        {"label": "No clicking sound and nothing resolved",               "answer_key": "no_clicking",     "next": "defect_power_no_click_terminal"}
+      ]
+    },
+
+    "defect_power_pcb_fuse_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review and determine if a Power PCB or transformer fuse replacement is needed.",
+      "internal_note": "Powercord / outlet / fuse issue pointing to Power PCB or transformer fuse. Admin to confirm and arrange appropriate repair.",
+      "evidence_required": ["video_of_issue", "photo_of_power_area"]
+    },
+
+    "defect_power_clicking_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review and determine if a remote replacement is needed.",
+      "internal_note": "Clicking sound when toggling back power switch = remote issue. Change remote.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_power_no_click_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review and arrange a Power PCB replacement.",
+      "internal_note": "No clicking sound when toggling back power switch. Change Power PCB.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_recline_which": {
+      "type": "question",
+      "prompt": "Which recline function is not working?",
+      "options": [
+        {"label": "Backrest recline",         "answer_key": "backrest",        "next": "defect_recline_scope_q"},
+        {"label": "Zero Gravity position",    "answer_key": "zero_gravity",    "next": "defect_recline_scope_q"},
+        {"label": "Footrest recline",         "answer_key": "footrest_recline","next": "defect_recline_scope_q"}
+      ]
+    },
+
+    "defect_recline_scope_q": {
+      "type": "question",
+      "prompt": "Are any other recline functions (backrest, zero gravity, footrest) also not working?",
+      "options": [
+        {"label": "One or more other recline functions are also not working", "answer_key": "multiple_not_working", "next": "defect_recline_move_q"},
+        {"label": "None of the recline functions work at all",                "answer_key": "none_working",        "next": "defect_recline_main_pcb_terminal"}
+      ]
+    },
+
+    "defect_recline_move_q": {
+      "type": "instruction",
+      "prompt": "When you turn the chair OFF, does the non-functioning recline part move back to its default position on its own?",
+      "options": [
+        {"label": "Yes, it moves back to default when powered off", "answer_key": "moves_on_off", "next": "defect_recline_actuator_terminal"},
+        {"label": "No, it stays stuck",                             "answer_key": "stays_stuck",  "next": "defect_recline_main_pcb_wire_terminal"}
+      ]
+    },
+
+    "defect_recline_actuator_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will arrange a replacement actuator for the non-functioning recline.",
+      "internal_note": "Other recline motors return to default on power-off. Replace the non-working actuator.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_recline_main_pcb_wire_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will diagnose and arrange the necessary PCB or wiring repair.",
+      "internal_note": "Non-functioning recline part stays stuck. Change Main PCB and verify wire to non-working actuator is properly connected.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_recline_main_pcb_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will arrange a Main PCB replacement.",
+      "internal_note": "None of the recline functions work at all. Replace Main PCB.",
+      "evidence_required": ["video_of_issue"]
+    },
+
+    "defect_footrest_which": {
+      "type": "question",
+      "prompt": "What specifically is the issue with the footrest?",
+      "options": [
+        {"label": "Footrest won't raise or lower (recline issue)",       "answer_key": "recline_issue",   "next": "defect_recline_which"},
+        {"label": "Air / inflation not working in the footrest",         "answer_key": "air_issue",       "next": "defect_air_footrest_raise"},
+        {"label": "Footrest is making a noise",                          "answer_key": "noise",           "next": "defect_footrest_noise_terminal"},
+        {"label": "Physical / cosmetic damage to the footrest",          "answer_key": "physical_damage", "next": "defect_cosmetic_photo_terminal"}
+      ]
+    },
+
+    "defect_footrest_noise_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Our team will review the footrest noise issue and arrange the appropriate service.",
+      "internal_note": "Footrest making noise. Inspect actuator and track mechanism. May need actuator replacement.",
+      "evidence_required": ["video_of_issue"]
+    }
+
+  }
+}
