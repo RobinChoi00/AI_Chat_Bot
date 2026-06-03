@@ -568,11 +568,18 @@ def _format_warranty_result(ticket_id: str, result: dict) -> str:
         lines.append(f"INTERNAL_NOTE: {internal_note}")
         lines += [""]
         if terminal_class == "awaiting_admin_review":
+            evidence_hint = ""
+            if "video_of_issue" in evidence:
+                email = evidence_email or "service@osakititan.com"
+                evidence_hint = (
+                    f" Also ask the customer to send a photo or video of the issue to {email}."
+                )
             lines.append(
                 "INSTRUCTION: Deliver the PROMPT_FOR_CUSTOMER verbatim. "
                 "DO NOT promise replacement, tech dispatch, compensation, refund, or any approval. "
-                "The prompt already says 'our team will review' — keep that language exactly. "
-                "AWAITING_ADMIN_REVIEW=TRUE"
+                "The prompt already says 'our team will review' — keep that language exactly."
+                + evidence_hint
+                + " AWAITING_ADMIN_REVIEW=TRUE"
             )
         elif terminal_class == "send_info":
             lines.append(

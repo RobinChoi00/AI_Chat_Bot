@@ -21,12 +21,12 @@
       "instructions": "Photograph all sides of the shipping box that show damage, dents, or markings"
     },
     "video_of_issue": {
-      "label": "Video Demonstrating the Issue",
-      "description": "Short video showing the malfunction while the chair is in operation",
-      "formats": ["mp4", "mov", "avi", "webm"],
+      "label": "Photo or Video of the Issue",
+      "description": "Clear photo or short video showing the problem while the chair is in operation",
+      "formats": ["jpg", "jpeg", "png", "webp", "mp4", "mov", "avi", "webm"],
       "min_count": 0,
       "max_count": 3,
-      "instructions": "Record a 30–60 second video demonstrating the problem with the chair powered on"
+      "instructions": "Send a clear photo or a 30–60 second video demonstrating the problem. Email to service@osakititan.com or upload below."
     },
     "signed_delivery_receipt": {
       "label": "Signed Delivery Receipt",

@@ -114,6 +114,63 @@ export async function getWarrantySession(
   return res.json() as Promise<WarrantySessionResponse>;
 }
 
+/**
+ * Start warranty intake at Installation / Delivery / Defect — no LLM call.
+ *
+ * CONTRACT: POST /api/v1/warranty/session/{session_id}/quick-start
+ */
+export async function quickStartWarranty(
+  sessionId: string,
+  issueType: "installation" | "delivery" | "defect",
+  domain = "osaki.com"
+): Promise<WarrantySessionResponse> {
+  const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/quick-start`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ issue_type: issueType, domain }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<WarrantySessionResponse>;
+}
+
+/**
+ * Advance the warranty workflow by one step — no LLM call.
+ *
+ * CONTRACT: POST /api/v1/warranty/{ticket_id}/answer
+ */
+export async function submitWarrantyAnswer(
+  ticketId: string,
+  answer: string
+): Promise<WarrantySessionResponse> {
+  const url = `${getApiBase()}/api/v1/warranty/${encodeURIComponent(ticketId)}/answer`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answer }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<WarrantySessionResponse>;
+}
+
 // ---------------------------------------------------------------------------
 // Evidence upload
 // ---------------------------------------------------------------------------

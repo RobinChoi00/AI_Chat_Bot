@@ -49,6 +49,8 @@ export interface WarrantyNode {
   prompt: string | null;
   options: AnswerOption[];
   is_terminal: boolean;
+  evidence_required?: string[];
+  evidence_email?: string | null;
 }
 
 export interface WarrantyTicketState {

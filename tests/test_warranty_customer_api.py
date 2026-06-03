@@ -1,0 +1,117 @@
+"""
+tests/test_warranty_customer_api.py
+====================================
+Customer-facing warranty HTTP endpoints (no LLM, no admin key).
+
+Covers:
+  - POST /api/v1/warranty/session/{id}/quick-start
+  - POST /api/v1/warranty/{ticket_id}/answer
+  - GET  /api/v1/warranty/session/{id} after terminal transition
+"""
+
+import sys
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+APP_DIR = Path(__file__).resolve().parent.parent / "app"
+sys.path.insert(0, str(APP_DIR))
+
+import warranty_models as wm  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def in_memory_db(monkeypatch):
+    import warranty_workflow as wf
+
+    mem_engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    mem_session_factory = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=mem_engine,
+        expire_on_commit=False,
+    )
+    wm.Base.metadata.create_all(bind=mem_engine)
+
+    monkeypatch.setattr(wm, "_engine", mem_engine)
+    monkeypatch.setattr(wm, "_SessionFactory", mem_session_factory)
+    monkeypatch.setattr(wf, "_SessionFactory", mem_session_factory)
+
+    yield
+
+
+@pytest.fixture
+def client():
+    from fastapi import FastAPI
+    from warranty_router import router  # noqa: WPS433
+
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def test_quick_start_installation_jumps_to_model_question(client):
+    session_id = "cust-api-install"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "installation", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["session_id"] == session_id
+    ticket = data["ticket"]
+    assert ticket is not None
+    assert ticket["issue_type"] == "installation"
+    assert ticket["current_node"]["node_id"] == "install_model"
+    assert "model" in ticket["current_node"]["prompt"].lower()
+
+
+def test_submit_answer_advances_without_llm(client):
+    session_id = "cust-api-answer"
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "defect", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "air"},
+    )
+    assert resp.status_code == 200
+    node = resp.json()["ticket"]["current_node"]
+    assert node["node_id"] == "defect_air_location"
+    assert len(node["options"]) >= 4
+
+
+def test_get_session_returns_ticket_after_admin_terminal(client):
+    session_id = "cust-api-terminal"
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "delivery", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "no_tracking"},
+    )
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "Jane Customer"},
+    )
+
+    session = client.get(f"/api/v1/warranty/session/{session_id}")
+    assert session.status_code == 200
+    ticket = session.json()["ticket"]
+    assert ticket is not None
+    assert ticket["status"] == "awaiting_admin_review"
+    assert ticket["current_node"]["is_terminal"] is True

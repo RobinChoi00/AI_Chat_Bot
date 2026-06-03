@@ -204,6 +204,87 @@ async def upload_evidence(
     }
 
 
+class WarrantyAnswerRequest(BaseModel):
+    """Customer answer for the current workflow node (answer_key, label, or text)."""
+    answer: str
+
+
+class WarrantyQuickStartRequest(BaseModel):
+    """Skip the root menu and jump straight to a top-level warranty issue type."""
+    issue_type: str  # installation | delivery | defect
+    domain: str = "osaki.com"
+
+
+_QUICK_START_ISSUE_KEYS = frozenset({"installation", "delivery", "defect"})
+
+
+def _serialize_ticket_state(session_id: str, ticket, node) -> Dict[str, Any]:
+    """Build the browser-safe session payload shared by GET/POST warranty endpoints."""
+    if ticket is None:
+        return {"session_id": session_id, "ticket": None}
+
+    ticket_id = str(ticket.ticket_id)
+    options: List[Dict[str, Any]] = []
+    node_prompt: Optional[str] = None
+    node_id: Optional[str] = None
+    node_type: Optional[str] = None
+    is_terminal = False
+    evidence_required: List[str] = []
+    evidence_email: Optional[str] = None
+
+    if node:
+        node_id = str(node.get("node_id", ""))
+        node_type = str(node.get("type", ""))
+        node_prompt = str(node.get("prompt", ""))
+        is_terminal = node_type == "terminal"
+        if is_terminal:
+            evidence_required = list(node.get("evidence_required", []))
+            evidence_email = node.get("evidence_email") or "service@osakititan.com"
+        for opt in node.get("options", []):
+            options.append({
+                "answer_key": opt.get("answer_key", ""),
+                "label": opt.get("label", ""),
+            })
+
+    return {
+        "session_id": session_id,
+        "ticket": {
+            "ticket_id":    ticket_id,
+            "status":       str(ticket.status),
+            "issue_type":   str(ticket.issue_type or ""),
+            "model_name":   str(ticket.model_name or ""),
+            "current_node": {
+                "node_id":            node_id,
+                "node_type":          node_type,
+                "prompt":             node_prompt,
+                "options":            options,
+                "is_terminal":        is_terminal,
+                "evidence_required":  evidence_required,
+                "evidence_email":     evidence_email,
+            } if node else None,
+        },
+    }
+
+
+def _get_open_session_ticket(engine, session_id: str):
+    """Return the latest non-resolved ticket for this chat session, if any."""
+    ticket = engine.get_active_session_ticket(session_id)
+    if ticket is not None:
+        return ticket
+
+    from warranty_models import warranty_db_session, WarrantyTicket  # type: ignore
+    with warranty_db_session() as db:
+        return (
+            db.query(WarrantyTicket)
+            .filter(
+                WarrantyTicket.session_id == session_id,
+                WarrantyTicket.status != "resolved",
+            )
+            .order_by(WarrantyTicket.created_at.desc())
+            .first()
+        )
+
+
 @router.get("/api/v1/warranty/session/{session_id}", tags=["warranty"])
 async def get_warranty_session_state(session_id: str):
     """
@@ -214,52 +295,78 @@ async def get_warranty_session_state(session_id: str):
     - the current node prompt and answer options (for rendering clickable buttons)
     - the current ticket status (for showing status badges)
 
-    Returns 200 with ticket=null if no active ticket exists.
+    Returns 200 with ticket=null if no open ticket exists.
     This endpoint is SAFE to call from the browser — it exposes no admin data.
     """
     engine = _lazy_engine()
-
-    ticket = engine.get_active_session_ticket(session_id)
+    ticket = _get_open_session_ticket(engine, session_id)
     if ticket is None:
         return {"session_id": session_id, "ticket": None}
 
-    ticket_id = str(ticket.ticket_id)
+    node = engine.get_current_node(str(ticket.ticket_id))
+    return _serialize_ticket_state(session_id, ticket, node)
+
+
+@router.post("/api/v1/warranty/session/{session_id}/quick-start", tags=["warranty"])
+async def quick_start_warranty(session_id: str, body: WarrantyQuickStartRequest):
+    """
+    Start (or resume) a warranty ticket and jump to Installation / Delivery / Defect
+    without any LLM call. Used by the frontend landing buttons on /warranty.
+    """
+    issue_type = body.issue_type.strip().lower()
+    if issue_type not in _QUICK_START_ISSUE_KEYS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"issue_type must be one of: {sorted(_QUICK_START_ISSUE_KEYS)}",
+        )
+
+    engine = _lazy_engine()
+    ticket = engine.get_active_session_ticket(session_id)
+    ticket_id: str
+
+    if ticket is None:
+        ticket_id, _root = engine.start_session(session_id, body.domain)
+        engine.submit_answer(ticket_id, "warranty")
+        engine.submit_answer(ticket_id, issue_type)
+    else:
+        ticket_id = str(ticket.ticket_id)
+        node = engine.get_current_node(ticket_id)
+        node_id = node.get("node_id") if node else None
+        if node_id == "root":
+            engine.submit_answer(ticket_id, "warranty")
+            engine.submit_answer(ticket_id, issue_type)
+        elif node_id == "issue_type":
+            engine.submit_answer(ticket_id, issue_type)
+
+    ticket = engine.get_ticket(ticket_id)
     node = engine.get_current_node(ticket_id)
-    options: List[Dict[str, Any]] = []
-    node_prompt: Optional[str] = None
-    node_id: Optional[str] = None
-    node_type: Optional[str] = None
-    is_terminal = False
+    return _serialize_ticket_state(session_id, ticket, node)
 
-    if node:
-        node_id = str(node.get("node_id", ""))
-        node_type = str(node.get("type", ""))
-        node_prompt = str(node.get("prompt", ""))
-        is_terminal = node_type == "terminal"
-        for opt in node.get("options", []):
-            options.append({
-                "answer_key": opt.get("answer_key", ""),
-                "label": opt.get("label", ""),
-            })
 
-    ticket_status = str(ticket.status)
+@router.post("/api/v1/warranty/{ticket_id}/answer", tags=["warranty"])
+async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
+    """
+    Advance the warranty workflow by one step — no LLM required.
 
-    return {
-        "session_id": session_id,
-        "ticket": {
-            "ticket_id":    ticket_id,
-            "status":       ticket_status,
-            "issue_type":   str(ticket.issue_type or ""),
-            "model_name":   str(ticket.model_name or ""),
-            "current_node": {
-                "node_id":    node_id,
-                "node_type":  node_type,
-                "prompt":     node_prompt,
-                "options":    options,
-                "is_terminal": is_terminal,
-            } if node else None,
-        },
-    }
+    Accepts an answer_key, option label, or free-text (for question_text nodes).
+    Returns the updated ticket state plus the next prompt/options for the UI.
+    """
+    engine = _lazy_engine()
+    answer = body.answer.strip()
+    if not answer:
+        raise HTTPException(status_code=422, detail="answer must not be empty")
+
+    try:
+        engine.submit_answer(ticket_id, answer)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+
+    node = engine.get_current_node(ticket_id)
+    return _serialize_ticket_state(str(ticket.session_id), ticket, node)
 
 
 @router.get("/api/v1/warranty/{ticket_id}/evidence", tags=["warranty"])

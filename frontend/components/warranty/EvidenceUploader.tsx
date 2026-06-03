@@ -9,12 +9,12 @@ interface Props {
   onUploadSuccess?: (filename: string) => void;
 }
 
-const ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".pdf", ".mp4", ".mov"];
+const ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".pdf", ".mp4", ".mov"];
 const MAX_BYTES = 20 * 1024 * 1024; // 20 MB
 
 const EVIDENCE_TYPES: { value: EvidenceType; label: string }[] = [
   { value: "damage_photos",     label: "Damage Photos" },
-  { value: "video_of_issue",    label: "Video of Issue" },
+  { value: "video_of_issue",    label: "Photo or Video of Issue" },
   { value: "proof_of_purchase", label: "Proof of Purchase" },
   { value: "photo_of_defect",   label: "Photo of Defect" },
   { value: "photo_of_chair",    label: "Photo of Chair" },
@@ -111,7 +111,7 @@ export default function EvidenceUploader({ ticketId, onUploadSuccess }: Props) {
         <label className="mb-1 block text-xs text-gray-500">
           File{" "}
           <span className="text-gray-400">
-            (jpg, jpeg, png, pdf, mp4, mov — max 20 MB)
+            (jpg, jpeg, png, webp, pdf, mp4, mov — max 20 MB)
           </span>
         </label>
         <input
@@ -158,7 +158,14 @@ export default function EvidenceUploader({ ticketId, onUploadSuccess }: Props) {
 
       {/* Disclaimer */}
       <p className="mt-2 text-center text-[10px] text-gray-400">
-        Files are securely stored. No email is sent automatically.
+        You can also email photos or videos to{" "}
+        <a
+          href="mailto:service@osakititan.com"
+          className="text-brand-600 underline hover:text-brand-800"
+        >
+          service@osakititan.com
+        </a>
+        .
       </p>
     </div>
   );
