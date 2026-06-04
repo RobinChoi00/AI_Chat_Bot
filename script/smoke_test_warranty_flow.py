@@ -89,10 +89,10 @@ SCENARIOS: List[Tuple[str, List[str], str, str]] = [
         "defect_air_shoulders_tech_terminal",
     ),
     (
-        "Delivery — no tracking number → look up by order name (admin review)",
-        ["warranty", "delivery", "no_tracking", "ORDER-SMOKE-001"],
+        "Delivery — tracking + box damage signed cleared → admin review",
+        ["warranty", "delivery", "has_tracking", "1Z999AA10123456784", "yes_box_damage", "signed_cleared"],
         "awaiting_admin_review",
-        "delivery_lookup_by_name_terminal",
+        "delivery_signed_cleared_terminal",
     ),
 ]
 

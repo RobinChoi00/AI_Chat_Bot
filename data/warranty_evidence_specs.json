@@ -71,7 +71,6 @@
   },
 
   "terminal_evidence_map": {
-    "delivery_lookup_by_name_terminal":        { "required": [],                                                             "optional": [] },
     "delivery_no_box_damage_terminal":         { "required": [],                                                             "optional": [] },
     "delivery_signed_cleared_terminal":        { "required": ["damage_photos"],                                              "optional": [] },
     "delivery_replace_claim_terminal":         { "required": ["damage_photos", "box_photos"],                                "optional": ["signed_delivery_receipt"] },

@@ -357,16 +357,44 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
         raise HTTPException(status_code=422, detail="answer must not be empty")
 
     try:
-        engine.submit_answer(ticket_id, answer)
+        result = engine.submit_answer(ticket_id, answer)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    tracking_summary: Optional[Dict[str, Any]] = None
+    previous_node = result.get("previous_node_id")
+    if previous_node in ("delivery_get_tracking_number", "delivery_get_name"):
+        from delivery_lookup import (  # noqa: WPS433
+            format_warranty_tracking_message,
+            lookup_by_order_or_email,
+            lookup_by_tracking_number,
+            persist_snapshot,
+        )
+
+        ticket_for_domain = engine.get_ticket(ticket_id)
+        domain = str(ticket_for_domain.domain if ticket_for_domain else "osaki.com")
+
+        if previous_node == "delivery_get_tracking_number":
+            snapshot = lookup_by_tracking_number(answer, domain)
+        else:
+            snapshot = lookup_by_order_or_email(answer, domain)
+
+        persist_snapshot(ticket_id, snapshot)
+        tracking_summary = {
+            "available": snapshot.available,
+            "message": format_warranty_tracking_message(snapshot),
+            "snapshot": snapshot.to_dict(),
+        }
 
     ticket = engine.get_ticket(ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
 
     node = engine.get_current_node(ticket_id)
-    return _serialize_ticket_state(str(ticket.session_id), ticket, node)
+    payload = _serialize_ticket_state(str(ticket.session_id), ticket, node)
+    if tracking_summary is not None:
+        payload["tracking_summary"] = tracking_summary
+    return payload
 
 
 @router.get("/api/v1/warranty/{ticket_id}/evidence", tags=["warranty"])

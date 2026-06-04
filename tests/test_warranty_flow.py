@@ -147,22 +147,22 @@ def test_installation_model_to_send_info():
 # Scenario 2 — Delivery, no tracking → lookup by name → awaiting_admin
 # ---------------------------------------------------------------------------
 
-def test_delivery_no_tracking_to_awaiting_admin():
+def test_delivery_no_tracking_continues_to_damage_question():
     ticket_id, _ = start()
 
     result = walk(ticket_id, [
         "warranty",        # root → issue_type
         "delivery",        # issue_type → delivery_tracking_q
         "no_tracking",     # delivery_tracking_q → delivery_get_name
-        "John Smith",      # delivery_get_name (question_text) → delivery_lookup_by_name_terminal
+        "customer@example.com",  # delivery_get_name → delivery_visible_damage_q
     ])
 
-    assert result["next_node_id"] == "delivery_lookup_by_name_terminal"
-    assert result["is_terminal"] is True
+    assert result["next_node_id"] == "delivery_visible_damage_q"
+    assert result["is_terminal"] is False
 
     t = ticket(ticket_id)
-    assert str(t.status) == "awaiting_admin_review"
-    assert t.get_collected().get("order_name") == "John Smith"
+    assert str(t.status) == "in_progress"
+    assert t.get_collected().get("order_or_email") == "customer@example.com"
 
     turns = WarrantyEngine.get_turns(ticket_id)
     assert len(turns) == 4

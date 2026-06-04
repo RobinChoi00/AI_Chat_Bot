@@ -434,6 +434,7 @@ class WarrantyEngine:
 
         return {
             "next_node_id":      next_node_id,
+            "previous_node_id":  node_id,
             "next_node":         {"node_id": next_node_id, **next_node},
             "answer_key":        answer_key,
             "is_terminal":       is_terminal,

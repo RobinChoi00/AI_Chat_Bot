@@ -92,7 +92,63 @@ def test_submit_answer_advances_without_llm(client):
     assert len(node["options"]) >= 4
 
 
-def test_get_session_returns_ticket_after_admin_terminal(client):
+def test_submit_answer_returns_tracking_summary(client, monkeypatch):
+    from delivery_lookup import TrackingSnapshot
+
+    def fake_lookup_tracking(tn, domain):
+        return TrackingSnapshot(
+            source="track123",
+            available=True,
+            status="IN_TRANSIT",
+            tracking_number=tn,
+        )
+
+    monkeypatch.setattr("delivery_lookup.lookup_by_tracking_number", fake_lookup_tracking)
+    monkeypatch.setattr("delivery_lookup.lookup_by_order_or_email", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "delivery_lookup.format_warranty_tracking_message",
+        lambda snap: f"Status: {snap.status}",
+    )
+    monkeypatch.setattr("delivery_lookup.persist_snapshot", lambda *_a, **_k: None)
+
+    session_id = "cust-api-tracking"
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "delivery", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "has_tracking"},
+    )
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "1Z999AA10123456784"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["tracking_summary"]["available"] is True
+    assert "IN_TRANSIT" in data["tracking_summary"]["message"]
+    assert data["ticket"]["current_node"]["node_id"] == "delivery_visible_damage_q"
+
+
+def test_get_session_returns_ticket_after_admin_terminal(client, monkeypatch):
+    from delivery_lookup import TrackingSnapshot
+
+    unavailable = TrackingSnapshot(source="unavailable", available=False)
+
+    monkeypatch.setattr("delivery_lookup.lookup_by_order_or_email", lambda *_a, **_k: unavailable)
+    monkeypatch.setattr(
+        "delivery_lookup.lookup_by_tracking_number",
+        lambda *_a, **_k: unavailable,
+    )
+    monkeypatch.setattr(
+        "delivery_lookup.format_warranty_tracking_message",
+        lambda snap: "lookup pending",
+    )
+    monkeypatch.setattr("delivery_lookup.persist_snapshot", lambda *_a, **_k: None)
+
     session_id = "cust-api-terminal"
     start = client.post(
         f"/api/v1/warranty/session/{session_id}/quick-start",
@@ -106,7 +162,15 @@ def test_get_session_returns_ticket_after_admin_terminal(client):
     )
     client.post(
         f"/api/v1/warranty/{ticket_id}/answer",
-        json={"answer": "Jane Customer"},
+        json={"answer": "customer@example.com"},
+    )
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "yes_box_damage"},
+    )
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "signed_cleared"},
     )
 
     session = client.get(f"/api/v1/warranty/session/{session_id}")

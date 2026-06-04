@@ -59,17 +59,9 @@
 
     "delivery_get_name": {
       "type": "question_text",
-      "prompt": "No problem! Please provide the full name used on the order and we will look it up for you.",
-      "answer_key": "order_name",
-      "next": "delivery_lookup_by_name_terminal"
-    },
-
-    "delivery_lookup_by_name_terminal": {
-      "type": "terminal",
-      "action": "awaiting_admin",
-      "prompt": "Thank you! Our team will look up your order and contact the carrier for an update. We will be in touch shortly.",
-      "internal_note": "No tracking number provided. Look up order in Netsuite using customer name. Contact carrier to get tracking and status update.",
-      "evidence_required": []
+      "prompt": "No problem! Please provide your order number OR the email address used at checkout, and we will look up your delivery status right away.",
+      "answer_key": "order_or_email",
+      "next": "delivery_visible_damage_q"
     },
 
     "delivery_get_tracking_number": {

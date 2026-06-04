@@ -151,6 +151,12 @@ export default function WarrantyChat() {
       try {
         const resp = await submitWarrantyAnswer(ticketId, answer);
         setWarrantyState(resp.ticket);
+        if (resp.tracking_summary?.message) {
+          setMessages((prev) => [
+            ...prev,
+            { role: "assistant", content: resp.tracking_summary!.message },
+          ]);
+        }
         appendAssistantPrompt(resp.ticket);
         setOptionsUsed(false);
       } catch (err: unknown) {

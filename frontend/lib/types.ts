@@ -61,9 +61,16 @@ export interface WarrantyTicketState {
   current_node: WarrantyNode | null;
 }
 
+export interface TrackingSummary {
+  available: boolean;
+  message: string;
+  snapshot?: Record<string, unknown>;
+}
+
 export interface WarrantySessionResponse {
   session_id: string;
   ticket: WarrantyTicketState | null;
+  tracking_summary?: TrackingSummary | null;
 }
 
 // ------------------------------------------------------------
