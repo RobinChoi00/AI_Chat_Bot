@@ -215,6 +215,12 @@ class WarrantyQuickStartRequest(BaseModel):
     domain: str = "osaki.com"
 
 
+class WarrantyEmailNotifyRequest(BaseModel):
+    """Notify the warranty team when a customer leaves their email in chat."""
+    message: str = ""
+    chat_messages: Optional[List[Dict[str, str]]] = None
+
+
 _QUICK_START_ISSUE_KEYS = frozenset({"installation", "delivery", "defect"})
 
 
@@ -390,11 +396,83 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
     if ticket is None:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
 
+    from warranty_email import maybe_send_warranty_transcript  # noqa: WPS433
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    email_notified = False
+    with warranty_db_session() as db:
+        ticket_row = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        if ticket_row:
+            turns = engine.get_turns(ticket_id)
+            _detected, sent_now = maybe_send_warranty_transcript(
+                ticket=ticket_row,
+                answer_text=answer,
+                turns=turns,
+            )
+            email_notified = sent_now
+
     node = engine.get_current_node(ticket_id)
     payload = _serialize_ticket_state(str(ticket.session_id), ticket, node)
     if tracking_summary is not None:
         payload["tracking_summary"] = tracking_summary
+    if email_notified:
+        payload["email_notified"] = True
     return payload
+
+
+@router.post("/api/v1/warranty/session/{session_id}/notify-email", tags=["warranty"])
+async def notify_warranty_email(session_id: str, body: WarrantyEmailNotifyRequest):
+    """
+    Send the warranty chat transcript to the warranty inbox when the customer
+    leaves their email address in free-text chat.
+    """
+    from warranty_email import extract_email, maybe_send_warranty_transcript, send_warranty_transcript_email  # noqa: WPS433
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    engine = _lazy_engine()
+
+    email = extract_email(body.message)
+    if not email and body.chat_messages:
+        for msg in reversed(body.chat_messages):
+            if msg.get("role") == "user":
+                email = extract_email(msg.get("content", ""))
+                if email:
+                    break
+
+    if not email:
+        return {"sent": False, "reason": "no_email_found"}
+
+    ticket = _get_open_session_ticket(engine, session_id)
+    if ticket is not None:
+        with warranty_db_session() as db:
+            ticket_row = (
+                db.query(WarrantyTicket)
+                .filter(WarrantyTicket.ticket_id == ticket.ticket_id)
+                .first()
+            )
+            if ticket_row is None:
+                return {"sent": False, "reason": "ticket_not_found"}
+
+            turns = engine.get_turns(str(ticket.ticket_id))
+            _detected, sent_now = maybe_send_warranty_transcript(
+                ticket=ticket_row,
+                answer_text=email,
+                turns=turns,
+                chat_messages=body.chat_messages,
+            )
+            sent = sent_now
+        return {"sent": sent, "customer_email": email}
+
+    sent = send_warranty_transcript_email(
+        customer_email=email,
+        session_id=session_id,
+        chat_messages=body.chat_messages,
+    )
+    return {"sent": sent, "customer_email": email}
 
 
 @router.get("/api/v1/warranty/{ticket_id}/evidence", tags=["warranty"])

@@ -171,6 +171,35 @@ export async function submitWarrantyAnswer(
   return res.json() as Promise<WarrantySessionResponse>;
 }
 
+/**
+ * Notify the warranty team when the customer leaves their email in chat.
+ *
+ * CONTRACT: POST /api/v1/warranty/session/{session_id}/notify-email
+ */
+export async function notifyWarrantyEmail(
+  sessionId: string,
+  message: string,
+  chatMessages: { role: string; content: string }[]
+): Promise<{ sent: boolean; customer_email?: string; reason?: string }> {
+  const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/notify-email`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, chat_messages: chatMessages }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 // ---------------------------------------------------------------------------
 // Evidence upload
 // ---------------------------------------------------------------------------

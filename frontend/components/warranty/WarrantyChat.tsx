@@ -7,15 +7,23 @@ import {
   getWarrantySession,
   quickStartWarranty,
   submitWarrantyAnswer,
+  notifyWarrantyEmail,
 } from "@/lib/api";
 import type { AnswerOption, ChatMessage, WarrantyTicketState } from "@/lib/types";
 import ChatMessageBubble from "./ChatMessageBubble";
 import AnswerOptions from "./AnswerOptions";
 import EvidenceUploader from "./EvidenceUploader";
 import TicketStatusBadge from "./TicketStatusBadge";
-import { formatTerminalPrompt } from "@/lib/evidenceMessage";
+import {
+  extractEmailFromText,
+  formatTerminalPrompt,
+  WARRANTY_CONTACT_EMAIL,
+} from "@/lib/evidenceMessage";
 
 const DOMAIN = "osaki.com";
+
+const EMAIL_THANK_YOU =
+  `Thank you! Our warranty team at ${WARRANTY_CONTACT_EMAIL} will respond within 24 hours.`;
 
 /** Shown immediately on page load — maps to flowchart issue_type answer_keys. */
 const INITIAL_ISSUE_OPTIONS: AnswerOption[] = [
@@ -111,6 +119,36 @@ export default function WarrantyChat() {
     setMessages((prev) => [...prev, { role: "assistant", content }]);
   }, []);
 
+  const appendEmailThankYou = useCallback(() => {
+    setMessages((prev) => {
+      if (prev.some((m) => m.content.includes("will respond within 24 hours"))) {
+        return prev;
+      }
+      return [...prev, { role: "assistant", content: EMAIL_THANK_YOU }];
+    });
+  }, []);
+
+  const tryNotifyWarrantyEmail = useCallback(
+    async (userText: string, history: ChatMessage[]) => {
+      const email = extractEmailFromText(userText);
+      if (!email) return;
+
+      const storageKey = `warranty_email_sent_${sessionId}`;
+      if (sessionStorage.getItem(storageKey) === email) return;
+
+      try {
+        const result = await notifyWarrantyEmail(sessionId, userText, history);
+        if (result.sent) {
+          sessionStorage.setItem(storageKey, email);
+          appendEmailThankYou();
+        }
+      } catch {
+        // Non-fatal — customer can still email service@ directly.
+      }
+    },
+    [sessionId, appendEmailThankYou]
+  );
+
   const handleQuickStart = useCallback(
     async (issueType: "installation" | "delivery" | "defect", label: string) => {
       if (loading) return;
@@ -157,6 +195,9 @@ export default function WarrantyChat() {
             { role: "assistant", content: resp.tracking_summary!.message },
           ]);
         }
+        if (resp.email_notified) {
+          appendEmailThankYou();
+        }
         appendAssistantPrompt(resp.ticket);
         setOptionsUsed(false);
       } catch (err: unknown) {
@@ -168,7 +209,7 @@ export default function WarrantyChat() {
         inputRef.current?.focus();
       }
     },
-    [warrantyState?.ticket_id, loading, appendAssistantPrompt]
+    [warrantyState?.ticket_id, loading, appendAssistantPrompt, appendEmailThankYou]
   );
 
   // Slow LLM path — only when the user types before picking an initial option.
@@ -199,6 +240,9 @@ export default function WarrantyChat() {
 
         setMessages((prev) => [...prev, { role: "assistant", content: fullResponse }]);
         setStreamingContent("");
+
+        const fullHistory = [...history, userMsg, { role: "assistant" as const, content: fullResponse }];
+        await tryNotifyWarrantyEmail(text, fullHistory);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Something went wrong.";
         setError(msg);
@@ -222,7 +266,7 @@ export default function WarrantyChat() {
         inputRef.current?.focus();
       }
     },
-    [loading, messages, sessionId, refreshWarrantyState]
+    [loading, messages, sessionId, refreshWarrantyState, tryNotifyWarrantyEmail]
   );
 
   const sendMessage = useCallback(
@@ -303,8 +347,26 @@ export default function WarrantyChat() {
             <p className="mt-1 max-w-xs text-sm text-gray-500">
               What type of issue can we help you with today?
             </p>
-            <p className="mt-3 text-xs text-gray-400">
-              Select an option below or describe your issue in the text box.
+            {showInitialOptions && (
+              <div className="mt-6 w-full max-w-sm">
+                <AnswerOptions
+                  options={INITIAL_ISSUE_OPTIONS}
+                  variant="stack"
+                  onSelect={(key, label) =>
+                    handleQuickStart(
+                      key as "installation" | "delivery" | "defect",
+                      label
+                    )
+                  }
+                  disabled={loading}
+                />
+              </div>
+            )}
+            <p className="mt-4 text-xs text-gray-400">
+              Or describe your issue in the text box below.
+            </p>
+            <p className="mt-2 text-xs text-gray-400">
+              All warranty decisions are reviewed by our support team.
             </p>
           </div>
         )}
@@ -341,19 +403,6 @@ export default function WarrantyChat() {
 
         <div ref={bottomRef} />
       </div>
-
-      {showInitialOptions && (
-        <div className="border-t border-gray-100 bg-white px-4 py-3">
-          <p className="mb-2 text-xs text-gray-500">Select your issue type:</p>
-          <AnswerOptions
-            options={INITIAL_ISSUE_OPTIONS}
-            onSelect={(key, label) =>
-              handleQuickStart(key as "installation" | "delivery" | "defect", label)
-            }
-            disabled={loading}
-          />
-        </div>
-      )}
 
       {hasWorkflowOptions && !isTerminal && (
         <div className="border-t border-gray-100 bg-white px-4 py-3">

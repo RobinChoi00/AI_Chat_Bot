@@ -1,5 +1,16 @@
 const DEFAULT_EVIDENCE_EMAIL = "service@osakititan.com";
 
+/** Standard warranty contact footer appended to terminal prompts. */
+export function buildWarrantyContactFooter(
+  evidenceEmail?: string | null
+): string {
+  const email = evidenceEmail?.trim() || DEFAULT_EVIDENCE_EMAIL;
+  return (
+    `For warranty support, contact us at ${email}.\n` +
+    `If you leave your email address, our warranty team will respond within 24 hours.`
+  );
+}
+
 /**
  * Customer-facing evidence request appended to terminal workflow prompts.
  */
@@ -32,6 +43,18 @@ export function buildEvidenceRequestMessage(
   return `Please send the requested files to ${email}. You can also upload using the form below.`;
 }
 
+function appendWarrantyFooter(text: string, evidenceEmail?: string | null): string {
+  const footer = buildWarrantyContactFooter(evidenceEmail);
+  const lower = text.toLowerCase();
+  if (
+    lower.includes("within 24 hours") &&
+    lower.includes(DEFAULT_EVIDENCE_EMAIL)
+  ) {
+    return text;
+  }
+  return `${text}\n\n${footer}`;
+}
+
 /** Combine the flowchart terminal prompt with a standardized evidence request. */
 export function formatTerminalPrompt(
   prompt: string,
@@ -43,14 +66,30 @@ export function formatTerminalPrompt(
   const hasVideoEvidence = evidenceRequired?.includes("video_of_issue");
 
   if (emailInPrompt && hasVideoEvidence && !lower.includes("video")) {
-    return `${prompt}\n\nPlease include a photo or video of the issue if possible. You can also upload using the form below.`;
+    return appendWarrantyFooter(
+      `${prompt}\n\nPlease include a photo or video of the issue if possible. You can also upload using the form below.`,
+      evidenceEmail
+    );
   }
 
   if (emailInPrompt && !hasVideoEvidence) {
-    return `${prompt}\n\nYou can also upload using the form below.`;
+    return appendWarrantyFooter(
+      `${prompt}\n\nYou can also upload using the form below.`,
+      evidenceEmail
+    );
   }
 
   const evidenceNote = buildEvidenceRequestMessage(evidenceRequired, evidenceEmail);
-  if (!evidenceNote) return prompt;
-  return `${prompt}\n\n${evidenceNote}`;
+  if (!evidenceNote) {
+    return appendWarrantyFooter(prompt, evidenceEmail);
+  }
+  return appendWarrantyFooter(`${prompt}\n\n${evidenceNote}`, evidenceEmail);
+}
+
+export const WARRANTY_CONTACT_EMAIL = DEFAULT_EVIDENCE_EMAIL;
+
+/** Detect the first email address in free text (customer reply). */
+export function extractEmailFromText(text: string): string | null {
+  const match = text.match(/[\w.+-]+@[\w.-]+\.\w+/);
+  return match ? match[0].toLowerCase() : null;
 }

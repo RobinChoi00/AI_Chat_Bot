@@ -23,6 +23,8 @@ SALES_EMAIL_BY_DOMAIN = {
     "osakimassagechair": "oskmc@osakititan.com",
 }
 
+WARRANTY_TEAM_EMAIL = os.environ.get("WARRANTY_TEAM_EMAIL", "service@osakititan.com")
+
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")

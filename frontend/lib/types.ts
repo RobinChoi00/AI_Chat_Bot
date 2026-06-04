@@ -71,6 +71,7 @@ export interface WarrantySessionResponse {
   session_id: string;
   ticket: WarrantyTicketState | null;
   tracking_summary?: TrackingSummary | null;
+  email_notified?: boolean;
 }
 
 // ------------------------------------------------------------

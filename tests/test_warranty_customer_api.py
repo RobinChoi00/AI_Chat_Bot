@@ -148,6 +148,10 @@ def test_get_session_returns_ticket_after_admin_terminal(client, monkeypatch):
         lambda snap: "lookup pending",
     )
     monkeypatch.setattr("delivery_lookup.persist_snapshot", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "warranty_email.send_warranty_transcript_email",
+        lambda **_k: True,
+    )
 
     session_id = "cust-api-terminal"
     start = client.post(
@@ -179,3 +183,46 @@ def test_get_session_returns_ticket_after_admin_terminal(client, monkeypatch):
     assert ticket is not None
     assert ticket["status"] == "awaiting_admin_review"
     assert ticket["current_node"]["is_terminal"] is True
+
+
+def test_notify_email_endpoint_sends_transcript(client, monkeypatch):
+    monkeypatch.setattr(
+        "warranty_email.send_warranty_transcript_email",
+        lambda **_k: True,
+    )
+
+    resp = client.post(
+        "/api/v1/warranty/session/sess-notify/notify-email",
+        json={
+            "message": "Please contact me at buyer@example.com",
+            "chat_messages": [
+                {"role": "user", "content": "My chair is broken"},
+                {"role": "assistant", "content": "Sorry to hear that."},
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["sent"] is True
+    assert data["customer_email"] == "buyer@example.com"
+
+
+def test_submit_answer_notifies_on_email_in_text(client, monkeypatch):
+    monkeypatch.setattr(
+        "warranty_email.send_warranty_transcript_email",
+        lambda **_k: True,
+    )
+
+    session_id = "cust-api-email-notify"
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "installation", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "OS-4000T — follow up at buyer@example.com"},
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("email_notified") is True
