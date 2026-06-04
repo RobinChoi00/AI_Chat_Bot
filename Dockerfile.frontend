@@ -1,14 +1,31 @@
 # Next.js production frontend
 # Build: docker build -f Dockerfile.frontend -t titan-frontend .
 # Runs on port 3000
+#
+# Requires BuildKit for npm cache mount (default in Docker 23+):
+#   DOCKER_BUILDKIT=1 docker compose build frontend
 
 FROM node:20-alpine AS base
 WORKDIR /app
+RUN apk add --no-cache ca-certificates
 
-# Install dependencies
+# Install dependencies — retries + cache for flaky EC2 ↔ npm registry links
 FROM base AS deps
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm ci
+RUN npm config set fetch-retries 5 && \
+    npm config set fetch-retry-mintimeout 20000 && \
+    npm config set fetch-retry-maxtimeout 120000 && \
+    npm config set maxsockets 2
+RUN --mount=type=cache,target=/root/.npm \
+    sh -c 'set -e; \
+    for attempt in 1 2 3 4 5; do \
+      echo "npm ci attempt ${attempt}/5..."; \
+      npm ci --no-audit --no-fund && exit 0; \
+      echo "npm ci failed — waiting 45s before retry..."; \
+      sleep 45; \
+    done; \
+    echo "npm ci failed after 5 attempts"; \
+    exit 1'
 
 # Build
 FROM base AS builder

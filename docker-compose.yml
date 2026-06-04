@@ -37,6 +37,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+      # Use host DNS/network during build — reduces npm ECONNRESET on small EC2
+      network: host
       args:
         # Public URL baked into client-side JS bundle at build time.
         # Server-side Route Handlers use BACKEND_INTERNAL_URL (Docker network).
