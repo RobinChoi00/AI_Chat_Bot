@@ -47,6 +47,47 @@ def test_format_success_message_includes_tracking():
     assert "1Z999AA10123456784" in msg
 
 
+def test_format_success_message_includes_order_details():
+    snap = TrackingSnapshot(
+        source="shopify",
+        available=True,
+        status="FULFILLED",
+        carrier="FedEx",
+        tracking_number="1234567890",
+        order_number="#OSKUS11308",
+        purchase_date="March 15, 2025",
+        product_names=["Osaki OS-4D Pro Maestro LE"],
+        total_amount="$5,499.00",
+    )
+    msg = format_warranty_tracking_message(snap)
+    assert "#OSKUS11308" in msg
+    assert "March 15, 2025" in msg
+    assert "Osaki OS-4D Pro Maestro LE" in msg
+    assert "$5,499.00" in msg
+    assert "1234567890" in msg
+
+
+def test_snapshot_from_shopify_order_details():
+    from delivery_lookup import _snapshot_from_tracking_data
+
+    snap = _snapshot_from_tracking_data(
+        {
+            "status": "PROCESSING",
+            "purchase_date_raw": "2025-03-15T18:30:00Z",
+            "order_number": "#1001",
+            "product_names": ["Titan Chair"],
+            "total_amount": "2999.00",
+            "currency_code": "USD",
+            "events": [],
+        },
+        source="shopify",
+    )
+    assert snap.order_number == "#1001"
+    assert snap.purchase_date == "March 15, 2025"
+    assert snap.product_names == ["Titan Chair"]
+    assert snap.total_amount == "$2,999.00"
+
+
 def test_lookup_by_tracking_number_empty():
     snap = lookup_by_tracking_number("  ", "osaki.com")
     assert snap.available is False
@@ -99,6 +140,11 @@ def test_lookup_by_order_or_email_shopify(monkeypatch):
                 "last_event": "In transit",
                 "current_location": "Memphis",
                 "events": [],
+                "order_number": "#1001",
+                "purchase_date_raw": "2025-01-10T12:00:00Z",
+                "product_names": ["Osaki Duo"],
+                "total_amount": "4999.00",
+                "currency_code": "USD",
             }
 
     monkeypatch.setattr("delivery_lookup._lazy_logistics", lambda: FakeMain())
@@ -106,3 +152,7 @@ def test_lookup_by_order_or_email_shopify(monkeypatch):
     assert snap.available is True
     assert snap.source == "shopify"
     assert snap.tracking_number == "1234567890"
+    assert snap.order_number == "#1001"
+    assert snap.purchase_date == "January 10, 2025"
+    assert snap.product_names == ["Osaki Duo"]
+    assert snap.total_amount == "$4,999.00"

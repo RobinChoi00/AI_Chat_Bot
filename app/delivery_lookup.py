@@ -30,6 +30,10 @@ class TrackingSnapshot:
     current_location: str = ""
     current_hub: str = ""
     events: List[Dict[str, str]] = field(default_factory=list)
+    order_number: str = ""
+    purchase_date: str = ""
+    product_names: List[str] = field(default_factory=list)
+    total_amount: str = ""
     error: Optional[str] = None
     looked_up_at: str = ""
 
@@ -46,6 +50,50 @@ def _lazy_logistics():
     import main as logistics  # noqa: WPS433
 
     return logistics
+
+
+def _format_purchase_date(iso_raw: str) -> str:
+    if not iso_raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso_raw.replace("Z", "+00:00"))
+        return dt.strftime("%B %d, %Y")
+    except ValueError:
+        return iso_raw[:10] if len(iso_raw) >= 10 else iso_raw
+
+
+def _format_order_total(amount: str, currency: str = "USD") -> str:
+    try:
+        value = float(amount)
+    except (TypeError, ValueError):
+        return amount or ""
+    if currency.upper() == "USD":
+        return f"${value:,.2f}"
+    return f"{currency.upper()} {value:,.2f}"
+
+
+def _order_details_lines(snapshot: TrackingSnapshot) -> List[str]:
+    if not (snapshot.order_number or snapshot.product_names or snapshot.total_amount):
+        return []
+
+    lines: List[str] = []
+    if snapshot.order_number:
+        lines.append(f"We found your order **{snapshot.order_number}**:")
+    else:
+        lines.append("We found your order:")
+
+    if snapshot.purchase_date:
+        lines.append(f"- Purchase Date: {snapshot.purchase_date}")
+    if snapshot.product_names:
+        if len(snapshot.product_names) == 1:
+            lines.append(f"- Product: {snapshot.product_names[0]}")
+        else:
+            lines.append("- Products:")
+            for product in snapshot.product_names:
+                lines.append(f"  • {product}")
+    if snapshot.total_amount:
+        lines.append(f"- Order Total: {snapshot.total_amount}")
+    return lines
 
 
 def _snapshot_from_tracking_data(
@@ -67,6 +115,17 @@ def _snapshot_from_tracking_data(
     status = str(data.get("status", "UNKNOWN"))
     processing = status in ("PROCESSING", "UNFULFILLED") or not tn
 
+    purchase_date = str(data.get("purchase_date", "") or "")
+    if not purchase_date and data.get("purchase_date_raw"):
+        purchase_date = _format_purchase_date(str(data["purchase_date_raw"]))
+
+    total_amount = ""
+    if data.get("total_amount"):
+        total_amount = _format_order_total(
+            str(data["total_amount"]),
+            str(data.get("currency_code", "USD")),
+        )
+
     return TrackingSnapshot(
         source=source,
         available=True,
@@ -79,6 +138,10 @@ def _snapshot_from_tracking_data(
         current_location=str(data.get("current_location", "")),
         current_hub=str(data.get("current_hub", "")),
         events=list(data.get("events") or []),
+        order_number=str(data.get("order_number", "")),
+        purchase_date=purchase_date,
+        product_names=list(data.get("product_names") or []),
+        total_amount=total_amount,
         looked_up_at=_now_iso(),
     )
 
@@ -165,21 +228,33 @@ def format_warranty_tracking_message(snapshot: TrackingSnapshot) -> str:
             + (f"\n\n({snapshot.error})" if snapshot.error else "")
         )
 
-    if snapshot.status in ("PROCESSING", "UNFULFILLED") or not snapshot.tracking_number:
-        return (
-            "Good news — we found your order! It is currently being prepared at our warehouse.\n\n"
-            f"- Order Status: **{snapshot.status or 'PROCESSING'}** (in preparation)\n"
-            "- A tracking number will be emailed once the carrier picks up the shipment.\n"
-            "- Typical processing time before pickup: **1–3 business days**.\n\n"
-            "We'll continue with your delivery warranty questions below."
-        )
+    order_lines = _order_details_lines(snapshot)
 
-    lines = [
-        "Here is your latest delivery update:",
-        f"- Current Status: {snapshot.status}",
-        f"- Carrier: {snapshot.carrier or 'Carrier'}",
-        f"- Tracking Number: {snapshot.tracking_number}",
-    ]
+    if snapshot.status in ("PROCESSING", "UNFULFILLED") or not snapshot.tracking_number:
+        lines = order_lines or ["We found your order!"]
+        lines.extend(
+            [
+                "",
+                f"- Order Status: **{snapshot.status or 'PROCESSING'}** (in preparation)",
+                "- A tracking number will be emailed once the carrier picks up the shipment.",
+                "- Typical processing time before pickup: **1–3 business days**.",
+                "",
+                "We'll continue with your delivery warranty questions below.",
+            ]
+        )
+        return "\n".join(lines)
+
+    lines = list(order_lines)
+    if lines:
+        lines.append("")
+    lines.extend(
+        [
+            "Here is your latest delivery update:",
+            f"- Current Status: {snapshot.status}",
+            f"- Carrier: {snapshot.carrier or 'Carrier'}",
+            f"- Tracking Number: {snapshot.tracking_number}",
+        ]
+    )
     if snapshot.current_location:
         lines.append(f"- Current Location: {snapshot.current_location}")
     if snapshot.eta:

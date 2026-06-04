@@ -338,6 +338,70 @@ def enrich_tracking_from_track123(tracking_number: str, store_config: Dict[str, 
         logger.warning(f"⚠️ Track123 enrich error: {e}")
         return {}
 
+def _extract_shopify_order_details(node: Dict[str, Any]) -> Dict[str, Any]:
+    """Pull warranty-relevant order fields from a Shopify GraphQL order node."""
+    details: Dict[str, Any] = {}
+
+    name = (node.get("name") or "").strip()
+    if name:
+        details["order_number"] = name
+
+    created_at = (node.get("createdAt") or "").strip()
+    if created_at:
+        details["purchase_date_raw"] = created_at
+
+    products: List[str] = []
+    for edge in (node.get("lineItems") or {}).get("edges") or []:
+        item = (edge or {}).get("node") or {}
+        title = (item.get("title") or "").strip()
+        if not title:
+            continue
+        qty = item.get("quantity") or 1
+        try:
+            qty_int = int(qty)
+        except (TypeError, ValueError):
+            qty_int = 1
+        if qty_int > 1:
+            products.append(f"{title} (×{qty_int})")
+        else:
+            products.append(title)
+    if products:
+        details["product_names"] = products
+
+    money = (node.get("totalPriceSet") or {}).get("shopMoney") or {}
+    amount = money.get("amount")
+    currency = (money.get("currencyCode") or "USD").strip()
+    if amount is not None and str(amount).strip():
+        details["total_amount"] = str(amount).strip()
+        details["currency_code"] = currency
+
+    return details
+
+
+def _merge_shopify_order_details(base: Dict[str, Any], node: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(base)
+    merged.update(_extract_shopify_order_details(node))
+    return merged
+
+
+def _shopify_orders_search(
+    url: str,
+    headers: Dict[str, str],
+    query: str,
+    search_query: str,
+) -> List[Dict[str, Any]]:
+    """Run a Shopify orders GraphQL search and return edge list."""
+    response = http_post_with_retry(
+        url,
+        json={"query": query, "variables": {"query": search_query}},
+        headers=headers,
+        timeout=8,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data.get("data", {}).get("orders", {}).get("edges", [])
+
+
 def fetch_shopify_order_status(order_number: str, email: str, target_domain: str) -> Dict[str, Any]:
     """접속 도메인에 맞춰 3개의 스토어 토큰 중 하나를 선택해 쇼피파이 API를 직접 호출합니다."""
     store_config = get_store_config(target_domain)
@@ -353,82 +417,140 @@ def fetch_shopify_order_status(order_number: str, email: str, target_domain: str
 
     query = """
     query getOrderTracking($query: String!) {
-      orders(first: 1, query: $query) {
-        edges { node { displayFulfillmentStatus fulfillments { trackingInfo { company number url } } } }
+      orders(first: 1, query: $query, sortKey: CREATED_AT, reverse: true) {
+        edges {
+          node {
+            name
+            createdAt
+            displayFulfillmentStatus
+            totalPriceSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            lineItems(first: 10) {
+              edges {
+                node {
+                  title
+                  quantity
+                }
+              }
+            }
+            fulfillments {
+              trackingInfo {
+                company
+                number
+                url
+              }
+            }
+          }
+        }
       }
     }
     """
     try:
         clean_order = order_number.replace("#", "").strip()
-        order_candidates = [clean_order]
-        digits_only = "".join(re.findall(r"\d+", clean_order))
-        if digits_only and digits_only != clean_order:
-            order_candidates.append(digits_only)
+        clean_email = (email or "").strip()
+        order_candidates = [clean_order] if clean_order else []
+        if clean_order:
+            digits_only = "".join(re.findall(r"\d+", clean_order))
+            if digits_only and digits_only != clean_order:
+                order_candidates.append(digits_only)
 
-        edges = []
-        for candidate in order_candidates:
-            variables = {"query": f"name:'{candidate}' AND email:'{email}'"}
-            response = http_post_with_retry(
-                url,
-                json={"query": query, "variables": variables},
-                headers=headers,
-                timeout=8,  # bumped from 5s — Shopify GraphQL can be slow
-            )
-            response.raise_for_status()
-            data = response.json()
-            edges = data.get("data", {}).get("orders", {}).get("edges", [])
-            if edges:
-                logger.info(f"✅ Order found by name:'{candidate}' + email")
-                break
+        edges: List[Dict[str, Any]] = []
 
-        if not edges:
-            logger.info(f"🔍 Name-based search failed. Trying email-only fallback for: {email}")
-            variables = {"query": f"email:'{email}'"}
-            response = http_post_with_retry(
+        if clean_email and clean_order:
+            for candidate in order_candidates:
+                edges = _shopify_orders_search(
+                    url,
+                    headers,
+                    query,
+                    f"name:'{candidate}' AND email:'{clean_email}'",
+                )
+                if edges:
+                    logger.info(f"✅ Order found by name:'{candidate}' + email")
+                    break
+
+        if not edges and clean_order:
+            logger.info(f"🔍 Trying order-number-only search for: {clean_order}")
+            for candidate in order_candidates:
+                edges = _shopify_orders_search(
+                    url,
+                    headers,
+                    query,
+                    f"name:'{candidate}'",
+                )
+                if edges:
+                    logger.info(f"✅ Order found by name:'{candidate}'")
+                    break
+
+        if not edges and clean_email:
+            logger.info(f"🔍 Trying email-only fallback for: {clean_email}")
+            edges = _shopify_orders_search(
                 url,
-                json={"query": query, "variables": variables},
-                headers=headers,
-                timeout=8,
+                headers,
+                query,
+                f"email:'{clean_email}'",
             )
-            response.raise_for_status()
-            data = response.json()
-            edges = data.get("data", {}).get("orders", {}).get("edges", [])
             if edges:
-                logger.info(f"✅ Order found by email-only fallback: {email}")
+                logger.info(f"✅ Order found by email-only fallback: {clean_email}")
 
         if not edges:
             return {"error": "Order not found, or the email does not match our records."}
 
         node = edges[0]["node"]
         status = node.get("displayFulfillmentStatus", "UNFULFILLED")
-        
-        if status == "UNFULFILLED" or not node.get("fulfillments"):
-            return {
-                "status": "PROCESSING",
-                "message": "Your order is confirmed and being prepared at the warehouse.",
-                "current_location": "Origin warehouse",
-                "current_hub": "Fulfillment center (pre-shipment)",
-                "eta": "Pending carrier pickup",
-                "last_event": "Order confirmed and waiting for carrier handoff.",
-                "events": []
-            }
 
-        tracking_info = node["fulfillments"][0]["trackingInfo"][0]
+        if status == "UNFULFILLED" or not node.get("fulfillments"):
+            return _merge_shopify_order_details(
+                {
+                    "status": "PROCESSING",
+                    "message": "Your order is confirmed and being prepared at the warehouse.",
+                    "current_location": "Origin warehouse",
+                    "current_hub": "Fulfillment center (pre-shipment)",
+                    "eta": "Pending carrier pickup",
+                    "last_event": "Order confirmed and waiting for carrier handoff.",
+                    "events": [],
+                },
+                node,
+            )
+
+        fulfillments = node.get("fulfillments") or []
+        tracking_info_list = (fulfillments[0] or {}).get("trackingInfo") or []
+        if not tracking_info_list:
+            return _merge_shopify_order_details(
+                {
+                    "status": "PROCESSING",
+                    "message": "Your order is confirmed and being prepared at the warehouse.",
+                    "current_location": "Origin warehouse",
+                    "current_hub": "Fulfillment center (pre-shipment)",
+                    "eta": "Pending carrier pickup",
+                    "last_event": "Order confirmed and waiting for carrier handoff.",
+                    "events": [],
+                },
+                node,
+            )
+
+        tracking_info = tracking_info_list[0]
         raw_company = tracking_info.get("company", "")
         raw_number = tracking_info.get("number", "")
         raw_url = tracking_info.get("url", "")
         resolved_company = resolve_carrier_name(raw_company, raw_number, raw_url)
-        tracking_data = {
-            "status": status,
-            "company": resolved_company,
-            "tracking_number": raw_number,
-            "tracking_url": tracking_info.get("url", ""),
-            "current_location": "Carrier network",
-            "current_hub": "In transit hub (latest carrier scan)",
-            "eta": "Pending carrier update",
-            "last_event": "Carrier label created or initial scan received.",
-            "events": []
-        }
+        tracking_data = _merge_shopify_order_details(
+            {
+                "status": status,
+                "company": resolved_company,
+                "tracking_number": raw_number,
+                "tracking_url": tracking_info.get("url", ""),
+                "current_location": "Carrier network",
+                "current_hub": "In transit hub (latest carrier scan)",
+                "eta": "Pending carrier update",
+                "last_event": "Carrier label created or initial scan received.",
+                "events": [],
+            },
+            node,
+        )
         enriched = enrich_tracking_from_track123(
             tracking_data.get("tracking_number", ""),
             store_config
