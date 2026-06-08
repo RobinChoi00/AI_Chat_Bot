@@ -210,7 +210,8 @@ export async function notifyWarrantyEmail(
  * CONTRACT: POST /api/v1/warranty/{ticket_id}/evidence (multipart/form-data)
  *
  * Allowed file types: jpg, jpeg, png, pdf, mp4, mov (max 20 MB)
- * Does NOT send email.
+ * Requires customer_email in the form.
+ * Notifies the warranty evidence team distribution list (file attached).
  * Does NOT expose internal server paths to the caller.
  *
  * @throws Error on validation failure (422), ticket not found (404), etc.
@@ -218,12 +219,14 @@ export async function notifyWarrantyEmail(
 export async function uploadEvidence(
   ticketId: string,
   evidenceType: EvidenceType,
-  file: File
+  file: File,
+  customerEmail: string
 ): Promise<EvidenceUploadResponse> {
   const url = `${getApiBase()}/api/v1/warranty/${encodeURIComponent(ticketId)}/evidence`;
 
   const formData = new FormData();
   formData.append("evidence_type", evidenceType);
+  formData.append("customer_email", customerEmail.trim());
   formData.append("file", file, file.name);
 
   const res = await fetch(url, {

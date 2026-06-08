@@ -6,6 +6,7 @@ import type { EvidenceType } from "@/lib/types";
 
 interface Props {
   ticketId: string;
+  initialCustomerEmail?: string;
   onUploadSuccess?: (filename: string) => void;
 }
 
@@ -24,9 +25,14 @@ const EVIDENCE_TYPES: { value: EvidenceType; label: string }[] = [
   { value: "other",             label: "Other" },
 ];
 
-export default function EvidenceUploader({ ticketId, onUploadSuccess }: Props) {
+export default function EvidenceUploader({
+  ticketId,
+  initialCustomerEmail = "",
+  onUploadSuccess,
+}: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [customerEmail, setCustomerEmail] = useState(initialCustomerEmail);
   const [evidenceType, setEvidenceType] = useState<EvidenceType>("damage_photos");
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<"success" | "error" | null>(null);
@@ -64,12 +70,20 @@ export default function EvidenceUploader({ ticketId, onUploadSuccess }: Props) {
 
   async function handleUpload() {
     if (!selectedFile) return;
+
+    const email = customerEmail.trim();
+    if (!email || !/^[\w.+-]+@[\w.-]+\.\w+$/.test(email)) {
+      setResult("error");
+      setErrorMsg("Please enter a valid email address.");
+      return;
+    }
+
     setUploading(true);
     setResult(null);
     setErrorMsg("");
 
     try {
-      const resp = await uploadEvidence(ticketId, evidenceType, selectedFile);
+      const resp = await uploadEvidence(ticketId, evidenceType, selectedFile, email);
       setResult("success");
       onUploadSuccess?.(resp.original_filename);
       setSelectedFile(null);
@@ -87,6 +101,21 @@ export default function EvidenceUploader({ ticketId, onUploadSuccess }: Props) {
       <p className="mb-3 text-sm font-medium text-gray-700">
         📎 Upload Evidence
       </p>
+
+      {/* Customer email (required) */}
+      <div className="mb-3">
+        <label className="mb-1 block text-xs text-gray-500">
+          Your email address <span className="text-red-500">*</span>
+        </label>
+        <input
+          type="email"
+          required
+          value={customerEmail}
+          onChange={(e) => setCustomerEmail(e.target.value)}
+          placeholder="you@example.com"
+          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+        />
+      </div>
 
       {/* Evidence type selector */}
       <div className="mb-3">
@@ -146,9 +175,9 @@ export default function EvidenceUploader({ ticketId, onUploadSuccess }: Props) {
       {/* Upload button */}
       <button
         onClick={handleUpload}
-        disabled={!selectedFile || uploading}
+        disabled={!selectedFile || !customerEmail.trim() || uploading}
         className={`w-full rounded-lg px-4 py-2 text-sm font-medium transition ${
-          !selectedFile || uploading
+          !selectedFile || !customerEmail.trim() || uploading
             ? "cursor-not-allowed bg-gray-200 text-gray-400"
             : "bg-brand-600 text-white hover:bg-brand-700 active:scale-[0.98]"
         }`}

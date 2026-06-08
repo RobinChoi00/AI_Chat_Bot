@@ -43,6 +43,20 @@ export function buildEvidenceRequestMessage(
   return `Please send the requested files to ${email}. You can also upload using the form below.`;
 }
 
+/** Remind customers that email is required when using the upload form. */
+export function buildEvidenceEmailRequiredNote(): string {
+  return "Please enter your email address in the upload form below — it is required so our team can follow up.";
+}
+
+function appendEvidenceEmailRequired(text: string): string {
+  const note = buildEvidenceEmailRequiredNote();
+  const lower = text.toLowerCase();
+  if (lower.includes("email address in the upload form")) {
+    return text;
+  }
+  return `${text}\n\n${note}`;
+}
+
 function appendWarrantyFooter(text: string, evidenceEmail?: string | null): string {
   const footer = buildWarrantyContactFooter(evidenceEmail);
   const lower = text.toLowerCase();
@@ -66,24 +80,30 @@ export function formatTerminalPrompt(
   const hasVideoEvidence = evidenceRequired?.includes("video_of_issue");
 
   if (emailInPrompt && hasVideoEvidence && !lower.includes("video")) {
-    return appendWarrantyFooter(
-      `${prompt}\n\nPlease include a photo or video of the issue if possible. You can also upload using the form below.`,
-      evidenceEmail
+    return appendEvidenceEmailRequired(
+      appendWarrantyFooter(
+        `${prompt}\n\nPlease include a photo or video of the issue if possible. You can also upload using the form below.`,
+        evidenceEmail
+      )
     );
   }
 
   if (emailInPrompt && !hasVideoEvidence) {
-    return appendWarrantyFooter(
-      `${prompt}\n\nYou can also upload using the form below.`,
-      evidenceEmail
+    return appendEvidenceEmailRequired(
+      appendWarrantyFooter(
+        `${prompt}\n\nYou can also upload using the form below.`,
+        evidenceEmail
+      )
     );
   }
 
   const evidenceNote = buildEvidenceRequestMessage(evidenceRequired, evidenceEmail);
   if (!evidenceNote) {
-    return appendWarrantyFooter(prompt, evidenceEmail);
+    return appendEvidenceEmailRequired(appendWarrantyFooter(prompt, evidenceEmail));
   }
-  return appendWarrantyFooter(`${prompt}\n\n${evidenceNote}`, evidenceEmail);
+  return appendEvidenceEmailRequired(
+    appendWarrantyFooter(`${prompt}\n\n${evidenceNote}`, evidenceEmail)
+  );
 }
 
 export const WARRANTY_CONTACT_EMAIL = DEFAULT_EVIDENCE_EMAIL;

@@ -17,9 +17,10 @@ Scenarios
   3. invalid extension (.exe) rejected → 422
   4. unsafe filename (path traversal) → sanitised and stored safely
   5. metadata stored correctly in WarrantyEvidence table
-  6. no email sent (emailed flag stays 0)
+  6. evidence notification queued (emailed flag updated when send succeeds)
   7. unknown ticket_id → 404
   8. oversized file → 413
+  9. missing or invalid customer_email → 422
 """
 
 from __future__ import annotations
@@ -84,9 +85,26 @@ def in_memory_db(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def block_evidence_email_notification(monkeypatch):
+    """Prevent background SMTP threads during most upload tests."""
+    import warranty_email as we
+
+    monkeypatch.setattr(we, "notify_evidence_upload_async", lambda **kwargs: None)
+
+
 # ---------------------------------------------------------------------------
 # FastAPI TestClient — built after DB is patched
 # ---------------------------------------------------------------------------
+
+_CUSTOMER_EMAIL = "customer@example.com"
+
+
+def _upload_form(evidence_type: str) -> dict:
+    return {
+        "evidence_type": evidence_type,
+        "customer_email": _CUSTOMER_EMAIL,
+    }
 
 @pytest.fixture()
 def client(in_memory_db):
@@ -125,7 +143,7 @@ class TestEvidenceUploadEndpoint:
 
         response = client.post(
             f"/api/v1/warranty/{ticket_id}/evidence",
-            data={"evidence_type": "damage_photos"},
+            data=_upload_form("damage_photos"),
             files={"file": ("photo.jpg", io.BytesIO(jpg_data), "image/jpeg")},
         )
         assert response.status_code == 200, response.text
@@ -145,7 +163,7 @@ class TestEvidenceUploadEndpoint:
 
         response = client.post(
             f"/api/v1/warranty/{ticket_id}/evidence",
-            data={"evidence_type": "proof_of_purchase"},
+            data=_upload_form("proof_of_purchase"),
             files={"file": ("receipt.pdf", io.BytesIO(pdf_data), "application/pdf")},
         )
         assert response.status_code == 200, response.text
@@ -158,7 +176,7 @@ class TestEvidenceUploadEndpoint:
 
         response = client.post(
             f"/api/v1/warranty/{ticket_id}/evidence",
-            data={"evidence_type": "other"},
+            data=_upload_form("other"),
             files={"file": ("malware.exe", io.BytesIO(b"MZ" + b"\x00" * 50), "application/octet-stream")},
         )
         assert response.status_code == 422, response.text
@@ -170,7 +188,7 @@ class TestEvidenceUploadEndpoint:
 
         response = client.post(
             f"/api/v1/warranty/{ticket_id}/evidence",
-            data={"evidence_type": "other"},
+            data=_upload_form("other"),
             files={"file": ("archive.zip", io.BytesIO(b"PK" + b"\x00" * 50), "application/zip")},
         )
         assert response.status_code == 422
@@ -186,7 +204,7 @@ class TestEvidenceUploadEndpoint:
 
         response = client.post(
             f"/api/v1/warranty/{ticket_id}/evidence",
-            data={"evidence_type": "damage_photos"},
+            data=_upload_form("damage_photos"),
             files={"file": (malicious_name, io.BytesIO(jpg_data), "image/jpeg")},
         )
         # Should succeed (sanitisation, not rejection)
@@ -211,7 +229,7 @@ class TestEvidenceUploadEndpoint:
 
         client.post(
             f"/api/v1/warranty/{ticket_id}/evidence",
-            data={"evidence_type": "photo_of_defect"},
+            data=_upload_form("photo_of_defect"),
             files={"file": ("defect.jpg", io.BytesIO(jpg_data), "image/jpeg")},
         )
 
@@ -223,8 +241,8 @@ class TestEvidenceUploadEndpoint:
         assert str(ev.file_path) != ""     # path was stored
         assert Path(str(ev.file_path)).exists()  # file actually exists on disk
 
-    def test_no_email_sent(self, client):
-        """After upload, emailed flag must remain 0 (email not sent in D-lite)."""
+    def test_no_email_sent_when_notification_disabled(self, client):
+        """When notification is blocked, emailed flag stays 0."""
         from warranty_workflow import WarrantyEngine
         from typing import cast as _cast
 
@@ -233,21 +251,65 @@ class TestEvidenceUploadEndpoint:
 
         client.post(
             f"/api/v1/warranty/{ticket_id}/evidence",
-            data={"evidence_type": "damage_photos"},
+            data=_upload_form("damage_photos"),
             files={"file": ("img.jpg", io.BytesIO(jpg_data), "image/jpeg")},
         )
 
         evidences = WarrantyEngine.get_evidences(ticket_id)
         assert len(evidences) == 1
-        assert _cast(int, evidences[0].emailed) == 0, (
-            "emailed flag must be 0 — email sending is not implemented in Phase D-lite"
+        assert _cast(int, evidences[0].emailed) == 0
+
+    def test_evidence_notification_queued(self, client, monkeypatch):
+        """Successful upload queues an evidence notification with customer email."""
+        import warranty_email as we
+
+        calls = []
+        monkeypatch.setattr(
+            we,
+            "notify_evidence_upload_async",
+            lambda **kwargs: calls.append(kwargs),
         )
+
+        ticket_id = _make_ticket("notify-test")
+        jpg_data = b"\xff\xd8\xff\xe0" + b"\x00" * 20
+
+        response = client.post(
+            f"/api/v1/warranty/{ticket_id}/evidence",
+            data={"evidence_type": "damage_photos", "customer_email": "buyer@example.com"},
+            files={"file": ("img.jpg", io.BytesIO(jpg_data), "image/jpeg")},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["customer_email"] == "buyer@example.com"
+        assert len(calls) == 1
+        assert calls[0]["customer_email"] == "buyer@example.com"
+        assert calls[0]["ticket_id"] == ticket_id
+
+    def test_missing_customer_email_rejected(self, client):
+        """Upload without customer_email is rejected with HTTP 422."""
+        ticket_id = _make_ticket("no-email-test")
+        response = client.post(
+            f"/api/v1/warranty/{ticket_id}/evidence",
+            data={"evidence_type": "damage_photos"},
+            files={"file": ("img.jpg", io.BytesIO(b"\xff\xd8"), "image/jpeg")},
+        )
+        assert response.status_code == 422
+
+    def test_invalid_customer_email_rejected(self, client):
+        """Upload with an invalid customer_email is rejected with HTTP 422."""
+        ticket_id = _make_ticket("bad-email-test")
+        response = client.post(
+            f"/api/v1/warranty/{ticket_id}/evidence",
+            data={"evidence_type": "damage_photos", "customer_email": "not-an-email"},
+            files={"file": ("img.jpg", io.BytesIO(b"\xff\xd8"), "image/jpeg")},
+        )
+        assert response.status_code == 422
+        assert "email" in response.json()["detail"].lower()
 
     def test_unknown_ticket_returns_404(self, client):
         """Uploading evidence for a nonexistent ticket returns HTTP 404."""
         response = client.post(
             "/api/v1/warranty/ghost-ticket-9999/evidence",
-            data={"evidence_type": "damage_photos"},
+            data=_upload_form("damage_photos"),
             files={"file": ("img.jpg", io.BytesIO(b"\xff\xd8"), "image/jpeg")},
         )
         assert response.status_code == 404
@@ -260,7 +322,7 @@ class TestEvidenceUploadEndpoint:
 
         response = client.post(
             f"/api/v1/warranty/{ticket_id}/evidence",
-            data={"evidence_type": "video_of_issue"},
+            data=_upload_form("video_of_issue"),
             files={"file": ("huge.mp4", io.BytesIO(big_data), "video/mp4")},
         )
         assert response.status_code == 413
@@ -273,7 +335,7 @@ class TestEvidenceUploadEndpoint:
         for i in range(2):
             client.post(
                 f"/api/v1/warranty/{ticket_id}/evidence",
-                data={"evidence_type": "damage_photos"},
+                data=_upload_form("damage_photos"),
                 files={"file": (f"img{i}.jpg", io.BytesIO(b"\xff\xd8" + b"\x00" * 10), "image/jpeg")},
             )
 
@@ -295,7 +357,7 @@ class TestEvidenceUploadEndpoint:
         for fname, data, mime, ev_type in files:
             r = client.post(
                 f"/api/v1/warranty/{ticket_id}/evidence",
-                data={"evidence_type": ev_type},
+                data=_upload_form(ev_type),
                 files={"file": (fname, io.BytesIO(data), mime)},
             )
             assert r.status_code == 200, r.text

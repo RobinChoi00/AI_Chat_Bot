@@ -25,6 +25,16 @@ SALES_EMAIL_BY_DOMAIN = {
 
 WARRANTY_TEAM_EMAIL = os.environ.get("WARRANTY_TEAM_EMAIL", "service@osakititan.com")
 
+# Warranty evidence uploads — notify these team inboxes (additive; customer still sees service@).
+WARRANTY_EVIDENCE_NOTIFY_RECIPIENTS: list[tuple[str, str]] = [
+    ("Cong Huynh-Tran", "cong.t@osakititan.com"),
+    ("Jose Alfonzo", "jose.a@osakititan.com"),
+    ("Alfonso Cardenas", "alfonso.c@osakititan.com"),
+    ("Roman Medrano", "roman.m@osakititan.com"),
+    ("Fred Dominguez", "fred.d@osakititan.com"),
+    ("Ryan Harp", "ryan.h@osakititan.com"),
+]
+
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")

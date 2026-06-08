@@ -118,6 +118,7 @@ def _safe_filename(original: str) -> str:
 async def upload_evidence(
     ticket_id: str,
     evidence_type: str = Form(...),
+    customer_email: str = Form(...),
     file: UploadFile = File(...),
 ):
     """
@@ -126,14 +127,24 @@ async def upload_evidence(
     Accepts: jpg, jpeg, png, pdf, mp4, mov (max 20 MB).
     Saves to:  uploaded_evidence/warranty/{ticket_id}/{uuid}_{filename}
     Stores metadata in WarrantyEvidence table.
-    Does NOT send email (Phase D-lite scope).
+    Requires customer_email and notifies the warranty evidence distribution list.
     """
+    from warranty_email import extract_email, notify_evidence_upload_async
+
     engine = _lazy_engine()
 
     # --- Ticket existence check ---
     ticket = engine.get_ticket(ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+
+    normalized_email = extract_email(customer_email.strip())
+    if not normalized_email:
+        raise HTTPException(
+            status_code=422,
+            detail="A valid customer email address is required to upload evidence.",
+        )
+    ticket.set_collected("customer_contact_email", normalized_email)
 
     # --- File type validation ---
     original_filename = file.filename or "upload"
@@ -192,12 +203,26 @@ async def upload_evidence(
         file_size_bytes=len(data),
     )
 
+    notify_evidence_upload_async(
+        evidence_id=int(ev.id),
+        ticket_id=ticket_id,
+        customer_email=normalized_email,
+        evidence_type=evidence_type,
+        original_filename=original_filename,
+        file_path=str(dest_path),
+        mime_type=mime,
+        file_size_bytes=len(data),
+        issue_type=str(ticket.issue_type or ""),
+        model_name=str(ticket.model_name or ""),
+    )
+
     return {
         "evidence_id":       ev.id,
         "ticket_id":         ticket_id,
         "ticket_status":     str(ticket.status),
         "evidence_type":     evidence_type,
         "original_filename": original_filename,
+        "customer_email":    normalized_email,
         "saved_path":        str(dest_path),
         "mime_type":         mime,
         "file_size_bytes":   len(data),
