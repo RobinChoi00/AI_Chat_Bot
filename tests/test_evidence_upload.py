@@ -241,6 +241,11 @@ class TestEvidenceUploadEndpoint:
         assert str(ev.file_path) != ""     # path was stored
         assert Path(str(ev.file_path)).exists()  # file actually exists on disk
 
+        ticket = WarrantyEngine.get_ticket(ticket_id)
+        assert ticket is not None
+        assert ticket.get_collected().get("customer_contact_email") == _CUSTOMER_EMAIL
+        assert str(evidences[0].customer_email) == _CUSTOMER_EMAIL
+
     def test_no_email_sent_when_notification_disabled(self, client):
         """When notification is blocked, emailed flag stays 0."""
         from warranty_workflow import WarrantyEngine

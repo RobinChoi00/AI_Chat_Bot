@@ -376,6 +376,11 @@ class WarrantyEngine:
                 answer_key = node.get("answer_key", "text_input")
                 # Store free-text input in collected_data
                 ticket.set_collected(answer_key, raw_answer)
+                from warranty_email import extract_email  # noqa: WPS433
+
+                detected = extract_email(raw_answer)
+                if detected:
+                    ticket.set_collected("customer_contact_email", detected)
             else:
                 # question or instruction: match to an option
                 options = node.get("options", [])
@@ -529,6 +534,7 @@ class WarrantyEngine:
         original_filename: str = "",
         mime_type: str = "",
         file_size_bytes: int = 0,
+        customer_email: str = "",
     ) -> WarrantyEvidence:
         """
         Persist an evidence record for a ticket.
@@ -547,6 +553,15 @@ class WarrantyEngine:
             if not ticket:
                 raise ValueError(f"Ticket {ticket_id!r} not found.")
 
+            normalized_email = ""
+            if customer_email:
+                from warranty_email import extract_email  # noqa: WPS433
+
+                normalized = extract_email(customer_email)
+                if normalized:
+                    normalized_email = normalized
+                    ticket.set_collected("customer_contact_email", normalized)
+
             ev = WarrantyEvidence(
                 ticket_id=ticket_id,
                 evidence_type=evidence_type,
@@ -554,6 +569,7 @@ class WarrantyEngine:
                 original_filename=original_filename,
                 mime_type=mime_type,
                 file_size_bytes=file_size_bytes,
+                customer_email=normalized_email or None,
                 emailed=0,
             )
             db.add(ev)

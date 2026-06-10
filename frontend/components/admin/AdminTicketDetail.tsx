@@ -41,10 +41,38 @@ function formatDate(iso: string | null): string {
 }
 
 export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
-  const collectedEntries = Object.entries(ticket.collected_data ?? {});
+  const collectedEntries = Object.entries(ticket.collected_data ?? {}).filter(
+    ([key]) => key !== "customer_contact_email" && key !== "tracking_snapshot"
+  );
+  const customerEmail = ticket.customer_email;
 
   return (
     <div className="space-y-6">
+      {/* ── Customer contact ─────────────────────────────────────── */}
+      <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-emerald-700">
+          Customer Contact
+        </h2>
+        {customerEmail ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <a
+              href={`mailto:${customerEmail}`}
+              className="text-lg font-semibold text-emerald-900 underline-offset-2 hover:underline"
+            >
+              {customerEmail}
+            </a>
+            <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800">
+              Follow up within 24 hours
+            </span>
+          </div>
+        ) : (
+          <p className="text-sm text-emerald-800">
+            No customer email captured yet. Check conversation answers or ask the
+            customer to upload evidence with their email address.
+          </p>
+        )}
+      </section>
+
       {/* ── Ticket info ─────────────────────────────────────────── */}
       <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-gray-500">

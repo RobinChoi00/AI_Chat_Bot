@@ -38,6 +38,7 @@ export interface AdminWarrantyTicket {
   defect_type: string | null;
   model_name: string | null;
   collected_data: Record<string, string>;
+  customer_email: string | null;
   admin_decision: string | null;
   admin_note: string | null;
   decided_by: string | null;
@@ -69,6 +70,7 @@ export interface AdminWarrantyEvidence {
   original_filename: string | null;
   mime_type: string | null;
   file_size_bytes: number;
+  customer_email: string | null;
   emailed: boolean;
   created_at: string | null;
 }

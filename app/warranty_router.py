@@ -144,7 +144,6 @@ async def upload_evidence(
             status_code=422,
             detail="A valid customer email address is required to upload evidence.",
         )
-    ticket.set_collected("customer_contact_email", normalized_email)
 
     # --- File type validation ---
     original_filename = file.filename or "upload"
@@ -201,6 +200,7 @@ async def upload_evidence(
         original_filename=original_filename,
         mime_type=mime,
         file_size_bytes=len(data),
+        customer_email=normalized_email,
     )
 
     notify_evidence_upload_async(
@@ -547,6 +547,14 @@ _ADMIN_ALLOWED_STATUSES = {
 }
 
 
+def _serialize_admin_ticket(ticket, turns=None, evidences=None) -> dict:
+    from warranty_email import resolve_customer_email  # noqa: WPS433
+
+    payload = ticket.to_dict()
+    payload["customer_email"] = resolve_customer_email(ticket, turns=turns, evidences=evidences)
+    return payload
+
+
 @router.get("/admin/warranty/tickets", tags=["admin-warranty"])
 async def list_warranty_tickets(
     status: Optional[str] = None,
@@ -571,7 +579,7 @@ async def list_warranty_tickets(
     return {
         "total":   len(tickets),
         "offset":  offset,
-        "tickets": [t.to_dict() for t in tickets],
+        "tickets": [_serialize_admin_ticket(t) for t in tickets],
     }
 
 
@@ -592,7 +600,7 @@ async def get_warranty_ticket_detail(
     evidences = engine.get_evidences(ticket_id)
 
     return {
-        "ticket":   ticket.to_dict(),
+        "ticket":   _serialize_admin_ticket(ticket, turns=turns, evidences=evidences),
         "turns":    [t.to_dict() for t in turns],
         "evidence": [e.to_dict() for e in evidences],
     }

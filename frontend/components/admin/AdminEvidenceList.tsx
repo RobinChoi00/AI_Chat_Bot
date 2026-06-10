@@ -79,9 +79,12 @@ export default function AdminEvidenceList({ evidence }: Props) {
                 </span>
                 <span>{formatBytes(ev.file_size_bytes)}</span>
                 {ev.mime_type && <span>{ev.mime_type}</span>}
+                {ev.customer_email && <span>{ev.customer_email}</span>}
                 <span>Uploaded: {formatDate(ev.created_at)}</span>
-                {ev.emailed && (
-                  <span className="text-teal-600">✉️ Forwarded</span>
+                {ev.emailed ? (
+                  <span className="text-teal-600">✉️ Team notified</span>
+                ) : (
+                  <span className="text-amber-600">⚠️ Email pending</span>
                 )}
               </div>
 

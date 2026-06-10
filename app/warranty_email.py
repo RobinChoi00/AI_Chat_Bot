@@ -38,6 +38,39 @@ def extract_email(text: str) -> Optional[str]:
     return match.group(0).lower() if match else None
 
 
+def resolve_customer_email(
+    ticket,
+    turns: Optional[Sequence[Any]] = None,
+    evidences: Optional[Sequence[Any]] = None,
+) -> Optional[str]:
+    """Best-effort customer email from collected data, turns, or evidence uploads."""
+    collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
+    for key in ("customer_contact_email", "order_or_email"):
+        found = extract_email(str(collected.get(key, "")))
+        if found:
+            return found
+
+    if turns:
+        for turn in reversed(list(turns)):
+            answer = getattr(turn, "customer_answer", None)
+            if answer is None and isinstance(turn, dict):
+                answer = turn.get("customer_answer")
+            found = extract_email(str(answer or ""))
+            if found:
+                return found
+
+    if evidences:
+        for ev in reversed(list(evidences)):
+            raw = getattr(ev, "customer_email", None)
+            if raw is None and isinstance(ev, dict):
+                raw = ev.get("customer_email")
+            found = extract_email(str(raw or ""))
+            if found:
+                return found
+
+    return None
+
+
 def build_transcript_body(
     *,
     ticket_id: Optional[str],
@@ -170,6 +203,8 @@ def maybe_send_warranty_transcript(
     if not email:
         return None, False
 
+    ticket.set_collected("customer_contact_email", email)
+
     collected = ticket.get_collected()
     if collected.get("transcript_emailed") == "1":
         return email, False
@@ -186,7 +221,6 @@ def maybe_send_warranty_transcript(
         chat_messages=chat_messages,
     )
     if sent:
-        ticket.set_collected("customer_contact_email", email)
         ticket.set_collected("transcript_emailed", "1")
         return email, True
     return email, False

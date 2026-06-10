@@ -38,7 +38,7 @@ export default function AdminTicketQueue({ tickets }: Props) {
       <table className="min-w-full divide-y divide-gray-200 text-sm">
         <thead className="bg-gray-50">
           <tr>
-            {["Ticket ID", "Status", "Issue / Defect", "Model", "Node", "Created", "Updated"].map(
+            {["Ticket ID", "Status", "Customer Email", "Issue / Defect", "Model", "Node", "Created", "Updated"].map(
               (h) => (
                 <th
                   key={h}
@@ -66,6 +66,18 @@ export default function AdminTicketQueue({ tickets }: Props) {
               </td>
               <td className="px-4 py-3">
                 <AdminStatusBadge status={t.status} />
+              </td>
+              <td className="px-4 py-3 text-gray-700">
+                {t.customer_email ? (
+                  <a
+                    href={`mailto:${t.customer_email}`}
+                    className="text-indigo-600 underline-offset-2 hover:underline"
+                  >
+                    {t.customer_email}
+                  </a>
+                ) : (
+                  <span className="text-gray-400">—</span>
+                )}
               </td>
               <td className="px-4 py-3 text-gray-700">
                 {t.issue_type || "—"}

@@ -187,7 +187,8 @@ class WarrantyEvidence(Base):
     original_filename = Column(String,  nullable=True)
     mime_type         = Column(String,  nullable=True)
     file_size_bytes   = Column(Integer, default=0)
-    emailed           = Column(Integer, default=0)       # 1 = forwarded to service@osakititan.com
+    emailed           = Column(Integer, default=0)       # 1 = warranty team notified
+    customer_email    = Column(String, nullable=True)    # email entered on upload form
     created_at        = Column(DateTime, default=_now_cst)
 
     def to_dict(self) -> dict:
@@ -199,6 +200,7 @@ class WarrantyEvidence(Base):
             "original_filename": self.original_filename,
             "mime_type":         self.mime_type,
             "file_size_bytes":   self.file_size_bytes,
+            "customer_email":    self.customer_email,
             "emailed":           bool(self.emailed),
             "created_at":        cast(datetime, self.created_at).isoformat() if self.created_at is not None else None,
         }
@@ -209,3 +211,20 @@ class WarrantyEvidence(Base):
 # ---------------------------------------------------------------------------
 
 Base.metadata.create_all(bind=_engine)
+
+
+def _migrate_warranty_schema() -> None:
+    """Add columns introduced after initial deploy (SQLite ALTER TABLE)."""
+    with _engine.connect() as conn:
+        raw = conn.connection.connection if hasattr(conn.connection, "connection") else conn.connection
+        cursor = raw.cursor()
+        cursor.execute("PRAGMA table_info(warranty_evidences)")
+        cols = {row[1] for row in cursor.fetchall()}
+        if "customer_email" not in cols:
+            cursor.execute(
+                "ALTER TABLE warranty_evidences ADD COLUMN customer_email TEXT"
+            )
+            raw.commit()
+
+
+_migrate_warranty_schema()

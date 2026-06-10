@@ -13,6 +13,7 @@ from warranty_email import (  # noqa: E402
     build_transcript_body,
     extract_email,
     maybe_send_warranty_transcript,
+    resolve_customer_email,
     send_evidence_upload_notification,
 )
 
@@ -104,7 +105,31 @@ def test_maybe_send_skips_duplicate(monkeypatch):
     assert sent is False
 
 
-def test_build_evidence_notification_body():
+def test_maybe_send_stores_email_even_when_smtp_fails(monkeypatch):
+    ticket = FakeTicket()
+    monkeypatch.setattr(
+        "warranty_email.send_warranty_transcript_email",
+        lambda **_k: False,
+    )
+
+    email, sent = maybe_send_warranty_transcript(
+        ticket=ticket,
+        answer_text="buyer@example.com",
+        turns=[],
+    )
+    assert email == "buyer@example.com"
+    assert sent is False
+    assert ticket.get_collected()["customer_contact_email"] == "buyer@example.com"
+
+
+def test_resolve_customer_email_from_collected_and_turns():
+    ticket = FakeTicket()
+    ticket.set_collected("order_or_email", "akhattakster@gmail.com")
+    assert resolve_customer_email(ticket) == "akhattakster@gmail.com"
+
+    ticket2 = FakeTicket()
+    turn = FakeTurn("delivery_get_name", "Order?", "buyer@example.com")
+    assert resolve_customer_email(ticket2, turns=[turn]) == "buyer@example.com"
     body = build_evidence_notification_body(
         ticket_id="T-99",
         customer_email="buyer@example.com",
