@@ -31,7 +31,7 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -204,7 +204,7 @@ async def upload_evidence(
     )
 
     notify_evidence_upload_async(
-        evidence_id=int(ev.id),
+        evidence_id=cast(int, ev.id),
         ticket_id=ticket_id,
         customer_email=normalized_email,
         evidence_type=evidence_type,
@@ -302,7 +302,7 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
     )
 
     notify_email_only_contact_async(
-        evidence_id=int(ev.id),
+        evidence_id=cast(int, ev.id),
         ticket_id=ticket_id,
         customer_email=normalized_email,
         session_id=str(ticket.session_id),

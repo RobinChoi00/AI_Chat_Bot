@@ -84,7 +84,7 @@ def _keyword_issue_type(text: str) -> Optional[str]:
         for word in words:
             if word in norm:
                 scores[issue] += 1
-    best = max(scores, key=scores.get)
+    best = max(scores, key=lambda k: scores[k])
     if scores[best] <= 0:
         return None
     tied = [k for k, v in scores.items() if v == scores[best]]
