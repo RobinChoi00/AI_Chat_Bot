@@ -228,9 +228,10 @@ class MasterIngester:
         if door_cols:
             print(f"   🚪 도어 관련 컬럼 보존됨: {door_cols}")
 
-        # 2. Shopify data (deduplicate by Title to avoid repeated rows per variant)
-        df_shopify = pd.read_csv(shopify_csv, low_memory=False).fillna("N/A")
-        df_shopify = df_shopify.drop_duplicates(subset=['Title'])
+        # 2. Shopify data — one canonical row per product handle (base price variant)
+        df_shopify_raw = pd.read_csv(shopify_csv, low_memory=False).fillna("N/A")
+        df_shopify = self._build_shopify_catalog_rows(df_shopify_raw)
+        print(f"   Shopify catalog rows (base variant): {len(df_shopify)} products.")
 
         # 3. Normalise for join
         # - Strips "massage chair", "os-" model prefix, 3D/4D/5D variant suffixes,
@@ -344,6 +345,12 @@ class MasterIngester:
                 specs_text.append(f"- {col_name}: {val_str}")
 
             content = f"Specifications for Model [{model_name}]:\n" + "\n".join(specs_text)
+            if str(row.get("Variant Price", "")).strip() not in ("", "N/A", "nan"):
+                content = (
+                    f"Specifications for Model [{model_name}]:\n"
+                    f"- BASE PRICE (USD): {row.get('Variant Price')}\n"
+                    + "\n".join(specs_text)
+                )
             self.domain_docs["osaki_products"].append(Document(
                 page_content=content,
                 metadata={"source": "specification_join", "title": model_name, "type": "specification"}
@@ -378,6 +385,159 @@ class MasterIngester:
                     "type": "specification",
                 },
             ))
+
+        # ── Phase 4: Shopify-only massage chairs (no spec sheet match) ──
+        matched_handles = set(
+            str(h).strip()
+            for h in merged_df.get("Handle", pd.Series(dtype=str)).tolist()
+            if str(h).strip() and str(h) != "N/A"
+        )
+        shop_only_cols = [
+            "Title", "Vendor", "Type", "Tags", "Handle", "Variant Price",
+            "Variant Compare At Price", "Track Type (product.metafields.custom.track_type)",
+            "Massage Mechanism (product.metafields.custom.massage_mechanism)",
+            "Zero Gravity (product.metafields.custom.zero_gravity)",
+            "Heating (product.metafields.custom.heating)",
+            "Number of Massage Styles (product.metafields.custom.number_of_massage_styles)",
+        ]
+        phase4_count = 0
+        for _, row in df_shopify.iterrows():
+            handle = str(row.get("Handle", "")).strip()
+            if not handle or handle in matched_handles:
+                continue
+            if not self._is_massage_chair_row(row):
+                continue
+            title = str(row.get("Title", "")).strip()
+            if not title:
+                continue
+            lines = [f"Shopify catalog entry for [{title}]:"]
+            lines.append(f"- BASE PRICE (USD): {row.get('Variant Price', 'N/A')}")
+            for col in shop_only_cols:
+                if col in ("Title", "Handle"):
+                    continue
+                val = str(row.get(col, "")).strip()
+                if val and val not in ("N/A", "nan"):
+                    lines.append(f"- {col}: {val}")
+            content = "\n".join(lines)
+            self.domain_docs["osaki_products"].append(Document(
+                page_content=content,
+                metadata={
+                    "source": "shopify_only",
+                    "title": title,
+                    "type": "shopify_catalog",
+                },
+            ))
+            phase4_count += 1
+        print(f"   Phase 4 (shopify-only): {phase4_count} massage chair products embedded.")
+
+        self._write_join_report(
+            df_shopify=df_shopify,
+            merged_df=merged_df,
+            unmatched_specs=unmatched_specs,
+            phase4_count=phase4_count,
+        )
+
+    @staticmethod
+    def _is_massage_chair_row(row) -> bool:
+        typ = str(row.get("Type", "")).lower()
+        cat = str(row.get("Product Category", "")).lower()
+        if typ == "massage chair":
+            return True
+        return "massage chairs" in cat or "massage chair" in cat
+
+    @staticmethod
+    def _is_base_warranty_variant(row) -> bool:
+        warranty = str(row.get("Option3 Value", "")).lower()
+        delivery = str(row.get("Option2 Value", "")).lower()
+        if "parts/labor" not in warranty or "free" not in warranty:
+            return False
+        if "extended" in warranty:
+            return False
+        return "curbside" in delivery or delivery in ("", "n/a")
+
+    def _build_shopify_catalog_rows(self, df_raw: pd.DataFrame) -> pd.DataFrame:
+        """Pick one base-price variant per Handle + forward-fill product fields."""
+        import re as _re
+
+        df = df_raw.copy()
+        df["Handle"] = df["Handle"].replace("", pd.NA).ffill()
+        for col in ("Title", "Vendor", "Type", "Product Category", "Tags"):
+            if col in df.columns:
+                df[col] = df.groupby("Handle")[col].ffill()
+
+        rows = []
+        for handle, group in df.groupby("Handle"):
+            if pd.isna(handle):
+                continue
+            titled = group[group["Title"].astype(str).str.strip().replace("N/A", "") != ""]
+            meta = titled.iloc[0] if len(titled) else group.iloc[0]
+            base_candidates = group[group.apply(self._is_base_warranty_variant, axis=1)]
+            if len(base_candidates) == 0:
+                base_candidates = group
+            try:
+                prices = pd.to_numeric(
+                    base_candidates["Variant Price"].astype(str).str.replace(",", ""),
+                    errors="coerce",
+                )
+                pick = base_candidates.loc[prices.idxmin()] if prices.notna().any() else base_candidates.iloc[0]
+            except Exception:
+                pick = base_candidates.iloc[0]
+            merged = meta.to_dict()
+            merged["Variant Price"] = pick.get("Variant Price", meta.get("Variant Price"))
+            merged["Variant Compare At Price"] = pick.get(
+                "Variant Compare At Price", meta.get("Variant Compare At Price")
+            )
+            merged["Handle"] = handle
+            rows.append(merged)
+        return pd.DataFrame(rows)
+
+    def _write_join_report(
+        self,
+        *,
+        df_shopify: pd.DataFrame,
+        merged_df: pd.DataFrame,
+        unmatched_specs: pd.DataFrame,
+        phase4_count: int,
+    ) -> None:
+        report_dir = os.path.join(DATA_DIR, "reports")
+        os.makedirs(report_dir, exist_ok=True)
+        report_path = os.path.join(report_dir, "product_join_report.csv")
+
+        matched_handles = set(
+            str(h).strip()
+            for h in merged_df.get("Handle", pd.Series(dtype=str)).tolist()
+            if str(h).strip() and str(h) != "N/A"
+        )
+        records = []
+        for _, row in df_shopify.iterrows():
+            handle = str(row.get("Handle", "")).strip()
+            title = str(row.get("Title", "")).strip()
+            if not title:
+                continue
+            if handle in matched_handles:
+                status = "joined"
+            elif self._is_massage_chair_row(row):
+                status = "shopify_only"
+            else:
+                status = "non_chair"
+            records.append({
+                "handle": handle,
+                "title": title,
+                "vendor": str(row.get("Vendor", "")),
+                "status": status,
+                "base_price": str(row.get("Variant Price", "")),
+            })
+        for _, row in unmatched_specs.iterrows():
+            records.append({
+                "handle": "",
+                "title": str(row.get("full_name_spec", "")),
+                "vendor": str(row.get("Brand", "")),
+                "status": "spec_only",
+                "base_price": "",
+            })
+
+        pd.DataFrame(records).to_csv(report_path, index=False)
+        print(f"   📋 Join report written: {report_path} ({len(records)} rows, phase4={phase4_count})")
 
     # ==========================================
     # 🚀 다중 벡터 DB 동시 빌드 (Multi-Index Generation)

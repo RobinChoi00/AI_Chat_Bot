@@ -226,3 +226,40 @@ def test_submit_answer_notifies_on_email_in_text(client, monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.json().get("email_notified") is True
+
+
+def test_natural_start_maps_issue_type(client, monkeypatch):
+    monkeypatch.setattr(
+        "warranty_nlp.interpret_issue_type",
+        lambda _text: "defect",
+    )
+
+    session_id = "cust-api-natural-start"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/natural-start",
+        json={"message": "my massage chair won't turn on", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["nlp_interpreted"] is True
+    assert data["interpreted_issue_type"] == "defect"
+    assert data["ticket"]["issue_type"] == "defect"
+    assert data["ticket"]["current_node"]["node_id"] == "defect_problem_type"
+
+
+def test_submit_answer_nlp_maps_natural_language(client):
+    session_id = "cust-api-nlp-answer"
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "delivery", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "I don't have a tracking number"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("nlp_interpreted") is True
+    assert data["ticket"]["current_node"]["node_id"] == "delivery_get_name"

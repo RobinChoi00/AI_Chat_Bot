@@ -72,6 +72,16 @@ export interface WarrantySessionResponse {
   ticket: WarrantyTicketState | null;
   tracking_summary?: TrackingSummary | null;
   email_notified?: boolean;
+  nlp_interpreted?: boolean;
+  interpreted_issue_type?: string;
+}
+
+export interface WarrantyContactResponse {
+  ticket_id: string;
+  customer_email: string;
+  evidence_type: string;
+  evidence_na: boolean;
+  email_notified?: boolean;
 }
 
 // ------------------------------------------------------------

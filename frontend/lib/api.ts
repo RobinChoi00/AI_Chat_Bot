@@ -12,6 +12,7 @@ import type {
   EvidenceType,
   EvidenceUploadResponse,
   WarrantySessionResponse,
+  WarrantyContactResponse,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -144,7 +145,36 @@ export async function quickStartWarranty(
 }
 
 /**
- * Advance the warranty workflow by one step — no LLM call.
+ * Start warranty intake from natural language — server maps to issue type.
+ *
+ * CONTRACT: POST /api/v1/warranty/session/{session_id}/natural-start
+ */
+export async function naturalStartWarranty(
+  sessionId: string,
+  message: string,
+  domain = "osaki.com"
+): Promise<WarrantySessionResponse> {
+  const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/natural-start`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, domain }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<WarrantySessionResponse>;
+}
+
+/**
+ * Advance the warranty workflow by one step — NLP maps free text when needed.
  *
  * CONTRACT: POST /api/v1/warranty/{ticket_id}/answer
  */
@@ -205,6 +235,34 @@ export async function notifyWarrantyEmail(
 // ---------------------------------------------------------------------------
 
 /**
+ * Final-step contact — email only (N/A for photo/video).
+ *
+ * CONTRACT: POST /api/v1/warranty/{ticket_id}/contact
+ */
+export async function submitWarrantyContact(
+  ticketId: string,
+  customerEmail: string
+): Promise<WarrantyContactResponse> {
+  const url = `${getApiBase()}/api/v1/warranty/${encodeURIComponent(ticketId)}/contact`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ customer_email: customerEmail, evidence_na: true }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<WarrantyContactResponse>;
+}
+
+/**
  * Upload an evidence file for a warranty ticket.
  *
  * CONTRACT: POST /api/v1/warranty/{ticket_id}/evidence (multipart/form-data)
@@ -218,7 +276,7 @@ export async function notifyWarrantyEmail(
  */
 export async function uploadEvidence(
   ticketId: string,
-  evidenceType: EvidenceType,
+  evidenceType: string,
   file: File,
   customerEmail: string
 ): Promise<EvidenceUploadResponse> {

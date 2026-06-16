@@ -229,6 +229,99 @@ async def upload_evidence(
     }
 
 
+class WarrantyContactRequest(BaseModel):
+    """Final-step customer contact — email required; photos/videos optional (N/A)."""
+    customer_email: str
+    evidence_na: bool = True
+
+
+@router.post("/api/v1/warranty/{ticket_id}/contact", tags=["warranty"])
+async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
+    """
+    Final step: customer leaves their email without uploading photo/video (N/A).
+
+    Records a not_available evidence row, emails the warranty inbox transcript,
+    and notifies the evidence distribution list (no attachment).
+    """
+    from warranty_email import (  # noqa: WPS433
+        extract_email,
+        notify_email_only_contact_async,
+        send_warranty_transcript_email,
+    )
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    engine = _lazy_engine()
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+
+    node = engine.get_current_node(ticket_id)
+    if not node or node.get("type") != "terminal":
+        raise HTTPException(
+            status_code=422,
+            detail="Contact can only be submitted after the warranty workflow is complete.",
+        )
+
+    normalized_email = extract_email(body.customer_email.strip())
+    if not normalized_email:
+        raise HTTPException(
+            status_code=422,
+            detail="A valid customer email address is required.",
+        )
+
+    turns = engine.get_turns(ticket_id)
+    ev = engine.record_evidence(
+        ticket_id=ticket_id,
+        evidence_type="not_available",
+        file_path="",
+        original_filename="N/A",
+        mime_type="",
+        file_size_bytes=0,
+        customer_email=normalized_email,
+    )
+
+    with warranty_db_session() as db:
+        ticket_row = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        if ticket_row:
+            ticket_row.set_collected("customer_contact_email", normalized_email)
+            ticket_row.set_collected("evidence_na", "1")
+
+    send_warranty_transcript_email(
+        customer_email=normalized_email,
+        session_id=str(ticket.session_id),
+        ticket_id=ticket_id,
+        domain=str(ticket.domain or "unknown"),
+        ticket_status=str(ticket.status or ""),
+        issue_type=str(ticket.issue_type or ""),
+        model_name=str(ticket.model_name or ""),
+        turns=turns,
+    )
+
+    notify_email_only_contact_async(
+        evidence_id=int(ev.id),
+        ticket_id=ticket_id,
+        customer_email=normalized_email,
+        session_id=str(ticket.session_id),
+        domain=str(ticket.domain or "unknown"),
+        ticket_status=str(ticket.status or ""),
+        issue_type=str(ticket.issue_type or ""),
+        model_name=str(ticket.model_name or ""),
+        turns=turns,
+    )
+
+    return {
+        "ticket_id": ticket_id,
+        "customer_email": normalized_email,
+        "evidence_type": "not_available",
+        "evidence_na": True,
+        "email_notified": True,
+    }
+
+
 class WarrantyAnswerRequest(BaseModel):
     """Customer answer for the current workflow node (answer_key, label, or text)."""
     answer: str
@@ -240,6 +333,12 @@ class WarrantyQuickStartRequest(BaseModel):
     domain: str = "osaki.com"
 
 
+class WarrantyNaturalStartRequest(BaseModel):
+    """Start warranty intake from free-text (LLM maps to issue type)."""
+    message: str
+    domain: str = "osaki.com"
+
+
 class WarrantyEmailNotifyRequest(BaseModel):
     """Notify the warranty team when a customer leaves their email in chat."""
     message: str = ""
@@ -247,6 +346,160 @@ class WarrantyEmailNotifyRequest(BaseModel):
 
 
 _QUICK_START_ISSUE_KEYS = frozenset({"installation", "delivery", "defect"})
+
+
+def _quick_start_ticket(
+    engine,
+    session_id: str,
+    issue_type: str,
+    domain: str,
+) -> Dict[str, Any]:
+    """Shared quick-start logic for button and natural-language entry."""
+    issue_type = issue_type.strip().lower()
+    if issue_type not in _QUICK_START_ISSUE_KEYS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"issue_type must be one of: {sorted(_QUICK_START_ISSUE_KEYS)}",
+        )
+
+    ticket = engine.get_active_session_ticket(session_id)
+    ticket_id: str
+
+    if ticket is None:
+        ticket_id, _root = engine.start_session(session_id, domain)
+        engine.submit_answer(ticket_id, "warranty")
+        engine.submit_answer(ticket_id, issue_type)
+    else:
+        ticket_id = str(ticket.ticket_id)
+        node = engine.get_current_node(ticket_id)
+        node_id = node.get("node_id") if node else None
+        if node_id == "root":
+            engine.submit_answer(ticket_id, "warranty")
+            engine.submit_answer(ticket_id, issue_type)
+        elif node_id == "issue_type":
+            engine.submit_answer(ticket_id, issue_type)
+
+    ticket = engine.get_ticket(ticket_id)
+    node = engine.get_current_node(ticket_id)
+    return _serialize_ticket_state(session_id, ticket, node)
+
+
+def _submit_answer_with_nlp(engine, ticket_id: str, answer: str) -> tuple[dict, bool]:
+    """
+    Submit a workflow answer; on option mismatch, map natural language via NLP.
+
+    Returns (submit_result, nlp_interpreted).
+    """
+    try:
+        return engine.submit_answer(ticket_id, answer), False
+    except ValueError as exc:
+        msg = str(exc)
+        if "did not match any option" not in msg:
+            raise
+
+        node = engine.get_current_node(ticket_id)
+        if not node:
+            raise
+
+        from warranty_nlp import interpret_warranty_answer  # noqa: WPS433
+
+        mapped = interpret_warranty_answer(node, answer)
+        if not mapped:
+            raise ValueError(
+                "I couldn't match your answer to the current question. "
+                "Please tap one of the options above, or rephrase more clearly."
+            ) from exc
+
+        if node.get("type") == "question_text":
+            return (
+                engine.submit_answer(
+                    ticket_id,
+                    mapped,
+                    customer_display=answer,
+                ),
+                True,
+            )
+
+        if mapped == answer:
+            raise
+
+        return (
+            engine.submit_answer(
+                ticket_id,
+                mapped,
+                customer_display=answer,
+            ),
+            True,
+        )
+
+
+def _finalize_answer_response(
+    engine,
+    ticket_id: str,
+    answer: str,
+    result: dict,
+    *,
+    nlp_interpreted: bool = False,
+) -> Dict[str, Any]:
+    """Build the browser payload after a successful submit_answer."""
+    tracking_summary: Optional[Dict[str, Any]] = None
+    previous_node = result.get("previous_node_id")
+    if previous_node in ("delivery_get_tracking_number", "delivery_get_name"):
+        from delivery_lookup import (  # noqa: WPS433
+            format_warranty_tracking_message,
+            lookup_by_order_or_email,
+            lookup_by_tracking_number,
+            persist_snapshot,
+        )
+
+        ticket_for_domain = engine.get_ticket(ticket_id)
+        domain = str(ticket_for_domain.domain if ticket_for_domain else "osaki.com")
+
+        lookup_text = answer
+        if previous_node == "delivery_get_tracking_number":
+            snapshot = lookup_by_tracking_number(lookup_text, domain)
+        else:
+            snapshot = lookup_by_order_or_email(lookup_text, domain)
+
+        persist_snapshot(ticket_id, snapshot)
+        tracking_summary = {
+            "available": snapshot.available,
+            "message": format_warranty_tracking_message(snapshot),
+            "snapshot": snapshot.to_dict(),
+        }
+
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+
+    from warranty_email import maybe_send_warranty_transcript  # noqa: WPS433
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    email_notified = False
+    with warranty_db_session() as db:
+        ticket_row = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        if ticket_row:
+            turns = engine.get_turns(ticket_id)
+            _detected, sent_now = maybe_send_warranty_transcript(
+                ticket=ticket_row,
+                answer_text=answer,
+                turns=turns,
+            )
+            email_notified = sent_now
+
+    node = engine.get_current_node(ticket_id)
+    payload = _serialize_ticket_state(str(ticket.session_id), ticket, node)
+    if tracking_summary is not None:
+        payload["tracking_summary"] = tracking_summary
+    if email_notified:
+        payload["email_notified"] = True
+    if nlp_interpreted:
+        payload["nlp_interpreted"] = True
+    return payload
 
 
 def _serialize_ticket_state(session_id: str, ticket, node) -> Dict[str, Any]:
@@ -344,43 +597,47 @@ async def quick_start_warranty(session_id: str, body: WarrantyQuickStartRequest)
     Start (or resume) a warranty ticket and jump to Installation / Delivery / Defect
     without any LLM call. Used by the frontend landing buttons on /warranty.
     """
-    issue_type = body.issue_type.strip().lower()
-    if issue_type not in _QUICK_START_ISSUE_KEYS:
+    engine = _lazy_engine()
+    return _quick_start_ticket(engine, session_id, body.issue_type, body.domain)
+
+
+@router.post("/api/v1/warranty/session/{session_id}/natural-start", tags=["warranty"])
+async def natural_start_warranty(session_id: str, body: WarrantyNaturalStartRequest):
+    """
+    Start warranty intake from free-text — LLM maps message to issue type, then
+    runs the same deterministic flowchart as quick-start.
+    """
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(status_code=422, detail="message must not be empty")
+
+    from warranty_nlp import interpret_issue_type  # noqa: WPS433
+
+    issue_type = interpret_issue_type(message)
+    if not issue_type:
         raise HTTPException(
             status_code=422,
-            detail=f"issue_type must be one of: {sorted(_QUICK_START_ISSUE_KEYS)}",
+            detail=(
+                "I couldn't tell whether this is an installation, delivery, or "
+                "defect issue. Please pick one of the options above or describe "
+                "your issue more specifically."
+            ),
         )
 
     engine = _lazy_engine()
-    ticket = engine.get_active_session_ticket(session_id)
-    ticket_id: str
-
-    if ticket is None:
-        ticket_id, _root = engine.start_session(session_id, body.domain)
-        engine.submit_answer(ticket_id, "warranty")
-        engine.submit_answer(ticket_id, issue_type)
-    else:
-        ticket_id = str(ticket.ticket_id)
-        node = engine.get_current_node(ticket_id)
-        node_id = node.get("node_id") if node else None
-        if node_id == "root":
-            engine.submit_answer(ticket_id, "warranty")
-            engine.submit_answer(ticket_id, issue_type)
-        elif node_id == "issue_type":
-            engine.submit_answer(ticket_id, issue_type)
-
-    ticket = engine.get_ticket(ticket_id)
-    node = engine.get_current_node(ticket_id)
-    return _serialize_ticket_state(session_id, ticket, node)
+    payload = _quick_start_ticket(engine, session_id, issue_type, body.domain)
+    payload["nlp_interpreted"] = True
+    payload["interpreted_issue_type"] = issue_type
+    return payload
 
 
 @router.post("/api/v1/warranty/{ticket_id}/answer", tags=["warranty"])
 async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
     """
-    Advance the warranty workflow by one step — no LLM required.
+    Advance the warranty workflow by one step.
 
-    Accepts an answer_key, option label, or free-text (for question_text nodes).
-    Returns the updated ticket state plus the next prompt/options for the UI.
+    Accepts an answer_key, option label, free-text (question_text nodes), or
+    natural language (mapped to the closest option via NLP when needed).
     """
     engine = _lazy_engine()
     answer = body.answer.strip()
@@ -388,65 +645,17 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
         raise HTTPException(status_code=422, detail="answer must not be empty")
 
     try:
-        result = engine.submit_answer(ticket_id, answer)
+        result, nlp_interpreted = _submit_answer_with_nlp(engine, ticket_id, answer)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    tracking_summary: Optional[Dict[str, Any]] = None
-    previous_node = result.get("previous_node_id")
-    if previous_node in ("delivery_get_tracking_number", "delivery_get_name"):
-        from delivery_lookup import (  # noqa: WPS433
-            format_warranty_tracking_message,
-            lookup_by_order_or_email,
-            lookup_by_tracking_number,
-            persist_snapshot,
-        )
-
-        ticket_for_domain = engine.get_ticket(ticket_id)
-        domain = str(ticket_for_domain.domain if ticket_for_domain else "osaki.com")
-
-        if previous_node == "delivery_get_tracking_number":
-            snapshot = lookup_by_tracking_number(answer, domain)
-        else:
-            snapshot = lookup_by_order_or_email(answer, domain)
-
-        persist_snapshot(ticket_id, snapshot)
-        tracking_summary = {
-            "available": snapshot.available,
-            "message": format_warranty_tracking_message(snapshot),
-            "snapshot": snapshot.to_dict(),
-        }
-
-    ticket = engine.get_ticket(ticket_id)
-    if ticket is None:
-        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
-
-    from warranty_email import maybe_send_warranty_transcript  # noqa: WPS433
-    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
-
-    email_notified = False
-    with warranty_db_session() as db:
-        ticket_row = (
-            db.query(WarrantyTicket)
-            .filter(WarrantyTicket.ticket_id == ticket_id)
-            .first()
-        )
-        if ticket_row:
-            turns = engine.get_turns(ticket_id)
-            _detected, sent_now = maybe_send_warranty_transcript(
-                ticket=ticket_row,
-                answer_text=answer,
-                turns=turns,
-            )
-            email_notified = sent_now
-
-    node = engine.get_current_node(ticket_id)
-    payload = _serialize_ticket_state(str(ticket.session_id), ticket, node)
-    if tracking_summary is not None:
-        payload["tracking_summary"] = tracking_summary
-    if email_notified:
-        payload["email_notified"] = True
-    return payload
+    return _finalize_answer_response(
+        engine,
+        ticket_id,
+        answer,
+        result,
+        nlp_interpreted=nlp_interpreted,
+    )
 
 
 @router.post("/api/v1/warranty/session/{session_id}/notify-email", tags=["warranty"])

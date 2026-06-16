@@ -260,6 +260,60 @@ def build_evidence_notification_body(
     return "\n".join(lines)
 
 
+def build_email_only_contact_body(
+    *,
+    ticket_id: str,
+    customer_email: str,
+    issue_type: str = "",
+    model_name: str = "",
+    ticket_status: str = "",
+    session_id: str = "",
+    domain: str = "",
+    turns: Optional[Sequence[Any]] = None,
+) -> str:
+    """Plain-text body when the customer submits email without photo/video (N/A)."""
+    lines = [
+        "Warranty case — customer contact submitted (no photo/video).",
+        "",
+        "The customer selected N/A and could not or did not wish to upload photos or videos.",
+        "",
+        f"Ticket ID       : {ticket_id}",
+        f"Customer Email  : {customer_email}",
+    ]
+    if session_id:
+        lines.append(f"Session ID      : {session_id}")
+    if domain:
+        lines.append(f"Site / Domain   : {domain}")
+    if issue_type:
+        lines.append(f"Issue Type      : {issue_type}")
+    if model_name:
+        lines.append(f"Model           : {model_name}")
+    if ticket_status:
+        lines.append(f"Ticket Status   : {ticket_status}")
+
+    if turns:
+        lines.extend(["", "--- Workflow steps ---"])
+        for turn in turns:
+            node_id = getattr(turn, "node_id", "") or turn.get("node_id", "")
+            prompt = getattr(turn, "node_prompt", "") or turn.get("node_prompt", "")
+            answer = getattr(turn, "customer_answer", "") or turn.get("customer_answer", "")
+            lines.append(f"[{node_id}]")
+            if prompt:
+                lines.append(f"Q: {prompt}")
+            if answer:
+                lines.append(f"A: {answer}")
+            lines.append("")
+
+    lines.extend(
+        [
+            "No file attachment — follow up with the customer by email if photos or videos are needed.",
+            "",
+            "-- Sent automatically by Osaki/Titan Warranty Chat --",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def send_evidence_upload_notification(
     *,
     ticket_id: str,
@@ -364,6 +418,105 @@ def notify_evidence_upload_async(
             file_size_bytes=file_size_bytes,
             issue_type=issue_type,
             model_name=model_name,
+        )
+        if not sent:
+            return
+        from warranty_models import WarrantyEvidence, warranty_db_session  # noqa: WPS433
+
+        with warranty_db_session() as db:
+            row = db.query(WarrantyEvidence).filter(WarrantyEvidence.id == evidence_id).first()
+            if row:
+                row.emailed = 1
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def send_email_only_contact_notification(
+    *,
+    ticket_id: str,
+    customer_email: str,
+    session_id: str = "",
+    domain: str = "",
+    ticket_status: str = "",
+    issue_type: str = "",
+    model_name: str = "",
+    turns: Optional[Sequence[Any]] = None,
+    recipients: Optional[List[tuple[str, str]]] = None,
+) -> bool:
+    """Notify warranty team inboxes when the customer submits email only (N/A evidence)."""
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        logger.error(
+            "Email-only contact not sent — EMAIL_SENDER / EMAIL_PASSWORD not configured."
+        )
+        return False
+
+    notify_list = recipients if recipients is not None else WARRANTY_EVIDENCE_NOTIFY_RECIPIENTS
+    if not notify_list:
+        logger.warning("Email-only contact skipped — no recipients configured.")
+        return False
+
+    to_addrs = [email for _name, email in notify_list]
+    subject = f"[Warranty Contact] {ticket_id} — email only (no media)"
+    body = build_email_only_contact_body(
+        ticket_id=ticket_id,
+        customer_email=customer_email,
+        issue_type=issue_type,
+        model_name=model_name,
+        ticket_status=ticket_status,
+        session_id=session_id,
+        domain=domain,
+        turns=turns,
+    )
+
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = ", ".join(to_addrs)
+    msg["Reply-To"] = customer_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.send_message(msg)
+        logger.info(
+            "Email-only warranty contact sent for ticket=%s to %d recipients",
+            ticket_id,
+            len(to_addrs),
+        )
+        return True
+    except smtplib.SMTPException as exc:
+        logger.error("Email-only contact notification failed: %s", exc)
+        return False
+
+
+def notify_email_only_contact_async(
+    *,
+    evidence_id: int,
+    ticket_id: str,
+    customer_email: str,
+    session_id: str = "",
+    domain: str = "",
+    ticket_status: str = "",
+    issue_type: str = "",
+    model_name: str = "",
+    turns: Optional[Sequence[Any]] = None,
+) -> None:
+    """Send email-only contact notification in a background thread."""
+
+    def _worker() -> None:
+        sent = send_email_only_contact_notification(
+            ticket_id=ticket_id,
+            customer_email=customer_email,
+            session_id=session_id,
+            domain=domain,
+            ticket_status=ticket_status,
+            issue_type=issue_type,
+            model_name=model_name,
+            turns=turns,
         )
         if not sent:
             return

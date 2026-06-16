@@ -3,22 +3,17 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { v4 as uuidv4 } from "uuid";
 import {
-  streamChat,
   getWarrantySession,
   quickStartWarranty,
+  naturalStartWarranty,
   submitWarrantyAnswer,
-  notifyWarrantyEmail,
 } from "@/lib/api";
 import type { AnswerOption, ChatMessage, WarrantyTicketState } from "@/lib/types";
 import ChatMessageBubble from "./ChatMessageBubble";
 import AnswerOptions from "./AnswerOptions";
 import EvidenceUploader from "./EvidenceUploader";
 import TicketStatusBadge from "./TicketStatusBadge";
-import {
-  extractEmailFromText,
-  formatTerminalPrompt,
-  WARRANTY_CONTACT_EMAIL,
-} from "@/lib/evidenceMessage";
+import { formatTerminalPrompt, WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
 
 const DOMAIN = "osaki.com";
 
@@ -35,10 +30,10 @@ const INITIAL_ISSUE_OPTIONS: AnswerOption[] = [
 /**
  * WarrantyChat
  * ============
- * Guided warranty intake with clickable options from the first screen.
+ * Hybrid warranty intake: deterministic flowchart + natural-language answers.
  *
- * Fast path (default): direct warranty API calls — no LLM, sub-second responses.
- * Slow path (fallback): typed free-text before a ticket exists → POST /api/v1/chat.
+ * Buttons submit answer_keys directly; typed text is mapped server-side via NLP
+ * while the workflow engine keeps branching, admin records, and evidence rules.
  */
 export default function WarrantyChat() {
   const [sessionId] = useState<string>(() => {
@@ -51,20 +46,20 @@ export default function WarrantyChat() {
   });
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [streamingContent, setStreamingContent] = useState<string>("");
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warrantyState, setWarrantyState] = useState<WarrantyTicketState | null>(null);
   const [optionsUsed, setOptionsUsed] = useState(false);
   const [sessionChecked, setSessionChecked] = useState(false);
+  const [contactSubmitted, setContactSubmitted] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingContent]);
+  }, [messages]);
 
   const refreshWarrantyState = useCallback(async () => {
     const resp = await getWarrantySession(sessionId);
@@ -127,27 +122,6 @@ export default function WarrantyChat() {
       return [...prev, { role: "assistant", content: EMAIL_THANK_YOU }];
     });
   }, []);
-
-  const tryNotifyWarrantyEmail = useCallback(
-    async (userText: string, history: ChatMessage[]) => {
-      const email = extractEmailFromText(userText);
-      if (!email) return;
-
-      const storageKey = `warranty_email_sent_${sessionId}`;
-      if (sessionStorage.getItem(storageKey) === email) return;
-
-      try {
-        const result = await notifyWarrantyEmail(sessionId, userText, history);
-        if (result.sent) {
-          sessionStorage.setItem(storageKey, email);
-          appendEmailThankYou();
-        }
-      } catch {
-        // Non-fatal — customer can still email service@ directly.
-      }
-    },
-    [sessionId, appendEmailThankYou]
-  );
 
   const handleQuickStart = useCallback(
     async (issueType: "installation" | "delivery" | "defect", label: string) => {
@@ -212,61 +186,30 @@ export default function WarrantyChat() {
     [warrantyState?.ticket_id, loading, appendAssistantPrompt, appendEmailThankYou]
   );
 
-  // Slow LLM path — only when the user types before picking an initial option.
-  const sendViaChat = useCallback(
+  const startViaNaturalLanguage = useCallback(
     async (text: string) => {
-      const userMsg: ChatMessage = { role: "user", content: text };
-      const history = [...messages];
-      setMessages((prev) => [...prev, userMsg]);
-      setInput("");
-      setStreamingContent("");
+      if (loading) return;
       setError(null);
       setLoading(true);
       setOptionsUsed(true);
+      setMessages((prev) => [...prev, { role: "user", content: text }]);
+      setInput("");
 
-      let fullResponse = "";
       try {
-        const stream = streamChat({
-          session_id: sessionId,
-          user_query: text,
-          chat_history: history,
-          current_domain: DOMAIN,
-        });
-
-        for await (const chunk of stream) {
-          fullResponse += chunk;
-          setStreamingContent(fullResponse);
-        }
-
-        setMessages((prev) => [...prev, { role: "assistant", content: fullResponse }]);
-        setStreamingContent("");
-
-        const fullHistory = [...history, userMsg, { role: "assistant" as const, content: fullResponse }];
-        await tryNotifyWarrantyEmail(text, fullHistory);
+        const resp = await naturalStartWarranty(sessionId, text, DOMAIN);
+        setWarrantyState(resp.ticket);
+        appendAssistantPrompt(resp.ticket);
+        setOptionsUsed(false);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Something went wrong.";
         setError(msg);
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content:
-              "I'm sorry, I encountered an error. Please try again or contact support.",
-          },
-        ]);
-        setStreamingContent("");
+        setOptionsUsed(false);
       } finally {
         setLoading(false);
-        try {
-          await refreshWarrantyState();
-        } catch {
-          // ignore
-        }
-        setOptionsUsed(false);
         inputRef.current?.focus();
       }
     },
-    [loading, messages, sessionId, refreshWarrantyState, tryNotifyWarrantyEmail]
+    [loading, sessionId, appendAssistantPrompt]
   );
 
   const sendMessage = useCallback(
@@ -279,9 +222,9 @@ export default function WarrantyChat() {
         return;
       }
 
-      await sendViaChat(text.trim());
+      await startViaNaturalLanguage(text.trim());
     },
-    [loading, warrantyState, advanceWarranty, sendViaChat]
+    [loading, warrantyState, advanceWarranty, startViaNaturalLanguage]
   );
 
   function handleSubmit(e: FormEvent) {
@@ -303,7 +246,6 @@ export default function WarrantyChat() {
   const isAwaitingAdmin =
     warrantyState?.status === "awaiting_admin_review" ||
     warrantyState?.status === "admin_reviewing";
-  const needsEvidence = warrantyState?.status === "awaiting_evidence";
   const hasWorkflowOptions =
     !optionsUsed &&
     !loading &&
@@ -340,7 +282,7 @@ export default function WarrantyChat() {
       )}
 
       <div className="chat-scroll flex-1 overflow-y-auto px-4 py-4">
-        {messages.length === 0 && !streamingContent && (
+        {messages.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center text-center">
             <div className="mb-4 text-5xl">🛡️</div>
             <h2 className="text-lg font-semibold text-gray-800">Warranty Support</h2>
@@ -375,16 +317,9 @@ export default function WarrantyChat() {
           {messages.map((msg, i) => (
             <ChatMessageBubble key={i} message={msg} />
           ))}
-
-          {streamingContent && (
-            <ChatMessageBubble
-              message={{ role: "assistant", content: streamingContent }}
-              isStreaming
-            />
-          )}
         </div>
 
-        {loading && !streamingContent && (
+        {loading && (
           <div className="mt-3 flex items-center gap-2 text-gray-400">
             <div className="flex gap-1">
               <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:0ms]" />
@@ -406,7 +341,9 @@ export default function WarrantyChat() {
 
       {hasWorkflowOptions && !isTerminal && (
         <div className="border-t border-gray-100 bg-white px-4 py-3">
-          <p className="mb-2 text-xs text-gray-500">Select an option:</p>
+          <p className="mb-2 text-xs text-gray-500">
+            Select an option or type your answer below:
+          </p>
           <AnswerOptions
             options={warrantyState!.current_node!.options}
             onSelect={handleOptionSelect}
@@ -415,12 +352,24 @@ export default function WarrantyChat() {
         </div>
       )}
 
-      {(needsEvidence || (isTerminal && warrantyState?.ticket_id)) &&
-        warrantyState?.ticket_id && (
+      {isTerminal && warrantyState?.ticket_id && !contactSubmitted && (
           <div className="border-t border-gray-100 bg-white p-4">
             <EvidenceUploader
               ticketId={warrantyState.ticket_id}
+              evidenceRequired={warrantyState.current_node?.evidence_required}
+              onContactSuccess={() => {
+                setContactSubmitted(true);
+                setMessages((prev) => [
+                  ...prev,
+                  {
+                    role: "assistant",
+                    content:
+                      "✅ Thank you — your email has been received. Our warranty team will follow up within 24 hours.",
+                  },
+                ]);
+              }}
               onUploadSuccess={(filename) => {
+                setContactSubmitted(true);
                 setMessages((prev) => [
                   ...prev,
                   {
@@ -447,8 +396,8 @@ export default function WarrantyChat() {
               onKeyDown={handleKeyDown}
               placeholder={
                 warrantyState?.ticket_id
-                  ? "Type your answer…"
-                  : "Or describe your issue…"
+                  ? "Type your answer in your own words…"
+                  : "Describe your issue (e.g. my chair won't turn on)…"
               }
               disabled={loading}
               className="flex-1 resize-none bg-transparent px-1 py-1 text-sm text-gray-900 placeholder-gray-400 focus:outline-none disabled:opacity-60"
@@ -473,7 +422,7 @@ export default function WarrantyChat() {
         </form>
       )}
 
-      {isTerminal && (
+      {isTerminal && contactSubmitted && (
         <div className="border-t border-gray-100 bg-white px-4 py-4 text-center">
           <p className="text-sm text-gray-600">
             Your case has been submitted. Our team will be in touch.

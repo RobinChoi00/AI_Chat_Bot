@@ -31,27 +31,43 @@ export function buildEvidenceRequestMessage(
 
   if (hasVideo) {
     if (hasDamagePhotos || hasOtherPhotos) {
-      return `Please send photos or a video of the issue to ${email}. You can also upload using the form below.`;
+      return (
+        `If you can, please share photos or a video of the issue using the form below. ` +
+        `If not, select N/A and submit your email only — our team will follow up within 24 hours.`
+      );
     }
-    return `Please send a photo or video of the issue to ${email}. You can also upload using the form below.`;
+    return (
+      `If you can, please share a photo or video using the form below. ` +
+      `If not, select N/A and submit your email only — our team will follow up within 24 hours.`
+    );
   }
 
   if (hasDamagePhotos || hasOtherPhotos) {
-    return `Please send the requested photos to ${email}. You can also upload using the form below.`;
+    return (
+      `If you can, please share the requested photos using the form below. ` +
+      `If not, select N/A and submit your email only — our team will follow up within 24 hours.`
+    );
   }
 
-  return `Please send the requested files to ${email}. You can also upload using the form below.`;
+  return `Please submit your email using the form below so our team can follow up within 24 hours.`;
 }
 
-/** Remind customers that email is required when using the upload form. */
+/** Remind customers that email is the final step after the workflow completes. */
 export function buildEvidenceEmailRequiredNote(): string {
-  return "Please enter your email address in the upload form below — it is required so our team can follow up.";
+  return (
+    "As a final step, please enter your email address below so our team can follow up within 24 hours. " +
+    "Photos or videos are optional — choose N/A if you cannot provide them."
+  );
 }
 
 function appendEvidenceEmailRequired(text: string): string {
   const note = buildEvidenceEmailRequiredNote();
   const lower = text.toLowerCase();
-  if (lower.includes("email address in the upload form")) {
+  if (
+    lower.includes("final step") ||
+    lower.includes("select n/a") ||
+    lower.includes("email address in the upload form")
+  ) {
     return text;
   }
   return `${text}\n\n${note}`;
@@ -82,7 +98,7 @@ export function formatTerminalPrompt(
   if (emailInPrompt && hasVideoEvidence && !lower.includes("video")) {
     return appendEvidenceEmailRequired(
       appendWarrantyFooter(
-        `${prompt}\n\nPlease include a photo or video of the issue if possible. You can also upload using the form below.`,
+        `${prompt}\n\nIf you can, include a photo or video using the form below. Otherwise, select N/A and submit your email only.`,
         evidenceEmail
       )
     );
@@ -91,7 +107,7 @@ export function formatTerminalPrompt(
   if (emailInPrompt && !hasVideoEvidence) {
     return appendEvidenceEmailRequired(
       appendWarrantyFooter(
-        `${prompt}\n\nYou can also upload using the form below.`,
+        `${prompt}\n\nPlease submit your email using the form below as the final step.`,
         evidenceEmail
       )
     );

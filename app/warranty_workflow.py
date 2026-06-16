@@ -320,7 +320,12 @@ class WarrantyEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def submit_answer(ticket_id: str, raw_answer: str) -> dict:
+    def submit_answer(
+        ticket_id: str,
+        raw_answer: str,
+        *,
+        customer_display: Optional[str] = None,
+    ) -> dict:
         """
         Process the customer's answer for the current node and transition state.
 
@@ -329,6 +334,8 @@ class WarrantyEngine:
         ticket_id  : UUID string for the open ticket
         raw_answer : Customer's raw input — either an answer_key, label text,
                      or 1-based integer index string.
+        customer_display : Optional verbatim text to store on the turn (e.g. when
+                     NLP mapped natural language to an answer_key).
 
         Returns
         -------
@@ -402,7 +409,7 @@ class WarrantyEngine:
                 node_id=node_id,
                 node_type=node_type,
                 node_prompt=node.get("prompt", ""),
-                customer_answer=raw_answer,
+                customer_answer=customer_display if customer_display is not None else raw_answer,
                 answer_key=answer_key,
             )
             db.add(turn)
@@ -415,7 +422,10 @@ class WarrantyEngine:
             elif node_id == "defect_problem_type":
                 ticket.defect_type = answer_key
             elif node_id == "install_model":
-                ticket.model_name = raw_answer
+                from product_catalog import resolve_model_name  # noqa: WPS433
+
+                display = customer_display if customer_display is not None else raw_answer
+                ticket.model_name = resolve_model_name(display) or display
 
             # -----------------------------------------------------------
             # Transition to next node

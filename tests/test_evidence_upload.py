@@ -370,3 +370,74 @@ class TestEvidenceUploadEndpoint:
 
         # Each upload gets a distinct DB ID
         assert len(set(ids)) == len(ids), "Duplicate evidence IDs returned"
+
+
+class TestWarrantyContactEndpoint:
+    """HTTP-level tests for POST /api/v1/warranty/{ticket_id}/contact (email-only / N/A)."""
+
+    def _terminal_ticket(self) -> str:
+        from warranty_workflow import WarrantyEngine
+
+        ticket_id, _ = WarrantyEngine.start_session("contact-test", "test.com")
+        WarrantyEngine.submit_answer(ticket_id, "warranty")
+        WarrantyEngine.submit_answer(ticket_id, "installation")
+        WarrantyEngine.submit_answer(ticket_id, "OS-4000T")
+        return ticket_id
+
+    def test_email_only_contact_on_terminal(self, client, monkeypatch):
+        from warranty_workflow import WarrantyEngine
+
+        transcript_calls = []
+        notify_calls = []
+        monkeypatch.setattr(
+            "warranty_email.send_warranty_transcript_email",
+            lambda **kwargs: transcript_calls.append(kwargs) or True,
+        )
+        monkeypatch.setattr(
+            "warranty_email.notify_email_only_contact_async",
+            lambda **kwargs: notify_calls.append(kwargs),
+        )
+
+        ticket_id = self._terminal_ticket()
+        response = client.post(
+            f"/api/v1/warranty/{ticket_id}/contact",
+            json={"customer_email": "buyer@example.com", "evidence_na": True},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["customer_email"] == "buyer@example.com"
+        assert body["evidence_type"] == "not_available"
+        assert body["evidence_na"] is True
+
+        evidences = WarrantyEngine.get_evidences(ticket_id)
+        assert len(evidences) == 1
+        assert str(evidences[0].evidence_type) == "not_available"
+        assert str(evidences[0].original_filename) == "N/A"
+        assert str(evidences[0].customer_email) == "buyer@example.com"
+
+        ticket = WarrantyEngine.get_ticket(ticket_id)
+        assert ticket.get_collected().get("customer_contact_email") == "buyer@example.com"
+        assert ticket.get_collected().get("evidence_na") == "1"
+        assert len(transcript_calls) == 1
+        assert len(notify_calls) == 1
+
+    def test_contact_rejected_before_terminal(self, client):
+        from warranty_workflow import WarrantyEngine
+
+        ticket_id, _ = WarrantyEngine.start_session("contact-early", "test.com")
+        WarrantyEngine.submit_answer(ticket_id, "warranty")
+        WarrantyEngine.submit_answer(ticket_id, "defect")
+
+        response = client.post(
+            f"/api/v1/warranty/{ticket_id}/contact",
+            json={"customer_email": "buyer@example.com", "evidence_na": True},
+        )
+        assert response.status_code == 422
+
+    def test_contact_invalid_email_rejected(self, client):
+        ticket_id = self._terminal_ticket()
+        response = client.post(
+            f"/api/v1/warranty/{ticket_id}/contact",
+            json={"customer_email": "not-an-email", "evidence_na": True},
+        )
+        assert response.status_code == 422

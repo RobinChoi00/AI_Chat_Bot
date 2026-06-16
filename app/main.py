@@ -1028,7 +1028,8 @@ DO NOT partially answer, hedge, or provide any information outside this scope.
 # WARRANTY WORKFLOW RULES (CRITICAL — NEVER VIOLATE)
 W1. When tool result begins with WARRANTY_TICKET_STARTED, WARRANTY_CONTINUE, or WARRANTY_TERMINAL_REACHED,
     you are inside a guided warranty intake workflow. Follow the INSTRUCTION section exactly.
-W2. Present the PROMPT to the customer verbatim (you may paraphrase for tone, but NEVER change the meaning).
+W2. Present the PROMPT to the customer verbatim (same meaning, same facts).
+    Do NOT add repair steps, replacement promises, or extra questions.
 W3. When the customer answers, extract the intent and call warranty_answer with the closest answer_key.
     Do NOT guess or invent the next step — the tool decides.
 W4. When WARRANTY_TERMINAL_REACHED with ACTION=awaiting_admin:
@@ -1533,6 +1534,7 @@ async def chat_endpoint(
         def generate_stream():
             full_response = ""
             tools_called: List[str] = []  # track which tools the agent invoked this turn
+            tool_results: List[str] = []
             try:
                 # ── Agentic loop: tool calls → final answer in ONE pass ──────
                 # When the LLM responds without tool_calls, msg.content IS the
@@ -1646,6 +1648,7 @@ async def chat_endpoint(
                             args["_session_id"] = chat_request.session_id
                         result = _execute_tool(tc.function.name, args, target_domain)
                         tools_called.append(tc.function.name)
+                        tool_results.append(result)
                         logger.info(f"🛠️ Tool [{tc.function.name}] → {len(result)} chars")
                         messages.append({
                             "role": "tool",
@@ -1666,6 +1669,18 @@ async def chat_endpoint(
                     full_response = response.choices[0].message.content or ""
 
                 # ── Post-processing (operates on full_response only) ─────────
+                try:
+                    from app.answer_guard import sanitize_agent_response  # noqa: WPS433
+                except ImportError:
+                    from answer_guard import sanitize_agent_response  # type: ignore  # noqa: WPS433
+
+                full_response = sanitize_agent_response(
+                    full_response,
+                    tools_called=tools_called,
+                    user_query=user_query,
+                    tool_results=tool_results,
+                )
+
                 user_sent_email = bool(re.search(r"[\w\.-]+@[\w\.-]+\.\w+", user_query))
                 response_lower = full_response.lower()
 

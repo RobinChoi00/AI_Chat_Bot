@@ -144,6 +144,17 @@ def _extract_price(text: str) -> Optional[float]:
     if not text:
         return None
 
+    base_match = re.search(
+        r"BASE PRICE \(USD\):\s*\$?(\d[\d,]*\.?\d*)", text, re.IGNORECASE
+    )
+    if base_match:
+        try:
+            v = float(base_match.group(1).replace(",", ""))
+            if 500 <= v <= 50000:
+                return v
+        except ValueError:
+            pass
+
     variant_match = re.search(r"Variant\s+Price[^\n$]*\$?(\d[\d,]*\.?\d*)", text, re.IGNORECASE)
     if variant_match:
         try:
@@ -310,6 +321,9 @@ def tool_search_chair_specs(
         auth_lines = _find_authoritative_lines(doc.page_content, query)
 
         lines.append(f"\n--- Result {i}: {title} ---")
+        base_price = _extract_price(doc.page_content)
+        if base_price is not None:
+            lines.append(f"BASE PRICE (USD): ${base_price:,.2f}")
         if auth_lines:
             lines.append("AUTHORITATIVE SPEC VALUES (use EXACTLY these numbers, do not paraphrase):")
             for al in auth_lines:
@@ -536,9 +550,10 @@ def _format_warranty_node(ticket_id: str, node: dict, is_start: bool = False) ->
         lines.append("OPTIONS: (free text — accept any input)")
     lines += [
         "",
-        "INSTRUCTION: Present the PROMPT to the customer in a warm, friendly tone.",
-        "When the customer responds, map their answer to the closest answer_key and call answer_warranty_question.",
-        "DO NOT make any warranty decision yourself. SUPPRESS_LEAD_FOOTER",
+        "INSTRUCTION: Present the PROMPT to the customer verbatim (same meaning). "
+        "Present OPTIONS exactly as listed. "
+        "When the customer responds, map their answer to the closest answer_key and call answer_warranty_question. "
+        "DO NOT make any warranty decision yourself. DO NOT invent steps or outcomes. SUPPRESS_LEAD_FOOTER",
     ]
     return "\n".join(lines)
 
@@ -613,9 +628,9 @@ def _format_warranty_result(ticket_id: str, result: dict) -> str:
         lines.append("OPTIONS: (free text — accept any input)")
     lines += [
         "",
-        "INSTRUCTION: Present PROMPT and OPTIONS to customer in a warm, friendly tone.",
-        "When they respond, call warranty_answer with the matching answer_key.",
-        "DO NOT make any warranty decision yourself. SUPPRESS_LEAD_FOOTER",
+        "INSTRUCTION: Present PROMPT and OPTIONS verbatim (same meaning). "
+        "When they respond, call warranty_answer with the matching answer_key. "
+        "DO NOT make any warranty decision yourself. DO NOT invent steps or outcomes. SUPPRESS_LEAD_FOOTER",
     ]
     return "\n".join(lines)
 

@@ -62,7 +62,8 @@ export default function AdminEvidenceList({ evidence }: Props) {
   return (
     <div className="space-y-2">
       {evidence.map((ev) => {
-        const icon = (ev.mime_type && MIME_ICON[ev.mime_type]) ?? "📎";
+        const isEmailOnly = ev.evidence_type === "not_available";
+        const icon = isEmailOnly ? "✉️" : (ev.mime_type && MIME_ICON[ev.mime_type]) ?? "📎";
         return (
           <div
             key={ev.id}
@@ -71,14 +72,16 @@ export default function AdminEvidenceList({ evidence }: Props) {
             <span className="mt-0.5 text-xl">{icon}</span>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-gray-900">
-                {ev.original_filename ?? "unnamed file"}
+                {isEmailOnly
+                  ? "Email only — no photo/video (N/A)"
+                  : (ev.original_filename ?? "unnamed file")}
               </p>
               <div className="mt-0.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-gray-500">
                 <span className="capitalize">
                   {ev.evidence_type.replace(/_/g, " ")}
                 </span>
-                <span>{formatBytes(ev.file_size_bytes)}</span>
-                {ev.mime_type && <span>{ev.mime_type}</span>}
+                {!isEmailOnly && <span>{formatBytes(ev.file_size_bytes)}</span>}
+                {!isEmailOnly && ev.mime_type && <span>{ev.mime_type}</span>}
                 {ev.customer_email && <span>{ev.customer_email}</span>}
                 <span>Uploaded: {formatDate(ev.created_at)}</span>
                 {ev.emailed ? (
@@ -89,6 +92,7 @@ export default function AdminEvidenceList({ evidence }: Props) {
               </div>
 
               {/* View / Download action */}
+              {!isEmailOnly && (
               <div className="mt-2 flex gap-2">
                 {isViewableInBrowser(ev.mime_type) ? (
                   <a
@@ -108,6 +112,7 @@ export default function AdminEvidenceList({ evidence }: Props) {
                   ⬇ Download
                 </a>
               </div>
+              )}
             </div>
           </div>
         );
