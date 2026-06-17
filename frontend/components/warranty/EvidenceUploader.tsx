@@ -32,8 +32,6 @@ const EVIDENCE_LABELS: Record<string, string> = {
   other: "Other",
 };
 
-type SubmitMode = "upload" | "na";
-
 export default function EvidenceUploader({
   ticketId,
   evidenceRequired = [],
@@ -44,19 +42,9 @@ export default function EvidenceUploader({
   const fileRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [customerEmail, setCustomerEmail] = useState(initialCustomerEmail);
-  const [submitMode, setSubmitMode] = useState<SubmitMode>("upload");
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<"success" | "error" | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
-
-  const mediaRequested = evidenceRequired.some(
-    (key) =>
-      key.includes("photo") ||
-      key.includes("video") ||
-      key.includes("damage") ||
-      key.includes("box") ||
-      key.includes("receipt")
-  );
 
   const evidenceTypeOptions = useMemo(() => {
     if (evidenceRequired.length === 0) {
@@ -108,7 +96,7 @@ export default function EvidenceUploader({
     return email;
   }
 
-  async function handleSubmitEmailOnly() {
+  async function handleSubmit() {
     const email = validateEmail();
     if (!email) return;
 
@@ -117,9 +105,17 @@ export default function EvidenceUploader({
     setErrorMsg("");
 
     try {
-      await submitWarrantyContact(ticketId, email);
-      setResult("success");
-      onContactSuccess?.(email);
+      if (selectedFile) {
+        const resp = await uploadEvidence(ticketId, evidenceType, selectedFile, email);
+        setResult("success");
+        onUploadSuccess?.(resp.original_filename);
+        setSelectedFile(null);
+        if (fileRef.current) fileRef.current.value = "";
+      } else {
+        await submitWarrantyContact(ticketId, email);
+        setResult("success");
+        onContactSuccess?.(email);
+      }
     } catch (err: unknown) {
       setResult("error");
       setErrorMsg(err instanceof Error ? err.message : "Submission failed.");
@@ -128,38 +124,8 @@ export default function EvidenceUploader({
     }
   }
 
-  async function handleUpload() {
-    const email = validateEmail();
-    if (!email || !selectedFile) return;
-
-    setSubmitting(true);
-    setResult(null);
-    setErrorMsg("");
-
-    try {
-      const resp = await uploadEvidence(
-        ticketId,
-        evidenceType,
-        selectedFile,
-        email
-      );
-      setResult("success");
-      onUploadSuccess?.(resp.original_filename);
-      setSelectedFile(null);
-      if (fileRef.current) fileRef.current.value = "";
-    } catch (err: unknown) {
-      setResult("error");
-      setErrorMsg(err instanceof Error ? err.message : "Upload failed.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  const showUploadSection = mediaRequested && submitMode === "upload";
-  const submitDisabled =
-    submitting ||
-    !customerEmail.trim() ||
-    (showUploadSection && !selectedFile);
+  const emailValid = /^[\w.+-]+@[\w.-]+\.\w+$/.test(customerEmail.trim());
+  const submitDisabled = submitting || !emailValid;
 
   return (
     <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4">
@@ -167,10 +133,9 @@ export default function EvidenceUploader({
         Final step — how can we reach you?
       </p>
       <p className="mb-3 text-xs text-gray-500">
-        Please leave your email so our warranty team can follow up within 24 hours.
-        {mediaRequested
-          ? " Photos or videos are helpful but optional."
-          : " No photo or video is required for this case."}
+        Enter your email so our warranty team can follow up within 24 hours.
+        Photos and videos are helpful but <strong>not required</strong> — you can
+        submit with email only.
       </p>
 
       <div className="mb-3">
@@ -187,74 +152,54 @@ export default function EvidenceUploader({
         />
       </div>
 
-      {mediaRequested && (
-        <div className="mb-3 space-y-2">
-          <p className="text-xs font-medium text-gray-600">Photo / video (optional)</p>
-          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
-            <input
-              type="radio"
-              name="submit-mode"
-              checked={submitMode === "upload"}
-              onChange={() => setSubmitMode("upload")}
-              className="mt-1"
-            />
-            <span>I can upload a photo or video</span>
-          </label>
-          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
-            <input
-              type="radio"
-              name="submit-mode"
-              checked={submitMode === "na"}
-              onChange={() => setSubmitMode("na")}
-              className="mt-1"
-            />
-            <span>
-              <strong>N/A</strong> — I don&apos;t have photos/videos or prefer not to send them
+      <div className="mb-3 rounded-lg border border-gray-200 bg-white p-3">
+        <p className="mb-2 text-xs font-medium text-gray-600">
+          Attach photo or video{" "}
+          <span className="font-normal text-gray-400">(optional)</span>
+        </p>
+
+        <div className="mb-3">
+          <label className="mb-1 block text-xs text-gray-500">Evidence type</label>
+          <select
+            value={evidenceType}
+            onChange={(e) => setEvidenceType(e.target.value)}
+            disabled={!selectedFile}
+            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-gray-50 disabled:text-gray-400"
+          >
+            {evidenceTypeOptions.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs text-gray-500">
+            File{" "}
+            <span className="text-gray-400">
+              (jpg, jpeg, png, webp, pdf, mp4, mov — max 20 MB)
             </span>
           </label>
+          <input
+            ref={fileRef}
+            type="file"
+            accept={ALLOWED_EXTENSIONS.join(",")}
+            onChange={handleFileChange}
+            className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-full file:border-0 file:bg-brand-50 file:px-3 file:py-1 file:text-xs file:font-medium file:text-brand-700 hover:file:bg-brand-100"
+          />
+          {selectedFile ? (
+            <p className="mt-1 text-xs text-gray-500">
+              Selected: <strong>{selectedFile.name}</strong>{" "}
+              ({(selectedFile.size / 1024).toFixed(1)} KB)
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-gray-400">
+              No file selected — that&apos;s OK. Submit your email below.
+            </p>
+          )}
         </div>
-      )}
-
-      {showUploadSection && (
-        <>
-          <div className="mb-3">
-            <label className="mb-1 block text-xs text-gray-500">Evidence type</label>
-            <select
-              value={evidenceType}
-              onChange={(e) => setEvidenceType(e.target.value)}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-            >
-              {evidenceTypeOptions.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="mb-3">
-            <label className="mb-1 block text-xs text-gray-500">
-              File{" "}
-              <span className="text-gray-400">
-                (jpg, jpeg, png, webp, pdf, mp4, mov — max 20 MB)
-              </span>
-            </label>
-            <input
-              ref={fileRef}
-              type="file"
-              accept={ALLOWED_EXTENSIONS.join(",")}
-              onChange={handleFileChange}
-              className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-full file:border-0 file:bg-brand-50 file:px-3 file:py-1 file:text-xs file:font-medium file:text-brand-700 hover:file:bg-brand-100"
-            />
-            {selectedFile && (
-              <p className="mt-1 text-xs text-gray-500">
-                Selected: <strong>{selectedFile.name}</strong>{" "}
-                ({(selectedFile.size / 1024).toFixed(1)} KB)
-              </p>
-            )}
-          </div>
-        </>
-      )}
+      </div>
 
       {errorMsg && (
         <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
@@ -269,11 +214,7 @@ export default function EvidenceUploader({
       )}
 
       <button
-        onClick={
-          mediaRequested && submitMode === "upload"
-            ? handleUpload
-            : handleSubmitEmailOnly
-        }
+        onClick={handleSubmit}
         disabled={submitDisabled}
         className={`w-full rounded-lg px-4 py-2 text-sm font-medium transition ${
           submitDisabled
@@ -283,9 +224,9 @@ export default function EvidenceUploader({
       >
         {submitting
           ? "Submitting…"
-          : mediaRequested && submitMode === "upload"
-            ? "Upload & Submit"
-            : "Submit Email"}
+          : selectedFile
+            ? "Submit with attachment"
+            : "Submit email only"}
       </button>
 
       <p className="mt-2 text-center text-[10px] text-gray-400">

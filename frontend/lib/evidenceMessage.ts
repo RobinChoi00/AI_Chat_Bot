@@ -33,19 +33,19 @@ export function buildEvidenceRequestMessage(
     if (hasDamagePhotos || hasOtherPhotos) {
       return (
         `If you can, please share photos or a video of the issue using the form below. ` +
-        `If not, select N/A and submit your email only — our team will follow up within 24 hours.`
+        `If not, submit your email only — no photo or video required.`
       );
     }
     return (
       `If you can, please share a photo or video using the form below. ` +
-      `If not, select N/A and submit your email only — our team will follow up within 24 hours.`
+      `If not, submit your email only — no photo or video required.`
     );
   }
 
   if (hasDamagePhotos || hasOtherPhotos) {
     return (
       `If you can, please share the requested photos using the form below. ` +
-      `If not, select N/A and submit your email only — our team will follow up within 24 hours.`
+      `If not, submit your email only — no photo or video required.`
     );
   }
 
@@ -56,7 +56,7 @@ export function buildEvidenceRequestMessage(
 export function buildEvidenceEmailRequiredNote(): string {
   return (
     "As a final step, please enter your email address below so our team can follow up within 24 hours. " +
-    "Photos or videos are optional — choose N/A if you cannot provide them."
+    "Photos or videos are optional — you can submit with email only."
   );
 }
 
@@ -65,7 +65,7 @@ function appendEvidenceEmailRequired(text: string): string {
   const lower = text.toLowerCase();
   if (
     lower.includes("final step") ||
-    lower.includes("select n/a") ||
+    lower.includes("email only") ||
     lower.includes("email address in the upload form")
   ) {
     return text;
@@ -98,7 +98,7 @@ export function formatTerminalPrompt(
   if (emailInPrompt && hasVideoEvidence && !lower.includes("video")) {
     return appendEvidenceEmailRequired(
       appendWarrantyFooter(
-        `${prompt}\n\nIf you can, include a photo or video using the form below. Otherwise, select N/A and submit your email only.`,
+        `${prompt}\n\nIf you can, include a photo or video using the form below. Otherwise, submit your email only — no attachment required.`,
         evidenceEmail
       )
     );
