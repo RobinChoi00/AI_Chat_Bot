@@ -1298,12 +1298,13 @@ async def chat_endpoint(
 
     Flow (cost-optimized):
     1. Rate-limit per IP (slowapi).
-    2. Short-circuit deterministic intents (showroom) → zero LLM calls.
-    3. Look up the response cache; return cached answer on hit (zero LLM cost).
-    4. Build messages = [system, ...chat_history, user_query].
-    5. Loop up to MAX_TOOL_TURNS of tool calls. The LLM's FIRST non-tool-call
+    2. Scope gate — off-topic queries get a fixed refusal (zero agent LLM calls).
+    3. Short-circuit deterministic intents (showroom) → zero LLM calls.
+    4. Look up the response cache; return cached answer on hit (zero LLM cost).
+    5. Build messages = [system, ...chat_history, user_query].
+    6. Loop up to MAX_TOOL_TURNS of tool calls. The LLM's FIRST non-tool-call
        response IS the final answer — we do NOT do a second synthesis call.
-    6. Persist chat log + token usage via BackgroundTasks.
+    7. Persist chat log + token usage via BackgroundTasks.
 
     Cost notes:
     - The previous implementation did a Phase 1 (tool loop) AND a Phase 2
@@ -1359,6 +1360,38 @@ async def chat_endpoint(
         forced_first_tool = "answer_warranty_question"
     else:
         forced_first_tool = infer_forced_tool(user_query)
+
+    # ── Scope gate: block off-topic before any agent LLM call ──
+    if not (_active_warranty_ticket and _active_warranty_node):
+        try:
+            from app.scope_classifier import build_scope_refusal, evaluate_scope
+        except ImportError:
+            from scope_classifier import build_scope_refusal, evaluate_scope  # type: ignore
+
+        scope_decision = evaluate_scope(user_query, chat_request.chat_history)
+        if scope_decision.is_blocked:
+            scope_refusal = build_scope_refusal()
+            logger.info(
+                "🚫 Scope blocked (%s%s): %s",
+                scope_decision.reason,
+                ", llm" if scope_decision.used_llm else "",
+                user_query[:120],
+            )
+            background_tasks.add_task(
+                _persist_chat_log,
+                chat_request.session_id, user_query, scope_refusal, target_domain,
+            )
+            background_tasks.add_task(
+                _persist_usage_log,
+                session_id=chat_request.session_id, domain=target_domain,
+                model="(scope_blocked)", call_count=0,
+                prompt_tokens=0, cached_tokens=0, completion_tokens=0,
+                estimated_cost_usd=0.0, elapsed_ms=0, cache_hit=False,
+            )
+            return StreamingResponse(
+                iter([scope_refusal]),
+                media_type="text/event-stream",
+            )
 
     # ── 💰 Zero-LLM short-circuit for showroom / location questions ──
     if forced_first_tool == "get_showroom_info":

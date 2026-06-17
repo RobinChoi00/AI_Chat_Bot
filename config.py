@@ -141,6 +141,10 @@ CHAT_CACHE_ENABLED = os.environ.get("CHAT_CACHE_ENABLED", "1") == "1"
 CHAT_CACHE_TTL_SECONDS = int(os.environ.get("CHAT_CACHE_TTL_SECONDS", 600))  # 10 min
 CHAT_CACHE_MAX_ENTRIES = int(os.environ.get("CHAT_CACHE_MAX_ENTRIES", 512))
 
+# Pre-LLM scope gate (blocks off-topic before the agent loop).
+SCOPE_CLASSIFIER_ENABLED = os.environ.get("SCOPE_CLASSIFIER_ENABLED", "1") == "1"
+SCOPE_CLASSIFIER_LLM = os.environ.get("SCOPE_CLASSIFIER_LLM", "1") == "1"
+
 
 # ==========================================
 # 6. CORS — restrict allowed origins in production
