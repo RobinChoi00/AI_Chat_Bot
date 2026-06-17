@@ -9,7 +9,7 @@ grounded in retrieved data.
 from __future__ import annotations
 
 import re
-from typing import Iterable, List, Sequence
+from typing import Iterable, Sequence
 
 _PRICE_RE = re.compile(
     r"\$\s?\d[\d,]*(?:\.\d{2})?"
@@ -22,10 +22,31 @@ _NUMBERED_STEPS_RE = re.compile(
     r"(?:^|\n)\s*(?:\d+[\).:]|step\s+\d+)",
     re.IGNORECASE,
 )
+_SPEC_NUMBER_CTX_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(?:inch|inches|\"|\s*in\b|lb|lbs|pound|kg|cm|mm|ft|feet)",
+    re.IGNORECASE,
+)
+_SPEC_NUMBER_REV_RE = re.compile(
+    r"(?:doorway|width|height|depth|weight|clearance|maximum\s+user)[^\d]{0,24}(\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
 
 _REPAIR_BLOCK_TOOLS = frozenset({"get_repair_help", "escalate_to_human"})
 _PRICE_BLOCK_TOOLS = frozenset({"search_chair_specs", "recommend_chairs"})
 _TRACKING_BLOCK_TOOLS = frozenset({"lookup_order_status"})
+
+_TRACKING_SIGNALS = (
+    "current status:", "tracking number:", "carrier:",
+    "estimated delivery:", "in preparation", "in transit",
+)
+_REPAIR_SIGNALS = (
+    "installation step", "install the", "assemble the", "assembly step",
+    "troubleshooting step", "remove the back", "manual mode",
+    "general steps", "follow these steps", "troubleshoot", "assembly",
+)
+_SPEC_TOPIC_SIGNALS = (
+    "inch", "inches", "dimension", "doorway", "weight", "lb", "clearance",
+)
 
 _SAFE_FALLBACK = (
     "I want to give you accurate information, so I need to look that up in our "
@@ -68,6 +89,73 @@ def _strip_ungrounded_prices(response: str, allowed_prices: set[str]) -> str:
     return _PRICE_RE.sub(repl, response)
 
 
+def _floats_in_line(line: str) -> set[float]:
+    nums: set[float] = set()
+    for m in re.finditer(r"(\d+(?:\.\d+)?)", line):
+        try:
+            val = float(m.group(1))
+            if val > 0:
+                nums.add(val)
+        except ValueError:
+            pass
+    return nums
+
+
+def _allowed_spec_numbers(blob: str) -> set[float]:
+    """Collect numeric spec values present in tool output."""
+    allowed: set[float] = set()
+    in_authoritative = False
+
+    for line in blob.splitlines():
+        if "AUTHORITATIVE SPEC VALUES" in line:
+            in_authoritative = True
+            continue
+        if in_authoritative:
+            stripped = line.strip()
+            if stripped.startswith("---") or stripped.startswith("Additional context"):
+                in_authoritative = False
+            elif stripped:
+                allowed.update(_floats_in_line(line))
+
+        lower = line.lower()
+        if any(kw in lower for kw in _SPEC_TOPIC_SIGNALS):
+            allowed.update(_floats_in_line(line))
+
+    return allowed
+
+
+def _claimed_spec_numbers(text: str) -> set[float]:
+    nums: set[float] = set()
+    for pattern in (_SPEC_NUMBER_CTX_RE, _SPEC_NUMBER_REV_RE):
+        for m in pattern.finditer(text or ""):
+            try:
+                nums.add(float(m.group(1)))
+            except ValueError:
+                pass
+    return nums
+
+
+def _number_is_allowed(value: float, allowed: set[float], tolerance: float = 0.08) -> bool:
+    for candidate in allowed:
+        if candidate <= 0:
+            continue
+        if abs(value - candidate) <= max(0.5, candidate * tolerance):
+            return True
+    return False
+
+
+def _has_ungrounded_spec_numbers(response: str, blob: str) -> bool:
+    allowed = _allowed_spec_numbers(blob)
+    if not allowed:
+        return False
+
+    claims = _claimed_spec_numbers(response)
+    if not claims:
+        return False
+
+    return any(not _number_is_allowed(n, allowed) for n in claims)
+
+
 def sanitize_agent_response(
     response: str,
     *,
@@ -89,32 +177,20 @@ def sanitize_agent_response(
     blob_lower = blob.lower()
     lower = text.lower()
 
-    # Always remove fake discount comparison narratives.
     text = _DISCOUNT_NARRATIVE_RE.sub(
         "Please check the current price on our website.", text
     )
 
-    # ── Tracking claims without lookup_order_status ──
-    tracking_signals = (
-        "current status:", "tracking number:", "carrier:",
-        "estimated delivery:", "in preparation", "in transit",
-    )
     if not called.intersection(_TRACKING_BLOCK_TOOLS) and any(
-        s in lower for s in tracking_signals
+        s in lower for s in _TRACKING_SIGNALS
     ):
         return (
             "I can look up your order status if you share your order number "
             "(for example OSKMC1234) and the email used at checkout."
         )
 
-    # ── Repair / install steps without get_repair_help ──
-    repair_signals = (
-        "installation step", "install the", "assemble the", "assembly step",
-        "troubleshooting step", "remove the back", "manual mode",
-        "general steps", "follow these steps",
-    )
     numbered_steps = bool(_NUMBERED_STEPS_RE.search(text))
-    repair_like = numbered_steps or any(s in lower for s in repair_signals)
+    repair_like = numbered_steps or any(s in lower for s in _REPAIR_SIGNALS)
     if repair_like and not called.intersection(_REPAIR_BLOCK_TOOLS):
         return (
             "I don't have verified repair or installation steps for that in "
@@ -123,7 +199,6 @@ def sanitize_agent_response(
             "Sat, 10:00 AM - 4:00 PM CST — and they can walk you through it safely."
         )
 
-    # ── Price claims without catalog tool ──
     response_prices = _prices_in_text(text)
     if response_prices and not called.intersection(_PRICE_BLOCK_TOOLS):
         text = _PRICE_RE.sub("", text)
@@ -134,11 +209,12 @@ def sanitize_agent_response(
                 "Which chair model are you asking about?"
             )
 
-    # ── Price claims with tool but amounts not in tool output ──
     if response_prices and called.intersection(_PRICE_BLOCK_TOOLS):
         allowed = _prices_in_text(blob)
-        # Also allow prices written without $ in tool blob (Variant Price: 4999.00)
-        for m in re.finditer(r"(?:price|variant price|base price)[^\n$]*\$?([\d,]+(?:\.\d{2})?)", blob_lower):
+        for m in re.finditer(
+            r"(?:price|variant price|base price)[^\n$]*\$?([\d,]+(?:\.\d{2})?)",
+            blob_lower,
+        ):
             raw = m.group(1).replace(",", "")
             allowed.add(f"${raw}")
             try:
@@ -149,11 +225,10 @@ def sanitize_agent_response(
                 pass
         text = _strip_ungrounded_prices(text, allowed)
 
-    # ── Spec numbers: if tool returned AUTHORITATIVE lines, warn on big drift ──
-    # (Light touch — full enforcement is in the system prompt.)
-    if "search_chair_specs" in called and "no_results" in blob_lower and any(
-        kw in lower for kw in ("inch", "inches", "dimension", "doorway", "weight", "lb")
-    ):
-        return _SAFE_FALLBACK
+    if "search_chair_specs" in called:
+        if "no_results" in blob_lower and any(kw in lower for kw in _SPEC_TOPIC_SIGNALS):
+            return _SAFE_FALLBACK
+        if "authoritative spec values" in blob_lower and _has_ungrounded_spec_numbers(text, blob):
+            return _SAFE_FALLBACK
 
     return text.strip()

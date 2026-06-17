@@ -131,16 +131,23 @@ class HybridRetriever:
 # Tool implementations (pure functions; Agent calls them)
 # ============================================================================
 
-def _extract_price(text: str) -> Optional[float]:
+def _extract_price(text: str, *, title: Optional[str] = None) -> Optional[float]:
     """Extract the most likely actual chair price from a doc.
 
     Strategy:
-    1. Prefer 'Variant Price: $X' field if present (Shopify export schema).
-    2. Otherwise scan all $-prefixed numbers and pick the MAX in a reasonable
-       chair price band ($500-$50,000). Picking the min was wrong because docs
-       often contain monthly payment ($199/mo), warranty add-on ($99), or
-       shipping fee ($249) — all of which are far below the real chair price.
+    1. Prefer Shopify CSV base price when title matches product_catalog.
+    2. Prefer 'BASE PRICE (USD): $X' field if present (ingested docs).
+    3. Otherwise scan Variant Price / $ amounts in the chair price band.
     """
+    if title:
+        try:
+            from product_catalog import resolve_catalog_price
+            catalog_price = resolve_catalog_price(title)
+            if catalog_price is not None:
+                return catalog_price
+        except ImportError:
+            pass
+
     if not text:
         return None
 
@@ -276,6 +283,16 @@ def tool_search_chair_specs(
       4. Final fallback: searching just on the alphanumeric core of the model
     """
     norm_model = _normalize_model_query(model_name) if model_name else None
+    if model_name:
+        try:
+            from product_catalog import resolve_model_name
+
+            canonical = resolve_model_name(model_name)
+            if canonical:
+                model_name = canonical
+                norm_model = _normalize_model_query(model_name)
+        except ImportError:
+            pass
     base_query = f"{model_name} {query}".strip() if model_name else query
 
     docs = products_retriever.search(base_query, k=5, model_hint=model_name)
@@ -321,7 +338,7 @@ def tool_search_chair_specs(
         auth_lines = _find_authoritative_lines(doc.page_content, query)
 
         lines.append(f"\n--- Result {i}: {title} ---")
-        base_price = _extract_price(doc.page_content)
+        base_price = _extract_price(doc.page_content, title=title)
         if base_price is not None:
             lines.append(f"BASE PRICE (USD): ${base_price:,.2f}")
         if auth_lines:
@@ -392,7 +409,7 @@ def tool_recommend_chairs(
             continue
         if any(ex and ex in title_lower for ex in excludes_norm):
             continue
-        price = _extract_price(doc.page_content)
+        price = _extract_price(doc.page_content, title=title)
         if price is None or price < MIN_REASONABLE_PRICE:
             continue
         if eff_min is not None and price < eff_min:

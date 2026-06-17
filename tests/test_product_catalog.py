@@ -21,3 +21,14 @@ def test_resolve_known_model_substring():
 def test_resolve_empty_returns_none():
     assert pc.resolve_model_name("") is None
     assert pc.resolve_model_name("x") is None
+
+
+def test_resolve_catalog_price_known_model():
+    pc.load_catalog_titles.cache_clear()
+    pc.load_catalog_base_prices.cache_clear()
+    if not pc._CSV_PATH.is_file():
+        return
+    price = pc.resolve_catalog_price("solo flex")
+    if price is not None:
+        assert 500 <= price <= 50000
+

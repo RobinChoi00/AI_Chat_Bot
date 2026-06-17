@@ -97,6 +97,104 @@ def load_catalog_titles() -> tuple[tuple[str, str], ...]:
     return tuple(entries)
 
 
+def _is_base_warranty_delivery(row: dict) -> bool:
+    warranty = str(row.get("Option3 Value", "") or "").lower()
+    delivery = str(row.get("Option2 Value", "") or "").lower()
+    if "parts/labor" not in warranty or "free" not in warranty:
+        return False
+    if "extended" in warranty:
+        return False
+    return "curbside" in delivery or delivery in ("", "n/a")
+
+
+@lru_cache(maxsize=1)
+def load_catalog_base_prices() -> dict[str, float]:
+    """
+    Return normalized title key → base variant price (USD) from Shopify export.
+    """
+    if not _CSV_PATH.is_file():
+        logger.warning("product_catalog: %s not found", _CSV_PATH)
+        return {}
+
+    by_handle: dict[str, list[dict]] = {}
+    with _CSV_PATH.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        current_handle = ""
+        current_title = ""
+        current_row: dict = {}
+        for row in reader:
+            h = (row.get("Handle") or "").strip()
+            if h:
+                current_handle = h
+                current_row = dict(row)
+            title = (row.get("Title") or "").strip()
+            if title:
+                current_title = title
+                current_row = dict(row)
+            if not current_handle or not current_title:
+                continue
+            if not _is_massage_chair(current_row):
+                continue
+            merged = dict(current_row)
+            merged["Title"] = current_title
+            merged["Handle"] = current_handle
+            by_handle.setdefault(current_handle, []).append(merged)
+
+    prices: dict[str, float] = {}
+    for _handle, rows in by_handle.items():
+        title = str(rows[0].get("Title", "")).strip()
+        if not title:
+            continue
+        base_rows = [r for r in rows if _is_base_warranty_delivery(r)]
+        candidates = base_rows or rows
+        best_price: Optional[float] = None
+        for row in candidates:
+            raw = str(row.get("Variant Price", "") or "").replace(",", "").strip()
+            if not raw:
+                continue
+            try:
+                val = float(raw)
+            except ValueError:
+                continue
+            if 500 <= val <= 50000 and (best_price is None or val < best_price):
+                best_price = val
+        if best_price is not None:
+            prices[_normalize_key(title)] = best_price
+
+    logger.info("product_catalog: loaded %d base prices", len(prices))
+    return prices
+
+
+def resolve_catalog_price(title_or_text: str) -> Optional[float]:
+    """Look up canonical base price for a product title or free-text model."""
+    text = (title_or_text or "").strip()
+    if len(text) < 2:
+        return None
+
+    prices = load_catalog_base_prices()
+    if not prices:
+        return None
+
+    norm = _normalize_key(text)
+    if norm in prices:
+        return prices[norm]
+
+    resolved = resolve_model_name(text)
+    if resolved:
+        key = _normalize_key(resolved)
+        if key in prices:
+            return prices[key]
+
+    best_price: Optional[float] = None
+    best_len = 0
+    for key, price in prices.items():
+        if len(key) >= 5 and (key in norm or norm in key):
+            if len(key) > best_len:
+                best_len = len(key)
+                best_price = price
+    return best_price
+
+
 def resolve_model_name(raw: str) -> Optional[str]:
     """
     Map free-text model input to the closest catalog Title, or None.

@@ -183,7 +183,7 @@ if not (os.getenv("EMAIL_SENDER") and os.getenv("EMAIL_PASSWORD")):
 # NOTE: Legacy keyword-based intent routing (TECHNICIAN_KEYWORDS, PRODUCT_QUERY_KEYWORDS,
 # TRACKING_KEYWORDS, etc.) was removed when the agentic tool-calling endpoint became
 # canonical — the LLM + tool schemas now perform routing. The patterns used by the
-# active endpoint live in `_PRODUCT_INTENT_PATTERNS`, `_REPAIR_INTENT_PATTERNS`,
+# active endpoint live in `intent_router.py` (repair / tracking / price / recommend).
 # `_TRACKING_INTENT_PATTERNS`, and `_SHOWROOM_INTENT_PATTERNS` further below.
 
 def get_store_key_prefix(target_domain: str) -> str:
@@ -1166,94 +1166,10 @@ def build_system_prompt(target_domain: str) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# Intent heuristics — used to bias the LLM's first tool call. Keeps the agent
-# from drifting into "Let me check..." stalls or training-data hallucinations.
-# ---------------------------------------------------------------------------
-
-# Phrases like "I'm interested in X", "Tell me about X", or a bare model name
-# almost always mean the user wants spec details. Forcing search_chair_specs
-# eliminates the "One moment please..." stall.
-_PRODUCT_INTENT_PATTERNS = [
-    re.compile(r"\b(i'?m|i am)\s+(interested\s+in|looking\s+(at|for))\b", re.IGNORECASE),
-    re.compile(r"\btell\s+me\s+(more\s+)?about\b", re.IGNORECASE),
-    re.compile(r"\b(specs?|specifications?|dimensions?|price|weight|features?)\b.*\b(of|for)\b", re.IGNORECASE),
-    re.compile(r"\b(what\s+is|how\s+much\s+(is|does))\b.*\b(osaki|titan|hypnos|nova|amamedic|maestro|orion|fleetwood|champ|atai|soho|duke|epic|aether|vera)\b", re.IGNORECASE),
-]
-
-# Repair / installation / troubleshooting language. We want to guarantee
-# get_repair_help is called — never let the LLM invent install steps.
-_REPAIR_INTENT_PATTERNS = [
-    re.compile(r"\b(install(ation|ing)?|assembl(e|y|ing)|set\s*up|setup)\b", re.IGNORECASE),
-    re.compile(r"\b(repair|troubleshoot|fix|broken|not\s+working|wo[nN]?'?t\s+(turn|power|start)|stopped\s+working)\b", re.IGNORECASE),
-    re.compile(r"\b(error\s+code|err\s*\d+|e\d{1,3})\b", re.IGNORECASE),
-    re.compile(r"\b(not\s+inflating|leaking|noise|squeak|grind|stuck|jammed)\b", re.IGNORECASE),
-    re.compile(r"\b(replace(ment)?|swap)\s+(the\s+)?(controller|remote|mech|roller|airbag|cable|cord|adapter)\b", re.IGNORECASE),
-]
-
-# Tracking — only force when the message looks like a tracking question and
-# the user already supplied an order id or email (otherwise we'd just spam
-# missing-input errors).
-_TRACKING_INTENT_PATTERNS = [
-    re.compile(r"\b(track|tracking|where\s+is\s+my|order\s+(status|update|tracking)|delivery\s+(status|update))\b", re.IGNORECASE),
-]
-_ORDER_ID_PATTERN = re.compile(r"\b(OSKMC|OSKUS|TIDM|OSK|TI)\d{3,7}\b", re.IGNORECASE)
-_EMAIL_PATTERN = re.compile(r"[\w\.\-+]+@[\w\.\-]+\.\w+")
-
-# Warranty claim intents — force warranty_start when the customer is clearly
-# reporting a defect, damage, or asking to file a warranty case.
-_WARRANTY_CLAIM_PATTERNS = [
-    re.compile(r"\b(warranty\s*(claim|request|ticket|issue|case|service|form)|file\s+a\s+warranty|under\s+warranty|submit\s+warranty)\b", re.IGNORECASE),
-    re.compile(r"\b(defect(ive)?|malfunction(ing)?)\b", re.IGNORECASE),
-    re.compile(r"\b(delivery\s+(damage[d]?|issue|problem|wrong)|damaged\s+in\s+transit|box\s+was\s+(damage[d]?|opened|crushed))\b", re.IGNORECASE),
-    re.compile(r"\b(i\s+want|i\s+need|i\s+'d\s+like|please)\s+(a\s+)?(replacement|refund|exchange|RMA|repair\s+service|compensation)\b", re.IGNORECASE),
-    re.compile(r"\b(my|the)\s+(chair|unit|product|massage\s+chair)\s+(is\s+)?(not\s+working|broken|defective|damaged|stopped)\b", re.IGNORECASE),
-    re.compile(r"\bfile\s+(a\s+)?(claim|warranty|ticket|complaint)\b", re.IGNORECASE),
-]
-
-# Showroom / company-location intents — force the showroom tool so customers
-# always get the canonical Carrollton, TX address, never a "I don't have".
-_SHOWROOM_INTENT_PATTERNS = [
-    re.compile(r"\b(showroom|show\s*room)\b", re.IGNORECASE),
-    re.compile(r"\b(where\s+(is|are)\s+(?:your|the)\s+(?:office|store|company|headquarters|hq)|company\s+location|store\s+location|office\s+location|headquarters)\b", re.IGNORECASE),
-    re.compile(r"\b(can\s+i\s+visit|come\s+see\s+(?:the\s+)?chairs?|try\s+(?:the\s+)?chairs?\s+in\s+person|in[-\s]?store)\b", re.IGNORECASE),
-    re.compile(r"\b(your|company)\s+(address|location)\b", re.IGNORECASE),
-]
-
-
-def _infer_forced_tool(user_query: str) -> Optional[str]:
-    """Return the tool name we should force on the first call, or None."""
-    q = (user_query or "").strip()
-    if not q:
-        return None
-
-    has_order_id = bool(_ORDER_ID_PATTERN.search(q))
-    has_email = bool(_EMAIL_PATTERN.search(q))
-
-    # Showroom / location — high priority because the answer is a single static fact.
-    if any(p.search(q) for p in _SHOWROOM_INTENT_PATTERNS):
-        return "get_showroom_info"
-
-    # Warranty claim — force the intake workflow before falling through to repair help.
-    if any(p.search(q) for p in _WARRANTY_CLAIM_PATTERNS):
-        return "start_warranty_workflow"
-
-    # Repair / install patterns take priority — these are the ones the LLM
-    # tends to hallucinate worst.
-    if any(p.search(q) for p in _REPAIR_INTENT_PATTERNS):
-        return "get_repair_help"
-
-    # Tracking — only when we have something to look up.
-    if any(p.search(q) for p in _TRACKING_INTENT_PATTERNS) and (has_order_id or has_email):
-        return "lookup_order_status"
-    if has_order_id and has_email:
-        return "lookup_order_status"
-
-    # Product interest — "I'm interested in <model>" / "Tell me about <model>"
-    if any(p.search(q) for p in _PRODUCT_INTENT_PATTERNS):
-        return "search_chair_specs"
-
-    return None
+try:
+    from app.intent_router import infer_forced_tool
+except ImportError:
+    from intent_router import infer_forced_tool  # type: ignore
 
 
 def _execute_tool(name: str, args: Dict[str, Any], target_domain: str) -> str:
@@ -1442,7 +1358,7 @@ async def chat_endpoint(
     if _active_warranty_ticket and _active_warranty_node:
         forced_first_tool = "answer_warranty_question"
     else:
-        forced_first_tool = _infer_forced_tool(user_query)
+        forced_first_tool = infer_forced_tool(user_query)
 
     # ── 💰 Zero-LLM short-circuit for showroom / location questions ──
     if forced_first_tool == "get_showroom_info":

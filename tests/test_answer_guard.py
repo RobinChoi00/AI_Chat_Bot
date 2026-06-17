@@ -47,3 +47,37 @@ def test_strips_discount_narrative():
         tool_results=["BASE PRICE (USD): $4,999.00"],
     )
     assert "Originally" not in out
+
+
+def test_blocks_ungrounded_spec_numbers_with_authoritative_tool():
+    tool_blob = (
+        "--- Result 1: Osaki Hypnos ---\n"
+        "BASE PRICE (USD): $8,999.00\n"
+        "AUTHORITATIVE SPEC VALUES (use EXACTLY these numbers, do not paraphrase):\n"
+        "  - Minimum Doorway: 32 inches\n"
+        "  - Chair Weight: 285 lbs\n"
+    )
+    out = sanitize_agent_response(
+        "You need a doorway clearance of at least 36 inches and the chair weighs about 300 lbs.",
+        tools_called=["search_chair_specs"],
+        user_query="doorway size for hypnos",
+        tool_results=[tool_blob],
+    )
+    assert "36 inches" not in out
+    assert "300 lbs" not in out
+    assert "accurate information" in out.lower()
+
+
+def test_allows_matching_spec_numbers_from_tool():
+    tool_blob = (
+        "AUTHORITATIVE SPEC VALUES (use EXACTLY these numbers, do not paraphrase):\n"
+        "  - Minimum Doorway: 32 inches\n"
+    )
+    out = sanitize_agent_response(
+        "The minimum doorway clearance is 32 inches.",
+        tools_called=["search_chair_specs"],
+        user_query="doorway",
+        tool_results=[tool_blob],
+    )
+    assert "32 inches" in out
+
