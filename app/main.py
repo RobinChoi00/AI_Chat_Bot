@@ -1110,6 +1110,10 @@ W5. NEVER skip the warranty_answer tool to jump to a conclusion. Every step must
     (+1-888-848-2630). The system will rewrite if needed.
 
 # CONTEXT-AWARE BEHAVIOR
+- On the FIRST message of a new conversation (empty chat history), if the user only
+  greets you ("hi", "hello", "help") or has not yet named a chair model, open with a
+  warm greeting AND ask which Osaki or Titan massage chair model they have (serial sticker).
+  If they already named a model or asked a specific question, skip the model question and help directly.
 - If the user's message is short or ambiguous (e.g. just "price", "specs", "more info"),
   look at the recent chat history. If a model was discussed, assume that model.
   If unclear, ASK ONE clarifying question instead of refusing.
@@ -1286,6 +1290,20 @@ def _build_showroom_reply(target_domain: str) -> str:
     )
 
 
+try:
+    from app.chat_welcome import (
+        build_chat_welcome_message,
+        is_conversation_start,
+        is_opening_greeting,
+    )
+except ImportError:
+    from chat_welcome import (  # type: ignore
+        build_chat_welcome_message,
+        is_conversation_start,
+        is_opening_greeting,
+    )
+
+
 @app.post("/api/v1/chat")
 @limiter.limit(f"{RATE_LIMIT_PER_MINUTE};{RATE_LIMIT_PER_HOUR}")
 async def chat_endpoint(
@@ -1392,6 +1410,29 @@ async def chat_endpoint(
                 iter([scope_refusal]),
                 media_type="text/event-stream",
             )
+
+    # ── 💰 Zero-LLM welcome for first-turn greetings ──
+    if (
+        is_conversation_start(chat_request.chat_history)
+        and is_opening_greeting(user_query)
+    ):
+        welcome_reply = build_chat_welcome_message()
+        logger.info("⚡ Short-circuit: opening greeting → welcome reply (0 LLM calls)")
+        background_tasks.add_task(
+            _persist_chat_log,
+            chat_request.session_id, user_query, welcome_reply, target_domain,
+        )
+        background_tasks.add_task(
+            _persist_usage_log,
+            session_id=chat_request.session_id, domain=target_domain,
+            model="(welcome)", call_count=0,
+            prompt_tokens=0, cached_tokens=0, completion_tokens=0,
+            estimated_cost_usd=0.0, elapsed_ms=0, cache_hit=False,
+        )
+        return StreamingResponse(
+            iter([welcome_reply]),
+            media_type="text/event-stream",
+        )
 
     # ── 💰 Zero-LLM short-circuit for showroom / location questions ──
     if forced_first_tool == "get_showroom_info":

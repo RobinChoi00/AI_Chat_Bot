@@ -1,4 +1,7 @@
 const DEFAULT_EVIDENCE_EMAIL = "service@osakititan.com";
+const DEFAULT_WARRANTY_PHONE = "+1-888-848-2630";
+const DEFAULT_WARRANTY_HOURS =
+  "Mon-Fri, 9:30 AM - 6:30 PM / Sat, 10:00 AM - 4:00 PM CST";
 
 /** Standard warranty contact footer appended to terminal prompts. */
 export function buildWarrantyContactFooter(
@@ -6,8 +9,9 @@ export function buildWarrantyContactFooter(
 ): string {
   const email = evidenceEmail?.trim() || DEFAULT_EVIDENCE_EMAIL;
   return (
-    `For warranty support, contact us at ${email}.\n` +
-    `If you leave your email address, our warranty team will respond within 24 hours.`
+    `For warranty support, call ${DEFAULT_WARRANTY_PHONE} or email ${email}.\n` +
+    `Hours: ${DEFAULT_WARRANTY_HOURS}.\n` +
+    `If you leave your email below, our warranty team will respond within 24 hours.`
   );
 }
 

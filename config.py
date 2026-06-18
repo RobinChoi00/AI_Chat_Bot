@@ -46,6 +46,23 @@ SUPPORT_CONTACT_MSG = f"If you need further assistance, please contact our suppo
 COMPANY_ADDRESS = "1001 W Crosby Rd, Carrollton, TX 75006"
 SHOWROOM_LOCATION = COMPANY_ADDRESS
 
+CHAT_WELCOME_MESSAGE = (
+    "Hello! Welcome to Osaki & Titan support. 👋\n\n"
+    "Which massage chair model do you have? "
+    "You can find it on the serial-number sticker on your chair "
+    "(for example, OS-4000T, Solo Flex, or Hypnos 4D).\n\n"
+    "Tell me your model, or ask about specs, pricing, orders, delivery, warranty, "
+    "or troubleshooting."
+)
+
+WARRANTY_WELCOME_MESSAGE = (
+    "Hello! Welcome to Osaki & Titan warranty support. 👋\n\n"
+    "Which massage chair model do you have? "
+    "You can find it on the serial-number sticker on your chair "
+    "(for example, OS-4000T, Solo Flex, or Hypnos 4D).\n\n"
+    "Please tell us your model below, or choose the type of issue you're experiencing."
+)
+
 
 def get_contact_msg(routing: str, target_domain: str) -> str:
     """Return the correct footer based on intent (Sales vs Warranty) and domain."""

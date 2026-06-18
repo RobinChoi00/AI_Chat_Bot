@@ -294,6 +294,18 @@ if "session_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+CHAT_WELCOME_MESSAGE = (
+    "Hello! Welcome to Osaki & Titan support. 👋\n\n"
+    "Which massage chair model do you have? "
+    "You can find it on the serial-number sticker on your chair "
+    "(for example, OS-4000T, Solo Flex, or Hypnos 4D).\n\n"
+    "Tell me your model, or ask about specs, pricing, orders, delivery, warranty, "
+    "or troubleshooting."
+)
+
+if not st.session_state.messages:
+    st.session_state.messages = [{"role": "assistant", "content": CHAT_WELCOME_MESSAGE}]
+
 # 4. 사이드바 UI 구성
 with st.sidebar:
     st.image(current_brand["logo"], width=150)
