@@ -23,8 +23,8 @@ services:
       - ./faiss_index:/app/faiss_index
       - ./db_data:/app/db_data
       - ./uploaded_evidence:/app/uploaded_evidence
-      - ./data/warranty_flowchart.json:/app/data/warranty_flowchart.json:ro
-      - ./data/warranty_evidence_specs.json:/app/data/warranty_evidence_specs.json:ro
+      - ./data:/app/data
+      - ./raw_data:/app/raw_data:ro
     logging:
       driver: "json-file"
       options:
