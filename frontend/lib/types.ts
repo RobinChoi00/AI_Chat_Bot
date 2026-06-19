@@ -67,6 +67,14 @@ export interface TrackingSummary {
   snapshot?: Record<string, unknown>;
 }
 
+export interface TerminalEnrichment {
+  message?: string;
+  install_video?: { url: string; label: string };
+  self_help?: string | null;
+  show_contact_form?: boolean;
+  defer_email?: boolean;
+}
+
 export interface WarrantySessionResponse {
   session_id: string;
   ticket: WarrantyTicketState | null;
@@ -74,6 +82,8 @@ export interface WarrantySessionResponse {
   email_notified?: boolean;
   nlp_interpreted?: boolean;
   interpreted_issue_type?: string;
+  assistant_message?: string | null;
+  terminal_enrichment?: TerminalEnrichment | null;
 }
 
 export interface WarrantyContactResponse {

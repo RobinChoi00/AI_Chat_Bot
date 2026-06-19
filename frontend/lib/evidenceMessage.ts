@@ -1,7 +1,12 @@
-const DEFAULT_EVIDENCE_EMAIL = "service@osakititan.com";
-const DEFAULT_WARRANTY_PHONE = "+1-888-848-2630";
-const DEFAULT_WARRANTY_HOURS =
-  "Mon-Fri, 9:30 AM - 6:30 PM / Sat, 10:00 AM - 4:00 PM CST";
+import {
+  WARRANTY_SUPPORT_EMAIL,
+  WARRANTY_SUPPORT_HOURS,
+  WARRANTY_SUPPORT_PHONE,
+} from "./warrantyContact";
+
+const DEFAULT_EVIDENCE_EMAIL = WARRANTY_SUPPORT_EMAIL;
+const DEFAULT_WARRANTY_PHONE = WARRANTY_SUPPORT_PHONE;
+const DEFAULT_WARRANTY_HOURS = WARRANTY_SUPPORT_HOURS;
 
 /** Standard warranty contact footer appended to terminal prompts. */
 export function buildWarrantyContactFooter(
@@ -10,8 +15,7 @@ export function buildWarrantyContactFooter(
   const email = evidenceEmail?.trim() || DEFAULT_EVIDENCE_EMAIL;
   return (
     `For warranty support, call ${DEFAULT_WARRANTY_PHONE} or email ${email}.\n` +
-    `Hours: ${DEFAULT_WARRANTY_HOURS}.\n` +
-    `If you leave your email below, our warranty team will respond within 24 hours.`
+    `Hours: ${DEFAULT_WARRANTY_HOURS}.`
   );
 }
 
@@ -24,7 +28,6 @@ export function buildEvidenceRequestMessage(
 ): string | null {
   if (!evidenceRequired?.length) return null;
 
-  const email = evidenceEmail?.trim() || DEFAULT_EVIDENCE_EMAIL;
   const hasVideo = evidenceRequired.includes("video_of_issue");
   const hasDamagePhotos =
     evidenceRequired.includes("damage_photos") ||
@@ -70,7 +73,8 @@ function appendEvidenceEmailRequired(text: string): string {
   if (
     lower.includes("final step") ||
     lower.includes("email only") ||
-    lower.includes("email address in the upload form")
+    lower.includes("email address in the upload form") ||
+    lower.includes("leave your email below")
   ) {
     return text;
   }
@@ -80,10 +84,7 @@ function appendEvidenceEmailRequired(text: string): string {
 function appendWarrantyFooter(text: string, evidenceEmail?: string | null): string {
   const footer = buildWarrantyContactFooter(evidenceEmail);
   const lower = text.toLowerCase();
-  if (
-    lower.includes("within 24 hours") &&
-    lower.includes(DEFAULT_EVIDENCE_EMAIL)
-  ) {
+  if (lower.includes("888-848-2630") && lower.includes("hours:")) {
     return text;
   }
   return `${text}\n\n${footer}`;
@@ -93,8 +94,13 @@ function appendWarrantyFooter(text: string, evidenceEmail?: string | null): stri
 export function formatTerminalPrompt(
   prompt: string,
   evidenceRequired?: string[],
-  evidenceEmail?: string | null
+  evidenceEmail?: string | null,
+  assistantMessage?: string | null
 ): string {
+  if (assistantMessage?.trim()) {
+    return assistantMessage.trim();
+  }
+
   const lower = prompt.toLowerCase();
   const emailInPrompt = lower.includes("service@osakititan.com");
   const hasVideoEvidence = evidenceRequired?.includes("video_of_issue");

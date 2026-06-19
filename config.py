@@ -9,7 +9,8 @@ load_dotenv(override=True)
 # ==========================================
 SUPPORT_BUSINESS_HOURS = "Mon-Fri, 9:30 AM - 6:30 PM / Sat, 10:00 AM - 4:00 PM CST"
 
-WARRANTY_PHONE = "+1-888-848-2630"
+WARRANTY_PHONE = "+1-888-848-2630 ext. 3"
+WARRANTY_BUSINESS_HOURS = "Mon-Fri, 10:00 AM - 6:00 PM CST"
 
 SALES_PHONE_BY_DOMAIN = {
     "osakiusa":          "+1-888-501-5988",
@@ -81,8 +82,8 @@ def get_contact_msg(routing: str, target_domain: str) -> str:
         )
 
     return (
-        f"If you need further assistance, please contact our support team at {WARRANTY_PHONE}. "
-        f"Our business hours are {SUPPORT_BUSINESS_HOURS}."
+        f"If you need further assistance, please contact our warranty team at {WARRANTY_PHONE}. "
+        f"Our warranty hours are {WARRANTY_BUSINESS_HOURS}."
     )
 
 # 프론트엔드에서 도메인을 넘겨주지 않았을 때 사용할 기본 폴백(Fallback) 도메인

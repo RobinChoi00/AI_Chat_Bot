@@ -170,7 +170,7 @@ export default function EvidenceUploader({
           value={customerEmail}
           onChange={(e) => setCustomerEmail(e.target.value)}
           placeholder="you@example.com"
-          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+          className="min-h-[48px] w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-brand-500 sm:text-sm"
         />
       </div>
 

@@ -381,7 +381,7 @@ def _quick_start_ticket(
 
     ticket = engine.get_ticket(ticket_id)
     node = engine.get_current_node(ticket_id)
-    return _serialize_ticket_state(session_id, ticket, node)
+    return _serialize_ticket_state(session_id, ticket, node, engine=engine)
 
 
 def _submit_answer_with_nlp(engine, ticket_id: str, answer: str) -> tuple[dict, bool]:
@@ -492,7 +492,7 @@ def _finalize_answer_response(
             email_notified = sent_now
 
     node = engine.get_current_node(ticket_id)
-    payload = _serialize_ticket_state(str(ticket.session_id), ticket, node)
+    payload = _serialize_ticket_state(str(ticket.session_id), ticket, node, engine=engine)
     if tracking_summary is not None:
         payload["tracking_summary"] = tracking_summary
     if email_notified:
@@ -502,7 +502,13 @@ def _finalize_answer_response(
     return payload
 
 
-def _serialize_ticket_state(session_id: str, ticket, node) -> Dict[str, Any]:
+def _serialize_ticket_state(
+    session_id: str,
+    ticket,
+    node,
+    *,
+    engine=None,
+) -> Dict[str, Any]:
     """Build the browser-safe session payload shared by GET/POST warranty endpoints."""
     if ticket is None:
         return {"session_id": session_id, "ticket": None}
@@ -530,7 +536,15 @@ def _serialize_ticket_state(session_id: str, ticket, node) -> Dict[str, Any]:
                 "label": opt.get("label", ""),
             })
 
-    return {
+    terminal_enrichment: Optional[Dict[str, Any]] = None
+    if node and node.get("type") == "terminal":
+        from warranty_terminal_enrichment import build_terminal_enrichment  # noqa: WPS433
+
+        if engine is None:
+            engine = _lazy_engine()
+        terminal_enrichment = build_terminal_enrichment(engine, ticket, node)
+
+    payload: Dict[str, Any] = {
         "session_id": session_id,
         "ticket": {
             "ticket_id":    ticket_id,
@@ -548,6 +562,10 @@ def _serialize_ticket_state(session_id: str, ticket, node) -> Dict[str, Any]:
             } if node else None,
         },
     }
+    if terminal_enrichment:
+        payload["terminal_enrichment"] = terminal_enrichment
+        payload["assistant_message"] = terminal_enrichment.get("message")
+    return payload
 
 
 def _get_open_session_ticket(engine, session_id: str):
@@ -588,7 +606,7 @@ async def get_warranty_session_state(session_id: str):
         return {"session_id": session_id, "ticket": None}
 
     node = engine.get_current_node(str(ticket.ticket_id))
-    return _serialize_ticket_state(session_id, ticket, node)
+    return _serialize_ticket_state(session_id, ticket, node, engine=engine)
 
 
 @router.post("/api/v1/warranty/session/{session_id}/quick-start", tags=["warranty"])
