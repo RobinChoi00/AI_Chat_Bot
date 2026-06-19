@@ -342,10 +342,6 @@ export default function WarrantyChat() {
   const isAwaitingAdmin =
     warrantyState?.status === "awaiting_admin_review" ||
     warrantyState?.status === "admin_reviewing";
-  const hasWorkflowOptions =
-    !optionsUsed &&
-    !loading &&
-    (warrantyState?.current_node?.options?.length ?? 0) > 0;
   const isTerminal = warrantyState?.current_node?.is_terminal ?? false;
 
   const needsModelRegistration =
@@ -362,6 +358,12 @@ export default function WarrantyChat() {
       (!!warrantyState?.model_name &&
         warrantyState?.current_node?.node_id === "issue_type" &&
         !warrantyState?.issue_type));
+
+  const hasWorkflowOptions =
+    !optionsUsed &&
+    !loading &&
+    !showIssueTypeOptions &&
+    (warrantyState?.current_node?.options?.length ?? 0) > 0;
 
   const helpOfferOptions =
     terminalEnrichment?.help_offer_options ?? [];
