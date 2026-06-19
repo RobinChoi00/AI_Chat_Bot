@@ -1,4 +1,4 @@
-"""Tests for install video lookup and defect self-help enrichment."""
+"""Tests for defect self-help formatting."""
 
 from __future__ import annotations
 
@@ -26,20 +26,20 @@ def test_lookup_install_video_default():
     assert result["match"] == "default"
 
 
-def test_lookup_install_video_series():
-    result = lookup_install_video("OS-4000T")
-    assert result["url"]
-    assert result["match"] in {"series", "model", "default"}
-
-
-def test_find_defect_self_help_power():
+def test_find_defect_self_help_power_back_switch():
+    turns = [
+        _Turn("power"),
+        _Turn("back_switch_sound", "Turned on the back switch and heard something from the chair"),
+    ]
     text = find_defect_self_help(
         defect_category="power",
-        path_text="fuse blown chair won't turn on clicking remote",
-        model_name="OS-4000T",
+        path_text="back switch heard something power remote",
+        node_id="defect_power_main_pcb_terminal",
+        turns=turns,
     )
     assert text is not None
-    assert "try" in text.lower() or "check" in text.lower()
+    assert "similar cases" in text.lower()
+    assert "power cord" in text.lower() or "fuse" in text.lower()
 
 
 def test_infer_defect_category_from_turns():

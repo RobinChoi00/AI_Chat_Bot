@@ -12,6 +12,7 @@ from warranty_self_help import (
     build_path_text,
     find_defect_self_help,
     infer_defect_category_from_turns,
+    soften_terminal_prompt,
 )
 
 
@@ -19,6 +20,13 @@ def _contact_footer() -> str:
     return (
         f"Warranty team: {WARRANTY_PHONE} · {WARRANTY_TEAM_EMAIL}\n"
         f"Hours: {WARRANTY_BUSINESS_HOURS}"
+    )
+
+
+def _still_need_help_cta() -> str:
+    return (
+        "If these steps don't resolve the issue, tap **I still need help** below "
+        "and we'll collect your email so our team can follow up."
     )
 
 
@@ -50,8 +58,8 @@ def _defect_message(
     ticket,
     node: dict,
     base_prompt: str,
-    evidence_required: list[str],
 ) -> dict[str, Any]:
+    node_id = str(node.get("node_id") or "")
     turns = engine.get_turns(ticket_id)
     category = infer_defect_category_from_turns(turns)
     path_text = build_path_text(turns)
@@ -59,28 +67,29 @@ def _defect_message(
         defect_category=category,
         path_text=path_text,
         model_name=str(getattr(ticket, "model_name", "") or ""),
+        node_id=node_id,
+        turns=turns,
     )
 
-    parts = [base_prompt]
+    parts: list[str] = []
     if self_help:
-        parts.append(f"\n\n{self_help}")
-    elif evidence_required:
-        parts.append(
-            "\n\nIf you still need our team's help, leave your email below — "
-            "photos and videos are optional."
-        )
+        parts.append(self_help)
+        parts.append(f"\n\n{soften_terminal_prompt(base_prompt)}")
     else:
+        parts.append(soften_terminal_prompt(base_prompt))
         parts.append(
-            "\n\nIf you still need our team's help, leave your email below."
+            "\n\nYou can also review basic checks in your chair manual, or browse "
+            f"[support guides]({REPAIR_MANUAL_URL})."
         )
 
+    parts.append(f"\n\n{_still_need_help_cta()}")
     parts.append(f"\n\n{_contact_footer()}")
 
     return {
         "message": "".join(parts),
         "self_help": self_help,
-        "show_contact_form": True,
-        "defer_email": False,
+        "show_contact_form": False,
+        "defer_email": True,
     }
 
 
@@ -99,7 +108,7 @@ def build_terminal_enrichment(
 
     ticket_id = str(getattr(ticket, "ticket_id", "") or "")
     issue_type = str(getattr(ticket, "issue_type", "") or "").lower()
-    evidence_required = list(node.get("evidence_required") or [])
+    evidence_required = list(node.get("evidence_required", []))
     action = str(node.get("action") or "")
 
     if node_id == "install_send_video" or (
@@ -109,43 +118,22 @@ def build_terminal_enrichment(
         return _install_message(model_name, base_prompt)
 
     if issue_type == "defect":
-        result = _defect_message(
-            engine,
-            ticket_id,
-            ticket,
-            node,
-            base_prompt,
-            evidence_required,
-        )
-        if action == "send_info":
-            result["show_contact_form"] = False
-            result["defer_email"] = True
-            if "still need help" not in result["message"].lower():
-                result["message"] = (
-                    f"{result['message']}\n\n"
-                    "If the issue continues, tap **I still need help** below."
-                )
-        return result
+        return _defect_message(engine, ticket_id, ticket, node, base_prompt)
 
     if action == "send_info":
         return {
-            "message": f"{base_prompt}\n\n{_contact_footer()}",
+            "message": f"{base_prompt}\n\n{_still_need_help_cta()}\n\n{_contact_footer()}",
             "show_contact_form": False,
             "defer_email": True,
         }
 
-    if evidence_required:
-        message = (
-            f"{base_prompt}\n\n"
-            "If you still need our team's help, leave your email below — "
-            "photos and videos are optional.\n\n"
-            f"{_contact_footer()}"
-        )
-    else:
-        message = f"{base_prompt}\n\n{_contact_footer()}"
-
+    message = (
+        f"{soften_terminal_prompt(base_prompt)}\n\n"
+        f"{_still_need_help_cta()}\n\n"
+        f"{_contact_footer()}"
+    )
     return {
         "message": message,
-        "show_contact_form": bool(evidence_required),
-        "defer_email": False,
+        "show_contact_form": False,
+        "defer_email": True,
     }
