@@ -68,6 +68,51 @@ _INTERNAL_MARKERS = (
     "warranty team will arrange",
 )
 
+_PII_OR_ADMIN_MARKERS = (
+    "customer address",
+    "phone number",
+    "description of issue:",
+    "information we need",
+    "proof of purchase",
+    "serial number:",
+    "order number",
+    "customer name:",
+    "place of purchase",
+    "service location:",
+    "tracking id",
+    "merged into ticket",
+    "your ticket case #",
+    "original message",
+    "sent from my",
+    " wrote:",
+    "http://",
+    "https://",
+    "888-848-2630",
+    "8888482630",
+    "ota world",
+    "non-refundable",
+    "warranty agreement",
+    "note: please",
+    "ticket #",
+    "fedex (tracking",
+)
+
+_BOILERPLATE_MARKERS = (
+    "qualified technician inspect",
+    "we strongly suggest having",
+    "with that being said",
+    "we always recommend having",
+    "parts purchased from our service",
+    "unauthorized sources",
+    "facebook marketplace",
+    "courtesy email to inform",
+)
+
+_MAX_CUSTOMER_STEP_LEN = 220
+_PHONE_RE = re.compile(r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b")
+_ZIP_RE = re.compile(r"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b")
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
+
 _CUSTOMER_ACTION_WORDS = (
     "check",
     "verify",
@@ -122,6 +167,47 @@ def _is_internal(text: str) -> bool:
     return any(marker in lower for marker in _INTERNAL_MARKERS)
 
 
+def _is_customer_safe_step(text: str) -> bool:
+    chunk = (text or "").strip()
+    if len(chunk) < 12 or len(chunk) > _MAX_CUSTOMER_STEP_LEN:
+        return False
+    if _is_internal(chunk):
+        return False
+    lower = chunk.lower()
+    if any(marker in lower for marker in _PII_OR_ADMIN_MARKERS):
+        return False
+    if any(marker in lower for marker in _BOILERPLATE_MARKERS):
+        return False
+    if _PHONE_RE.search(chunk) or _ZIP_RE.search(chunk) or _EMAIL_RE.search(chunk):
+        return False
+    if not any(word in lower for word in _CUSTOMER_ACTION_WORDS):
+        return False
+    return True
+
+
+def _clean_freshdesk_title(subject: str, question: str = "") -> str:
+    raw = (subject or question or "").strip()
+    raw = re.sub(r"^(?:reopened:\s*)+", "", raw, flags=re.I)
+    raw = re.sub(r"^(?:re|fwd):\s*", "", raw, flags=re.I).strip()
+    raw = re.sub(r"^ticket\s+#\d+\s*--\s*", "", raw, flags=re.I).strip()
+    if len(raw) > 80:
+        raw = raw[:77] + "..."
+    return raw or "Support case"
+
+
+def _is_usable_freshdesk_answer(answer: str) -> bool:
+    lower = (answer or "").lower().strip()
+    if len(lower) < 20:
+        return False
+    if "merged into ticket" in lower:
+        return False
+    if lower.startswith("this ticket is closed"):
+        return False
+    if lower.startswith("expedite shipping"):
+        return False
+    return True
+
+
 def _extract_customer_steps(*texts: str) -> tuple[str, ...]:
     steps: list[str] = []
     seen: set[str] = set()
@@ -131,12 +217,7 @@ def _extract_customer_steps(*texts: str) -> tuple[str, ...]:
         for chunk in re.split(r"[\n.;]+", blob):
             chunk = chunk.strip()
             chunk = re.sub(r"^\d+[\).\]]\s*", "", chunk)
-            if len(chunk) < 12:
-                continue
-            if _is_internal(chunk):
-                continue
-            lower = chunk.lower()
-            if not any(word in lower for word in _CUSTOMER_ACTION_WORDS):
+            if not _is_customer_safe_step(chunk):
                 continue
             key = _normalize(chunk)
             if key in seen:
@@ -198,14 +279,16 @@ def _load_freshdesk_entries() -> list[KnowledgeEntry]:
         question = str(ticket.get("question") or "").strip()
         answer = str(ticket.get("answer") or "").strip()
         subject = str(ticket.get("subject") or "").strip()
+        if not _is_usable_freshdesk_answer(answer):
+            continue
         if not question and not subject:
             continue
         blob = f"{subject} {question}"
-        steps = _extract_customer_steps(answer, question)
+        steps = _extract_customer_steps(answer)
         if not steps:
             continue
         category = _infer_category(blob)
-        title = subject or question[:80]
+        title = _clean_freshdesk_title(subject, question)
         entries.append(
             KnowledgeEntry(
                 source="freshdesk",
@@ -276,8 +359,10 @@ def _score_entry(
         score += 3.0
     elif category and entry.category == "general":
         score += 0.5
-    if entry.source == "freshdesk":
-        score += 0.5
+    if entry.source == "qa_csv":
+        score += 1.5
+    elif entry.source == "auto_check":
+        score += 1.0
     if entry.customer_steps:
         score += 1.0
     return score

@@ -46,6 +46,9 @@ def test_build_workflow_diagnosis_power_back_switch():
     assert diagnosis["steps"]
     assert "What you can try" in message
     assert "Would you like our warranty team" in message
+    assert "2816860269" not in message
+    assert "HOUSTON" not in message
+    assert "REOPENED" not in message
 
 
 def test_infer_defect_category_from_turns():

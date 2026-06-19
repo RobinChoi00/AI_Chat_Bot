@@ -46,14 +46,33 @@ def ticket_question(ticket: dict) -> str:
 
 
 def conversation_agent_answer(conversations: list[dict]) -> str:
+    """Collect customer-visible agent replies only (skip private/internal notes)."""
     replies: list[str] = []
     for conv in conversations:
         if conv.get("incoming") is not False:
+            continue
+        if conv.get("private"):
             continue
         body = (conv.get("body_text") or "").strip() or strip_html(conv.get("body"))
         if body:
             replies.append(body)
     return "\n".join(replies)
+
+
+_MERGED_ANSWER_RE = re.compile(
+    r"^(this ticket is closed|merged into ticket|expedite shipping)",
+    re.I,
+)
+
+
+def is_usable_qa_pair(question: str, answer: str) -> bool:
+    if not question.strip() or not answer.strip():
+        return False
+    if _MERGED_ANSWER_RE.match(answer.strip()):
+        return False
+    if "merged into ticket" in answer.lower():
+        return False
+    return True
 
 
 def normalize_freshdesk_domain(raw: str) -> str:
@@ -213,7 +232,7 @@ class FreshdeskETL:
                 answer = self.fetch_conversations(ticket_id)
                 time.sleep(0.3)
 
-                if question.strip() and answer.strip():
+                if is_usable_qa_pair(question, answer):
                     valid_qa_count += 1
                     tickets.append(
                         {

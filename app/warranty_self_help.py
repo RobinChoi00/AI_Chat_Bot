@@ -113,6 +113,63 @@ def _collect_fallback_hints(turns, node_id: str) -> tuple[str, ...]:
     return tuple(unique[:4])
 
 
+def _friendly_match_summary(
+    matches: list[KnowledgeEntry],
+    *,
+    defect_category: Optional[str],
+    model_name: str,
+    issue_type: str,
+) -> str:
+    model_display = (model_name or "your chair").strip()
+    preferred = next((m for m in matches if m.source in {"qa_csv", "auto_check"}), None)
+    top = preferred or (matches[0] if matches else None)
+
+    if top and top.source == "freshdesk":
+        if defect_category:
+            label = _CATEGORY_LABELS.get(defect_category, defect_category)
+            return (
+                f"Based on your answers, this looks like a **{label}** issue "
+                f"with your {model_display}."
+            )
+        if issue_type == "delivery":
+            return (
+                "Based on your delivery answers, here is what we typically see "
+                "in similar warranty cases."
+            )
+        if issue_type == "installation":
+            return (
+                f"For your {model_display}, here are setup tips from similar installation cases."
+            )
+        return (
+            f"Based on your answers, here are troubleshooting steps that often help "
+            f"with your {model_display}."
+        )
+
+    if top and top.title:
+        return (
+            f"Based on your answers and similar support cases, this looks related to "
+            f"**{top.title}** on your {model_display}."
+        )
+    if defect_category:
+        label = _CATEGORY_LABELS.get(defect_category, defect_category)
+        return (
+            f"Based on your answers, this appears to be a **{label}** issue "
+            f"with your {model_display}."
+        )
+    if issue_type == "delivery":
+        return (
+            "Based on your delivery answers, here is what we typically see "
+            "in similar warranty cases."
+        )
+    if issue_type == "installation":
+        return (
+            f"For your {model_display}, here are setup tips from similar installation cases."
+        )
+    return (
+        "Based on what you told us and similar support history, here is our assessment."
+    )
+
+
 def _dedupe_steps(steps: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -149,34 +206,43 @@ def build_workflow_diagnosis(
 
     steps: list[str] = list(fallback)
     for entry in matches:
+        if entry.source == "freshdesk":
+            continue
         steps.extend(entry.customer_steps[:2])
+    if len(steps) <= len(fallback):
+        for entry in matches:
+            if entry.source == "freshdesk":
+                steps.extend(entry.customer_steps[:1])
     steps = _dedupe_steps(steps)
 
-    model_display = (model_name or "your chair").strip()
     if matches:
-        summary = (
-            f"Based on your answers and similar support cases, this looks related to "
-            f"**{matches[0].title}** on your {model_display}."
-        )
-    elif defect_category:
-        label = _CATEGORY_LABELS.get(defect_category, defect_category)
-        summary = (
-            f"Based on your answers, this appears to be a **{label}** issue "
-            f"with your {model_display}."
-        )
-    elif issue_type == "delivery":
-        summary = (
-            "Based on your delivery answers, here is what we typically see "
-            "in similar warranty cases."
-        )
-    elif issue_type == "installation":
-        summary = (
-            f"For your {model_display}, here are setup tips from similar installation cases."
+        summary = _friendly_match_summary(
+            matches,
+            defect_category=defect_category,
+            model_name=model_name,
+            issue_type=issue_type,
         )
     else:
-        summary = (
-            "Based on what you told us and similar support history, here is our assessment."
-        )
+        model_display = (model_name or "your chair").strip()
+        if defect_category:
+            label = _CATEGORY_LABELS.get(defect_category, defect_category)
+            summary = (
+                f"Based on your answers, this appears to be a **{label}** issue "
+                f"with your {model_display}."
+            )
+        elif issue_type == "delivery":
+            summary = (
+                "Based on your delivery answers, here is what we typically see "
+                "in similar warranty cases."
+            )
+        elif issue_type == "installation":
+            summary = (
+                f"For your {model_display}, here are setup tips from similar installation cases."
+            )
+        else:
+            summary = (
+                "Based on what you told us and similar support history, here is our assessment."
+            )
 
     return {
         "summary": summary,

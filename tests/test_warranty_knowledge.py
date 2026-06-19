@@ -50,3 +50,38 @@ def test_extract_customer_steps_filters_internal():
     )
     assert steps
     assert all("pcb" not in s.lower() for s in steps)
+
+
+def test_extract_customer_steps_filters_pii_and_templates():
+    steps = wk._extract_customer_steps(
+        "The information we need is outlined below: Description of Issue: 4000CS Stuck in zero. "
+        "Customer Address: 3222 ARBOR S HOUSTON, TX 77004 Phone Number: 2816860269",
+        "With that being said, we always recommend having a qualified technician inspect your chair.",
+    )
+    assert steps == ()
+
+
+def test_freshdesk_loader_skips_merged_tickets(tmp_path, monkeypatch):
+    freshdesk = tmp_path / "freshdesk_tickets.json"
+    freshdesk.write_text(
+        json.dumps([
+            {
+                "ticket_id": 1,
+                "subject": "REOPENED: Osaki 4000CS",
+                "question": "Chair has no power",
+                "answer": "This ticket is closed and merged into ticket 182769",
+            },
+            {
+                "ticket_id": 2,
+                "subject": "Power issue",
+                "question": "Back switch clicking",
+                "answer": "Please verify the power cord is plugged in firmly. Try toggling the back switch off and on.",
+            },
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wk, "_FRESHDESK_PATH", freshdesk)
+    wk.load_knowledge_entries.cache_clear()
+    entries = [e for e in wk.load_knowledge_entries() if e.source == "freshdesk"]
+    assert len(entries) == 1
+    assert "4000CS" not in entries[0].title or entries[0].title == "Power issue"
