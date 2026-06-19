@@ -333,6 +333,12 @@ class WarrantyQuickStartRequest(BaseModel):
     domain: str = "osaki.com"
 
 
+class WarrantyRegisterModelRequest(BaseModel):
+    """Register chair model before issue-type selection."""
+    model: str
+    domain: str = "osaki.com"
+
+
 class WarrantyNaturalStartRequest(BaseModel):
     """Start warranty intake from free-text (LLM maps to issue type)."""
     message: str
@@ -346,6 +352,30 @@ class WarrantyEmailNotifyRequest(BaseModel):
 
 
 _QUICK_START_ISSUE_KEYS = frozenset({"installation", "delivery", "defect"})
+
+
+def _require_registered_model(ticket) -> None:
+    if not str(getattr(ticket, "model_name", "") or "").strip():
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Please tell us your chair model first (for example OS-4000T or Solo Flex), "
+                "then choose the type of issue."
+            ),
+        )
+
+
+def _maybe_skip_install_model(engine, ticket_id: str) -> None:
+    """If model was registered upfront, skip the install_model question."""
+    ticket = engine.get_ticket(ticket_id)
+    node = engine.get_current_node(ticket_id)
+    if ticket is None or node is None:
+        return
+    if node.get("node_id") != "install_model":
+        return
+    model = str(getattr(ticket, "model_name", "") or "").strip()
+    if model:
+        engine.submit_answer(ticket_id, model)
 
 
 def _quick_start_ticket(
@@ -366,22 +396,65 @@ def _quick_start_ticket(
     ticket_id: str
 
     if ticket is None:
-        ticket_id, _root = engine.start_session(session_id, domain)
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Please tell us your chair model first (for example OS-4000T or Solo Flex), "
+                "then choose the type of issue."
+            ),
+        )
+
+    _require_registered_model(ticket)
+    ticket_id = str(ticket.ticket_id)
+    node = engine.get_current_node(ticket_id)
+    node_id = node.get("node_id") if node else None
+    if node_id == "root":
         engine.submit_answer(ticket_id, "warranty")
         engine.submit_answer(ticket_id, issue_type)
+    elif node_id == "issue_type":
+        engine.submit_answer(ticket_id, issue_type)
+
+    if issue_type == "installation":
+        _maybe_skip_install_model(engine, ticket_id)
+
+    ticket = engine.get_ticket(ticket_id)
+    node = engine.get_current_node(ticket_id)
+    return _serialize_ticket_state(session_id, ticket, node, engine=engine)
+
+
+def _register_model_ticket(
+    engine,
+    session_id: str,
+    model: str,
+    domain: str,
+) -> Dict[str, Any]:
+    from product_catalog import resolve_model_name  # noqa: WPS433
+
+    raw = model.strip()
+    if not raw:
+        raise HTTPException(status_code=422, detail="model must not be empty")
+
+    resolved = resolve_model_name(raw) or raw
+    ticket = engine.get_active_session_ticket(session_id)
+    ticket_id: str
+
+    if ticket is None:
+        ticket_id, _root = engine.start_session(session_id, domain)
+        engine.submit_answer(ticket_id, "warranty")
     else:
         ticket_id = str(ticket.ticket_id)
         node = engine.get_current_node(ticket_id)
         node_id = node.get("node_id") if node else None
         if node_id == "root":
             engine.submit_answer(ticket_id, "warranty")
-            engine.submit_answer(ticket_id, issue_type)
-        elif node_id == "issue_type":
-            engine.submit_answer(ticket_id, issue_type)
 
+    engine.set_model_name(ticket_id, resolved)
     ticket = engine.get_ticket(ticket_id)
     node = engine.get_current_node(ticket_id)
-    return _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    payload["model_registered"] = True
+    payload["resolved_model"] = resolved
+    return payload
 
 
 def _submit_answer_with_nlp(engine, ticket_id: str, answer: str) -> tuple[dict, bool]:
@@ -551,6 +624,10 @@ def _serialize_ticket_state(
             "status":       str(ticket.status),
             "issue_type":   str(ticket.issue_type or ""),
             "model_name":   str(ticket.model_name or ""),
+            "model_confirmed": bool(str(ticket.model_name or "").strip()),
+            "ready_for_issue_type": (
+                node_id == "issue_type" and bool(str(ticket.model_name or "").strip())
+            ),
             "current_node": {
                 "node_id":            node_id,
                 "node_type":          node_type,
@@ -609,6 +686,15 @@ async def get_warranty_session_state(session_id: str):
     return _serialize_ticket_state(session_id, ticket, node, engine=engine)
 
 
+@router.post("/api/v1/warranty/session/{session_id}/register-model", tags=["warranty"])
+async def register_warranty_model(session_id: str, body: WarrantyRegisterModelRequest):
+    """
+    Step 1 of warranty intake: confirm chair model, then show issue-type options.
+    """
+    engine = _lazy_engine()
+    return _register_model_ticket(engine, session_id, body.model, body.domain)
+
+
 @router.post("/api/v1/warranty/session/{session_id}/quick-start", tags=["warranty"])
 async def quick_start_warranty(session_id: str, body: WarrantyQuickStartRequest):
     """
@@ -643,6 +729,9 @@ async def natural_start_warranty(session_id: str, body: WarrantyNaturalStartRequ
         )
 
     engine = _lazy_engine()
+    ticket = engine.get_active_session_ticket(session_id)
+    if ticket is not None:
+        _require_registered_model(ticket)
     payload = _quick_start_ticket(engine, session_id, issue_type, body.domain)
     payload["nlp_interpreted"] = True
     payload["interpreted_issue_type"] = issue_type

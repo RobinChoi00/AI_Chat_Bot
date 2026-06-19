@@ -58,24 +58,53 @@ def client():
     return TestClient(app)
 
 
-def test_quick_start_installation_jumps_to_model_question(client):
+def _register_model(client, session_id: str, model: str = "OS-4000T"):
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/register-model",
+        json={"model": model, "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200
+    return resp.json()
+
+
+def test_register_model_then_ready_for_issue_type(client):
+    session_id = "cust-api-model"
+    data = _register_model(client, session_id)
+    ticket = data["ticket"]
+    assert ticket["model_name"] == "OS-4000T"
+    assert ticket["model_confirmed"] is True
+    assert ticket["ready_for_issue_type"] is True
+    assert ticket["current_node"]["node_id"] == "issue_type"
+
+
+def test_quick_start_requires_model_first(client):
+    session_id = "cust-api-no-model"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "installation", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 422
+
+
+def test_quick_start_installation_skips_model_question_when_registered(client):
     session_id = "cust-api-install"
+    _register_model(client, session_id)
     resp = client.post(
         f"/api/v1/warranty/session/{session_id}/quick-start",
         json={"issue_type": "installation", "domain": "osaki.com"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["session_id"] == session_id
     ticket = data["ticket"]
-    assert ticket is not None
     assert ticket["issue_type"] == "installation"
-    assert ticket["current_node"]["node_id"] == "install_model"
-    assert "model" in ticket["current_node"]["prompt"].lower()
+    assert ticket["current_node"]["node_id"] == "install_send_video"
+    assert ticket["current_node"]["is_terminal"] is True
+    assert data["terminal_enrichment"]["phase"] == "awaiting_help_consent"
 
 
 def test_submit_answer_advances_without_llm(client):
     session_id = "cust-api-answer"
+    _register_model(client, session_id)
     start = client.post(
         f"/api/v1/warranty/session/{session_id}/quick-start",
         json={"issue_type": "defect", "domain": "osaki.com"},
@@ -112,6 +141,7 @@ def test_submit_answer_returns_tracking_summary(client, monkeypatch):
     monkeypatch.setattr("delivery_lookup.persist_snapshot", lambda *_a, **_k: None)
 
     session_id = "cust-api-tracking"
+    _register_model(client, session_id)
     start = client.post(
         f"/api/v1/warranty/session/{session_id}/quick-start",
         json={"issue_type": "delivery", "domain": "osaki.com"},
@@ -154,6 +184,7 @@ def test_get_session_returns_ticket_after_admin_terminal(client, monkeypatch):
     )
 
     session_id = "cust-api-terminal"
+    _register_model(client, session_id)
     start = client.post(
         f"/api/v1/warranty/session/{session_id}/quick-start",
         json={"issue_type": "delivery", "domain": "osaki.com"},
@@ -208,21 +239,35 @@ def test_notify_email_endpoint_sends_transcript(client, monkeypatch):
 
 
 def test_submit_answer_notifies_on_email_in_text(client, monkeypatch):
+    from delivery_lookup import TrackingSnapshot
+
     monkeypatch.setattr(
         "warranty_email.send_warranty_transcript_email",
         lambda **_k: True,
     )
+    unavailable = TrackingSnapshot(source="unavailable", available=False)
+    monkeypatch.setattr("delivery_lookup.lookup_by_order_or_email", lambda *_a, **_k: unavailable)
+    monkeypatch.setattr(
+        "delivery_lookup.format_warranty_tracking_message",
+        lambda snap: "lookup pending",
+    )
+    monkeypatch.setattr("delivery_lookup.persist_snapshot", lambda *_a, **_k: None)
 
     session_id = "cust-api-email-notify"
+    _register_model(client, session_id)
     start = client.post(
         f"/api/v1/warranty/session/{session_id}/quick-start",
-        json={"issue_type": "installation", "domain": "osaki.com"},
+        json={"issue_type": "delivery", "domain": "osaki.com"},
     )
     ticket_id = start.json()["ticket"]["ticket_id"]
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "no_tracking"},
+    )
 
     resp = client.post(
         f"/api/v1/warranty/{ticket_id}/answer",
-        json={"answer": "OS-4000T — follow up at buyer@example.com"},
+        json={"answer": "follow up at buyer@example.com"},
     )
     assert resp.status_code == 200
     assert resp.json().get("email_notified") is True
@@ -235,6 +280,7 @@ def test_natural_start_maps_issue_type(client, monkeypatch):
     )
 
     session_id = "cust-api-natural-start"
+    _register_model(client, session_id)
     resp = client.post(
         f"/api/v1/warranty/session/{session_id}/natural-start",
         json={"message": "my massage chair won't turn on", "domain": "osaki.com"},
@@ -249,6 +295,7 @@ def test_natural_start_maps_issue_type(client, monkeypatch):
 
 def test_submit_answer_nlp_maps_natural_language(client):
     session_id = "cust-api-nlp-answer"
+    _register_model(client, session_id)
     start = client.post(
         f"/api/v1/warranty/session/{session_id}/quick-start",
         json={"issue_type": "delivery", "domain": "osaki.com"},

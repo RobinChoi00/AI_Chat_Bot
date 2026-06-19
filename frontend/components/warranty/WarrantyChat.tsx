@@ -6,6 +6,7 @@ import {
   getWarrantySession,
   quickStartWarranty,
   naturalStartWarranty,
+  registerWarrantyModel,
   submitWarrantyAnswer,
 } from "@/lib/api";
 import type {
@@ -24,11 +25,14 @@ import { WARRANTY_WELCOME_MESSAGE } from "@/lib/welcomeMessage";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 
 const DOMAIN = "osaki.com";
-/** Brief pause so replies feel considered, not instant. */
 const THINKING_DELAY_MS = 750;
 
 const EMAIL_THANK_YOU =
   `Thank you! Our warranty team at ${WARRANTY_CONTACT_EMAIL} will respond within 24 hours.`;
+
+const SELF_HELP_CLOSING =
+  "Sounds good — try those steps first. If you still need us, you can start a new case anytime. " +
+  "Our warranty team is also available by phone during business hours.";
 
 const INITIAL_ISSUE_OPTIONS: AnswerOption[] = [
   { answer_key: "installation", label: "Installation Issue" },
@@ -45,11 +49,11 @@ function assistantContentFromResponse(
   resp: Pick<WarrantySessionResponse, "assistant_message" | "terminal_enrichment">
 ): string | null {
   const node = ticket?.current_node;
-  if (!node?.prompt) return null;
+  if (!node?.prompt && !resp.assistant_message) return null;
   return formatTerminalPrompt(
-    node.prompt,
-    node.evidence_required,
-    node.evidence_email,
+    node?.prompt ?? "",
+    node?.evidence_required,
+    node?.evidence_email,
     resp.assistant_message ?? resp.terminal_enrichment?.message
   );
 }
@@ -73,20 +77,20 @@ export default function WarrantyChat() {
   const [optionsUsed, setOptionsUsed] = useState(false);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [contactSubmitted, setContactSubmitted] = useState(false);
-  const [showContactForm, setShowContactForm] = useState(false);
+  const [helpConsent, setHelpConsent] = useState<"yes" | "no" | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading, showContactForm]);
+  }, [messages, loading, helpConsent]);
 
   const applySessionResponse = useCallback((resp: WarrantySessionResponse) => {
     setWarrantyState(resp.ticket);
     setTerminalEnrichment(resp.terminal_enrichment ?? null);
-    if (resp.terminal_enrichment?.defer_email) {
-      setShowContactForm(false);
+    if (resp.terminal_enrichment?.phase === "awaiting_help_consent") {
+      setHelpConsent(null);
     }
     setOptionsUsed(false);
     return resp;
@@ -103,22 +107,30 @@ export default function WarrantyChat() {
       try {
         const resp = await refreshWarrantyState();
         if (cancelled) return;
-        const prompt = resp.ticket?.current_node?.prompt;
-        if (prompt && !resp.ticket?.current_node?.is_terminal) {
-          setMessages([{ role: "assistant", content: prompt }]);
-        } else if (prompt && resp.ticket?.current_node?.is_terminal) {
+        const ticket = resp.ticket;
+        if (ticket?.current_node?.is_terminal && ticket.current_node.prompt) {
           setMessages([
             {
               role: "assistant",
               content:
-                assistantContentFromResponse(resp.ticket, resp) ?? prompt,
+                assistantContentFromResponse(ticket, resp) ?? ticket.current_node.prompt,
             },
           ]);
-        } else if (!resp.ticket?.ticket_id) {
+        } else if (ticket?.ready_for_issue_type && ticket.model_name) {
+          setMessages([
+            { role: "assistant", content: WARRANTY_WELCOME_MESSAGE },
+            {
+              role: "assistant",
+              content: `Great — I have **${ticket.model_name}** on file.\n\nWhat type of issue can we help you with? Choose below or describe it in your own words.`,
+            },
+          ]);
+        } else if (ticket?.current_node?.prompt && !ticket.current_node.is_terminal) {
+          setMessages([{ role: "assistant", content: ticket.current_node.prompt }]);
+        } else if (!ticket?.ticket_id) {
           setMessages([{ role: "assistant", content: WARRANTY_WELCOME_MESSAGE }]);
         }
       } catch {
-        // Non-fatal — user can still pick an initial option.
+        // Non-fatal
       } finally {
         if (!cancelled) setSessionChecked(true);
       }
@@ -134,8 +146,6 @@ export default function WarrantyChat() {
       resp: Pick<WarrantySessionResponse, "assistant_message" | "terminal_enrichment">
     ) => {
       await sleep(THINKING_DELAY_MS);
-      const node = ticket?.current_node;
-      if (!node?.prompt) return;
       const content = assistantContentFromResponse(ticket, resp);
       if (!content) return;
       setMessages((prev) => [...prev, { role: "assistant", content }]);
@@ -143,14 +153,35 @@ export default function WarrantyChat() {
     []
   );
 
-  const appendEmailThankYou = useCallback(() => {
-    setMessages((prev) => {
-      if (prev.some((m) => m.content.includes("will respond within 24 hours"))) {
-        return prev;
+  const registerModel = useCallback(
+    async (text: string) => {
+      setError(null);
+      setLoading(true);
+      setMessages((prev) => [...prev, { role: "user", content: text }]);
+      setInput("");
+
+      try {
+        const resp = await registerWarrantyModel(sessionId, text.trim(), DOMAIN);
+        applySessionResponse(resp);
+        const resolved = resp.resolved_model ?? resp.ticket?.model_name ?? text.trim();
+        await sleep(THINKING_DELAY_MS);
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: `Thanks! I have **${resolved}** registered.\n\nWhat type of issue can we help you with? Choose an option below or describe it in your own words.`,
+          },
+        ]);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Something went wrong.";
+        setError(msg);
+      } finally {
+        setLoading(false);
+        inputRef.current?.focus();
       }
-      return [...prev, { role: "assistant", content: EMAIL_THANK_YOU }];
-    });
-  }, []);
+    },
+    [sessionId, applySessionResponse]
+  );
 
   const handleQuickStart = useCallback(
     async (issueType: "installation" | "delivery" | "defect", label: string) => {
@@ -158,12 +189,12 @@ export default function WarrantyChat() {
       setError(null);
       setLoading(true);
       setOptionsUsed(true);
-      setShowContactForm(false);
+      setHelpConsent(null);
 
       try {
         const resp = await quickStartWarranty(sessionId, issueType, DOMAIN);
         applySessionResponse(resp);
-        setMessages([{ role: "user", content: label }]);
+        setMessages((prev) => [...prev, { role: "user", content: label }]);
         await appendAssistantFromResponse(resp.ticket, resp);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Something went wrong.";
@@ -185,7 +216,7 @@ export default function WarrantyChat() {
       setError(null);
       setLoading(true);
       setOptionsUsed(true);
-      setShowContactForm(false);
+      setHelpConsent(null);
       setMessages((prev) => [...prev, { role: "user", content: userLabel }]);
 
       try {
@@ -198,9 +229,6 @@ export default function WarrantyChat() {
             { role: "assistant", content: resp.tracking_summary!.message },
           ]);
         }
-        if (resp.email_notified) {
-          appendEmailThankYou();
-        }
         await appendAssistantFromResponse(resp.ticket, resp);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Something went wrong.";
@@ -211,13 +239,7 @@ export default function WarrantyChat() {
         inputRef.current?.focus();
       }
     },
-    [
-      warrantyState?.ticket_id,
-      loading,
-      applySessionResponse,
-      appendAssistantFromResponse,
-      appendEmailThankYou,
-    ]
+    [warrantyState?.ticket_id, loading, applySessionResponse, appendAssistantFromResponse]
   );
 
   const startViaNaturalLanguage = useCallback(
@@ -226,7 +248,7 @@ export default function WarrantyChat() {
       setError(null);
       setLoading(true);
       setOptionsUsed(true);
-      setShowContactForm(false);
+      setHelpConsent(null);
       setMessages((prev) => [...prev, { role: "user", content: text }]);
       setInput("");
 
@@ -250,15 +272,36 @@ export default function WarrantyChat() {
     async (text: string) => {
       if (!text.trim() || loading) return;
 
+      const trimmed = text.trim();
+      const hasModel = Boolean(
+        warrantyState?.model_confirmed || warrantyState?.model_name
+      );
+      const atIssueType =
+        warrantyState?.ready_for_issue_type ||
+        warrantyState?.current_node?.node_id === "issue_type";
+
+      if (!hasModel) {
+        await registerModel(trimmed);
+        return;
+      }
+
+      if (atIssueType && !warrantyState?.issue_type) {
+        await startViaNaturalLanguage(trimmed);
+        return;
+      }
+
       if (warrantyState?.ticket_id && !warrantyState.current_node?.is_terminal) {
-        await advanceWarranty(text.trim(), text.trim());
+        await advanceWarranty(trimmed, trimmed);
         setInput("");
         return;
       }
 
-      await startViaNaturalLanguage(text.trim());
+      if (warrantyState?.current_node?.is_terminal && helpConsent === null) {
+        setError("Please tap Yes or No below so we know how to help next.");
+        return;
+      }
     },
-    [loading, warrantyState, advanceWarranty, startViaNaturalLanguage]
+    [loading, warrantyState, registerModel, startViaNaturalLanguage, advanceWarranty, helpConsent]
   );
 
   function handleSubmit(e: FormEvent) {
@@ -277,6 +320,25 @@ export default function WarrantyChat() {
     advanceWarranty(answerKey, label);
   }
 
+  function handleHelpOffer(key: string, label: string) {
+    setMessages((prev) => [...prev, { role: "user", content: label }]);
+    if (key === "yes_team_help") {
+      setHelpConsent("yes");
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            "No problem — please share your email below so our warranty team can follow up. " +
+            "Photos or videos are optional.",
+        },
+      ]);
+    } else {
+      setHelpConsent("no");
+      setMessages((prev) => [...prev, { role: "assistant", content: SELF_HELP_CLOSING }]);
+    }
+  }
+
   const isAwaitingAdmin =
     warrantyState?.status === "awaiting_admin_review" ||
     warrantyState?.status === "admin_reviewing";
@@ -284,27 +346,50 @@ export default function WarrantyChat() {
     !optionsUsed &&
     !loading &&
     (warrantyState?.current_node?.options?.length ?? 0) > 0;
-  const showInitialOptions =
-    sessionChecked &&
-    !warrantyState?.ticket_id &&
-    !loading;
   const isTerminal = warrantyState?.current_node?.is_terminal ?? false;
 
-  const deferEmail = terminalEnrichment?.defer_email ?? false;
-  const wantsContactForm = terminalEnrichment?.show_contact_form !== false;
+  const needsModelRegistration =
+    sessionChecked &&
+    !isTerminal &&
+    !(warrantyState?.model_confirmed || warrantyState?.model_name);
+
+  const showIssueTypeOptions =
+    sessionChecked &&
+    !loading &&
+    !isTerminal &&
+    !needsModelRegistration &&
+    (warrantyState?.ready_for_issue_type ||
+      (!!warrantyState?.model_name &&
+        warrantyState?.current_node?.node_id === "issue_type" &&
+        !warrantyState?.issue_type));
+
+  const helpOfferOptions =
+    terminalEnrichment?.help_offer_options ?? [];
+
+  const showHelpOffer =
+    isTerminal &&
+    terminalEnrichment?.phase === "awaiting_help_consent" &&
+    helpConsent === null &&
+    !contactSubmitted &&
+    helpOfferOptions.length > 0;
+
   const showEmailSection =
     isTerminal &&
-    warrantyState?.ticket_id &&
-    !contactSubmitted &&
-    (!deferEmail || showContactForm) &&
-    (wantsContactForm || showContactForm);
-
-  const showStillNeedHelp =
-    isTerminal &&
-    deferEmail &&
-    !showContactForm &&
+    helpConsent === "yes" &&
     !contactSubmitted &&
     warrantyState?.ticket_id;
+
+  const showInputBar =
+    !isTerminal ||
+    (isTerminal && helpConsent === null && !contactSubmitted && !showHelpOffer);
+
+  const inputPlaceholder = needsModelRegistration
+    ? "Enter your chair model (e.g. OS-4000T, Solo Flex)…"
+    : showIssueTypeOptions
+      ? "Describe your issue (e.g. my chair won't turn on)…"
+      : warrantyState?.ticket_id
+        ? "Type your answer…"
+        : "Enter your chair model…";
 
   return (
     <div className="mx-auto flex h-[calc(100dvh-64px)] w-full max-w-2xl flex-col">
@@ -324,8 +409,7 @@ export default function WarrantyChat() {
         <div className="mx-4 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
           <p className="text-sm font-medium text-amber-800">Under Support Review</p>
           <p className="mt-0.5 text-xs text-amber-700">
-            Your case has been prepared for support team review. Final warranty
-            decisions are handled by our support team.
+            Your case has been prepared for support team review.
           </p>
         </div>
       )}
@@ -337,7 +421,7 @@ export default function WarrantyChat() {
           ))}
         </div>
 
-        {showInitialOptions && (
+        {showIssueTypeOptions && (
           <div className="mt-4 rounded-2xl border border-gray-100 bg-white px-3 py-4 shadow-sm sm:px-4">
             <p className="mb-3 text-sm font-medium text-gray-700">
               What type of issue can we help you with?
@@ -353,9 +437,6 @@ export default function WarrantyChat() {
               }
               disabled={loading}
             />
-            <p className="mt-3 text-center text-xs text-gray-400">
-              Or describe your issue in the text box below.
-            </p>
           </div>
         )}
 
@@ -393,15 +474,14 @@ export default function WarrantyChat() {
         </div>
       )}
 
-      {showStillNeedHelp && (
+      {showHelpOffer && (
         <div className="border-t border-gray-100 bg-white px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4">
-          <button
-            type="button"
-            onClick={() => setShowContactForm(true)}
-            className="flex min-h-[52px] w-full items-center justify-center rounded-2xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 active:scale-[0.98]"
-          >
-            I still need help — contact warranty team
-          </button>
+          <AnswerOptions
+            options={helpOfferOptions}
+            onSelect={handleHelpOffer}
+            disabled={loading}
+            variant="stack"
+          />
         </div>
       )}
 
@@ -435,7 +515,7 @@ export default function WarrantyChat() {
         </div>
       )}
 
-      {!isTerminal && (
+      {showInputBar && (
         <form
           onSubmit={handleSubmit}
           className="border-t border-gray-200 bg-white px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-4"
@@ -447,11 +527,7 @@ export default function WarrantyChat() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={
-                warrantyState?.ticket_id
-                  ? "Type your answer…"
-                  : "Describe your issue (e.g. my chair won't turn on)…"
-              }
+              placeholder={inputPlaceholder}
               disabled={loading}
               className="min-h-[44px] flex-1 resize-none bg-transparent px-2 py-2 text-base text-gray-900 placeholder-gray-400 focus:outline-none disabled:opacity-60 sm:text-sm"
               style={{ maxHeight: "120px" }}
@@ -468,18 +544,17 @@ export default function WarrantyChat() {
               {loading ? "…" : "Send"}
             </button>
           </div>
-          <p className="mt-1.5 text-center text-[10px] text-gray-400">
-            Warranty decisions are reviewed by our support team.
-          </p>
           <WarrantyTeamContactFooter compact className="mt-2" />
         </form>
       )}
 
-      {isTerminal && contactSubmitted && (
+      {(contactSubmitted || helpConsent === "no") && (
         <div className="border-t border-gray-100 bg-white px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-center">
-          <p className="text-sm text-gray-600">
-            Your case has been submitted. Our team will be in touch.
-          </p>
+          {contactSubmitted && (
+            <p className="text-sm text-gray-600">
+              Your case has been submitted. Our team will be in touch.
+            </p>
+          )}
           <WarrantyTeamContactFooter className="mt-4 text-left" />
           <button
             onClick={() => {

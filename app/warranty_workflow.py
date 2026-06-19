@@ -281,6 +281,23 @@ class WarrantyEngine:
             )
 
     @staticmethod
+    def set_model_name(ticket_id: str, model_name: str) -> None:
+        """Persist normalized chair model before or during workflow intake."""
+        display = (model_name or "").strip()
+        if not display:
+            raise ValueError("model_name must not be empty")
+        with warranty_db_session() as db:
+            ticket = (
+                db.query(WarrantyTicket)
+                .filter(WarrantyTicket.ticket_id == ticket_id)
+                .first()
+            )
+            if ticket is None:
+                raise ValueError(f"Ticket {ticket_id!r} not found.")
+            ticket.model_name = display
+            ticket.set_collected("model_name", display)
+
+    @staticmethod
     def get_active_session_ticket(session_id: str) -> Optional[WarrantyTicket]:
         """Return the most recent in-progress ticket for a chat session, or None."""
         with warranty_db_session() as db:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from warranty_self_help import soften_terminal_prompt
 from warranty_terminal_enrichment import build_terminal_enrichment
 
 
@@ -42,7 +41,7 @@ class _EngineDefect:
         ]
 
 
-def test_install_terminal_includes_video_link():
+def test_install_terminal_includes_video_and_help_offer():
     node = {
         "node_id": "install_send_video",
         "type": "terminal",
@@ -54,10 +53,11 @@ def test_install_terminal_includes_video_link():
     assert result is not None
     assert "Watch installation video" in result["message"]
     assert result["defer_email"] is True
-    assert result["show_contact_form"] is False
+    assert result["phase"] == "awaiting_help_consent"
+    assert len(result["help_offer_options"]) == 2
 
 
-def test_defect_terminal_self_help_first_and_deferred_email():
+def test_defect_terminal_diagnosis_and_help_offer():
     node = {
         "node_id": "defect_power_main_pcb_terminal",
         "type": "terminal",
@@ -67,16 +67,9 @@ def test_defect_terminal_self_help_first_and_deferred_email():
     }
     result = build_terminal_enrichment(_EngineDefect(), _TicketDefect(), node)
     assert result is not None
+    assert result["phase"] == "awaiting_help_consent"
     assert result["defer_email"] is True
-    assert result["show_contact_form"] is False
     assert "PCB repair or replacement" not in result["message"]
-    assert "I still need help" in result["message"]
-    assert "leave your email below" not in result["message"].lower()
-    assert result["message"].index("Based on similar cases") < result["message"].index("warranty team will review")
-
-
-def test_soften_terminal_prompt():
-    raw = "Our team will arrange a replacement remote for you."
-    softened = soften_terminal_prompt(raw)
-    assert "replacement remote" not in softened.lower()
-    assert "review" in softened.lower()
+    assert "Would you like our warranty team" in result["message"]
+    assert "What you can try" in result["message"]
+    assert result["diagnosis"]["steps"]

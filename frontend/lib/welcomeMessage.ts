@@ -10,7 +10,7 @@ export const CHAT_WELCOME_MESSAGE =
 
 export const WARRANTY_WELCOME_MESSAGE =
   "Hello! Welcome to Osaki & Titan warranty support. 👋\n\n" +
-  "Which massage chair model do you have? " +
+  "First, which massage chair model do you have? " +
   "You can find it on the serial-number sticker on your chair " +
   "(for example, OS-4000T, Solo Flex, or Hypnos 4D).\n\n" +
-  "Please tell us your model below, or choose the type of issue you're experiencing.";
+  "Please type your model below. Once we confirm it, we'll guide you through your issue step by step.";

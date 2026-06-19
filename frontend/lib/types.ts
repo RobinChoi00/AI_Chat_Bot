@@ -58,6 +58,8 @@ export interface WarrantyTicketState {
   status: TicketStatus;
   issue_type: string;
   model_name: string;
+  model_confirmed?: boolean;
+  ready_for_issue_type?: boolean;
   current_node: WarrantyNode | null;
 }
 
@@ -71,6 +73,14 @@ export interface TerminalEnrichment {
   message?: string;
   install_video?: { url: string; label: string };
   self_help?: string | null;
+  diagnosis?: {
+    summary?: string;
+    steps?: string[];
+    sources?: string[];
+    top_match?: string | null;
+  } | null;
+  phase?: "awaiting_help_consent" | "contact";
+  help_offer_options?: AnswerOption[];
   show_contact_form?: boolean;
   defer_email?: boolean;
 }
@@ -84,6 +94,8 @@ export interface WarrantySessionResponse {
   interpreted_issue_type?: string;
   assistant_message?: string | null;
   terminal_enrichment?: TerminalEnrichment | null;
+  model_registered?: boolean;
+  resolved_model?: string;
 }
 
 export interface WarrantyContactResponse {

@@ -1,9 +1,13 @@
-"""Tests for defect self-help formatting."""
+"""Tests for defect self-help / diagnosis formatting."""
 
 from __future__ import annotations
 
 from install_videos import lookup_install_video
-from warranty_self_help import find_defect_self_help, infer_defect_category_from_turns
+from warranty_self_help import (
+    build_workflow_diagnosis,
+    format_diagnosis_message,
+    infer_defect_category_from_turns,
+)
 
 
 class _Turn:
@@ -26,20 +30,22 @@ def test_lookup_install_video_default():
     assert result["match"] == "default"
 
 
-def test_find_defect_self_help_power_back_switch():
+def test_build_workflow_diagnosis_power_back_switch():
     turns = [
         _Turn("power"),
         _Turn("back_switch_sound", "Turned on the back switch and heard something from the chair"),
     ]
-    text = find_defect_self_help(
+    diagnosis = build_workflow_diagnosis(
         defect_category="power",
         path_text="back switch heard something power remote",
         node_id="defect_power_main_pcb_terminal",
         turns=turns,
+        model_name="OS-4000T",
     )
-    assert text is not None
-    assert "similar cases" in text.lower()
-    assert "power cord" in text.lower() or "fuse" in text.lower()
+    message = format_diagnosis_message(diagnosis)
+    assert diagnosis["steps"]
+    assert "What you can try" in message
+    assert "Would you like our warranty team" in message
 
 
 def test_infer_defect_category_from_turns():

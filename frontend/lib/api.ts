@@ -116,6 +116,35 @@ export async function getWarrantySession(
 }
 
 /**
+ * Register chair model — required before issue-type selection.
+ *
+ * CONTRACT: POST /api/v1/warranty/session/{session_id}/register-model
+ */
+export async function registerWarrantyModel(
+  sessionId: string,
+  model: string,
+  domain = "osaki.com"
+): Promise<WarrantySessionResponse> {
+  const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/register-model`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, domain }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<WarrantySessionResponse>;
+}
+
+/**
  * Start warranty intake at Installation / Delivery / Defect — no LLM call.
  *
  * CONTRACT: POST /api/v1/warranty/session/{session_id}/quick-start
