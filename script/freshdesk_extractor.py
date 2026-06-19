@@ -28,6 +28,33 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def strip_html(value: str | None) -> str:
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", value)).strip()
+
+
+def ticket_question(ticket: dict) -> str:
+    """List tickets omit description unless include=description is set."""
+    text = (ticket.get("description_text") or "").strip()
+    if text:
+        return text
+    return strip_html(ticket.get("description"))
+
+
+def conversation_agent_answer(conversations: list[dict]) -> str:
+    replies: list[str] = []
+    for conv in conversations:
+        if conv.get("incoming") is not False:
+            continue
+        body = (conv.get("body_text") or "").strip() or strip_html(conv.get("body"))
+        if body:
+            replies.append(body)
+    return "\n".join(replies)
+
 
 def normalize_freshdesk_domain(raw: str) -> str:
     """
@@ -127,13 +154,7 @@ class FreshdeskETL:
         try:
             response = requests.get(url, auth=self.auth, headers=self.headers, timeout=15)
             if response.status_code == 200:
-                conversations = response.json()
-                agent_replies = [
-                    conv.get("body_text") or ""
-                    for conv in conversations
-                    if conv.get("incoming") is False
-                ]
-                return "\n".join(filter(None, agent_replies))
+                return conversation_agent_answer(response.json())
         except Exception:
             pass
         return ""
@@ -150,6 +171,7 @@ class FreshdeskETL:
             url = f"{self.base_url}/tickets"
             params = {
                 "updated_since": "2023-01-01T00:00:00Z",
+                "include": "description",
                 "page": page,
                 "per_page": 30,
             }
@@ -187,7 +209,7 @@ class FreshdeskETL:
                     continue
                 resolved_count += 1
                 ticket_id = ticket["id"]
-                question = ticket.get("description_text") or ""
+                question = ticket_question(ticket)
                 answer = self.fetch_conversations(ticket_id)
                 time.sleep(0.3)
 
