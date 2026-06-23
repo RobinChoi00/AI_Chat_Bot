@@ -424,8 +424,8 @@ export default function WarrantyChat() {
         </div>
 
         {showIssueTypeOptions && (
-          <div className="mt-4 rounded-2xl border border-gray-100 bg-white px-3 py-4 shadow-sm sm:px-4">
-            <p className="mb-3 text-sm font-medium text-gray-700">
+          <div className="mt-3 rounded-xl border border-gray-100 bg-white px-3 py-3 shadow-sm sm:mt-4 sm:rounded-2xl sm:py-4 sm:px-4">
+            <p className="mb-2 text-xs font-medium text-gray-700 sm:mb-3 sm:text-sm">
               What type of issue can we help you with?
             </p>
             <AnswerOptions
@@ -463,8 +463,8 @@ export default function WarrantyChat() {
       </div>
 
       {hasWorkflowOptions && !isTerminal && (
-        <div className="border-t border-gray-100 bg-white px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4">
-          <p className="mb-2 text-xs font-medium text-gray-600">
+        <div className="border-t border-gray-100 bg-white px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-3 sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <p className="mb-1.5 text-[11px] font-medium text-gray-600 sm:mb-2 sm:text-xs">
             Tap an option or type your answer below
           </p>
           <AnswerOptions
@@ -477,7 +477,7 @@ export default function WarrantyChat() {
       )}
 
       {showHelpOffer && (
-        <div className="border-t border-gray-100 bg-white px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4">
+        <div className="border-t border-gray-100 bg-white px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-3 sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <AnswerOptions
             options={helpOfferOptions}
             onSelect={handleHelpOffer}
