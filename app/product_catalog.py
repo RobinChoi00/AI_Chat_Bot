@@ -195,6 +195,52 @@ def resolve_catalog_price(title_or_text: str) -> Optional[float]:
     return best_price
 
 
+def _is_kakaotalk_bundle(title: str) -> bool:
+    return "kakaotalk" in (title or "").lower()
+
+
+def _key_is_le_variant(key: str) -> bool:
+    return key.endswith("le") or "maestrole" in key or "prole" in key
+
+
+def format_model_display_name(title: str) -> str:
+    """Strip KakaoTalk bundle marketing from Shopify titles for customer-facing UI."""
+    s = (title or "").strip()
+    s = re.sub(r"\s*\([^)]*kakao[^)]*\)\s*", " ", s, flags=re.I)
+    s = re.sub(r"\s*with\s+free\s+.+$", "", s, flags=re.I)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _pick_best_catalog_title(
+    matches: list[tuple[str, str]],
+    *,
+    norm: str,
+    tokens: list[str],
+) -> Optional[str]:
+    if not matches:
+        return None
+
+    wants_le = norm.endswith("le") or "maestrole" in norm or any(t == "le" for t in tokens)
+
+    def rank(item: tuple[str, str]) -> tuple:
+        key, title = item
+        le_variant = _key_is_le_variant(key)
+        le_mismatch = 0 if wants_le == le_variant else 1
+        version_noise = 0
+        if "20" in key and "20" not in norm and "2" not in tokens:
+            version_noise = 1
+        return (
+            _is_kakaotalk_bundle(title),
+            le_mismatch,
+            version_noise,
+            -len(key),
+            title.lower(),
+        )
+
+    _key, title = min(matches, key=rank)
+    return format_model_display_name(title)
+
+
 def resolve_model_name(raw: str) -> Optional[str]:
     """
     Map free-text model input to the closest catalog Title, or None.
@@ -211,24 +257,33 @@ def resolve_model_name(raw: str) -> Optional[str]:
     if not norm:
         return None
 
+    tokens = [t for t in re.findall(r"[a-z0-9]+", text.lower()) if t not in _NOISE and len(t) >= 3]
+
     for key, title in catalog:
         if norm == key:
-            return title
+            return format_model_display_name(title)
 
-    for key, title in catalog:
-        if len(key) >= 5 and (key in norm or norm in key):
-            return title
+    partial_matches = [
+        (key, title)
+        for key, title in catalog
+        if len(key) >= 5 and (key in norm or norm in key)
+    ]
+    picked = _pick_best_catalog_title(partial_matches, norm=norm, tokens=tokens)
+    if picked:
+        return picked
 
-    tokens = [t for t in re.findall(r"[a-z0-9]+", text.lower()) if t not in _NOISE and len(t) >= 3]
     if not tokens:
         return None
 
-    best_title: Optional[str] = None
+    token_matches: list[tuple[str, str]] = []
     best_score = 0
     for key, title in catalog:
         score = sum(1 for t in tokens if t in key)
-        if score > best_score and score >= max(2, len(tokens) - 1):
-            best_score = score
-            best_title = title
+        if score >= max(2, len(tokens) - 1):
+            if score > best_score:
+                best_score = score
+                token_matches = [(key, title)]
+            elif score == best_score:
+                token_matches.append((key, title))
 
-    return best_title
+    return _pick_best_catalog_title(token_matches, norm=norm, tokens=tokens)

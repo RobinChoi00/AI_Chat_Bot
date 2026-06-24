@@ -32,3 +32,27 @@ def test_resolve_catalog_price_known_model():
     if price is not None:
         assert 500 <= price <= 50000
 
+
+def test_format_model_display_name_strips_kakaotalk_bundle():
+    raw = "Osaki OS-Pro Maestro (Kakaotalk) with FREE Eye Massager"
+    assert pc.format_model_display_name(raw) == "Osaki OS-Pro Maestro"
+
+
+def test_resolve_maestro_prefers_clean_title_over_kakaotalk_bundle():
+    pc.load_catalog_titles.cache_clear()
+    if not pc._CSV_PATH.is_file():
+        return
+    resolved = pc.resolve_model_name("Maestro")
+    assert resolved == "Osaki OS-Pro Maestro"
+    assert "kakaotalk" not in resolved.lower()
+    assert "free eye" not in resolved.lower()
+
+
+def test_resolve_maestro_le_prefers_clean_le_title():
+    pc.load_catalog_titles.cache_clear()
+    if not pc._CSV_PATH.is_file():
+        return
+    resolved = pc.resolve_model_name("Maestro LE")
+    assert resolved == "Osaki OS-Pro Maestro LE"
+    assert "kakaotalk" not in resolved.lower()
+
