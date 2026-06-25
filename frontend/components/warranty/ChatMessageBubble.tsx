@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import type { ChatMessage } from "@/lib/types";
+import SpeakButton from "./SpeakButton";
 
 interface Props {
   message: ChatMessage;
@@ -115,20 +116,25 @@ export default function ChatMessageBubble({ message, isStreaming }: Props) {
         </div>
       )}
 
-      <div
-        className={`min-w-0 max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm sm:max-w-[85%] ${
-          isUser
-            ? "rounded-br-md bg-brand-600 text-white"
-            : "rounded-bl-md bg-white text-gray-800 ring-1 ring-gray-100"
-        }`}
-      >
-        {lines.map((line, i) => (
-          <span key={i} className="block">
-            {renderInline(line, `line-${i}`)}
-          </span>
-        ))}
-        {isStreaming && (
-          <span className="ml-1 inline-block h-3 w-1.5 animate-pulse rounded-sm bg-current opacity-70" />
+      <div className="min-w-0 max-w-[92%] sm:max-w-[85%]">
+        <div
+          className={`rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${
+            isUser
+              ? "rounded-br-md bg-brand-600 text-white"
+              : "rounded-bl-md bg-white text-gray-800 ring-1 ring-gray-100"
+          }`}
+        >
+          {lines.map((line, i) => (
+            <span key={i} className="block">
+              {renderInline(line, `line-${i}`)}
+            </span>
+          ))}
+          {isStreaming && (
+            <span className="ml-1 inline-block h-3 w-1.5 animate-pulse rounded-sm bg-current opacity-70" />
+          )}
+        </div>
+        {!isUser && !isStreaming && message.content.trim() && (
+          <SpeakButton text={message.content} className="mt-1.5" />
         )}
       </div>
 
