@@ -107,6 +107,15 @@ export interface NoteRequest {
   added_by?: string;
 }
 
+export type CustomerEmailSkipReason =
+  | "decision_not_notifiable"
+  | "no_customer_message"
+  | "no_customer_email"
+  | "smtp_not_configured"
+  | "send_failed";
+
 export interface DecisionResponse {
   ticket: AdminWarrantyTicket;
+  customer_email_sent: boolean;
+  customer_email_skip_reason: CustomerEmailSkipReason | null;
 }

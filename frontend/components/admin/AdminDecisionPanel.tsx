@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { submitAdminDecision } from "@/lib/adminApi";
-import type { AdminDecision } from "@/lib/adminTypes";
+import type { AdminDecision, CustomerEmailSkipReason } from "@/lib/adminTypes";
 import AdminStatusBadge from "./AdminStatusBadge";
 
 interface Props {
@@ -50,6 +50,21 @@ const DECISIONS: Record<AdminDecision, DecisionConfig> = {
   },
 };
 
+const EMAIL_NOTIFY_DECISIONS = new Set<AdminDecision>([
+  "approved",
+  "rejected",
+  "need_more_information",
+  "closed",
+]);
+
+const SKIP_REASON_LABELS: Record<CustomerEmailSkipReason, string> = {
+  decision_not_notifiable: "This decision does not trigger a customer email.",
+  no_customer_message: "No customer message was entered — email was not sent.",
+  no_customer_email: "No customer email on file — email was not sent.",
+  smtp_not_configured: "Email is not configured on the server — email was not sent.",
+  send_failed: "Decision saved, but the customer email could not be delivered.",
+};
+
 export default function AdminDecisionPanel({ ticketId, currentStatus }: Props) {
   const router = useRouter();
   const [selected, setSelected] = useState<AdminDecision | null>(null);
@@ -58,6 +73,9 @@ export default function AdminDecisionPanel({ ticketId, currentStatus }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [emailSent, setEmailSent] = useState<boolean | null>(null);
+  const [emailSkipReason, setEmailSkipReason] =
+    useState<CustomerEmailSkipReason | null>(null);
 
   const cfg = selected ? DECISIONS[selected] : null;
 
@@ -67,6 +85,8 @@ export default function AdminDecisionPanel({ ticketId, currentStatus }: Props) {
     setCustomerMessage("");
     setError(null);
     setDone(false);
+    setEmailSent(null);
+    setEmailSkipReason(null);
   }
 
   function handleCancel() {
@@ -80,13 +100,15 @@ export default function AdminDecisionPanel({ ticketId, currentStatus }: Props) {
     setError(null);
 
     try {
-      await submitAdminDecision(ticketId, {
+      const result = await submitAdminDecision(ticketId, {
         decision: selected,
         note: note.trim() || undefined,
         customer_message: customerMessage.trim() || undefined,
         decided_by: "admin",
       });
       setDone(true);
+      setEmailSent(result.customer_email_sent);
+      setEmailSkipReason(result.customer_email_skip_reason);
       setSelected(null);
       router.refresh();
     } catch (err) {
@@ -105,8 +127,20 @@ export default function AdminDecisionPanel({ ticketId, currentStatus }: Props) {
       </div>
 
       {done && (
-        <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
-          ✅ Decision recorded successfully.
+        <div className="space-y-2">
+          <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+            Decision recorded successfully.
+          </div>
+          {emailSent && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+              Customer notified by email.
+            </div>
+          )}
+          {!emailSent && emailSkipReason && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              {SKIP_REASON_LABELS[emailSkipReason]}
+            </div>
+          )}
         </div>
       )}
 
@@ -165,16 +199,30 @@ export default function AdminDecisionPanel({ ticketId, currentStatus }: Props) {
           {/* Customer message */}
           <div className="mb-4">
             <label className="mb-1 block text-xs font-medium text-gray-600">
-              Message for customer (optional)
+              Message for customer
+              {selected && EMAIL_NOTIFY_DECISIONS.has(selected)
+                ? " (sent by email when filled in)"
+                : " (optional)"}
             </label>
             <textarea
               value={customerMessage}
               onChange={(e) => setCustomerMessage(e.target.value)}
-              placeholder="Message to surface to the customer in the chat (if supported)…"
-              rows={2}
+              placeholder={
+                selected && EMAIL_NOTIFY_DECISIONS.has(selected)
+                  ? "Write the message the customer will receive by email. Internal notes stay in the field above."
+                  : "Optional message for the customer…"
+              }
+              rows={3}
               disabled={loading}
               className="w-full resize-none rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400 disabled:opacity-60"
             />
+            {selected &&
+              EMAIL_NOTIFY_DECISIONS.has(selected) &&
+              !customerMessage.trim() && (
+                <p className="mt-1 text-xs text-amber-700">
+                  Leave this blank and no customer email will be sent.
+                </p>
+              )}
           </div>
 
           {error && (

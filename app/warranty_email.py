@@ -23,9 +23,23 @@ from config import (
     EMAIL_SENDER,
     SMTP_PORT,
     SMTP_SERVER,
+    WARRANTY_BUSINESS_HOURS,
     WARRANTY_EVIDENCE_NOTIFY_RECIPIENTS,
+    WARRANTY_PHONE,
     WARRANTY_TEAM_EMAIL,
 )
+
+# Admin decisions that may trigger a customer email (when message + email exist).
+_ADMIN_DECISION_NOTIFY = frozenset(
+    {"approved", "rejected", "need_more_information", "closed"}
+)
+
+_ADMIN_DECISION_SUBJECT = {
+    "approved": "Approved",
+    "rejected": "Not approved",
+    "need_more_information": "Additional information needed",
+    "closed": "Case closed",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -528,3 +542,128 @@ def notify_email_only_contact_async(
                 row.emailed = 1
 
     threading.Thread(target=_worker, daemon=True).start()
+
+
+def build_admin_decision_customer_body(
+    *,
+    ticket_id: str,
+    customer_message: str,
+    model_name: str = "",
+    issue_type: str = "",
+) -> str:
+    """Plain-text email body sent to the customer after an admin decision."""
+    lines = [
+        "Dear Customer,",
+        "",
+        customer_message.strip(),
+        "",
+        f"Case reference: {ticket_id}",
+    ]
+    if model_name:
+        lines.append(f"Product: {model_name}")
+    if issue_type:
+        lines.append(f"Issue: {issue_type}")
+    lines.extend(
+        [
+            "",
+            "If you have questions, contact our warranty team:",
+            f"  Phone : {WARRANTY_PHONE}",
+            f"  Email : {WARRANTY_TEAM_EMAIL}",
+            f"  Hours : {WARRANTY_BUSINESS_HOURS}",
+            "",
+            "-- Osaki / Titan Warranty Support --",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def send_admin_decision_customer_email(
+    *,
+    to_email: str,
+    ticket_id: str,
+    decision: str,
+    customer_message: str,
+    model_name: str = "",
+    issue_type: str = "",
+) -> bool:
+    """Email the customer with the admin-written message only (never internal notes)."""
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        logger.error(
+            "Admin decision customer email not sent — EMAIL_SENDER / EMAIL_PASSWORD not configured."
+        )
+        return False
+
+    label = _ADMIN_DECISION_SUBJECT.get(decision, "Update")
+    subject = f"[Osaki/Titan Warranty] Case {ticket_id} — {label}"
+    body = build_admin_decision_customer_body(
+        ticket_id=ticket_id,
+        customer_message=customer_message,
+        model_name=model_name,
+        issue_type=issue_type,
+    )
+
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = to_email
+    msg["Reply-To"] = WARRANTY_TEAM_EMAIL
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.send_message(msg)
+        logger.info(
+            "Admin decision customer email sent — ticket=%s decision=%s to=%s",
+            ticket_id,
+            decision,
+            to_email,
+        )
+        return True
+    except smtplib.SMTPException as exc:
+        logger.error("Admin decision customer email failed: %s", exc)
+        return False
+
+
+def maybe_send_admin_decision_customer_email(
+    *,
+    ticket,
+    decision: str,
+    customer_message: str,
+    turns: Optional[Sequence[Any]] = None,
+    evidences: Optional[Sequence[Any]] = None,
+) -> tuple[bool, Optional[str]]:
+    """
+    Send the admin's customer_message to the customer when appropriate.
+
+    Returns (sent, skip_reason).  skip_reason is set when no email was sent.
+    Internal admin notes are never included.
+    """
+    normalized_decision = decision.strip().lower()
+    if normalized_decision not in _ADMIN_DECISION_NOTIFY:
+        return False, "decision_not_notifiable"
+
+    message = (customer_message or "").strip()
+    if not message:
+        return False, "no_customer_message"
+
+    to_email = resolve_customer_email(ticket, turns=turns, evidences=evidences)
+    if not to_email:
+        return False, "no_customer_email"
+
+    sent = send_admin_decision_customer_email(
+        to_email=to_email,
+        ticket_id=str(ticket.ticket_id),
+        decision=normalized_decision,
+        customer_message=message,
+        model_name=str(ticket.model_name or ""),
+        issue_type=str(ticket.issue_type or ""),
+    )
+    if sent:
+        return True, None
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        return False, "smtp_not_configured"
+    return False, "send_failed"

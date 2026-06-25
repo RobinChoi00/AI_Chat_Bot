@@ -959,11 +959,28 @@ async def admin_warranty_decision(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+    turns = engine.get_turns(ticket_id)
+    evidences = engine.get_evidences(ticket_id)
+
+    from warranty_email import maybe_send_admin_decision_customer_email  # noqa: WPS433
+
+    customer_email_sent, customer_email_skip_reason = maybe_send_admin_decision_customer_email(
+        ticket=ticket,
+        decision=body.decision,
+        customer_message=body.customer_message or "",
+        turns=turns,
+        evidences=evidences,
+    )
+
     logger.info(
         f"⚖️  Admin decision — ticket={ticket_id} decision={body.decision} "
-        f"decided_by={body.decided_by}"
+        f"decided_by={body.decided_by} customer_email_sent={customer_email_sent}"
     )
-    return {"ticket": ticket.to_dict()}
+    return {
+        "ticket": _serialize_admin_ticket(ticket, turns=turns, evidences=evidences),
+        "customer_email_sent": customer_email_sent,
+        "customer_email_skip_reason": customer_email_skip_reason,
+    }
 
 
 @router.post("/admin/warranty/{ticket_id}/note", tags=["admin-warranty"])
