@@ -33,6 +33,7 @@ _DEFECT_CATEGORY_MAP: dict[str, str] = {
     "footrest": "footrest",
     "cosmetic": "misc",
     "heat": "heat",
+    "voice": "voice",
 }
 
 _QA_CATEGORY_MAP: dict[str, str] = {
@@ -53,6 +54,7 @@ _CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "footrest": ("footrest", "calf", "leg rest"),
     "heat": ("heat", "heated", "warming"),
     "misc": ("cosmetic", "voice", "speaker", "software", "bluetooth"),
+    "voice": ("voice", "command", "microphone", "mic", "alexa", "hey", "ghost", "false trigger", "random voice"),
 }
 
 _INTERNAL_MARKERS = (
@@ -252,6 +254,8 @@ def _load_qa_entries() -> list[KnowledgeEntry]:
             if not steps and not diagnostic:
                 continue
             category = _QA_CATEGORY_MAP.get(current_qa_category, "general")
+            if "voice control" in col0.lower() or col0.lower().startswith("voice "):
+                category = "voice"
             entries.append(
                 KnowledgeEntry(
                     source="qa_csv",

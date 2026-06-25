@@ -84,6 +84,31 @@ def test_install_air_hose_terminal_includes_diy_steps_and_video():
     assert result["phase"] == "awaiting_help_consent"
 
 
+def test_voice_not_working_terminal_includes_diy_steps():
+    node = {
+        "node_id": "defect_voice_not_working_terminal",
+        "type": "terminal",
+        "action": "send_info",
+        "prompt": "Voice help.",
+        "evidence_required": [],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("voice"),
+                _Turn("voice_no_response"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "What you can try" in result["message"]
+    assert "voice" in result["message"].lower()
+    assert result["diagnosis"]["steps"]
+    assert result["phase"] == "awaiting_help_consent"
+
+
 def test_defect_terminal_diagnosis_and_help_offer():
     node = {
         "node_id": "defect_power_main_pcb_terminal",

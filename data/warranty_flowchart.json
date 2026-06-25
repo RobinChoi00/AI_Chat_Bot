@@ -161,8 +161,35 @@
         {"label": "Full rolling massage mechanism issue",                 "answer_key": "rolling",  "next": "defect_rolling_problem_type"},
         {"label": "Power issue (chair won't turn on or has power problems)", "answer_key": "power", "next": "defect_power_remote_on_q"},
         {"label": "Recline / position adjustment not working",            "answer_key": "recline",  "next": "defect_recline_which"},
-        {"label": "Footrest issue",                                       "answer_key": "footrest", "next": "defect_footrest_which"}
+        {"label": "Footrest issue",                                       "answer_key": "footrest", "next": "defect_footrest_which"},
+        {"label": "Voice control issue",                                  "answer_key": "voice",    "next": "defect_voice_which"}
       ]
+    },
+
+    "defect_voice_which": {
+      "type": "question",
+      "prompt": "Which voice control issue best describes your situation?",
+      "options": [
+        {"label": "Voice control does not respond to my commands",     "answer_key": "voice_no_response",  "next": "defect_voice_not_working_terminal"},
+        {"label": "Voice picks up random commands / false triggers", "answer_key": "false_triggers",     "next": "defect_voice_false_triggers_terminal"},
+        {"label": "Not sure",                                        "answer_key": "voice_not_sure",     "next": "defect_voice_not_working_terminal"}
+      ]
+    },
+
+    "defect_voice_not_working_terminal": {
+      "type": "terminal",
+      "action": "send_info",
+      "prompt": "Let's try a few voice control checks — many issues are fixed with the right commands and microphone placement.",
+      "internal_note": "Voice not responding. Customer-safe DIY: supported commands, mic location, side panel connections. Team follow-up if still dead.",
+      "evidence_required": []
+    },
+
+    "defect_voice_false_triggers_terminal": {
+      "type": "terminal",
+      "action": "send_info",
+      "prompt": "False voice triggers are often caused by background noise or TV audio. Here are settings and placement tips.",
+      "internal_note": "Ghost/random voice pickup. Customer-safe: settings off, unplug when idle, reduce noise. Not a defect if sensitivity picks up ambient speech.",
+      "evidence_required": []
     },
 
     "defect_air_location": {

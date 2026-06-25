@@ -125,6 +125,8 @@
     "defect_air_side_reconnect_terminal":      { "required": [],                                                             "optional": [] },
     "defect_air_base_hose_terminal":           { "required": [],                                                             "optional": [] },
     "defect_cosmetic_side_fixed_terminal":     { "required": [],                                                             "optional": [] },
-    "defect_remote_connection_terminal":       { "required": [],                                                             "optional": [] }
+    "defect_remote_connection_terminal":       { "required": [],                                                             "optional": [] },
+    "defect_voice_not_working_terminal":       { "required": [],                                                             "optional": [] },
+    "defect_voice_false_triggers_terminal":    { "required": [],                                                             "optional": [] }
   }
 }

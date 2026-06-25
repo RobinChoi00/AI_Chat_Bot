@@ -17,10 +17,13 @@ from warranty_self_help import (
     HELP_OFFER_OPTIONS,
     build_install_air_hose_diagnosis,
     build_path_text,
+    build_voice_diagnosis,
     build_workflow_diagnosis,
     format_diagnosis_message,
     format_install_air_hose_message,
+    format_voice_self_help_message,
     infer_defect_category_from_turns,
+    infer_voice_symptom_from_turns,
 )
 
 
@@ -83,6 +86,25 @@ def _install_air_hose_message(engine, ticket_id: str, ticket) -> dict[str, Any]:
     return _help_offer_enrichment(body, diagnosis=diagnosis)
 
 
+def _voice_self_help_message(engine, ticket_id: str, ticket, *, false_triggers: bool) -> dict[str, Any]:
+    model_name = str(getattr(ticket, "model_name", "") or "")
+    turns = engine.get_turns(ticket_id)
+    path_text = build_path_text(turns)
+    symptom = "false_triggers" if false_triggers else "voice_no_response"
+    if not false_triggers:
+        symptom = infer_voice_symptom_from_turns(turns)
+    diagnosis = build_voice_diagnosis(
+        symptom=symptom,
+        path_text=path_text,
+        model_name=model_name,
+    )
+    body = format_voice_self_help_message(
+        diagnosis=diagnosis,
+        repair_manual_url=REPAIR_MANUAL_URL,
+    )
+    return _help_offer_enrichment(body, diagnosis=diagnosis)
+
+
 def _workflow_end_message(
     engine,
     ticket_id: str,
@@ -127,6 +149,12 @@ def build_terminal_enrichment(
 
     if node_id == "install_air_hose_terminal":
         return _install_air_hose_message(engine, ticket_id, ticket)
+
+    if node_id == "defect_voice_not_working_terminal":
+        return _voice_self_help_message(engine, ticket_id, ticket, false_triggers=False)
+
+    if node_id == "defect_voice_false_triggers_terminal":
+        return _voice_self_help_message(engine, ticket_id, ticket, false_triggers=True)
 
     if node_id == "install_send_video" or (
         issue_type == "installation" and action == "send_info"

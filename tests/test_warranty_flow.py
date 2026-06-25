@@ -159,6 +159,66 @@ def test_installation_footrest_air_to_diy_terminal():
     assert str(ticket(ticket_id).status) == "send_info"
 
 
+def test_defect_voice_not_working_to_diy_terminal():
+    ticket_id, _ = start()
+
+    result = walk(ticket_id, [
+        "warranty",
+        "defect",
+        "voice",
+        "voice_no_response",
+    ])
+
+    assert result["next_node_id"] == "defect_voice_not_working_terminal"
+    assert result["is_terminal"] is True
+    assert str(ticket(ticket_id).status) == "send_info"
+    assert str(ticket(ticket_id).defect_type) == "voice"
+
+
+def test_defect_voice_false_triggers_to_diy_terminal():
+    ticket_id, _ = start()
+
+    result = walk(ticket_id, [
+        "warranty",
+        "defect",
+        "voice",
+        "false_triggers",
+    ])
+
+    assert result["next_node_id"] == "defect_voice_false_triggers_terminal"
+    assert result["is_terminal"] is True
+
+
+def test_defect_voice_not_working_to_diy_terminal():
+    ticket_id, _ = start()
+
+    result = walk(ticket_id, [
+        "warranty",
+        "defect",
+        "voice",
+        "voice_no_response",
+    ])
+
+    assert result["next_node_id"] == "defect_voice_not_working_terminal"
+    assert result["is_terminal"] is True
+    assert str(ticket(ticket_id).status) == "send_info"
+    assert str(ticket(ticket_id).defect_type) == "voice"
+
+
+def test_defect_voice_false_triggers_to_diy_terminal():
+    ticket_id, _ = start()
+
+    result = walk(ticket_id, [
+        "warranty",
+        "defect",
+        "voice",
+        "false_triggers",
+    ])
+
+    assert result["next_node_id"] == "defect_voice_false_triggers_terminal"
+    assert result["is_terminal"] is True
+
+
 # ---------------------------------------------------------------------------
 # Scenario 2 — Delivery, no tracking → lookup by name → awaiting_admin
 # ---------------------------------------------------------------------------

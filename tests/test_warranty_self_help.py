@@ -98,3 +98,22 @@ def test_build_install_air_hose_diagnosis_includes_core_steps():
     assert diagnosis["steps"]
     assert any("footrest" in step.lower() for step in diagnosis["steps"])
     assert "footrest-to-base" in diagnosis["summary"].lower()
+
+
+def test_build_voice_diagnosis_includes_core_steps():
+    from warranty_self_help import build_voice_diagnosis
+
+    diagnosis = build_voice_diagnosis(
+        symptom="voice_no_response",
+        path_text="voice control does not work commands",
+        model_name="OS-4000T",
+    )
+    assert diagnosis["steps"]
+    assert any("command" in step.lower() for step in diagnosis["steps"])
+
+    ghost = build_voice_diagnosis(
+        symptom="false_triggers",
+        path_text="voice ghost random tv",
+        model_name="OS-4000T",
+    )
+    assert any("tv" in step.lower() or "unplug" in step.lower() for step in ghost["steps"])

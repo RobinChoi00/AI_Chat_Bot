@@ -12,7 +12,7 @@ from typing import Any, Optional
 from warranty_knowledge import KnowledgeEntry, search_knowledge
 
 _DEFECT_CATEGORY_KEYS = frozenset({
-    "power", "remote", "air", "rolling", "recline", "footrest", "cosmetic", "heat",
+    "power", "remote", "air", "rolling", "recline", "footrest", "cosmetic", "heat", "voice",
 })
 
 _CATEGORY_LABELS: dict[str, str] = {
@@ -24,6 +24,7 @@ _CATEGORY_LABELS: dict[str, str] = {
     "footrest": "footrest",
     "cosmetic": "cosmetic",
     "heat": "heating",
+    "voice": "voice control",
 }
 
 _NODE_HINTS: dict[str, tuple[str, ...]] = {
@@ -89,6 +90,32 @@ def infer_install_concern_from_turns(turns) -> Optional[str]:
         if key in ("footrest_or_no_air", "general_setup", "other"):
             return key
     return None
+
+
+def infer_voice_symptom_from_turns(turns) -> str:
+    for turn in reversed(list(turns or [])):
+        key = str(getattr(turn, "answer_key", "") or "")
+        if key == "false_triggers":
+            return "false_triggers"
+        if key in ("voice_no_response", "voice_not_sure"):
+            return "voice_no_response"
+    return "voice_no_response"
+
+
+_VOICE_NOT_WORKING_STEPS: tuple[str, ...] = (
+    "Use only the voice commands listed in your chair's manual or on-screen command list — custom phrases may not work.",
+    "Speak clearly toward the built-in microphone and try from about an arm's length away.",
+    "Locate the microphone on your model (often near the side panel or headrest — check your user manual).",
+    "Check that side panel connections are fully seated, especially if the chair was recently installed.",
+    "Power cycle the chair: turn the back switch OFF, wait 10 seconds, then turn it ON and try again.",
+)
+
+_VOICE_FALSE_TRIGGER_STEPS: tuple[str, ...] = (
+    "Move the chair away from TVs, speakers, or busy conversation areas if possible.",
+    "Turn off voice control in the chair settings if you do not want voice features active.",
+    "Unplug the chair from the wall when you are not using it to prevent idle listening.",
+    "Try lowering room noise — voice systems can react to nearby speech or TV audio.",
+)
 
 
 def infer_defect_category_from_turns(turns) -> Optional[str]:
@@ -257,6 +284,75 @@ def format_install_air_hose_message(
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
         "\n\n**Would you like our warranty team to follow up if air still does not work after these steps?**"
+    )
+    return "\n".join(parts)
+
+
+def build_voice_diagnosis(
+    *,
+    symptom: str,
+    path_text: str,
+    model_name: str = "",
+) -> dict[str, Any]:
+    """DIY steps for voice control issues (no replacement/dispatch language)."""
+    base_steps = (
+        _VOICE_FALSE_TRIGGER_STEPS
+        if symptom == "false_triggers"
+        else _VOICE_NOT_WORKING_STEPS
+    )
+    query = (
+        f"{path_text} voice control false trigger ghost random"
+        if symptom == "false_triggers"
+        else f"{path_text} voice control command microphone not working"
+    )
+    matches: list[KnowledgeEntry] = search_knowledge(
+        path_text=query,
+        defect_category="voice",
+        model_name=model_name,
+        limit=3,
+    )
+    steps: list[str] = list(base_steps)
+    for entry in matches:
+        if entry.source in ("qa_csv", "auto_check"):
+            steps.extend(entry.customer_steps[:2])
+    if len(steps) <= len(base_steps):
+        for entry in matches:
+            if entry.source == "freshdesk":
+                steps.extend(entry.customer_steps[:2])
+    steps = _dedupe_steps(steps)
+
+    model_display = (model_name or "your chair").strip()
+    if symptom == "false_triggers":
+        summary = (
+            f"For your **{model_display}**, voice control can react to **background speech or TV audio**. "
+            "Try the steps below before requesting service."
+        )
+    else:
+        summary = (
+            f"For your **{model_display}**, voice control issues are often fixed by using the "
+            "**correct commands**, speaking clearly to the mic, and checking connections."
+        )
+    if matches:
+        summary = f"{summary} Similar support cases suggest starting with the steps below."
+
+    return {
+        "summary": summary,
+        "steps": steps,
+        "sources": [entry.source for entry in matches[:3]],
+        "top_match": matches[0].title if matches else None,
+    }
+
+
+def format_voice_self_help_message(*, diagnosis: dict[str, Any], repair_manual_url: str) -> str:
+    parts: list[str] = [str(diagnosis.get("summary") or "").strip()]
+    steps: list[str] = list(diagnosis.get("steps") or [])
+    if steps:
+        parts.append("\n\n**What you can try:**")
+        for idx, step in enumerate(steps, start=1):
+            parts.append(f"{idx}. {step}")
+    parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
+    parts.append(
+        "\n\n**Would you like our warranty team to follow up if voice control still does not work?**"
     )
     return "\n".join(parts)
 
