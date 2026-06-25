@@ -12,6 +12,7 @@ Phase E-lite  — Admin management
     GET    /admin/warranty/tickets/{ticket_id}
     POST   /admin/warranty/{ticket_id}/decision
     POST   /admin/warranty/{ticket_id}/note
+    POST   /admin/warranty/sync-freshdesk
 
 Authentication
 --------------
@@ -33,6 +34,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
+import requests
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -986,6 +988,53 @@ async def admin_warranty_note(
         raise HTTPException(status_code=404, detail=str(e))
 
     return {"ticket": ticket.to_dict()}
+
+
+@router.post("/admin/warranty/sync-freshdesk", tags=["admin-warranty"])
+async def admin_sync_freshdesk(
+    x_admin_key: Optional[str] = Header(default=None),
+    max_pages: int = 5,
+):
+    """
+    Pull resolved Freshdesk tickets into data/freshdesk_tickets.json and
+    reload warranty self-help knowledge cache. Admin-only.
+    """
+    _require_admin(x_admin_key)
+
+    try:
+        from freshdesk_sync import sync_freshdesk_knowledge  # noqa: WPS433
+        from warranty_knowledge import clear_knowledge_cache, load_knowledge_entries  # noqa: WPS433
+    except ImportError:
+        from app.freshdesk_sync import sync_freshdesk_knowledge  # type: ignore  # noqa: WPS433
+        from app.warranty_knowledge import (  # type: ignore  # noqa: WPS433
+            clear_knowledge_cache,
+            load_knowledge_entries,
+        )
+
+    pages = max(1, min(int(max_pages), 20))
+    try:
+        result = sync_freshdesk_knowledge(max_pages=pages)
+    except EnvironmentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except requests.exceptions.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Freshdesk API error: {exc}") from exc
+
+    clear_knowledge_cache()
+    entries = load_knowledge_entries()
+    freshdesk_entries = sum(1 for entry in entries if entry.source == "freshdesk")
+
+    logger.info(
+        "Freshdesk sync — ok=%s tickets=%s knowledge_freshdesk=%s",
+        result.get("ok"),
+        result.get("ticket_count"),
+        freshdesk_entries,
+    )
+
+    return {
+        **result,
+        "knowledge_freshdesk_entries": freshdesk_entries,
+        "knowledge_total_entries": len(entries),
+    }
 
 
 @router.get(

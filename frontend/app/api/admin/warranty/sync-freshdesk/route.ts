@@ -1,0 +1,33 @@
+/**
+ * POST /api/admin/warranty/sync-freshdesk
+ *
+ * Server-side proxy to FastAPI POST /admin/warranty/sync-freshdesk.
+ */
+import { NextResponse } from "next/server";
+import { getBackendUrl } from "@/lib/backendUrl";
+
+const BACKEND = getBackendUrl();
+
+function requireAdminKey(): string {
+  const key = process.env.ADMIN_API_KEY;
+  if (!key) throw new Error("ADMIN_API_KEY is not configured on the server.");
+  return key;
+}
+
+export async function POST() {
+  try {
+    const adminKey = requireAdminKey();
+    const upstream = await fetch(`${BACKEND}/admin/warranty/sync-freshdesk`, {
+      method: "POST",
+      headers: { "X-Admin-Key": adminKey },
+      cache: "no-store",
+      signal: AbortSignal.timeout(120_000),
+    });
+
+    const data: unknown = await upstream.json();
+    return NextResponse.json(data, { status: upstream.status });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : "Internal server error";
+    return NextResponse.json({ detail }, { status: 500 });
+  }
+}

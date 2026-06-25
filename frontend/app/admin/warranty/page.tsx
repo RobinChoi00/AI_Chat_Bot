@@ -9,6 +9,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import AdminTicketQueue from "@/components/admin/AdminTicketQueue";
 import AdminQueueFilters from "@/components/admin/AdminQueueFilters";
+import AdminFreshdeskSync from "@/components/admin/AdminFreshdeskSync";
 import type { TicketListResponse } from "@/lib/adminTypes";
 import { getBackendUrl } from "@/lib/backendUrl";
 
@@ -92,7 +93,10 @@ export default async function AdminWarrantyQueuePage({
         </div>
 
         {/* Filters + refresh */}
-        <AdminQueueFilters currentStatus={status} total={data.total} />
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <AdminQueueFilters currentStatus={status} total={data.total} />
+          <AdminFreshdeskSync />
+        </div>
 
         {/* Fetch error */}
         {fetchError && (

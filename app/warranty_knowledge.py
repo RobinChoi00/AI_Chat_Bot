@@ -344,6 +344,11 @@ def load_knowledge_entries() -> tuple[KnowledgeEntry, ...]:
     return tuple(combined)
 
 
+def clear_knowledge_cache() -> None:
+    """Invalidate cached knowledge after freshdesk_tickets.json is updated."""
+    load_knowledge_entries.cache_clear()
+
+
 def _score_entry(
     entry: KnowledgeEntry,
     path_tokens: set[str],
