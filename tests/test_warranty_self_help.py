@@ -118,6 +118,44 @@ def test_build_rolling_noise_diagnosis_includes_core_steps():
     assert infer_rolling_noise_type_from_turns(turns) == "pops"
 
 
+def test_build_remote_diagnosis_includes_core_steps():
+    from warranty_self_help import build_remote_diagnosis, infer_remote_symptom_from_turns
+
+    diagnosis = build_remote_diagnosis(
+        symptom="bad_connection",
+        path_text="remote cable loose connection",
+        model_name="OS-4000T",
+    )
+    assert diagnosis["steps"]
+    assert any("cable" in step.lower() for step in diagnosis["steps"])
+
+    turns = [_Turn("remote"), _Turn("no_power"), _Turn("bad_connection")]
+    assert infer_remote_symptom_from_turns(turns) == "bad_connection"
+    assert (
+        infer_remote_symptom_from_turns([], node_id="defect_remote_fuse_terminal")
+        == "fuse_broken"
+    )
+
+
+def test_build_power_diagnosis_includes_core_steps():
+    from warranty_self_help import build_power_diagnosis, infer_power_symptom_from_turns
+
+    diagnosis = build_power_diagnosis(
+        symptom="clicking_sound",
+        path_text="power back switch clicking sound",
+        model_name="OS-4000T",
+    )
+    assert diagnosis["steps"]
+    assert any("click" in step.lower() or "switch" in step.lower() for step in diagnosis["steps"])
+
+    turns = [_Turn("power"), _Turn("remote_off"), _Turn("clicking_sound")]
+    assert infer_power_symptom_from_turns(turns) == "clicking_sound"
+    assert (
+        infer_power_symptom_from_turns([], node_id="defect_power_no_click_terminal")
+        == "no_clicking"
+    )
+
+
 def test_build_workflow_diagnosis_prefers_freshdesk_for_remote():
     from warranty_self_help import build_workflow_diagnosis
 

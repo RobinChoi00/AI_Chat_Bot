@@ -110,6 +110,22 @@ def infer_rolling_noise_type_from_turns(turns) -> str:
     return "noise_massaging"
 
 
+def infer_remote_symptom_from_turns(turns, node_id: str = "") -> str:
+    for turn in reversed(list(turns or [])):
+        key = str(getattr(turn, "answer_key", "") or "")
+        if key in _REMOTE_STEPS:
+            return key
+    return _NODE_REMOTE_SYMPTOM.get(node_id, "no_power")
+
+
+def infer_power_symptom_from_turns(turns, node_id: str = "") -> str:
+    for turn in reversed(list(turns or [])):
+        key = str(getattr(turn, "answer_key", "") or "")
+        if key in _POWER_STEPS:
+            return key
+    return _NODE_POWER_SYMPTOM.get(node_id, "remote_off")
+
+
 _VOICE_NOT_WORKING_STEPS: tuple[str, ...] = (
     "Use only the voice commands listed in your chair's manual or on-screen command list — custom phrases may not work.",
     "Speak clearly toward the built-in microphone and try from about an arm's length away.",
@@ -146,6 +162,167 @@ _ROLLING_NOISE_STEPS: dict[str, tuple[str, ...]] = {
 }
 
 _FRESHDESK_PRIORITY_CATEGORIES = frozenset({"power", "remote", "mech"})
+
+_REMOTE_STEPS: dict[str, tuple[str, ...]] = {
+    "no_power": (
+        "Check whether the remote fuse is intact (refer to your manual for fuse location).",
+        "Unplug the cable between the chair and remote, then reconnect both ends firmly.",
+        "Press and hold the remote power button for a few seconds, then try turning it on again.",
+        "Try the side panel buttons on the chair to see if the chair responds without the remote.",
+    ),
+    "blank_screen_commands_ok": (
+        "If commands work but the screen is blank, unplug the remote cable and reconnect it firmly.",
+        "Power cycle the remote by turning it off, waiting 10 seconds, then on again.",
+        "Note which commands still work — this helps our team if you need follow-up.",
+    ),
+    "cable_damaged": (
+        "Inspect the remote cable along its full length for cuts, kinks, or pin damage.",
+        "Do not force a damaged connector — unplug the chair before checking connections.",
+        "If you can safely reconnect a loose end, test whether the remote powers on.",
+    ),
+    "commands_not_responding": (
+        "Reseat the cable between the chair and remote at both ends.",
+        "Test each area of the remote (recline, footrest, massage) and note which commands fail.",
+        "Try the side panel buttons to confirm the chair itself responds.",
+        "Power cycle the chair: back switch OFF, wait 10 seconds, then ON.",
+    ),
+    "fuse_broken": (
+        "If the remote fuse appears blown, do not force the remote on.",
+        "Note the fuse condition and location for our team if you need a replacement.",
+        "Try the side panel buttons to see whether the chair works without the remote.",
+    ),
+    "bad_connection": (
+        "Unplug the cable between the chair and remote completely.",
+        "Inspect both connectors for bent pins or debris.",
+        "Plug the cable back in firmly until it feels fully seated.",
+        "Power the remote on and test basic commands like footrest up or down.",
+    ),
+    "intermittent": (
+        "Reseat the remote cable at both the chair and remote ends.",
+        "Note when the remote fails — at startup, after recline, or randomly.",
+        "Try the side panel buttons when the remote is unresponsive.",
+        "Power cycle the chair and remote, then test again.",
+    ),
+    "all_checked_ok": (
+        "Toggle the back power switch OFF, wait 10 seconds, then ON — note any click or sound.",
+        "Try the side panel buttons to see if the chair responds without the remote.",
+        "Reseat the remote cable and test whether the remote screen turns on.",
+        "Record a short video showing the remote and chair response if you need team follow-up.",
+    ),
+}
+
+_POWER_STEPS: dict[str, tuple[str, ...]] = {
+    "remote_off": (
+        "Confirm the power cord is firmly plugged into both the chair and wall outlet.",
+        "Test the wall outlet with another device to make sure it has power.",
+        "Check the chair fuse if you can access it safely (see your manual).",
+        "Toggle the back power switch OFF, wait 10 seconds, then ON — listen for a click.",
+    ),
+    "no_response": (
+        "Reseat the cable between the chair and remote at both ends.",
+        "Try the side panel buttons to confirm the chair itself responds.",
+        "Power cycle: turn the back switch OFF, wait 10 seconds, then ON.",
+        "Note whether the remote screen is on but commands do nothing.",
+    ),
+    "quick_control_ok": (
+        "Reseat the cable between the chair and main remote.",
+        "Confirm the quick control panel works while the main remote does not.",
+        "Power cycle the remote and chair, then test again.",
+        "Try a different command on the main remote (footrest, recline, power off).",
+    ),
+    "back_switch_sound": (
+        "Confirm the power cord and outlet are good, then note exactly what you hear from the chair.",
+        "Try the side panel buttons to see if the chair responds without the remote.",
+        "Toggle the back switch OFF and ON again and listen for the same sound.",
+        "Record a short video of the sound if you need team follow-up.",
+    ),
+    "recline_not_working": (
+        "Try each recline function separately (backrest, Zero Gravity, footrest) and note which fails.",
+        "When you power the chair OFF, watch whether the stuck part returns to its default position.",
+        "Try the same function from the side panel buttons if your model has them.",
+    ),
+    "moves_on_off": (
+        "When powered off, note whether the stuck recline part moves back on its own.",
+        "Try the failing function once more from the remote and side panel.",
+        "Record a short video showing the recline issue if you need team follow-up.",
+    ),
+    "stays_stuck": (
+        "When powered off, confirm the stuck part does not return to its default position.",
+        "Do not force the backrest or footrest — note which direction it is stuck.",
+        "Try the side panel buttons for the same function.",
+    ),
+    "powercord_issue": (
+        "Unplug the power cord from the wall and the chair, then reconnect both ends firmly.",
+        "Avoid extension cords if possible — plug directly into the wall outlet.",
+        "Inspect the cord for visible damage along its length.",
+    ),
+    "outlet_no_power": (
+        "Test the wall outlet with a lamp or phone charger to confirm it has power.",
+        "Try a different outlet on the same circuit if available.",
+        "Once the outlet works, reconnect the chair firmly and toggle the back switch ON.",
+    ),
+    "fuse_blown": (
+        "If the chair fuse appears blown, do not force the chair on.",
+        "Note the fuse condition and location for our team if you need follow-up.",
+        "Double-check the power cord and outlet before replacing a fuse.",
+    ),
+    "clicking_sound": (
+        "A click when toggling the back switch often means the chair has power — reseat the remote cable.",
+        "Try the side panel buttons to see if the chair works without the remote.",
+        "Power cycle the remote and test basic commands.",
+    ),
+    "no_clicking": (
+        "Verify the power cord at both the wall and the chair, then check the fuse.",
+        "Toggle the back switch OFF, wait 10 seconds, then ON — listen for any sound at all.",
+        "Try a different wall outlet if the cord and fuse look OK.",
+    ),
+}
+
+_NODE_REMOTE_SYMPTOM: dict[str, str] = {
+    "defect_remote_blank_screen_terminal": "blank_screen_commands_ok",
+    "defect_remote_cable_terminal": "cable_damaged",
+    "defect_remote_partial_terminal": "commands_not_responding",
+    "defect_remote_fuse_terminal": "fuse_broken",
+    "defect_remote_connection_terminal": "bad_connection",
+    "defect_remote_intermittent_terminal": "intermittent",
+    "defect_remote_pcb_check_terminal": "all_checked_ok",
+}
+
+_NODE_POWER_SYMPTOM: dict[str, str] = {
+    "defect_power_remote_replace_terminal": "no_response",
+    "defect_power_main_pcb_terminal": "back_switch_sound",
+    "defect_power_actuator_terminal": "moves_on_off",
+    "defect_power_main_pcb_wire_terminal": "stays_stuck",
+    "defect_power_pcb_fuse_terminal": "fuse_blown",
+    "defect_power_clicking_terminal": "clicking_sound",
+    "defect_power_no_click_terminal": "no_clicking",
+}
+
+_REMOTE_SUMMARY_LABELS: dict[str, str] = {
+    "no_power": "a remote that will not turn on or show anything",
+    "blank_screen_commands_ok": "a remote with a blank screen but working commands",
+    "cable_damaged": "a damaged remote cable",
+    "commands_not_responding": "a remote where some commands do not respond",
+    "fuse_broken": "a blown remote fuse",
+    "bad_connection": "a loose remote cable connection",
+    "intermittent": "a remote that works only sometimes",
+    "all_checked_ok": "a remote issue after basic checks",
+}
+
+_POWER_SUMMARY_LABELS: dict[str, str] = {
+    "remote_off": "a chair that will not power on",
+    "no_response": "a remote that turns on but does not control the chair",
+    "quick_control_ok": "a main remote issue while side controls still work",
+    "back_switch_sound": "power symptoms after toggling the back switch",
+    "recline_not_working": "a recline function that is not working",
+    "moves_on_off": "a recline part that returns when powered off",
+    "stays_stuck": "a recline part that stays stuck when powered off",
+    "powercord_issue": "a power cord connection issue",
+    "outlet_no_power": "a wall outlet with no power",
+    "fuse_blown": "a blown chair fuse",
+    "clicking_sound": "a clicking sound when toggling the back switch",
+    "no_clicking": "no response after power and fuse checks",
+}
 
 
 def infer_defect_category_from_turns(turns) -> Optional[str]:
@@ -468,6 +645,116 @@ def format_rolling_noise_self_help_message(*, diagnosis: dict[str, Any], repair_
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
         "\n\n**Would you like our warranty team to follow up if the noise continues after these steps?**"
+    )
+    return "\n".join(parts)
+
+
+def build_remote_diagnosis(
+    *,
+    symptom: str,
+    path_text: str,
+    model_name: str = "",
+) -> dict[str, Any]:
+    """DIY steps for remote / controller issues before team review."""
+    base_steps = _REMOTE_STEPS.get(symptom, _REMOTE_STEPS["no_power"])
+    query = f"{path_text} remote controller tablet not working"
+    matches: list[KnowledgeEntry] = search_knowledge(
+        path_text=query,
+        defect_category="remote",
+        model_name=model_name,
+        limit=3,
+    )
+    steps: list[str] = list(base_steps)
+    steps = _merge_knowledge_steps(
+        steps=steps,
+        matches=matches,
+        fallback_len=len(base_steps),
+        defect_category="remote",
+    )
+    steps = _dedupe_steps(steps)
+
+    model_display = (model_name or "your chair").strip()
+    label = _REMOTE_SUMMARY_LABELS.get(symptom, "a remote or controller issue")
+    summary = (
+        f"For your **{model_display}**, **{label}** can often be improved by checking "
+        "the **cable, fuse, and connections** below."
+    )
+    if matches:
+        summary = f"{summary} Similar support cases suggest trying these steps first."
+
+    return {
+        "summary": summary,
+        "steps": steps,
+        "sources": [entry.source for entry in matches[:3]],
+        "top_match": matches[0].title if matches else None,
+    }
+
+
+def format_remote_self_help_message(*, diagnosis: dict[str, Any], repair_manual_url: str) -> str:
+    parts: list[str] = [str(diagnosis.get("summary") or "").strip()]
+    steps: list[str] = list(diagnosis.get("steps") or [])
+    if steps:
+        parts.append("\n\n**What you can try:**")
+        for idx, step in enumerate(steps, start=1):
+            parts.append(f"{idx}. {step}")
+    parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
+    parts.append(
+        "\n\n**Would you like our warranty team to follow up if the remote still does not work?**"
+    )
+    return "\n".join(parts)
+
+
+def build_power_diagnosis(
+    *,
+    symptom: str,
+    path_text: str,
+    model_name: str = "",
+) -> dict[str, Any]:
+    """DIY steps for chair power issues before team review."""
+    base_steps = _POWER_STEPS.get(symptom, _POWER_STEPS["remote_off"])
+    query = f"{path_text} power turn on fuse outlet cord remote"
+    matches: list[KnowledgeEntry] = search_knowledge(
+        path_text=query,
+        defect_category="power",
+        model_name=model_name,
+        limit=3,
+    )
+    steps: list[str] = list(base_steps)
+    steps = _merge_knowledge_steps(
+        steps=steps,
+        matches=matches,
+        fallback_len=len(base_steps),
+        defect_category="power",
+    )
+    steps = _dedupe_steps(steps)
+
+    model_display = (model_name or "your chair").strip()
+    label = _POWER_SUMMARY_LABELS.get(symptom, "a power issue")
+    summary = (
+        f"For your **{model_display}**, **{label}** is often related to the "
+        "**power cord, outlet, fuse, or back switch**. Try the steps below first."
+    )
+    if matches:
+        summary = f"{summary} Similar support cases suggest these checks before service."
+
+    return {
+        "summary": summary,
+        "steps": steps,
+        "sources": [entry.source for entry in matches[:3]],
+        "top_match": matches[0].title if matches else None,
+    }
+
+
+def format_power_self_help_message(*, diagnosis: dict[str, Any], repair_manual_url: str) -> str:
+    parts: list[str] = [str(diagnosis.get("summary") or "").strip()]
+    steps: list[str] = list(diagnosis.get("steps") or [])
+    if steps:
+        parts.append("\n\n**What you can try:**")
+        for idx, step in enumerate(steps, start=1):
+            parts.append(f"{idx}. {step}")
+    parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
+    parts.append(
+        "\n\n**Would you like our warranty team to follow up if the chair still will not power on?**"
     )
     return "\n".join(parts)
 

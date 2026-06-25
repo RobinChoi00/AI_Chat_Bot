@@ -135,6 +135,61 @@ def test_rolling_noise_terminal_includes_diy_steps():
     assert result["phase"] == "awaiting_help_consent"
 
 
+def test_remote_connection_terminal_includes_diy_steps():
+    node = {
+        "node_id": "defect_remote_connection_terminal",
+        "type": "terminal",
+        "action": "send_info",
+        "prompt": "Please try unplugging the chair's cable connection and plugging it back in firmly.",
+        "evidence_required": [],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("remote"),
+                _Turn("no_power"),
+                _Turn("bad_connection"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "What you can try" in result["message"]
+    assert "cable" in result["message"].lower()
+    assert result["diagnosis"]["steps"]
+    assert result["phase"] == "awaiting_help_consent"
+
+
+def test_power_no_click_terminal_includes_diy_steps():
+    node = {
+        "node_id": "defect_power_no_click_terminal",
+        "type": "terminal",
+        "action": "awaiting_admin",
+        "prompt": "Our team will review and arrange a Power PCB replacement.",
+        "evidence_required": ["video_of_issue"],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("power"),
+                _Turn("remote_off"),
+                _Turn("no_clicking"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "What you can try" in result["message"]
+    assert "Power PCB replacement" not in result["message"]
+    assert any(
+        "fuse" in step.lower() or "outlet" in step.lower() or "switch" in step.lower()
+        for step in result["diagnosis"]["steps"]
+    )
+    assert result["phase"] == "awaiting_help_consent"
+
+
 def test_defect_terminal_diagnosis_and_help_offer():
     node = {
         "node_id": "defect_power_main_pcb_terminal",

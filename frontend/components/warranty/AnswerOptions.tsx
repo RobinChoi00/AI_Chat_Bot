@@ -11,28 +11,164 @@ interface Props {
 }
 
 const OPTION_ICONS: Record<string, string> = {
+  // Entry / routing
+  warranty: "🛡️",
+  sales: "💬",
   installation: "🔧",
   delivery: "📦",
   defect: "⚙️",
-  warranty: "🛡️",
-  sales: "💬",
-  power: "🔌",
-  remote: "📱",
+  other: "📋",
+
+  // Installation
+  footrest_or_no_air: "💨",
+  general_setup: "📖",
+
+  // Delivery
+  no_tracking: "❓",
+  has_tracking: "📍",
+  yes_box_damage: "📦",
+  no_box_damage: "✅",
+  signed_cleared: "✅",
+  signed_damaged: "⚠️",
+  visible_at_unboxing: "📦",
+  noticed_later: "🕐",
+
+  // Defect categories
   air: "💨",
+  cosmetic: "✨",
+  remote: "📱",
   rolling: "🔄",
+  power: "🔌",
   recline: "↕️",
   footrest: "🦶",
-  cosmetic: "✨",
+  voice: "🎙️",
+  heat: "🔥",
+
+  // Voice
+  voice_no_response: "🔇",
+  false_triggers: "📺",
+  voice_not_sure: "❓",
+
+  // Air / body areas
+  feet_calves: "🦵",
+  arms: "💪",
+  shoulders_hips: "🫁",
+  side_panel: "🧩",
+  base: "⬛",
+
+  // Air troubleshooting
+  yes_worked: "🔄",
+  never_worked: "🚫",
+  air_blowing: "💨",
+  no_air: "🌬️",
+  hose_issue: "🔗",
+  hoses_ok: "✅",
+  hose_clear: "✅",
+  yes_hissing: "💨",
+  no_hissing: "🔇",
+  pump_running: "⚙️",
+  no_sound: "🔇",
+  yes_white_glove: "🧤",
+  no_white_glove: "📦",
+
+  // Cosmetic
+  panels_fixed: "🔧",
+  still_damaged: "💥",
+  yes_box_damaged: "📦",
+
+  // Remote
+  has_power: "🔋",
+  no_power: "🪫",
+  blank_screen_commands_ok: "📱",
+  cable_damaged: "🔌",
+  commands_not_responding: "📵",
+  fuse_broken: "⚡",
+  bad_connection: "🔌",
+  intermittent: "〰️",
+  all_checked_ok: "🔍",
+
+  // Rolling / mechanism
+  noise_up_down: "🔊",
+  noise_massaging: "🔊",
+  pops: "💥",
+  heads_not_moving: "🛑",
+  no_movement: "🛑",
+  worked_before_stopped: "🔄",
+  power_but_no_move: "⚡",
+
+  // Power
+  remote_on: "🔋",
+  remote_off: "🪫",
+  no_response: "📵",
+  quick_control_ok: "🎛️",
+  back_switch_sound: "🔊",
+  recline_not_working: "↕️",
+  moves_on_off: "↩️",
+  stays_stuck: "🔒",
+  powercord_issue: "🔌",
+  outlet_no_power: "🪫",
+  fuse_blown: "⚡",
+  clicking_sound: "🔊",
+  no_clicking: "🔇",
+
+  // Recline
+  backrest: "🪑",
+  zero_gravity: "🌙",
+  footrest_recline: "🦶",
+  multiple_not_working: "⚠️",
+  none_working: "🚫",
+
+  // Footrest defect
+  legrest_not_extend: "↔️",
+  air_not_inflating: "💨",
+  legrest_not_lowering: "↕️",
+  foot_rollers: "🦶",
+  calf_roller: "🦵",
+
+  // Help offer
+  yes_team_help: "🙋",
+  no_self_help: "🛠️",
+
+  // Yes / No shortcuts
   yes: "✓",
   no: "✗",
 };
 
+const LABEL_ICON_RULES: Array<[RegExp, string]> = [
+  [/^yes[,\s]/i, "✓"],
+  [/^no[,\s]/i, "✗"],
+  [/not sure/i, "❓"],
+  [/white glove/i, "🧤"],
+  [/tracking number/i, "📍"],
+  [/box.*damag/i, "📦"],
+  [/signed as/i, "📝"],
+  [/unbox/i, "📦"],
+  [/noticed later/i, "🕐"],
+  [/noise|click|pop|hiss/i, "🔊"],
+  [/hose|air blow|inflat/i, "💨"],
+  [/fuse|power|outlet|powercord|plug/i, "🔌"],
+  [/remote|screen|command/i, "📱"],
+  [/voice/i, "🎙️"],
+  [/massage|mechanism|roller|head/i, "🔄"],
+  [/recline|backrest|zero gravity|footrest|legrest/i, "↕️"],
+  [/photo|video|picture/i, "📷"],
+  [/worked before|stopped/i, "🔄"],
+  [/never worked|not work|no movement|stuck/i, "🚫"],
+  [/help me|please help/i, "🙋"],
+  [/on my own|try these/i, "🛠️"],
+  [/damaged|broken|cut/i, "💥"],
+  [/clear|connected|checked|nothing obvious/i, "✅"],
+];
+
 function iconFor(key: string, label: string): string {
   if (OPTION_ICONS[key]) return OPTION_ICONS[key];
+  for (const [pattern, emoji] of LABEL_ICON_RULES) {
+    if (pattern.test(label)) return emoji;
+  }
   const lower = label.toLowerCase();
   if (lower.startsWith("yes")) return "✓";
   if (lower.startsWith("no")) return "✗";
-  return "→";
+  return "📌";
 }
 
 /**
