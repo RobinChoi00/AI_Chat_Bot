@@ -98,9 +98,9 @@ REPAIR_MANUAL_URL = "https://www.otasupport.com"
 # ==========================================
 MAX_RETRIES = 3
 
-# LLM 모델 설정 (추후 gpt-5가 나오면 여기서만 수정하면 됨)
-AGENT_MODEL = "gpt-4o"
-ROUTER_MODEL = "gpt-4o-mini"
+# LLM model settings — override via env without code changes.
+AGENT_MODEL = os.environ.get("OPENAI_AGENT_MODEL", "gpt-4.1")
+ROUTER_MODEL = os.environ.get("OPENAI_ROUTER_MODEL", "gpt-4.1-mini")
 
 # 💰 [Cost Optimization] Embedding model:
 # - text-embedding-3-small : 5x cheaper than ada-002 AND higher quality.
