@@ -6,11 +6,18 @@ export const metadata = {
   description: "Start a warranty claim for your Osaki or Titan massage chair.",
 };
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover" as const,
+  interactiveWidget: "resizes-content" as const,
+};
+
 export default function WarrantyPage() {
   return (
-    <main className="flex min-h-screen flex-col bg-gray-50">
+    <main className="flex h-dvh flex-col overflow-hidden bg-gray-50">
       {/* Page header */}
-      <header className="border-b border-gray-200 bg-white px-4 py-3 shadow-sm">
+      <header className="shrink-0 border-b border-gray-200 bg-white px-4 py-3 shadow-sm">
         <div className="mx-auto flex max-w-2xl items-center gap-3">
           <Link
             href="/"
@@ -32,7 +39,7 @@ export default function WarrantyPage() {
       </header>
 
       {/* Chat widget */}
-      <div className="flex flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col">
         <WarrantyChat />
       </div>
     </main>

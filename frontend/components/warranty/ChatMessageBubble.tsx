@@ -116,7 +116,7 @@ export default function ChatMessageBubble({ message, isStreaming }: Props) {
       )}
 
       <div
-        className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm sm:max-w-[85%] ${
+        className={`min-w-0 max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm sm:max-w-[85%] ${
           isUser
             ? "rounded-br-md bg-brand-600 text-white"
             : "rounded-bl-md bg-white text-gray-800 ring-1 ring-gray-100"

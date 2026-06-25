@@ -394,21 +394,23 @@ export default function WarrantyChat() {
         : "Enter your chair model…";
 
   return (
-    <div className="mx-auto flex h-[calc(100dvh-64px)] w-full max-w-2xl flex-col">
+    <div className="mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col">
       {warrantyState && (
-        <div className="flex items-center justify-between border-b border-gray-100 bg-white px-4 py-2">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-100 bg-white px-4 py-2">
           <TicketStatusBadge
             status={warrantyState.status}
             ticketId={warrantyState.ticket_id}
           />
           {warrantyState.model_name && (
-            <span className="text-xs text-gray-500">{warrantyState.model_name}</span>
+            <span className="truncate text-right text-xs text-gray-500">
+              {warrantyState.model_name}
+            </span>
           )}
         </div>
       )}
 
       {isAwaitingAdmin && (
-        <div className="mx-4 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+        <div className="mx-4 mt-3 shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
           <p className="text-sm font-medium text-amber-800">Under Support Review</p>
           <p className="mt-0.5 text-xs text-amber-700">
             Your case has been prepared for support team review.
@@ -416,7 +418,7 @@ export default function WarrantyChat() {
         </div>
       )}
 
-      <div className="chat-scroll flex-1 overflow-y-auto px-3 py-4 sm:px-4">
+      <div className="chat-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-4">
         <div className="space-y-4">
           {messages.map((msg, i) => (
             <ChatMessageBubble key={i} message={msg} />
@@ -463,7 +465,7 @@ export default function WarrantyChat() {
       </div>
 
       {hasWorkflowOptions && !isTerminal && (
-        <div className="border-t border-gray-100 bg-white px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-3 sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        <div className="shrink-0 border-t border-gray-100 bg-white px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-3 sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <p className="mb-1.5 text-[11px] font-medium text-gray-600 sm:mb-2 sm:text-xs">
             Tap an option or type your answer below
           </p>
@@ -477,7 +479,7 @@ export default function WarrantyChat() {
       )}
 
       {showHelpOffer && (
-        <div className="border-t border-gray-100 bg-white px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-3 sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        <div className="shrink-0 border-t border-gray-100 bg-white px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-3 sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <AnswerOptions
             options={helpOfferOptions}
             onSelect={handleHelpOffer}
@@ -488,7 +490,7 @@ export default function WarrantyChat() {
       )}
 
       {showEmailSection && (
-        <div className="border-t border-gray-100 bg-white p-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-4">
+        <div className="shrink-0 border-t border-gray-100 bg-white p-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-4">
           <EvidenceUploader
             ticketId={warrantyState!.ticket_id}
             evidenceRequired={warrantyState!.current_node?.evidence_required}
@@ -520,7 +522,7 @@ export default function WarrantyChat() {
       {showInputBar && (
         <form
           onSubmit={handleSubmit}
-          className="border-t border-gray-200 bg-white px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-4"
+          className="shrink-0 border-t border-gray-200 bg-white px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-4"
         >
           <div className="flex items-end gap-2 rounded-2xl border border-gray-200 bg-gray-50 p-2 focus-within:border-brand-500 focus-within:ring-1 focus-within:ring-brand-500">
             <textarea
@@ -551,7 +553,7 @@ export default function WarrantyChat() {
       )}
 
       {(contactSubmitted || helpConsent === "no") && (
-        <div className="border-t border-gray-100 bg-white px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-center">
+        <div className="shrink-0 border-t border-gray-100 bg-white px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-center">
           {contactSubmitted && (
             <p className="text-sm text-gray-600">
               Your case has been submitted. Our team will be in touch.
