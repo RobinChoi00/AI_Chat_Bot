@@ -144,6 +144,13 @@ class KnowledgeEntry:
     customer_steps: tuple[str, ...]
 
 
+def map_workflow_defect_category(defect_category: Optional[str]) -> Optional[str]:
+    """Map workflow answer_key (e.g. rolling) to knowledge category (e.g. mech)."""
+    if not defect_category:
+        return None
+    return _DEFECT_CATEGORY_MAP.get(defect_category.lower(), defect_category)
+
+
 def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").lower()).strip()
 

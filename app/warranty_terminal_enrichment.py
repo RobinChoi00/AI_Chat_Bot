@@ -17,14 +17,23 @@ from warranty_self_help import (
     HELP_OFFER_OPTIONS,
     build_install_air_hose_diagnosis,
     build_path_text,
+    build_rolling_noise_diagnosis,
     build_voice_diagnosis,
     build_workflow_diagnosis,
     format_diagnosis_message,
     format_install_air_hose_message,
+    format_rolling_noise_self_help_message,
     format_voice_self_help_message,
     infer_defect_category_from_turns,
+    infer_rolling_noise_type_from_turns,
     infer_voice_symptom_from_turns,
 )
+
+_ROLLING_NOISE_TERMINALS = frozenset({
+    "defect_rolling_noise_updown_terminal",
+    "defect_rolling_noise_massage_terminal",
+    "defect_rolling_pops_terminal",
+})
 
 
 def _contact_footer() -> str:
@@ -105,6 +114,23 @@ def _voice_self_help_message(engine, ticket_id: str, ticket, *, false_triggers: 
     return _help_offer_enrichment(body, diagnosis=diagnosis)
 
 
+def _rolling_noise_message(engine, ticket_id: str, ticket) -> dict[str, Any]:
+    model_name = str(getattr(ticket, "model_name", "") or "")
+    turns = engine.get_turns(ticket_id)
+    path_text = build_path_text(turns)
+    noise_type = infer_rolling_noise_type_from_turns(turns)
+    diagnosis = build_rolling_noise_diagnosis(
+        noise_type=noise_type,
+        path_text=path_text,
+        model_name=model_name,
+    )
+    body = format_rolling_noise_self_help_message(
+        diagnosis=diagnosis,
+        repair_manual_url=REPAIR_MANUAL_URL,
+    )
+    return _help_offer_enrichment(body, diagnosis=diagnosis)
+
+
 def _workflow_end_message(
     engine,
     ticket_id: str,
@@ -155,6 +181,9 @@ def build_terminal_enrichment(
 
     if node_id == "defect_voice_false_triggers_terminal":
         return _voice_self_help_message(engine, ticket_id, ticket, false_triggers=True)
+
+    if node_id in _ROLLING_NOISE_TERMINALS:
+        return _rolling_noise_message(engine, ticket_id, ticket)
 
     if node_id == "install_send_video" or (
         issue_type == "installation" and action == "send_info"

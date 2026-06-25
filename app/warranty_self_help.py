@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from warranty_knowledge import KnowledgeEntry, search_knowledge
+from warranty_knowledge import KnowledgeEntry, map_workflow_defect_category, search_knowledge
 
 _DEFECT_CATEGORY_KEYS = frozenset({
     "power", "remote", "air", "rolling", "recline", "footrest", "cosmetic", "heat", "voice",
@@ -102,6 +102,14 @@ def infer_voice_symptom_from_turns(turns) -> str:
     return "voice_no_response"
 
 
+def infer_rolling_noise_type_from_turns(turns) -> str:
+    for turn in reversed(list(turns or [])):
+        key = str(getattr(turn, "answer_key", "") or "")
+        if key in _ROLLING_NOISE_STEPS:
+            return key
+    return "noise_massaging"
+
+
 _VOICE_NOT_WORKING_STEPS: tuple[str, ...] = (
     "Use only the voice commands listed in your chair's manual or on-screen command list — custom phrases may not work.",
     "Speak clearly toward the built-in microphone and try from about an arm's length away.",
@@ -116,6 +124,28 @@ _VOICE_FALSE_TRIGGER_STEPS: tuple[str, ...] = (
     "Unplug the chair from the wall when you are not using it to prevent idle listening.",
     "Try lowering room noise — voice systems can react to nearby speech or TV audio.",
 )
+
+_ROLLING_NOISE_STEPS: dict[str, tuple[str, ...]] = {
+    "noise_up_down": (
+        "Check that the massage strap is not tangled around the mechanism head.",
+        "Look for anything blocking the track path if you can safely see the mechanism area.",
+        "Try one up/down cycle in manual mode and note exactly when the loud noise occurs.",
+        "Record a short video of the noise while the mechanism moves — rollers visible if possible.",
+    ),
+    "noise_massaging": (
+        "Open or remove the back pad and check that the strap is not tangled with the massage head.",
+        "Inspect the back pad and backrest lining for holes, bunching, or loose material.",
+        "Try manual mode and note whether the noise happens on every massage stroke or only certain areas.",
+        "Record a short video during massage with the back area visible if you need team follow-up.",
+    ),
+    "pops": (
+        "Make sure the back pad is not bunched up — zip or velcro it smoothly in place.",
+        "Check the backrest lining and back pad for holes or loose material that could catch the mechanism.",
+        "Try manual mode and note when the pop or click happens during the massage cycle.",
+    ),
+}
+
+_FRESHDESK_PRIORITY_CATEGORIES = frozenset({"power", "remote", "mech"})
 
 
 def infer_defect_category_from_turns(turns) -> Optional[str]:
@@ -357,6 +387,91 @@ def format_voice_self_help_message(*, diagnosis: dict[str, Any], repair_manual_u
     return "\n".join(parts)
 
 
+def _merge_knowledge_steps(
+    *,
+    steps: list[str],
+    matches: list[KnowledgeEntry],
+    fallback_len: int,
+    defect_category: Optional[str],
+) -> list[str]:
+    """Merge Q&A/Freshdesk steps; prefer Freshdesk for power, remote, and mech."""
+    mapped = map_workflow_defect_category(defect_category)
+    prefer_freshdesk = mapped in _FRESHDESK_PRIORITY_CATEGORIES
+
+    if prefer_freshdesk:
+        for entry in matches:
+            if entry.source == "freshdesk":
+                steps.extend(entry.customer_steps[:2])
+    for entry in matches:
+        if entry.source != "freshdesk":
+            steps.extend(entry.customer_steps[:2])
+    if not prefer_freshdesk and len(steps) <= fallback_len:
+        for entry in matches:
+            if entry.source == "freshdesk":
+                steps.extend(entry.customer_steps[:1])
+    return steps
+
+
+def build_rolling_noise_diagnosis(
+    *,
+    noise_type: str,
+    path_text: str,
+    model_name: str = "",
+) -> dict[str, Any]:
+    """DIY steps for massage mechanism noise before team review."""
+    base_steps = _ROLLING_NOISE_STEPS.get(noise_type, _ROLLING_NOISE_STEPS["noise_massaging"])
+    query = f"{path_text} massage mechanism noise rolling mech"
+    matches: list[KnowledgeEntry] = search_knowledge(
+        path_text=query,
+        defect_category="rolling",
+        model_name=model_name,
+        limit=3,
+    )
+    steps: list[str] = list(base_steps)
+    steps = _merge_knowledge_steps(
+        steps=steps,
+        matches=matches,
+        fallback_len=len(base_steps),
+        defect_category="rolling",
+    )
+    steps = _dedupe_steps(steps)
+
+    model_display = (model_name or "your chair").strip()
+    labels = {
+        "noise_up_down": "when the mechanism moves up or down",
+        "noise_massaging": "during massage",
+        "pops": "popping or clicking during massage",
+    }
+    when = labels.get(noise_type, "with the massage mechanism")
+    summary = (
+        f"For your **{model_display}**, noise **{when}** is often related to the "
+        "**strap, back pad, or track area**. Try the steps below first."
+    )
+    if matches:
+        summary = f"{summary} Similar support cases suggest these checks before service."
+
+    return {
+        "summary": summary,
+        "steps": steps,
+        "sources": [entry.source for entry in matches[:3]],
+        "top_match": matches[0].title if matches else None,
+    }
+
+
+def format_rolling_noise_self_help_message(*, diagnosis: dict[str, Any], repair_manual_url: str) -> str:
+    parts: list[str] = [str(diagnosis.get("summary") or "").strip()]
+    steps: list[str] = list(diagnosis.get("steps") or [])
+    if steps:
+        parts.append("\n\n**What you can try:**")
+        for idx, step in enumerate(steps, start=1):
+            parts.append(f"{idx}. {step}")
+    parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
+    parts.append(
+        "\n\n**Would you like our warranty team to follow up if the noise continues after these steps?**"
+    )
+    return "\n".join(parts)
+
+
 def build_workflow_diagnosis(
     *,
     defect_category: Optional[str],
@@ -380,14 +495,12 @@ def build_workflow_diagnosis(
         fallback = _NODE_HINTS[node_id]
 
     steps: list[str] = list(fallback)
-    for entry in matches:
-        if entry.source == "freshdesk":
-            continue
-        steps.extend(entry.customer_steps[:2])
-    if len(steps) <= len(fallback):
-        for entry in matches:
-            if entry.source == "freshdesk":
-                steps.extend(entry.customer_steps[:1])
+    steps = _merge_knowledge_steps(
+        steps=steps,
+        matches=matches,
+        fallback_len=len(fallback),
+        defect_category=defect_category,
+    )
     steps = _dedupe_steps(steps)
 
     if matches:

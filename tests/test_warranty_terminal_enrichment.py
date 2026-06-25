@@ -109,6 +109,32 @@ def test_voice_not_working_terminal_includes_diy_steps():
     assert result["phase"] == "awaiting_help_consent"
 
 
+def test_rolling_noise_terminal_includes_diy_steps():
+    node = {
+        "node_id": "defect_rolling_noise_massage_terminal",
+        "type": "terminal",
+        "action": "awaiting_admin",
+        "prompt": "Our team will review this noise issue.",
+        "evidence_required": ["video_of_issue"],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("rolling"),
+                _Turn("noise_massaging"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "What you can try" in result["message"]
+    assert "strap" in result["message"].lower() or "back pad" in result["message"].lower()
+    assert "Our team will review this noise issue" not in result["message"]
+    assert result["diagnosis"]["steps"]
+    assert result["phase"] == "awaiting_help_consent"
+
+
 def test_defect_terminal_diagnosis_and_help_offer():
     node = {
         "node_id": "defect_power_main_pcb_terminal",

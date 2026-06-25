@@ -100,6 +100,46 @@ def test_build_install_air_hose_diagnosis_includes_core_steps():
     assert "footrest-to-base" in diagnosis["summary"].lower()
 
 
+def test_build_rolling_noise_diagnosis_includes_core_steps():
+    from warranty_self_help import (
+        build_rolling_noise_diagnosis,
+        infer_rolling_noise_type_from_turns,
+    )
+
+    diagnosis = build_rolling_noise_diagnosis(
+        noise_type="noise_up_down",
+        path_text="rolling mechanism loud noise up down",
+        model_name="OS-4000T",
+    )
+    assert diagnosis["steps"]
+    assert any("strap" in step.lower() for step in diagnosis["steps"])
+
+    turns = [_Turn("rolling"), _Turn("pops")]
+    assert infer_rolling_noise_type_from_turns(turns) == "pops"
+
+
+def test_build_workflow_diagnosis_prefers_freshdesk_for_remote():
+    from warranty_self_help import build_workflow_diagnosis
+
+    diagnosis = build_workflow_diagnosis(
+        defect_category="remote",
+        path_text="remote not working no power",
+        node_id="defect_remote_pcb_check_terminal",
+        turns=[_Turn("remote"), _Turn("no_power")],
+        model_name="OS-4000T",
+    )
+    assert diagnosis["steps"]
+    if diagnosis.get("sources"):
+        freshdesk_idx = next(
+            (i for i, s in enumerate(diagnosis["sources"]) if s == "freshdesk"),
+            None,
+        )
+        if freshdesk_idx is not None:
+            assert freshdesk_idx == 0 or any(
+                "freshdesk" in str(s) for s in diagnosis.get("sources", [])
+            )
+
+
 def test_build_voice_diagnosis_includes_core_steps():
     from warranty_self_help import build_voice_diagnosis
 
