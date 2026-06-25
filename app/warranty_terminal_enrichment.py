@@ -42,13 +42,15 @@ def _help_offer_enrichment(message: str, diagnosis: Optional[dict] = None) -> di
 
 def _install_message(model_name: str, base_prompt: str) -> dict[str, Any]:
     video = lookup_install_video(model_name)
-    url = video["url"]
-    label = video["label"]
     model_display = (model_name or "your chair").strip()
+    clips = video.get("videos") or [{"url": video["url"], "label": video["label"]}]
+    link_lines = "\n".join(
+        f"[Watch — {clip['label']}]({clip['url']})" for clip in clips
+    )
 
     body = (
         f"Here is the installation guide for your **{model_display}**:\n"
-        f"[Watch installation video — {label}]({url})\n\n"
+        f"{link_lines}\n\n"
         f"More guides: [{REPAIR_MANUAL_URL}]({REPAIR_MANUAL_URL}).\n\n"
         f"**Would you like our warranty team to follow up if you still need help after watching?**"
     )

@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
-from install_videos import lookup_install_video
-from warranty_self_help import (
+import sys
+from pathlib import Path
+
+APP_DIR = Path(__file__).resolve().parent.parent / "app"
+sys.path.insert(0, str(APP_DIR))
+
+import install_videos  # noqa: E402
+from install_videos import lookup_install_video  # noqa: E402
+from warranty_self_help import (  # noqa: E402
     build_workflow_diagnosis,
     format_diagnosis_message,
     infer_defect_category_from_turns,
@@ -28,6 +35,28 @@ def test_lookup_install_video_default():
     result = lookup_install_video("")
     assert result["url"]
     assert result["match"] == "default"
+
+
+def test_lookup_install_video_updated_urls():
+    install_videos._load_catalog.cache_clear()
+    pano = lookup_install_video("4D Panorama")
+    assert pano["match"] == "model"
+    assert pano["url"] == "https://youtu.be/kjgBL9EilYo"
+
+    pinnacle = lookup_install_video("Pinnacle 5D Duoflex AI")
+    assert pinnacle["url"] == "https://youtu.be/UtiWbrLrNHo"
+
+    dreamer = lookup_install_video("Osaki 3D Dreamer V2")
+    assert dreamer["url"] == "https://youtu.be/7BmcooshWLs"
+
+
+def test_lookup_install_video_multi_clip_escape_duo():
+    install_videos._load_catalog.cache_clear()
+    result = lookup_install_video("Osaki Platinum - Escape Duo 4D")
+    assert result["match"] == "model"
+    assert len(result["videos"]) == 2
+    assert result["videos"][0]["url"] == "https://youtu.be/amqSdBFdDAg"
+    assert result["videos"][1]["url"] == "https://youtu.be/87cYF1dvv_E"
 
 
 def test_build_workflow_diagnosis_power_back_switch():

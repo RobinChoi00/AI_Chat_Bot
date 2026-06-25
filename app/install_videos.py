@@ -11,7 +11,7 @@ import json
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from config import REPAIR_MANUAL_URL
 from product_catalog import resolve_model_name
@@ -34,9 +34,28 @@ def _load_catalog() -> dict:
         return json.load(handle)
 
 
-def lookup_install_video(model_name: str) -> dict[str, str]:
+def _entry_to_result(entry: dict, *, resolved: str, match: str, fallback_url: str) -> dict[str, Any]:
+    videos = entry.get("videos")
+    result: dict[str, Any] = {
+        "url": str(entry.get("url") or fallback_url),
+        "label": str(entry.get("label") or resolved),
+        "match": match,
+    }
+    if isinstance(videos, list) and videos:
+        result["videos"] = [
+            {
+                "url": str(item.get("url") or fallback_url),
+                "label": str(item.get("label") or resolved),
+            }
+            for item in videos
+            if isinstance(item, dict)
+        ]
+    return result
+
+
+def lookup_install_video(model_name: str) -> dict[str, Any]:
     """
-    Return {"url": str, "label": str, "match": "model|series|default"}.
+    Return {"url": str, "label": str, "match": "model|series|default", "videos"?: list}.
     """
     catalog = _load_catalog()
     default = catalog.get("default") or {}
@@ -52,29 +71,25 @@ def lookup_install_video(model_name: str) -> dict[str, str]:
 
     models: dict = catalog.get("models") or {}
     if key in models:
-        entry = models[key]
-        return {
-            "url": str(entry.get("url") or fallback_url),
-            "label": str(entry.get("label") or resolved),
-            "match": "model",
-        }
+        return _entry_to_result(
+            models[key], resolved=resolved, match="model", fallback_url=fallback_url
+        )
 
     for model_key, entry in models.items():
         if model_key in key or key in model_key:
-            return {
-                "url": str(entry.get("url") or fallback_url),
-                "label": str(entry.get("label") or resolved),
-                "match": "model",
-            }
+            return _entry_to_result(
+                entry, resolved=resolved, match="model", fallback_url=fallback_url
+            )
 
     series: dict = catalog.get("series") or {}
     for series_key, entry in series.items():
         sk = _normalize_key(series_key)
         if sk and sk in key:
-            return {
-                "url": str(entry.get("url") or fallback_url),
-                "label": str(entry.get("label") or f"{resolved} installation"),
-                "match": "series",
-            }
+            return _entry_to_result(
+                entry,
+                resolved=resolved,
+                match="series",
+                fallback_url=fallback_url,
+            )
 
     return {"url": fallback_url, "label": fallback_label, "match": "default"}
