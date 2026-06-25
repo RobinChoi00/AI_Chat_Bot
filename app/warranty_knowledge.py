@@ -48,7 +48,7 @@ _QA_CATEGORY_MAP: dict[str, str] = {
 _CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "power": ("power", "fuse", "outlet", "plug", "clicking", "turn on", "pcb", "surge", "switch"),
     "remote": ("remote", "tablet", "controller", "bluetooth", "pair"),
-    "air": ("air", "airbag", "inflate", "hissing", "compressor"),
+    "air": ("air", "airbag", "inflate", "hissing", "compressor", "footrest hose", "no air"),
     "mech": ("mech", "roller", "massage", "rolling", "knead", "track"),
     "footrest": ("footrest", "calf", "leg rest"),
     "heat": ("heat", "heated", "warming"),

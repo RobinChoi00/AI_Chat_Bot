@@ -51,10 +51,37 @@ def test_install_terminal_includes_video_and_help_offer():
     }
     result = build_terminal_enrichment(_EngineInstall(), _TicketInstall(), node)
     assert result is not None
-    assert "Watch installation video" in result["message"]
+    assert "Watch —" in result["message"]
+    assert "footrest and base" in result["message"].lower()
     assert result["defer_email"] is True
     assert result["phase"] == "awaiting_help_consent"
     assert len(result["help_offer_options"]) == 2
+
+
+def test_install_air_hose_terminal_includes_diy_steps_and_video():
+    node = {
+        "node_id": "install_air_hose_terminal",
+        "type": "terminal",
+        "action": "send_info",
+        "prompt": "Footrest or air installation help.",
+        "evidence_required": [],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("installation"),
+                _Turn("model_name", "OS-4000T"),
+                _Turn("footrest_or_no_air"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketInstall(), node)
+    assert result is not None
+    assert "footrest-to-base air hose" in result["message"].lower()
+    assert "What you can try" in result["message"]
+    assert "Watch —" in result["message"]
+    assert result["diagnosis"]["steps"]
+    assert result["phase"] == "awaiting_help_consent"
 
 
 def test_defect_terminal_diagnosis_and_help_offer():

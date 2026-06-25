@@ -37,7 +37,25 @@
       "type": "question_text",
       "prompt": "What model is your massage chair? (e.g., OS-4000T, Titan Pro Commander)",
       "answer_key": "model_name",
-      "next": "install_send_video"
+      "next": "install_concern"
+    },
+
+    "install_concern": {
+      "type": "question",
+      "prompt": "What installation issue are you having?",
+      "options": [
+        {"label": "Footrest problem or no air anywhere on the chair", "answer_key": "footrest_or_no_air", "next": "install_air_hose_terminal"},
+        {"label": "General assembly / setup help",                  "answer_key": "general_setup",      "next": "install_send_video"},
+        {"label": "Other installation issue",                         "answer_key": "other",              "next": "install_send_video"}
+      ]
+    },
+
+    "install_air_hose_terminal": {
+      "type": "terminal",
+      "action": "send_info",
+      "prompt": "Many footrest and whole-chair air issues are fixed by reconnecting the air hose between the footrest and the base. I'll walk you through the steps and share your model's installation video.",
+      "internal_note": "Post-install: footrest-to-base air hose often not connected during assembly. Customer-safe DIY first; team follow-up if still no air.",
+      "evidence_required": []
     },
 
     "install_send_video": {

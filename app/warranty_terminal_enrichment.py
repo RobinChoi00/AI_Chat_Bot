@@ -15,9 +15,11 @@ from config import REPAIR_MANUAL_URL, WARRANTY_BUSINESS_HOURS, WARRANTY_PHONE, W
 from install_videos import lookup_install_video
 from warranty_self_help import (
     HELP_OFFER_OPTIONS,
+    build_install_air_hose_diagnosis,
     build_path_text,
     build_workflow_diagnosis,
     format_diagnosis_message,
+    format_install_air_hose_message,
     infer_defect_category_from_turns,
 )
 
@@ -51,10 +53,34 @@ def _install_message(model_name: str, base_prompt: str) -> dict[str, Any]:
     body = (
         f"Here is the installation guide for your **{model_display}**:\n"
         f"{link_lines}\n\n"
+        f"If **air does not work anywhere on the chair** after setup, check that the "
+        f"**air hose between the footrest and base** is firmly connected.\n\n"
         f"More guides: [{REPAIR_MANUAL_URL}]({REPAIR_MANUAL_URL}).\n\n"
         f"**Would you like our warranty team to follow up if you still need help after watching?**"
     )
     return _help_offer_enrichment(body)
+
+
+def _install_air_hose_message(engine, ticket_id: str, ticket) -> dict[str, Any]:
+    model_name = str(getattr(ticket, "model_name", "") or "")
+    turns = engine.get_turns(ticket_id)
+    path_text = build_path_text(turns)
+    diagnosis = build_install_air_hose_diagnosis(
+        path_text=path_text,
+        model_name=model_name,
+        turns=turns,
+    )
+    video = lookup_install_video(model_name)
+    clips = video.get("videos") or [{"url": video["url"], "label": video["label"]}]
+    link_lines = "\n".join(
+        f"[Watch — {clip['label']}]({clip['url']})" for clip in clips
+    )
+    body = format_install_air_hose_message(
+        diagnosis=diagnosis,
+        video_link_lines=link_lines,
+        repair_manual_url=REPAIR_MANUAL_URL,
+    )
+    return _help_offer_enrichment(body, diagnosis=diagnosis)
 
 
 def _workflow_end_message(
@@ -98,6 +124,9 @@ def build_terminal_enrichment(
     ticket_id = str(getattr(ticket, "ticket_id", "") or "")
     issue_type = str(getattr(ticket, "issue_type", "") or "").lower()
     action = str(node.get("action") or "")
+
+    if node_id == "install_air_hose_terminal":
+        return _install_air_hose_message(engine, ticket_id, ticket)
 
     if node_id == "install_send_video" or (
         issue_type == "installation" and action == "send_info"

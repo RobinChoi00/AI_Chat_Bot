@@ -97,9 +97,8 @@ def test_quick_start_installation_skips_model_question_when_registered(client):
     data = resp.json()
     ticket = data["ticket"]
     assert ticket["issue_type"] == "installation"
-    assert ticket["current_node"]["node_id"] == "install_send_video"
-    assert ticket["current_node"]["is_terminal"] is True
-    assert data["terminal_enrichment"]["phase"] == "awaiting_help_consent"
+    assert ticket["current_node"]["node_id"] == "install_concern"
+    assert ticket["current_node"]["is_terminal"] is False
 
 
 def test_submit_answer_advances_without_llm(client):

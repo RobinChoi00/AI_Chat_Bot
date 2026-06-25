@@ -75,6 +75,21 @@ HELP_OFFER_OPTIONS: tuple[dict[str, str], ...] = (
     {"answer_key": "no_self_help", "label": "I'll try these steps on my own"},
 )
 
+_INSTALL_AIR_HOSE_STEPS: tuple[str, ...] = (
+    "With the chair powered off, find the air hose that connects the footrest to the base of the chair.",
+    "Disconnect and firmly reconnect both ends of that hose — this fixes many cases where air does not work anywhere on the chair.",
+    "Make sure the hose is not pinched or trapped between the footrest and base from assembly.",
+    "Power the chair back on, raise the footrest, and test leg air from the remote.",
+)
+
+
+def infer_install_concern_from_turns(turns) -> Optional[str]:
+    for turn in reversed(list(turns or [])):
+        key = str(getattr(turn, "answer_key", "") or "")
+        if key in ("footrest_or_no_air", "general_setup", "other"):
+            return key
+    return None
+
 
 def infer_defect_category_from_turns(turns) -> Optional[str]:
     for turn in turns:
@@ -180,6 +195,70 @@ def _dedupe_steps(steps: list[str]) -> list[str]:
         seen.add(key)
         out.append(step)
     return out[:5]
+
+
+def build_install_air_hose_diagnosis(
+    *,
+    path_text: str,
+    model_name: str = "",
+    turns=None,
+) -> dict[str, Any]:
+    """DIY steps for post-install footrest / whole-chair air issues."""
+    enriched_path = f"{path_text} installation footrest no air hose whole chair"
+    matches: list[KnowledgeEntry] = search_knowledge(
+        path_text=enriched_path,
+        defect_category="air",
+        model_name=model_name,
+        limit=3,
+    )
+    steps: list[str] = list(_INSTALL_AIR_HOSE_STEPS)
+    for entry in matches:
+        if entry.source in ("qa_csv", "auto_check"):
+            steps.extend(entry.customer_steps[:2])
+    if len(steps) <= len(_INSTALL_AIR_HOSE_STEPS):
+        for entry in matches:
+            if entry.source == "freshdesk":
+                steps.extend(entry.customer_steps[:2])
+    steps = _dedupe_steps(steps)
+
+    model_display = (model_name or "your chair").strip()
+    summary = (
+        f"For your **{model_display}**, footrest or whole-chair air problems after installation "
+        "are often caused by the **footrest-to-base air hose** not being fully connected."
+    )
+    if matches:
+        summary = (
+            f"{summary} Similar cases in our support history suggest trying the steps below first."
+        )
+
+    return {
+        "summary": summary,
+        "steps": steps,
+        "sources": [entry.source for entry in matches[:3]],
+        "top_match": matches[0].title if matches else None,
+    }
+
+
+def format_install_air_hose_message(
+    *,
+    diagnosis: dict[str, Any],
+    video_link_lines: str,
+    repair_manual_url: str,
+) -> str:
+    parts: list[str] = [str(diagnosis.get("summary") or "").strip()]
+    steps: list[str] = list(diagnosis.get("steps") or [])
+    if steps:
+        parts.append("\n\n**What you can try:**")
+        for idx, step in enumerate(steps, start=1):
+            parts.append(f"{idx}. {step}")
+    if video_link_lines.strip():
+        parts.append("\n\n**Installation video for your model:**")
+        parts.append(video_link_lines.strip())
+    parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
+    parts.append(
+        "\n\n**Would you like our warranty team to follow up if air still does not work after these steps?**"
+    )
+    return "\n".join(parts)
 
 
 def build_workflow_diagnosis(

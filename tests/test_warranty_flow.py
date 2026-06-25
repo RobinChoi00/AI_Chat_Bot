@@ -126,7 +126,8 @@ def test_installation_model_to_send_info():
     result = walk(ticket_id, [
         "warranty",        # root → issue_type
         "installation",    # issue_type → install_model
-        "OS-4000T",        # install_model (question_text) → install_send_video
+        "OS-4000T",        # install_model → install_concern
+        "general_setup",   # install_concern → install_send_video
     ])
 
     assert result["next_node_id"] == "install_send_video"
@@ -138,9 +139,24 @@ def test_installation_model_to_send_info():
     assert str(t.status) == "send_info"  # DIY: send video — no admin needed
 
     turns = WarrantyEngine.get_turns(ticket_id)
-    assert len(turns) == 3
+    assert len(turns) == 4
     assert str(turns[2].customer_answer) == "OS-4000T"
     assert str(turns[2].answer_key) == "model_name"
+
+
+def test_installation_footrest_air_to_diy_terminal():
+    ticket_id, _ = start()
+
+    result = walk(ticket_id, [
+        "warranty",
+        "installation",
+        "Osaki 4D Maestro LE 2.0",
+        "footrest_or_no_air",
+    ])
+
+    assert result["next_node_id"] == "install_air_hose_terminal"
+    assert result["is_terminal"] is True
+    assert str(ticket(ticket_id).status) == "send_info"
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +303,7 @@ def test_invalid_answer_raises():
 def test_double_answer_on_terminal_raises():
     ticket_id, _ = start()
     # Reach install_send_video terminal
-    walk(ticket_id, ["warranty", "installation", "Titan Pro Commander"])
+    walk(ticket_id, ["warranty", "installation", "Titan Pro Commander", "general_setup"])
 
     # Ticket is now in send_info (terminal reached). Further answers should raise.
     with pytest.raises(ValueError, match="no longer in progress"):
