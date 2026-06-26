@@ -18,6 +18,7 @@ import type {
 } from "@/lib/types";
 import ChatMessageBubble from "./ChatMessageBubble";
 import AnswerOptions from "./AnswerOptions";
+import CollapsibleOptionPanel from "./CollapsibleOptionPanel";
 import EvidenceUploader from "./EvidenceUploader";
 import TicketStatusBadge from "./TicketStatusBadge";
 import { formatTerminalPrompt, WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
@@ -78,6 +79,8 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [contactSubmitted, setContactSubmitted] = useState(false);
   const [helpConsent, setHelpConsent] = useState<"yes" | "no" | null>(null);
+  const [optionsPanelExpanded, setOptionsPanelExpanded] = useState(true);
+  const [issueTypePanelExpanded, setIssueTypePanelExpanded] = useState(true);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -139,6 +142,17 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       cancelled = true;
     };
   }, [refreshWarrantyState]);
+
+  const workflowOptionCount = warrantyState?.current_node?.options?.length ?? 0;
+  const workflowNodeId = warrantyState?.current_node?.node_id ?? "";
+
+  useEffect(() => {
+    if (workflowOptionCount >= 6) {
+      setOptionsPanelExpanded(false);
+    } else if (workflowOptionCount > 0) {
+      setOptionsPanelExpanded(true);
+    }
+  }, [workflowNodeId, workflowOptionCount]);
 
   const appendAssistantFromResponse = useCallback(
     async (
@@ -365,6 +379,12 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     !showIssueTypeOptions &&
     (warrantyState?.current_node?.options?.length ?? 0) > 0;
 
+  useEffect(() => {
+    if (showIssueTypeOptions) {
+      setIssueTypePanelExpanded(true);
+    }
+  }, [showIssueTypeOptions]);
+
   const helpOfferOptions =
     terminalEnrichment?.help_offer_options ?? [];
 
@@ -430,21 +450,27 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         </div>
 
         {showIssueTypeOptions && (
-          <div className="mt-3 rounded-xl border border-gray-100 bg-white px-3 py-3 shadow-sm sm:mt-4 sm:rounded-2xl sm:py-4 sm:px-4">
-            <p className="mb-2 text-xs font-medium text-gray-700 sm:mb-3 sm:text-sm">
-              What can we help you with today?
-            </p>
-            <AnswerOptions
-              options={INITIAL_ISSUE_OPTIONS}
-              variant="stack"
-              onSelect={(key, label) =>
-                handleQuickStart(
-                  key as "installation" | "delivery" | "defect",
-                  label
-                )
-              }
+          <div className="mt-3 sm:mt-4">
+            <CollapsibleOptionPanel
+              title="What can we help you with?"
+              hint="Or type your issue below"
+              optionCount={INITIAL_ISSUE_OPTIONS.length}
+              expanded={issueTypePanelExpanded}
+              onToggle={() => setIssueTypePanelExpanded((open) => !open)}
               disabled={loading}
-            />
+            >
+              <AnswerOptions
+                options={INITIAL_ISSUE_OPTIONS}
+                variant="stack"
+                onSelect={(key, label) =>
+                  handleQuickStart(
+                    key as "installation" | "delivery" | "defect",
+                    label
+                  )
+                }
+                disabled={loading}
+              />
+            </CollapsibleOptionPanel>
           </div>
         )}
 
@@ -470,15 +496,21 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
 
       {hasWorkflowOptions && !isTerminal && (
         <div className="shrink-0 border-t border-gray-100 bg-white px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-3 sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-          <p className="mb-1.5 text-[11px] font-medium text-gray-600 sm:mb-2 sm:text-xs">
-            Tap an option or type your answer below
-          </p>
-          <AnswerOptions
-            options={warrantyState!.current_node!.options}
-            onSelect={handleOptionSelect}
+          <CollapsibleOptionPanel
+            title="Choose an option"
+            hint="Or type your answer in the box below"
+            optionCount={workflowOptionCount}
+            expanded={optionsPanelExpanded}
+            onToggle={() => setOptionsPanelExpanded((open) => !open)}
             disabled={loading}
-            variant="stack"
-          />
+          >
+            <AnswerOptions
+              options={warrantyState!.current_node!.options}
+              onSelect={handleOptionSelect}
+              disabled={loading}
+              variant="stack"
+            />
+          </CollapsibleOptionPanel>
         </div>
       )}
 

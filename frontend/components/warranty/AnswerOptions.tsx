@@ -171,9 +171,28 @@ function iconFor(key: string, label: string): string {
   return "📌";
 }
 
+/** Shorter labels for dense mobile grids (display only). */
+const SHORT_LABELS: Record<string, string> = {
+  air: "Air / inflation",
+  cosmetic: "Cosmetic damage",
+  remote: "Remote / controller",
+  rolling: "Massage mechanism",
+  power: "Power issue",
+  recline: "Recline / position",
+  footrest: "Footrest",
+  voice: "Voice control",
+};
+
+function displayLabel(opt: AnswerOption, compact: boolean): string {
+  if (compact && SHORT_LABELS[opt.answer_key]) {
+    return SHORT_LABELS[opt.answer_key];
+  }
+  return opt.label;
+}
+
 /**
  * Renders warranty workflow options as tap targets.
- * Mobile: compact (44px min height). sm+: roomier buttons for desktop/tablet.
+ * Mobile: compact 2-column grid when many options; sm+ keeps roomy stack.
  */
 export default function AnswerOptions({
   options,
@@ -183,40 +202,64 @@ export default function AnswerOptions({
 }: Props) {
   if (!options.length) return null;
 
-  const isStack = variant === "stack";
+  const compact = options.length >= 6;
+  const isStack = variant === "stack" && !compact;
 
-  return (
+  const grid = (
     <div
       className={
-        isStack
-          ? "flex w-full flex-col gap-2 sm:gap-2.5"
-          : "grid grid-cols-1 gap-1.5 sm:grid-cols-2 sm:gap-2"
+        compact
+          ? "grid grid-cols-2 gap-1.5 sm:grid-cols-1 sm:gap-2.5"
+          : isStack
+            ? "flex w-full flex-col gap-2 sm:gap-2.5"
+            : "grid grid-cols-1 gap-1.5 sm:grid-cols-2 sm:gap-2"
       }
     >
-      {options.map((opt) => (
-        <button
-          key={opt.answer_key}
-          type="button"
-          onClick={() => onSelect(opt.answer_key, opt.label)}
-          disabled={disabled}
-          className={`flex min-h-[44px] w-full items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-[13px] font-medium transition active:scale-[0.98] sm:min-h-[52px] sm:gap-3 sm:rounded-2xl sm:px-4 sm:py-3.5 sm:text-sm ${
-            disabled
-              ? "cursor-not-allowed border-gray-200 bg-gray-50 text-gray-400"
-              : "border-brand-200 bg-white text-gray-800 shadow-sm hover:border-brand-400 hover:bg-brand-50/60"
-          }`}
-        >
-          <span
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-brand-50 text-sm sm:h-9 sm:w-9 sm:text-base"
-            aria-hidden
+      {options.map((opt) => {
+        const label = displayLabel(opt, compact);
+        return (
+          <button
+            key={opt.answer_key}
+            type="button"
+            onClick={() => onSelect(opt.answer_key, opt.label)}
+            disabled={disabled}
+            className={`flex w-full items-center text-left font-medium transition active:scale-[0.98] ${
+              compact
+                ? "min-h-[44px] gap-1.5 rounded-lg border px-2 py-2 text-[11px] leading-snug sm:min-h-[52px] sm:gap-3 sm:rounded-2xl sm:px-4 sm:py-3.5 sm:text-sm"
+                : "min-h-[44px] gap-2 rounded-xl border px-3 py-2.5 text-[13px] sm:min-h-[52px] sm:gap-3 sm:rounded-2xl sm:px-4 sm:py-3.5 sm:text-sm"
+            } ${
+              disabled
+                ? "cursor-not-allowed border-gray-200 bg-gray-50 text-gray-400"
+                : "border-brand-200 bg-white text-gray-800 shadow-sm hover:border-brand-400 hover:bg-brand-50/60"
+            }`}
           >
-            {iconFor(opt.answer_key, opt.label)}
-          </span>
-          <span className="flex-1 leading-tight sm:leading-snug">{opt.label}</span>
-          <span className="flex-shrink-0 text-sm text-brand-500 sm:text-base" aria-hidden>
-            ›
-          </span>
-        </button>
-      ))}
+            <span
+              className={`flex flex-shrink-0 items-center justify-center rounded-full bg-brand-50 ${
+                compact
+                  ? "h-7 w-7 text-xs sm:h-9 sm:w-9 sm:text-base"
+                  : "h-8 w-8 text-sm sm:h-9 sm:w-9 sm:text-base"
+              }`}
+              aria-hidden
+            >
+              {iconFor(opt.answer_key, opt.label)}
+            </span>
+            <span className="min-w-0 flex-1 leading-tight sm:leading-snug">{label}</span>
+            {!compact && (
+              <span className="flex-shrink-0 text-sm text-brand-500 sm:text-base" aria-hidden>
+                ›
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  if (!compact) return grid;
+
+  return (
+    <div className="max-h-[min(46dvh,340px)] overflow-y-auto overscroll-contain pr-0.5 sm:max-h-none">
+      {grid}
     </div>
   );
 }
