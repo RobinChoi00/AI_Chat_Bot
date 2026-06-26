@@ -382,6 +382,7 @@ class TestWarrantyContactEndpoint:
         WarrantyEngine.submit_answer(ticket_id, "warranty")
         WarrantyEngine.submit_answer(ticket_id, "installation")
         WarrantyEngine.submit_answer(ticket_id, "OS-4000T")
+        WarrantyEngine.submit_answer(ticket_id, "footrest_or_no_air")
         return ticket_id
 
     def test_email_only_contact_on_terminal(self, client, monkeypatch):
@@ -408,6 +409,8 @@ class TestWarrantyContactEndpoint:
         assert body["customer_email"] == "buyer@example.com"
         assert body["evidence_type"] == "not_available"
         assert body["evidence_na"] is True
+        assert "case_summary" in body
+        assert body["case_summary_source"] in {"llm", "deterministic"}
 
         evidences = WarrantyEngine.get_evidences(ticket_id)
         assert len(evidences) == 1
