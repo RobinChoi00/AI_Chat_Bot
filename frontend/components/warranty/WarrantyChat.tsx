@@ -35,9 +35,9 @@ const SELF_HELP_CLOSING =
   "Our warranty team is also available by phone during business hours.";
 
 const INITIAL_ISSUE_OPTIONS: AnswerOption[] = [
-  { answer_key: "installation", label: "Installation Issue" },
-  { answer_key: "delivery", label: "Delivery Issue" },
-  { answer_key: "defect", label: "Defect / Malfunction" },
+  { answer_key: "installation", label: "Setup & installation" },
+  { answer_key: "delivery", label: "Delivery & tracking" },
+  { answer_key: "defect", label: "Warranty / defect" },
 ];
 
 function sleep(ms: number) {
@@ -58,7 +58,7 @@ function assistantContentFromResponse(
   );
 }
 
-export default function WarrantyChat() {
+export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const [sessionId] = useState<string>(() => {
     if (typeof window === "undefined") return uuidv4();
     const stored = sessionStorage.getItem("warranty_session_id");
@@ -394,8 +394,12 @@ export default function WarrantyChat() {
         : "Enter your chair model…";
 
   return (
-    <div className="mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col">
-      {warrantyState && (
+    <div
+      className={`mx-auto flex min-h-0 w-full flex-1 flex-col ${
+        embed ? "max-w-none" : "max-w-2xl"
+      }`}
+    >
+      {warrantyState && !embed && (
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-100 bg-white px-4 py-2">
           <TicketStatusBadge
             status={warrantyState.status}
@@ -428,7 +432,7 @@ export default function WarrantyChat() {
         {showIssueTypeOptions && (
           <div className="mt-3 rounded-xl border border-gray-100 bg-white px-3 py-3 shadow-sm sm:mt-4 sm:rounded-2xl sm:py-4 sm:px-4">
             <p className="mb-2 text-xs font-medium text-gray-700 sm:mb-3 sm:text-sm">
-              What type of issue can we help you with?
+              What can we help you with today?
             </p>
             <AnswerOptions
               options={INITIAL_ISSUE_OPTIONS}

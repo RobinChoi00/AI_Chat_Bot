@@ -1,6 +1,29 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  async headers() {
+    return [
+      {
+        source: "/warranty/embed",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value: [
+              "frame-ancestors 'self'",
+              "https://*.myshopify.com",
+              "https://osakiusa.com",
+              "https://www.osakiusa.com",
+              "https://*.osakichair.com",
+              "https://titanchair.com",
+              "https://www.titanchair.com",
+              "https://osakimassagechair.com",
+              "https://www.osakimassagechair.com",
+            ].join(" "),
+          },
+        ],
+      },
+    ];
+  },
   // Proxy /api/* to the FastAPI backend so the browser never needs CORS headers
   async rewrites() {
     const apiBase =

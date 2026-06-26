@@ -2,8 +2,9 @@ import Link from "next/link";
 import WarrantyChat from "@/components/warranty/WarrantyChat";
 
 export const metadata = {
-  title: "Warranty Support — Osaki & Titan",
-  description: "Start a warranty claim for your Osaki or Titan massage chair.",
+  title: "Setup · Warranty · Delivery — Osaki & Titan",
+  description:
+    "Guided setup, warranty, and delivery help for your Osaki or Titan massage chair.",
 };
 
 export const viewport = {
@@ -29,10 +30,10 @@ export default function WarrantyPage() {
           <span className="text-gray-300">|</span>
           <div>
             <h1 className="text-base font-semibold text-gray-900">
-              🛡️ Warranty Support
+              Setup · Warranty · Delivery
             </h1>
             <p className="text-xs text-gray-500">
-              Osaki &amp; Titan Massage Chairs
+              Guided help for Osaki &amp; Titan chairs
             </p>
           </div>
         </div>

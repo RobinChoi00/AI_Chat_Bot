@@ -9,8 +9,8 @@ export const CHAT_WELCOME_MESSAGE =
   "or troubleshooting.";
 
 export const WARRANTY_WELCOME_MESSAGE =
-  "Hello! Welcome to Osaki & Titan warranty support. 👋\n\n" +
-  "First, which massage chair model do you have? " +
-  "You can find it on the serial-number sticker on your chair " +
+  "Hello! 👋\n\n" +
+  "This guide helps with **setup, warranty, and delivery** for your Osaki or Titan chair.\n\n" +
+  "First, which model do you have? Check the serial-number sticker on your chair " +
   "(for example, OS-4000T, Solo Flex, or Hypnos 4D).\n\n" +
-  "Please type your model below. Once we confirm it, we'll guide you through your issue step by step.";
+  "Type your model below — we'll walk you through step-by-step fixes before our team follows up.";
