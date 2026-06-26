@@ -321,6 +321,7 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         model_name=str(ticket.model_name or ""),
         turns=turns,
         case_summary=case_summary,
+        case_summary_source=summary_payload.get("source", ""),
         terminal_node_id=terminal_node_id,
     )
 
@@ -336,6 +337,7 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         turns=turns,
         terminal_node_id=terminal_node_id,
         case_summary=case_summary,
+        case_summary_source=summary_payload.get("source", ""),
     )
 
     return {

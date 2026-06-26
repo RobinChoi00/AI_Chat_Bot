@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from typing import Any, Optional, Sequence
@@ -16,6 +17,31 @@ from typing import Any, Optional, Sequence
 logger = logging.getLogger(__name__)
 
 _SKIP_ANSWER_KEYS = frozenset({"warranty", "model_name"})
+
+_PROMISE_RE = re.compile(
+    r"\b("
+    r"replace(?:ment|d)?|refund(?:ed|s)?|dispatch(?:ed)?|send a tech|"
+    r"technician|approved|will ship|ship(?:ped|ping)?|repair or replace|"
+    r"compensation|free part|we will send|parts will be"
+    r")\b",
+    re.I,
+)
+
+_SUMMARY_STOPWORDS = frozenset({
+    "about", "after", "before", "being", "been", "chair", "could",
+    "customer", "during", "issue", "model", "noted", "problem",
+    "reported", "reports", "stated", "states", "their", "them",
+    "there", "these", "those", "through", "warranty", "which",
+    "while", "would",
+})
+
+_MIN_FACT_TOKEN_LEN = 5
+_MIN_FACT_MATCH_RATIO = 0.6
+
+
+def contains_promise_language(text: str) -> bool:
+    """True when text includes repair/dispatch/refund style promises."""
+    return bool(_PROMISE_RE.search(text or ""))
 
 
 def _turn_field(turn: Any, name: str) -> str:
@@ -43,6 +69,116 @@ def _format_turns_for_prompt(turns: Sequence[Any]) -> str:
             chunk += f" A: {answer}"
         lines.append(chunk)
     return "\n".join(lines)
+
+
+def build_transcript_corpus(
+    *,
+    issue_type: str = "",
+    model_name: str = "",
+    turns: Optional[Sequence[Any]] = None,
+    terminal_node_id: str = "",
+) -> str:
+    """Lowercased text of all workflow facts available to the summarizer."""
+    chunks: list[str] = [
+        issue_type.replace("_", " "),
+        model_name,
+        terminal_node_id.replace("_", " "),
+    ]
+    for turn in turns or []:
+        chunks.extend(
+            [
+                _turn_field(turn, "node_id").replace("_", " "),
+                _turn_field(turn, "node_prompt"),
+                _turn_field(turn, "answer_key").replace("_", " "),
+                _turn_field(turn, "customer_answer"),
+            ]
+        )
+    return " ".join(part for part in chunks if part).lower()
+
+
+def _summary_fact_tokens(summary: str) -> list[str]:
+    tokens: list[str] = []
+    for raw in re.findall(r"[a-z0-9][a-z0-9-]{3,}", (summary or "").lower()):
+        token = raw.strip("-")
+        if len(token) < 4:
+            continue
+        if token in _SUMMARY_STOPWORDS:
+            continue
+        tokens.append(token)
+    return tokens
+
+
+def validate_llm_summary_against_transcript(
+    *,
+    summary: str,
+    suggested_subject: str,
+    issue_type: str = "",
+    model_name: str = "",
+    turns: Optional[Sequence[Any]] = None,
+    terminal_node_id: str = "",
+) -> tuple[bool, str]:
+    """
+    Reject LLM output that promises service or cites facts outside the transcript.
+
+    Returns (ok, reject_reason).
+    """
+    summary = (summary or "").strip()
+    suggested_subject = (suggested_subject or "").strip()
+
+    if contains_promise_language(summary):
+        return False, "promise_in_summary"
+    if contains_promise_language(suggested_subject):
+        return False, "promise_in_subject"
+
+    model = (model_name or "").strip()
+    if len(model) >= 3:
+        model_lower = model.lower()
+        if model_lower not in summary.lower() and model_lower not in suggested_subject.lower():
+            return False, "model_not_in_output"
+
+    corpus = build_transcript_corpus(
+        issue_type=issue_type,
+        model_name=model_name,
+        turns=turns,
+        terminal_node_id=terminal_node_id,
+    )
+    if not corpus.strip():
+        return False, "empty_transcript"
+
+    fact_tokens = _summary_fact_tokens(summary)
+    if not fact_tokens:
+        return False, "no_fact_tokens"
+
+    matched = sum(1 for token in fact_tokens if token in corpus)
+    required = max(1, math.ceil(len(fact_tokens) * _MIN_FACT_MATCH_RATIO))
+    if matched < required:
+        return False, "facts_not_in_transcript"
+
+    return True, ""
+
+
+def sanitize_email_subject(subject: str, *, fallback: str) -> str:
+    """Drop subjects that contain promise language."""
+    cleaned = (subject or "").strip()
+    if not cleaned or contains_promise_language(cleaned):
+        return fallback
+    return cleaned[:120]
+
+
+def format_case_summary_section_header(source: str) -> str:
+    if source == "llm":
+        return "--- Case summary (AI-generated — verify workflow below) ---"
+    if source == "provided":
+        return "--- Case summary ---"
+    return "--- Case summary (from workflow) ---"
+
+
+def format_case_summary_for_email(summary: str, source: str) -> str:
+    """Format summary body for team email (disclaimer only for LLM source)."""
+    text = (summary or "").strip()
+    if source == "llm":
+        return f"{text}\n\n(AI-generated — verify workflow below.)"
+    return text
 
 
 def build_deterministic_case_summary(
@@ -98,7 +234,7 @@ def suggested_subject_from_summary(
         base = f"{model} — {issue} case"
     if ticket_id:
         base = f"{base} ({ticket_id})"
-    return base[:120]
+    return sanitize_email_subject(base, fallback=f"{model} — {issue} case")[:120]
 
 
 def _openai_client():
@@ -161,7 +297,7 @@ def _llm_case_summary(
                     "role": "system",
                     "content": (
                         "You summarize warranty chat transcripts for internal support staff only. "
-                        "Never add repair outcomes or promises."
+                        "Never add repair outcomes or promises. Use only facts from the transcript."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -178,13 +314,20 @@ def _llm_case_summary(
         summary = str(parsed.get("summary", "")).strip()
         if len(summary) < 20:
             return None
-        if re.search(
-            r"\b(replace|refund|dispatch|send a tech|approved|will ship)\b",
-            summary,
-            re.I,
-        ):
-            return None
         subject = str(parsed.get("suggested_subject", "")).strip()[:120]
+
+        ok, reason = validate_llm_summary_against_transcript(
+            summary=summary,
+            suggested_subject=subject,
+            issue_type=issue_type,
+            model_name=model_name,
+            turns=turns,
+            terminal_node_id=terminal_node_id,
+        )
+        if not ok:
+            logger.info("warranty_summary LLM output rejected: %s", reason)
+            return None
+
         return {"summary": summary, "suggested_subject": subject}
     except Exception as exc:
         logger.warning("warranty_summary LLM call failed: %s", exc)
@@ -226,11 +369,16 @@ def summarize_warranty_case(
         )
         if llm:
             summary = llm["summary"]
-            subject = llm.get("suggested_subject") or suggested_subject_from_summary(
-                issue_type=issue_type,
-                model_name=model_name,
-                summary=summary,
+            subject = sanitize_email_subject(
+                llm.get("suggested_subject") or "",
+                fallback=subject_fallback,
             )
+            if subject == subject_fallback and llm.get("suggested_subject"):
+                subject = suggested_subject_from_summary(
+                    issue_type=issue_type,
+                    model_name=model_name,
+                    summary=summary,
+                )
             return {
                 "summary": summary,
                 "suggested_subject": subject,
