@@ -195,3 +195,44 @@ def test_build_voice_diagnosis_includes_core_steps():
         model_name="OS-4000T",
     )
     assert any("tv" in step.lower() or "unplug" in step.lower() for step in ghost["steps"])
+
+
+def test_build_air_diagnosis_includes_core_steps():
+    from warranty_self_help import build_air_diagnosis, infer_air_symptom_from_turns
+
+    diagnosis = build_air_diagnosis(
+        symptom="footrest_air",
+        path_text="footrest airbags not inflating hose",
+        model_name="OS-4000T",
+    )
+    assert diagnosis["steps"]
+    assert any("footrest" in step.lower() or "hose" in step.lower() for step in diagnosis["steps"])
+
+    turns = [_Turn("footrest"), _Turn("air_not_inflating"), _Turn("air_blowing")]
+    assert infer_air_symptom_from_turns(turns) == "footrest_air"
+    assert (
+        infer_air_symptom_from_turns([], node_id="defect_air_pump_terminal")
+        == "pump_no_air"
+    )
+
+
+def test_build_footrest_diagnosis_includes_core_steps():
+    from warranty_self_help import build_footrest_diagnosis, infer_footrest_symptom_from_turns
+
+    diagnosis = build_footrest_diagnosis(
+        symptom="legrest_not_extend",
+        path_text="footrest does not extend legrest",
+        model_name="OS-4000T",
+    )
+    assert diagnosis["steps"]
+    assert any(
+        "remote" in step.lower() or "side panel" in step.lower()
+        for step in diagnosis["steps"]
+    )
+
+    turns = [_Turn("footrest"), _Turn("legrest_not_extend")]
+    assert infer_footrest_symptom_from_turns(turns) == "legrest_not_extend"
+    assert (
+        infer_footrest_symptom_from_turns([], node_id="defect_footrest_foot_rollers_terminal")
+        == "foot_rollers"
+    )

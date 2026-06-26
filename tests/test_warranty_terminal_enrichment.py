@@ -206,3 +206,56 @@ def test_defect_terminal_diagnosis_and_help_offer():
     assert "Would you like our warranty team" in result["message"]
     assert "What you can try" in result["message"]
     assert result["diagnosis"]["steps"]
+
+
+def test_air_pump_terminal_includes_diy_steps():
+    node = {
+        "node_id": "defect_air_pump_terminal",
+        "type": "terminal",
+        "action": "awaiting_admin",
+        "prompt": "Our team will review your case and arrange the necessary service.",
+        "evidence_required": ["video_of_issue"],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("air"),
+                _Turn("feet_calves"),
+                _Turn("never_worked"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "What you can try" in result["message"]
+    assert any("hose" in step.lower() for step in result["diagnosis"]["steps"])
+    assert "air pump" not in result["message"].lower()
+    assert result["phase"] == "awaiting_help_consent"
+
+
+def test_footrest_extend_terminal_includes_diy_steps():
+    node = {
+        "node_id": "defect_footrest_extend_terminal",
+        "type": "terminal",
+        "action": "awaiting_admin",
+        "prompt": "Our team will review the leg extension issue.",
+        "evidence_required": ["video_of_issue"],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("footrest"),
+                _Turn("legrest_not_extend"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "What you can try" in result["message"]
+    assert any(
+        "power cycle" in step.lower() or "side panel" in step.lower()
+        for step in result["diagnosis"]["steps"]
+    )
+    assert result["phase"] == "awaiting_help_consent"

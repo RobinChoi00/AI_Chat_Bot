@@ -15,6 +15,8 @@ from config import REPAIR_MANUAL_URL, WARRANTY_BUSINESS_HOURS, WARRANTY_PHONE, W
 from install_videos import lookup_install_video
 from warranty_self_help import (
     HELP_OFFER_OPTIONS,
+    build_air_diagnosis,
+    build_footrest_diagnosis,
     build_install_air_hose_diagnosis,
     build_path_text,
     build_power_diagnosis,
@@ -22,13 +24,17 @@ from warranty_self_help import (
     build_rolling_noise_diagnosis,
     build_voice_diagnosis,
     build_workflow_diagnosis,
+    format_air_self_help_message,
     format_diagnosis_message,
+    format_footrest_self_help_message,
     format_install_air_hose_message,
     format_power_self_help_message,
     format_remote_self_help_message,
     format_rolling_noise_self_help_message,
     format_voice_self_help_message,
+    infer_air_symptom_from_turns,
     infer_defect_category_from_turns,
+    infer_footrest_symptom_from_turns,
     infer_power_symptom_from_turns,
     infer_remote_symptom_from_turns,
     infer_rolling_noise_type_from_turns,
@@ -59,6 +65,25 @@ _POWER_TERMINALS = frozenset({
     "defect_power_pcb_fuse_terminal",
     "defect_power_clicking_terminal",
     "defect_power_no_click_terminal",
+})
+
+_AIR_TERMINALS = frozenset({
+    "defect_air_hose_fix_terminal",
+    "defect_air_tech_terminal",
+    "defect_air_pump_terminal",
+    "defect_air_arms_tech_terminal",
+    "defect_air_shoulders_tech_terminal",
+    "defect_air_footrest_wg_tech_terminal",
+    "defect_air_side_wg_tech_terminal",
+    "defect_air_side_reconnect_terminal",
+    "defect_air_base_wg_tech_terminal",
+    "defect_air_base_hose_terminal",
+})
+
+_FOOTREST_TERMINALS = frozenset({
+    "defect_footrest_extend_terminal",
+    "defect_footrest_foot_rollers_terminal",
+    "defect_footrest_calf_roller_terminal",
 })
 
 
@@ -191,6 +216,40 @@ def _power_self_help_message(engine, ticket_id: str, ticket, node_id: str) -> di
     return _help_offer_enrichment(body, diagnosis=diagnosis)
 
 
+def _air_self_help_message(engine, ticket_id: str, ticket, node_id: str) -> dict[str, Any]:
+    model_name = str(getattr(ticket, "model_name", "") or "")
+    turns = engine.get_turns(ticket_id)
+    path_text = build_path_text(turns)
+    symptom = infer_air_symptom_from_turns(turns, node_id=node_id)
+    diagnosis = build_air_diagnosis(
+        symptom=symptom,
+        path_text=path_text,
+        model_name=model_name,
+    )
+    body = format_air_self_help_message(
+        diagnosis=diagnosis,
+        repair_manual_url=REPAIR_MANUAL_URL,
+    )
+    return _help_offer_enrichment(body, diagnosis=diagnosis)
+
+
+def _footrest_self_help_message(engine, ticket_id: str, ticket, node_id: str) -> dict[str, Any]:
+    model_name = str(getattr(ticket, "model_name", "") or "")
+    turns = engine.get_turns(ticket_id)
+    path_text = build_path_text(turns)
+    symptom = infer_footrest_symptom_from_turns(turns, node_id=node_id)
+    diagnosis = build_footrest_diagnosis(
+        symptom=symptom,
+        path_text=path_text,
+        model_name=model_name,
+    )
+    body = format_footrest_self_help_message(
+        diagnosis=diagnosis,
+        repair_manual_url=REPAIR_MANUAL_URL,
+    )
+    return _help_offer_enrichment(body, diagnosis=diagnosis)
+
+
 def _workflow_end_message(
     engine,
     ticket_id: str,
@@ -250,6 +309,12 @@ def build_terminal_enrichment(
 
     if node_id in _POWER_TERMINALS:
         return _power_self_help_message(engine, ticket_id, ticket, node_id)
+
+    if node_id in _AIR_TERMINALS:
+        return _air_self_help_message(engine, ticket_id, ticket, node_id)
+
+    if node_id in _FOOTREST_TERMINALS:
+        return _footrest_self_help_message(engine, ticket_id, ticket, node_id)
 
     if node_id == "install_send_video" or (
         issue_type == "installation" and action == "send_info"
