@@ -205,6 +205,10 @@ async def upload_evidence(
         customer_email=normalized_email,
     )
 
+    turns = engine.get_turns(ticket_id)
+    current_node = engine.get_current_node(ticket_id)
+    terminal_node_id = str(current_node.get("node_id") or "") if current_node else ""
+
     notify_evidence_upload_async(
         evidence_id=cast(int, ev.id),
         ticket_id=ticket_id,
@@ -216,6 +220,8 @@ async def upload_evidence(
         file_size_bytes=len(data),
         issue_type=str(ticket.issue_type or ""),
         model_name=str(ticket.model_name or ""),
+        turns=turns,
+        terminal_node_id=terminal_node_id,
     )
 
     return {
@@ -272,6 +278,17 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         )
 
     turns = engine.get_turns(ticket_id)
+    terminal_node_id = str(node.get("node_id") or "")
+    from warranty_summary import summarize_warranty_case  # noqa: WPS433
+
+    summary_payload = summarize_warranty_case(
+        issue_type=str(ticket.issue_type or ""),
+        model_name=str(ticket.model_name or ""),
+        turns=turns,
+        terminal_node_id=terminal_node_id,
+    )
+    case_summary = summary_payload["summary"]
+
     ev = engine.record_evidence(
         ticket_id=ticket_id,
         evidence_type="not_available",
@@ -291,6 +308,8 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         if ticket_row:
             ticket_row.set_collected("customer_contact_email", normalized_email)
             ticket_row.set_collected("evidence_na", "1")
+            ticket_row.set_collected("case_summary", case_summary)
+            ticket_row.set_collected("case_summary_source", summary_payload.get("source", ""))
 
     send_warranty_transcript_email(
         customer_email=normalized_email,
@@ -301,6 +320,8 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         issue_type=str(ticket.issue_type or ""),
         model_name=str(ticket.model_name or ""),
         turns=turns,
+        case_summary=case_summary,
+        terminal_node_id=terminal_node_id,
     )
 
     notify_email_only_contact_async(
@@ -313,6 +334,8 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         issue_type=str(ticket.issue_type or ""),
         model_name=str(ticket.model_name or ""),
         turns=turns,
+        terminal_node_id=terminal_node_id,
+        case_summary=case_summary,
     )
 
     return {
@@ -321,6 +344,8 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         "evidence_type": "not_available",
         "evidence_na": True,
         "email_notified": True,
+        "case_summary": case_summary,
+        "case_summary_source": summary_payload.get("source", ""),
     }
 
 

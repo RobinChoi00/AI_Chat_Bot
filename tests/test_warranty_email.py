@@ -179,6 +179,14 @@ def test_send_evidence_upload_notification(monkeypatch, tmp_path):
     monkeypatch.setattr("warranty_email.EMAIL_SENDER", "bot@example.com")
     monkeypatch.setattr("warranty_email.EMAIL_PASSWORD", "secret")
     monkeypatch.setattr("warranty_email.smtplib.SMTP", FakeSMTP)
+    monkeypatch.setattr(
+        "warranty_email._resolve_case_summary",
+        lambda **_k: {
+            "summary": "Test summary for evidence upload.",
+            "suggested_subject": "OS-4000T test",
+            "source": "deterministic",
+        },
+    )
 
     ok = send_evidence_upload_notification(
         ticket_id="T-55",
@@ -196,6 +204,9 @@ def test_send_evidence_upload_notification(monkeypatch, tmp_path):
     assert msg["To"] == "team@example.com"
     assert msg["Reply-To"] == "buyer@example.com"
     assert "T-55" in msg["Subject"]
+    part = msg.get_payload()[0]
+    body_text = part.get_payload(decode=True).decode("utf-8")
+    assert "Test summary for evidence upload." in body_text
 
 
 def test_build_admin_decision_customer_body_excludes_internal_note():

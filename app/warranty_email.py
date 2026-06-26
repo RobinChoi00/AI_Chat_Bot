@@ -96,6 +96,7 @@ def build_transcript_body(
     model_name: str = "",
     turns: Sequence[Any],
     chat_messages: Optional[List[Dict[str, str]]] = None,
+    case_summary: str = "",
 ) -> str:
     """Format a plain-text transcript for the warranty team."""
     lines = [
@@ -114,6 +115,9 @@ def build_transcript_body(
         lines.append(f"Model          : {model_name}")
     if ticket_status:
         lines.append(f"Ticket Status  : {ticket_status}")
+
+    if case_summary:
+        lines.extend(["", "--- Case summary (AI-assisted) ---", case_summary.strip(), ""])
 
     if turns:
         lines.extend(["", "--- Workflow steps ---"])
@@ -141,6 +145,38 @@ def build_transcript_body(
     return "\n".join(lines)
 
 
+def _resolve_case_summary(
+    *,
+    issue_type: str = "",
+    model_name: str = "",
+    turns: Optional[Sequence[Any]] = None,
+    terminal_node_id: str = "",
+    case_summary: str = "",
+) -> dict[str, str]:
+    if case_summary.strip():
+        from warranty_summary import suggested_subject_from_summary  # noqa: WPS433
+
+        summary = case_summary.strip()
+        return {
+            "summary": summary,
+            "suggested_subject": suggested_subject_from_summary(
+                issue_type=issue_type,
+                model_name=model_name,
+                summary=summary,
+            ),
+            "source": "provided",
+        }
+
+    from warranty_summary import summarize_warranty_case  # noqa: WPS433
+
+    return summarize_warranty_case(
+        issue_type=issue_type,
+        model_name=model_name,
+        turns=turns or [],
+        terminal_node_id=terminal_node_id,
+    )
+
+
 def send_warranty_transcript_email(
     *,
     customer_email: str,
@@ -152,6 +188,8 @@ def send_warranty_transcript_email(
     model_name: str = "",
     turns: Optional[Sequence[Any]] = None,
     chat_messages: Optional[List[Dict[str, str]]] = None,
+    case_summary: str = "",
+    terminal_node_id: str = "",
 ) -> bool:
     """Email the warranty team inbox with the customer's chat transcript."""
     if not EMAIL_SENDER or not EMAIL_PASSWORD:
@@ -160,8 +198,21 @@ def send_warranty_transcript_email(
         )
         return False
 
+    summary_payload = _resolve_case_summary(
+        issue_type=issue_type,
+        model_name=model_name,
+        turns=turns,
+        terminal_node_id=terminal_node_id,
+        case_summary=case_summary,
+    )
+    summary_text = summary_payload["summary"]
+    subject_hint = summary_payload.get("suggested_subject") or ""
+
     subject_ref = ticket_id or session_id[:8]
-    subject = f"[Warranty Chat] Customer contact — {customer_email} ({subject_ref})"
+    if subject_hint:
+        subject = f"[Warranty Chat] {subject_hint}"
+    else:
+        subject = f"[Warranty Chat] Customer contact — {customer_email} ({subject_ref})"
     body = build_transcript_body(
         ticket_id=ticket_id,
         session_id=session_id,
@@ -172,6 +223,7 @@ def send_warranty_transcript_email(
         model_name=model_name,
         turns=turns or [],
         chat_messages=chat_messages,
+        case_summary=summary_text,
     )
 
     msg = MIMEMultipart()
@@ -249,6 +301,7 @@ def build_evidence_notification_body(
     file_size_bytes: int,
     issue_type: str = "",
     model_name: str = "",
+    case_summary: str = "",
 ) -> str:
     lines = [
         "New warranty evidence uploaded by a customer.",
@@ -263,6 +316,8 @@ def build_evidence_notification_body(
         lines.append(f"Issue Type      : {issue_type}")
     if model_name:
         lines.append(f"Model           : {model_name}")
+    if case_summary:
+        lines.extend(["", "--- Case summary (AI-assisted) ---", case_summary.strip(), ""])
     lines.extend(
         [
             "",
@@ -284,6 +339,7 @@ def build_email_only_contact_body(
     session_id: str = "",
     domain: str = "",
     turns: Optional[Sequence[Any]] = None,
+    case_summary: str = "",
 ) -> str:
     """Plain-text body when the customer submits email without photo/video (N/A)."""
     lines = [
@@ -304,6 +360,9 @@ def build_email_only_contact_body(
         lines.append(f"Model           : {model_name}")
     if ticket_status:
         lines.append(f"Ticket Status   : {ticket_status}")
+
+    if case_summary:
+        lines.extend(["", "--- Case summary (AI-assisted) ---", case_summary.strip(), ""])
 
     if turns:
         lines.extend(["", "--- Workflow steps ---"])
@@ -340,6 +399,9 @@ def send_evidence_upload_notification(
     issue_type: str = "",
     model_name: str = "",
     recipients: Optional[List[tuple[str, str]]] = None,
+    turns: Optional[Sequence[Any]] = None,
+    terminal_node_id: str = "",
+    case_summary: str = "",
 ) -> bool:
     """Email the warranty team distribution list with the uploaded file attached."""
     if not EMAIL_SENDER or not EMAIL_PASSWORD:
@@ -358,6 +420,15 @@ def send_evidence_upload_notification(
         logger.error("Evidence notification failed — file not found: %s", file_path)
         return False
 
+    summary_payload = _resolve_case_summary(
+        issue_type=issue_type,
+        model_name=model_name,
+        turns=turns,
+        terminal_node_id=terminal_node_id,
+        case_summary=case_summary,
+    )
+    summary_text = summary_payload["summary"]
+
     to_addrs = [email for _name, email in notify_list]
     subject = f"[Warranty Evidence] {ticket_id} — {original_filename}"
     body = build_evidence_notification_body(
@@ -368,6 +439,7 @@ def send_evidence_upload_notification(
         file_size_bytes=file_size_bytes,
         issue_type=issue_type,
         model_name=model_name,
+        case_summary=summary_text,
     )
 
     msg = MIMEMultipart()
@@ -418,6 +490,8 @@ def notify_evidence_upload_async(
     file_size_bytes: int,
     issue_type: str = "",
     model_name: str = "",
+    turns: Optional[Sequence[Any]] = None,
+    terminal_node_id: str = "",
 ) -> None:
     """Send evidence notification in a background thread and mark emailed=1 on success."""
 
@@ -432,6 +506,8 @@ def notify_evidence_upload_async(
             file_size_bytes=file_size_bytes,
             issue_type=issue_type,
             model_name=model_name,
+            turns=turns,
+            terminal_node_id=terminal_node_id,
         )
         if not sent:
             return
@@ -455,6 +531,8 @@ def send_email_only_contact_notification(
     issue_type: str = "",
     model_name: str = "",
     turns: Optional[Sequence[Any]] = None,
+    terminal_node_id: str = "",
+    case_summary: str = "",
     recipients: Optional[List[tuple[str, str]]] = None,
 ) -> bool:
     """Notify warranty team inboxes when the customer submits email only (N/A evidence)."""
@@ -469,8 +547,21 @@ def send_email_only_contact_notification(
         logger.warning("Email-only contact skipped — no recipients configured.")
         return False
 
+    summary_payload = _resolve_case_summary(
+        issue_type=issue_type,
+        model_name=model_name,
+        turns=turns,
+        terminal_node_id=terminal_node_id,
+        case_summary=case_summary,
+    )
+    summary_text = summary_payload["summary"]
+    subject_hint = summary_payload.get("suggested_subject") or ""
+
     to_addrs = [email for _name, email in notify_list]
-    subject = f"[Warranty Contact] {ticket_id} — email only (no media)"
+    if subject_hint:
+        subject = f"[Warranty Contact] {subject_hint}"
+    else:
+        subject = f"[Warranty Contact] {ticket_id} — email only (no media)"
     body = build_email_only_contact_body(
         ticket_id=ticket_id,
         customer_email=customer_email,
@@ -480,6 +571,7 @@ def send_email_only_contact_notification(
         session_id=session_id,
         domain=domain,
         turns=turns,
+        case_summary=summary_text,
     )
 
     msg = MIMEMultipart()
@@ -518,6 +610,8 @@ def notify_email_only_contact_async(
     issue_type: str = "",
     model_name: str = "",
     turns: Optional[Sequence[Any]] = None,
+    terminal_node_id: str = "",
+    case_summary: str = "",
 ) -> None:
     """Send email-only contact notification in a background thread."""
 
@@ -531,6 +625,8 @@ def notify_email_only_contact_async(
             issue_type=issue_type,
             model_name=model_name,
             turns=turns,
+            terminal_node_id=terminal_node_id,
+            case_summary=case_summary,
         )
         if not sent:
             return
