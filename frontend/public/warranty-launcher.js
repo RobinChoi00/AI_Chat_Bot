@@ -196,7 +196,10 @@
       teaser.remove();
       teaser = null;
     }
-    frame.src = baseUrl + "/warranty/embed";
+    frame.src =
+      baseUrl +
+      "/warranty/embed?store=" +
+      encodeURIComponent(window.location.hostname || "");
     panel.classList.add("open");
     document.body.style.overflow = "hidden";
     closeBtn.focus();

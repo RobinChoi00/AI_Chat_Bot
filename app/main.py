@@ -186,23 +186,7 @@ if not (os.getenv("EMAIL_SENDER") and os.getenv("EMAIL_PASSWORD")):
 # active endpoint live in `intent_router.py` (repair / tracking / price / recommend).
 # `_TRACKING_INTENT_PATTERNS`, and `_SHOWROOM_INTENT_PATTERNS` further below.
 
-def get_store_key_prefix(target_domain: str) -> str:
-    lowered = (target_domain or "").lower()
-    if "titanchair.com" in lowered:
-        return "TITAN"
-    if "osakimassagechair.com" in lowered:
-        return "OSAKIMASSAGE"
-    return "OSAKI"
-
-def get_store_config(target_domain: str) -> Dict[str, str]:
-    """Resolve per-store Shopify and Track123 credentials from env."""
-    prefix = get_store_key_prefix(target_domain)
-    return {
-        "shop_domain": os.getenv(f"{prefix}_SHOP_DOMAIN", "").strip(),
-        "shop_access_token": os.getenv(f"{prefix}_ACCESS_TOKEN", "").strip(),
-        "track123_api_key": os.getenv(f"{prefix}_TRACK123_API_KEY", "").strip(),
-        "track123_token": os.getenv(f"{prefix}_TRACK123_TOKEN", "").strip(),
-    }
+from store_config import get_store_config, get_store_key_prefix
 
 def _pick_first_non_empty(data: Dict[str, Any], keys: List[str]) -> str:
     for key in keys:
@@ -259,84 +243,26 @@ def http_post_with_retry(url: str, **kwargs) -> requests.Response:
     return _check_status_for_retry(requests.post(url, **kwargs))
 
 
-def _normalize_track123_events(events: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    normalized = []
-    for event in events[-3:]:
-        city = _pick_first_non_empty(event, ["city", "location_city"])
-        state = _pick_first_non_empty(event, ["state", "province", "location_state"])
-        country = _pick_first_non_empty(event, ["country", "country_name", "location_country"])
-        location_parts = [x for x in [city, state, country] if x]
-        location = ", ".join(location_parts) if location_parts else _pick_first_non_empty(event, ["location", "facility", "hub"])
-
-        normalized.append({
-            "time": _pick_first_non_empty(event, ["time", "checkpoint_time", "event_time", "updated_at"]) or "Unknown time",
-            "location": location or "Carrier network",
-            "event": _pick_first_non_empty(event, ["message", "description", "status", "tag"]) or "Carrier update",
-            "hub": _pick_first_non_empty(event, ["facility", "hub", "center"]) or "",
-        })
-    return normalized
-
-def enrich_tracking_from_track123(tracking_number: str, store_config: Dict[str, str]) -> Dict[str, Any]:
+def enrich_tracking_from_track123(
+    tracking_number: str,
+    store_config: Dict[str, str],
+    *,
+    company: str = "",
+    tracking_url: str = "",
+) -> Dict[str, Any]:
     """Fetch richer location/hub/ETA data from Track123 if configured."""
-    api_key = store_config.get("track123_api_key", "")
-    token = store_config.get("track123_token", "")
-    if not api_key or not tracking_number:
-        return {}
-
-    base_url = os.getenv("TRACK123_API_BASE_URL", "https://api.track123.com").rstrip("/")
-    endpoint_template = os.getenv(
-        "TRACK123_TRACKING_ENDPOINT_TEMPLATE",
-        "/api/v1/trackings/{tracking_number}"
-    )
-    endpoint = endpoint_template.format(tracking_number=tracking_number)
-    url = f"{base_url}{endpoint}"
-
-    headers = {
-        "X-API-Key": api_key,
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    if token:
-        headers["X-Track123-Token"] = token
-
     try:
-        response = http_get_with_retry(url, headers=headers, timeout=6)
-        if response.status_code >= 400:
-            logger.warning(f"⚠️ Track123 lookup failed: {response.status_code}")
-            return {}
+        from track123_client import query_track123_tracking  # noqa: WPS433
+    except ImportError:
+        from app.track123_client import query_track123_tracking  # type: ignore  # noqa: WPS433
 
-        payload = response.json()
-        root = payload.get("data", payload)
-        if isinstance(root, list):
-            root = root[0] if root else {}
-        tracking = root.get("tracking", root) if isinstance(root, dict) else {}
-        if not isinstance(tracking, dict):
-            return {}
-
-        events = tracking.get("events") or tracking.get("checkpoints") or tracking.get("history") or []
-        if not isinstance(events, list):
-            events = []
-
-        normalized_events = _normalize_track123_events(events)
-        latest_event = normalized_events[-1] if normalized_events else {}
-
-        eta = _pick_first_non_empty(tracking, ["eta", "estimated_delivery", "expected_delivery", "delivery_date"]) or "Pending carrier update"
-        current_hub = _pick_first_non_empty(tracking, ["current_hub", "hub", "facility", "distribution_center"])
-        if not current_hub and latest_event:
-            current_hub = latest_event.get("hub", "")
-
-        return {
-            "track123_source": "enabled",
-            "status": _pick_first_non_empty(tracking, ["status", "delivery_status", "tag"]),
-            "current_location": _pick_first_non_empty(tracking, ["current_location", "location"]) or latest_event.get("location", "Carrier network"),
-            "current_hub": current_hub or "Carrier transit hub",
-            "eta": eta,
-            "last_event": _pick_first_non_empty(tracking, ["last_event"]) or latest_event.get("event", "Latest carrier update pending."),
-            "events": normalized_events,
-        }
-    except Exception as e:
-        logger.warning(f"⚠️ Track123 enrich error: {e}")
-        return {}
+    return query_track123_tracking(
+        tracking_number,
+        store_config,
+        company=company,
+        tracking_url=tracking_url,
+        http_post=http_post_with_retry,
+    )
 
 def _extract_shopify_order_details(node: Dict[str, Any]) -> Dict[str, Any]:
     """Pull warranty-relevant order fields from a Shopify GraphQL order node."""
@@ -553,7 +479,9 @@ def fetch_shopify_order_status(order_number: str, email: str, target_domain: str
         )
         enriched = enrich_tracking_from_track123(
             tracking_data.get("tracking_number", ""),
-            store_config
+            store_config,
+            company=str(tracking_data.get("company", "")),
+            tracking_url=str(tracking_data.get("tracking_url", "")),
         )
         if not enriched:
             enriched = enrich_tracking_from_aftership(

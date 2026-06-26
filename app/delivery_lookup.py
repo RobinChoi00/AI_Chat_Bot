@@ -189,7 +189,7 @@ def lookup_by_tracking_number(tracking_number: str, domain: str) -> TrackingSnap
 
     data: Dict[str, Any] = {
         "status": enriched.get("status", "IN_TRANSIT"),
-        "company": enriched.get("company", logistics.resolve_carrier_name("", tn, "")),
+        "company": enriched.get("company") or logistics.resolve_carrier_name("", tn, ""),
         "tracking_number": tn,
         "tracking_url": enriched.get("tracking_url", ""),
         "current_location": enriched.get("current_location", "Carrier network"),

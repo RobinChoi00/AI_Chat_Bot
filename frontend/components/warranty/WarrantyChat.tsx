@@ -25,7 +25,8 @@ import { formatTerminalPrompt, WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMess
 import { WARRANTY_WELCOME_MESSAGE } from "@/lib/welcomeMessage";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 
-const DOMAIN = "osaki.com";
+import { resolveWarrantyStoreDomain } from "@/lib/warrantyStoreDomain";
+
 const THINKING_DELAY_MS = 1500;
 
 const EMAIL_THANK_YOU =
@@ -60,6 +61,7 @@ function assistantContentFromResponse(
 }
 
 export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
+  const storeDomain = resolveWarrantyStoreDomain();
   const [sessionId] = useState<string>(() => {
     if (typeof window === "undefined") return uuidv4();
     const stored = sessionStorage.getItem("warranty_session_id");
@@ -175,7 +177,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       setInput("");
 
       try {
-        const resp = await registerWarrantyModel(sessionId, text.trim(), DOMAIN);
+        const resp = await registerWarrantyModel(sessionId, text.trim(), storeDomain);
         applySessionResponse(resp);
         const resolved = resp.resolved_model ?? resp.ticket?.model_name ?? text.trim();
         await sleep(THINKING_DELAY_MS);
@@ -206,7 +208,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       setHelpConsent(null);
 
       try {
-        const resp = await quickStartWarranty(sessionId, issueType, DOMAIN);
+        const resp = await quickStartWarranty(sessionId, issueType, storeDomain);
         applySessionResponse(resp);
         setMessages((prev) => [...prev, { role: "user", content: label }]);
         await appendAssistantFromResponse(resp.ticket, resp);
@@ -267,7 +269,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       setInput("");
 
       try {
-        const resp = await naturalStartWarranty(sessionId, text, DOMAIN);
+        const resp = await naturalStartWarranty(sessionId, text, storeDomain);
         applySessionResponse(resp);
         await appendAssistantFromResponse(resp.ticket, resp);
       } catch (err: unknown) {
