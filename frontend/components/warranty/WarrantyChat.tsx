@@ -25,7 +25,7 @@ import { WARRANTY_WELCOME_MESSAGE } from "@/lib/welcomeMessage";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 
 const DOMAIN = "osaki.com";
-const THINKING_DELAY_MS = 750;
+const THINKING_DELAY_MS = 1500;
 
 const EMAIL_THANK_YOU =
   `Thank you! Our warranty team at ${WARRANTY_CONTACT_EMAIL} will respond within 24 hours.`;
