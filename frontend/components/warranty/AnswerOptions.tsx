@@ -130,13 +130,13 @@ const OPTION_ICONS: Record<string, string> = {
   no_self_help: "🛠️",
 
   // Yes / No shortcuts
-  yes: "✓",
-  no: "✗",
+  yes: "✅",
+  no: "❌",
 };
 
 const LABEL_ICON_RULES: Array<[RegExp, string]> = [
-  [/^yes[,\s]/i, "✓"],
-  [/^no[,\s]/i, "✗"],
+  [/^yes[,\s]/i, "✅"],
+  [/^no[,\s]/i, "❌"],
   [/not sure/i, "❓"],
   [/white glove/i, "🧤"],
   [/tracking number/i, "📍"],
@@ -166,8 +166,8 @@ function iconFor(key: string, label: string): string {
     if (pattern.test(label)) return emoji;
   }
   const lower = label.toLowerCase();
-  if (lower.startsWith("yes")) return "✓";
-  if (lower.startsWith("no")) return "✗";
+  if (lower.startsWith("yes")) return "✅";
+  if (lower.startsWith("no")) return "❌";
   return "📌";
 }
 
@@ -234,10 +234,10 @@ export default function AnswerOptions({
             }`}
           >
             <span
-              className={`flex flex-shrink-0 items-center justify-center rounded-full bg-brand-50 ${
+              className={`flex flex-shrink-0 items-center justify-center rounded-xl border border-brand-300/70 bg-gradient-to-br from-brand-50 to-brand-100 shadow-sm ring-1 ring-white/80 ${
                 compact
-                  ? "h-7 w-7 text-xs sm:h-9 sm:w-9 sm:text-base"
-                  : "h-8 w-8 text-sm sm:h-9 sm:w-9 sm:text-base"
+                  ? "h-9 w-9 text-[1.35rem] leading-none sm:h-10 sm:w-10 sm:text-2xl"
+                  : "h-10 w-10 text-2xl leading-none sm:h-11 sm:w-11 sm:text-[1.75rem]"
               }`}
               aria-hidden
             >

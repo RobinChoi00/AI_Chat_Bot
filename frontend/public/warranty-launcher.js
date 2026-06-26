@@ -35,11 +35,12 @@
   var styles = document.createElement("style");
   styles.textContent =
     "#osaki-warranty-root{font-family:Inter,system-ui,-apple-system,sans-serif;" +
-    "line-height:1.35;-webkit-font-smoothing:antialiased}" +
+    "line-height:1.35;-webkit-font-smoothing:antialiased;" +
+    "--ow-gold:#c9a962;--ow-gold-light:#e8d5a3;--ow-dark:#0f1419;--ow-dark-mid:#1a2332}" +
     "#osaki-warranty-teaser{position:fixed;left:max(16px,env(safe-area-inset-left));" +
     "bottom:calc(88px + env(safe-area-inset-bottom));max-width:min(280px,calc(100vw - 32px));" +
-    "background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:12px 14px;" +
-    "box-shadow:0 12px 32px rgba(0,0,0,.14);z-index:" +
+    "background:#fff;border:1px solid #e5e7eb;border-left:4px solid var(--ow-gold);" +
+    "border-radius:14px;padding:12px 14px;box-shadow:0 12px 32px rgba(0,0,0,.14);z-index:" +
     Z +
     ";animation:osakiWarrantyFadeIn .35s ease}" +
     "#osaki-warranty-teaser p{margin:0 0 8px;font-size:13px;color:#111827;font-weight:600}" +
@@ -48,32 +49,50 @@
     "color:#6b7280;font-size:11px;cursor:pointer;padding:0}" +
     "#osaki-warranty-btn{position:fixed;left:max(16px,env(safe-area-inset-left));" +
     "bottom:max(16px,env(safe-area-inset-bottom));display:flex;align-items:center;gap:10px;" +
-    "border:0;border-radius:999px;padding:10px 14px 10px 12px;cursor:pointer;" +
-    "background:linear-gradient(135deg,#111827 0%,#1f2937 100%);color:#fff;" +
-    "box-shadow:0 8px 24px rgba(0,0,0,.22);z-index:" +
-    (Z + 1) +
-    ";transition:transform .15s ease,box-shadow .15s ease}" +
-    "#osaki-warranty-btn:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(0,0,0,.28)}" +
-    "#osaki-warranty-btn:active{transform:scale(.98)}" +
-    "#osaki-warranty-btn .icon{width:40px;height:40px;border-radius:50%;display:flex;" +
-    "align-items:center;justify-content:center;background:rgba(255,255,255,.12);font-size:20px;flex-shrink:0}" +
-    "#osaki-warranty-btn .label{text-align:left}" +
-    "#osaki-warranty-btn .label strong{display:block;font-size:13px;font-weight:700;letter-spacing:.01em}" +
-    "#osaki-warranty-btn .label em{display:block;font-style:normal;font-size:11px;" +
-    "color:#d1d5db;margin-top:2px}" +
-    "#osaki-warranty-panel{position:fixed;inset:0;background:rgba(17,24,39,.45);" +
+    "border:2px solid var(--ow-gold);border-radius:999px;padding:8px 16px 8px 8px;cursor:pointer;" +
+    "background:linear-gradient(145deg,var(--ow-dark) 0%,var(--ow-dark-mid) 55%,#243044 100%);" +
+    "color:#fff;box-shadow:0 8px 28px rgba(0,0,0,.35),0 0 0 0 rgba(201,169,98,.45);" +
     "z-index:" +
+    (Z + 1) +
+    ";transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease;" +
+    "animation:osakiWarrantyPulse 2.8s ease-in-out infinite}" +
+    "#osaki-warranty-btn:hover{transform:translateY(-2px);border-color:var(--ow-gold-light);" +
+    "box-shadow:0 14px 36px rgba(0,0,0,.4),0 0 24px rgba(201,169,98,.35);animation:none}" +
+    "#osaki-warranty-btn:active{transform:scale(.97)}" +
+    "#osaki-warranty-btn .icon-wrap{position:relative;width:48px;height:48px;flex-shrink:0}" +
+    "#osaki-warranty-btn .icon-ring{position:absolute;inset:0;border-radius:50%;" +
+    "background:linear-gradient(145deg,rgba(201,169,98,.35),rgba(201,169,98,.08));" +
+    "border:1px solid rgba(201,169,98,.55);box-shadow:inset 0 1px 0 rgba(255,255,255,.15)}" +
+    "#osaki-warranty-btn .icon-main{position:absolute;inset:0;display:flex;align-items:center;" +
+    "justify-content:center;font-size:22px;line-height:1}" +
+    "#osaki-warranty-btn .icon-badge{position:absolute;right:-2px;bottom:-2px;width:20px;height:20px;" +
+    "border-radius:50%;background:linear-gradient(135deg,var(--ow-gold),#a8863a);" +
+    "border:2px solid var(--ow-dark);display:flex;align-items:center;justify-content:center;" +
+    "font-size:11px;line-height:1;box-shadow:0 2px 6px rgba(0,0,0,.25)}" +
+    "#osaki-warranty-btn .label{text-align:left;padding-right:2px}" +
+    "#osaki-warranty-btn .label strong{display:block;font-size:13px;font-weight:700;" +
+    "letter-spacing:.02em;color:#fff}" +
+    "#osaki-warranty-btn .label em{display:block;font-style:normal;font-size:11px;" +
+    "color:var(--ow-gold-light);margin-top:2px;font-weight:500}" +
+    "@media(max-width:639px){#osaki-warranty-btn{padding:6px;border-radius:50%;" +
+    "width:58px;height:58px;justify-content:center;gap:0}" +
+    "#osaki-warranty-btn .label{display:none}" +
+    "#osaki-warranty-btn .icon-wrap{width:44px;height:44px}" +
+    "#osaki-warranty-btn .icon-main{font-size:24px}}" +
+    "#osaki-warranty-panel{position:fixed;inset:0;background:rgba(15,20,25,.55);" +
+    "backdrop-filter:blur(2px);z-index:" +
     (Z + 2) +
     ";display:none;align-items:flex-end;justify-content:flex-start;padding:0}" +
     "#osaki-warranty-panel.open{display:flex}" +
     "#osaki-warranty-sheet{width:100%;max-width:430px;height:min(92dvh,720px);" +
     "background:#f9fafb;border-radius:16px 16px 0 0;overflow:hidden;display:flex;" +
-    "flex-direction:column;box-shadow:0 -8px 40px rgba(0,0,0,.2);animation:osakiWarrantySlideUp .28s ease}" +
+    "flex-direction:column;box-shadow:0 -8px 40px rgba(0,0,0,.25);animation:osakiWarrantySlideUp .28s ease}" +
     "@media(min-width:640px){#osaki-warranty-panel{align-items:flex-end;padding:16px;" +
     "padding-left:max(16px,env(safe-area-inset-left));padding-bottom:max(16px,env(safe-area-inset-bottom))}" +
     "#osaki-warranty-sheet{border-radius:16px;height:min(85dvh,680px)}}" +
     "#osaki-warranty-sheet header{display:flex;align-items:center;justify-content:space-between;" +
-    "padding:12px 14px;background:#fff;border-bottom:1px solid #e5e7eb;flex-shrink:0}" +
+    "padding:12px 14px;background:linear-gradient(180deg,#fff,#fafafa);" +
+    "border-bottom:1px solid #e5e7eb;flex-shrink:0}" +
     "#osaki-warranty-sheet header div strong{display:block;font-size:14px;color:#111827}" +
     "#osaki-warranty-sheet header div span{font-size:11px;color:#6b7280}" +
     "#osaki-warranty-close{border:0;background:#f3f4f6;width:36px;height:36px;border-radius:50%;" +
@@ -82,7 +101,9 @@
     "@keyframes osakiWarrantyFadeIn{from{opacity:0;transform:translateY(8px)}" +
     "to{opacity:1;transform:translateY(0)}}" +
     "@keyframes osakiWarrantySlideUp{from{opacity:0;transform:translateY(24px)}" +
-    "to{opacity:1;transform:translateY(0)}}";
+    "to{opacity:1;transform:translateY(0)}}" +
+    "@keyframes osakiWarrantyPulse{0%,100%{box-shadow:0 8px 28px rgba(0,0,0,.35),0 0 0 0 rgba(201,169,98,.4)}" +
+    "50%{box-shadow:0 8px 28px rgba(0,0,0,.35),0 0 0 10px rgba(201,169,98,0)}}";
   document.head.appendChild(styles);
 
   var root = document.createElement("div");
@@ -94,7 +115,7 @@
     teaser = document.createElement("div");
     teaser.id = "osaki-warranty-teaser";
     teaser.innerHTML =
-      "<p>Setup, warranty &amp; delivery help</p>" +
+      "<p>🛡️ Setup, warranty &amp; delivery help</p>" +
       "<span>Step-by-step guide for your chair — before you call or email.</span>" +
       '<button type="button" aria-label="Dismiss">Dismiss</button>';
     root.appendChild(teaser);
@@ -116,7 +137,11 @@
   btn.type = "button";
   btn.setAttribute("aria-label", "Open setup, warranty and delivery help");
   btn.innerHTML =
-    '<span class="icon" aria-hidden="true">🛡️</span>' +
+    '<span class="icon-wrap" aria-hidden="true">' +
+    '<span class="icon-ring"></span>' +
+    '<span class="icon-main">🛡️</span>' +
+    '<span class="icon-badge">✓</span>' +
+    "</span>" +
     '<span class="label"><strong>Setup · Warranty · Delivery</strong>' +
     "<em>Guided help for your chair</em></span>";
   root.appendChild(btn);
