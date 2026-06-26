@@ -18,7 +18,10 @@
   if (window.__osakiWarrantyLauncherLoaded) return;
   window.__osakiWarrantyLauncherLoaded = true;
 
-  var script = document.currentScript;
+  // defer scripts run after parse — document.currentScript is often null
+  var script =
+    document.currentScript ||
+    document.querySelector('script[src*="warranty-launcher"]');
   var baseUrl = (script && script.getAttribute("data-base-url")) || "";
   if (!baseUrl && script && script.src) {
     try {
@@ -28,6 +31,13 @@
     }
   }
   baseUrl = (baseUrl || window.location.origin).replace(/\/$/, "");
+  if (script && script.src && baseUrl.indexOf("myshopify.com") !== -1) {
+    try {
+      baseUrl = new URL(script.src).origin.replace(/\/$/, "");
+    } catch (_e2) {
+      /* keep fallback */
+    }
+  }
 
   var TEASER_KEY = "osaki_warranty_launcher_teaser_v1";
   var Z = 2147483000;
@@ -105,6 +115,15 @@
     "@keyframes osakiWarrantyPulse{0%,100%{box-shadow:0 8px 28px rgba(0,0,0,.35),0 0 0 0 rgba(201,169,98,.4)}" +
     "50%{box-shadow:0 8px 28px rgba(0,0,0,.35),0 0 0 10px rgba(201,169,98,0)}}";
   document.head.appendChild(styles);
+
+  if (!document.body) {
+    document.addEventListener("DOMContentLoaded", initLauncher);
+    return;
+  }
+  initLauncher();
+
+  function initLauncher() {
+  if (document.getElementById("osaki-warranty-root")) return;
 
   var root = document.createElement("div");
   root.id = "osaki-warranty-root";
@@ -196,4 +215,5 @@
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && open) closePanel();
   });
+  }
 })();
