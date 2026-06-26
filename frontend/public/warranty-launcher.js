@@ -87,8 +87,8 @@
     "color:var(--ow-gold-light);margin-top:2px;font-weight:500}" +
     "@media(max-width:639px){#osaki-warranty-btn{padding:6px;border-radius:50%;" +
     "width:58px;height:58px;justify-content:center;gap:0;flex-direction:row;" +
-    "bottom:calc(96px + env(safe-area-inset-bottom))}" +
-    "#osaki-warranty-teaser{bottom:calc(168px + env(safe-area-inset-bottom))}" +
+    "bottom:calc(128px + env(safe-area-inset-bottom))}" +
+    "#osaki-warranty-teaser{bottom:calc(200px + env(safe-area-inset-bottom))}" +
     "#osaki-warranty-btn .label{display:none}" +
     "#osaki-warranty-btn .icon-wrap{width:44px;height:44px}" +
     "#osaki-warranty-btn .icon-main{font-size:24px}}" +
