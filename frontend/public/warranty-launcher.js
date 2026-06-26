@@ -9,7 +9,7 @@
  *     defer
  *   ></script>
  *
- * Place on bottom-left so it does not compete with Tidio (usually bottom-right).
+ * Place on the bottom-right, stacked above Tidio (sales chat).
  * data-base-url should point at the Next.js frontend that serves /warranty/embed.
  */
 (function () {
@@ -47,9 +47,9 @@
     "#osaki-warranty-root{font-family:Inter,system-ui,-apple-system,sans-serif;" +
     "line-height:1.35;-webkit-font-smoothing:antialiased;" +
     "--ow-gold:#c9a962;--ow-gold-light:#e8d5a3;--ow-dark:#0f1419;--ow-dark-mid:#1a2332}" +
-    "#osaki-warranty-teaser{position:fixed;left:max(16px,env(safe-area-inset-left));" +
-    "bottom:calc(88px + env(safe-area-inset-bottom));max-width:min(280px,calc(100vw - 32px));" +
-    "background:#fff;border:1px solid #e5e7eb;border-left:4px solid var(--ow-gold);" +
+    "#osaki-warranty-teaser{position:fixed;right:max(16px,env(safe-area-inset-right));" +
+    "bottom:calc(188px + env(safe-area-inset-bottom));max-width:min(280px,calc(100vw - 32px));" +
+    "background:#fff;border:1px solid #e5e7eb;border-right:4px solid var(--ow-gold);" +
     "border-radius:14px;padding:12px 14px;box-shadow:0 12px 32px rgba(0,0,0,.14);z-index:" +
     Z +
     ";animation:osakiWarrantyFadeIn .35s ease}" +
@@ -57,8 +57,9 @@
     "#osaki-warranty-teaser span{display:block;font-size:12px;color:#4b5563;font-weight:400}" +
     "#osaki-warranty-teaser button{margin-top:8px;border:0;background:transparent;" +
     "color:#6b7280;font-size:11px;cursor:pointer;padding:0}" +
-    "#osaki-warranty-btn{position:fixed;left:max(16px,env(safe-area-inset-left));" +
-    "bottom:max(16px,env(safe-area-inset-bottom));display:flex;align-items:center;gap:10px;" +
+    "#osaki-warranty-btn{position:fixed;right:max(16px,env(safe-area-inset-right));" +
+    "bottom:calc(110px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:10px;" +
+    "flex-direction:row-reverse;" +
     "border:2px solid var(--ow-gold);border-radius:999px;padding:8px 16px 8px 8px;cursor:pointer;" +
     "background:linear-gradient(145deg,var(--ow-dark) 0%,var(--ow-dark-mid) 55%,#243044 100%);" +
     "color:#fff;box-shadow:0 8px 28px rgba(0,0,0,.35),0 0 0 0 rgba(201,169,98,.45);" +
@@ -79,26 +80,28 @@
     "border-radius:50%;background:linear-gradient(135deg,var(--ow-gold),#a8863a);" +
     "border:2px solid var(--ow-dark);display:flex;align-items:center;justify-content:center;" +
     "font-size:11px;line-height:1;box-shadow:0 2px 6px rgba(0,0,0,.25)}" +
-    "#osaki-warranty-btn .label{text-align:left;padding-right:2px}" +
+    "#osaki-warranty-btn .label{text-align:right;padding-left:2px}" +
     "#osaki-warranty-btn .label strong{display:block;font-size:13px;font-weight:700;" +
     "letter-spacing:.02em;color:#fff}" +
     "#osaki-warranty-btn .label em{display:block;font-style:normal;font-size:11px;" +
     "color:var(--ow-gold-light);margin-top:2px;font-weight:500}" +
     "@media(max-width:639px){#osaki-warranty-btn{padding:6px;border-radius:50%;" +
-    "width:58px;height:58px;justify-content:center;gap:0}" +
+    "width:58px;height:58px;justify-content:center;gap:0;flex-direction:row;" +
+    "bottom:calc(96px + env(safe-area-inset-bottom))}" +
+    "#osaki-warranty-teaser{bottom:calc(168px + env(safe-area-inset-bottom))}" +
     "#osaki-warranty-btn .label{display:none}" +
     "#osaki-warranty-btn .icon-wrap{width:44px;height:44px}" +
     "#osaki-warranty-btn .icon-main{font-size:24px}}" +
     "#osaki-warranty-panel{position:fixed;inset:0;background:rgba(15,20,25,.55);" +
     "backdrop-filter:blur(2px);z-index:" +
     (Z + 2) +
-    ";display:none;align-items:flex-end;justify-content:flex-start;padding:0}" +
+    ";display:none;align-items:flex-end;justify-content:flex-end;padding:0}" +
     "#osaki-warranty-panel.open{display:flex}" +
     "#osaki-warranty-sheet{width:100%;max-width:430px;height:min(92dvh,720px);" +
     "background:#f9fafb;border-radius:16px 16px 0 0;overflow:hidden;display:flex;" +
     "flex-direction:column;box-shadow:0 -8px 40px rgba(0,0,0,.25);animation:osakiWarrantySlideUp .28s ease}" +
-    "@media(min-width:640px){#osaki-warranty-panel{align-items:flex-end;padding:16px;" +
-    "padding-left:max(16px,env(safe-area-inset-left));padding-bottom:max(16px,env(safe-area-inset-bottom))}" +
+    "@media(min-width:640px){#osaki-warranty-panel{align-items:flex-end;justify-content:flex-end;padding:16px;" +
+    "padding-right:max(16px,env(safe-area-inset-right));padding-bottom:max(16px,env(safe-area-inset-bottom))}" +
     "#osaki-warranty-sheet{border-radius:16px;height:min(85dvh,680px)}}" +
     "#osaki-warranty-sheet header{display:flex;align-items:center;justify-content:space-between;" +
     "padding:12px 14px;background:linear-gradient(180deg,#fff,#fafafa);" +
