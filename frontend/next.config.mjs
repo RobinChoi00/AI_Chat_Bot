@@ -18,6 +18,8 @@ const nextConfig = {
               "https://www.titanchair.com",
               "https://osakimassagechair.com",
               "https://www.osakimassagechair.com",
+              "https://osaki-titan.com",
+              "https://www.osaki-titan.com",
             ].join(" "),
           },
         ],
