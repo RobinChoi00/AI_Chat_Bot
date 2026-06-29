@@ -374,6 +374,15 @@ class WarrantyNaturalStartRequest(BaseModel):
     domain: str = "osaki.com"
 
 
+class WarrantySmartStartRequest(BaseModel):
+    """
+    Start warranty intake from free-text and fast-forward as many flowchart
+    steps as the LLM can confidently extract.
+    """
+    message: str
+    domain: str = "osaki.com"
+
+
 class WarrantyEmailNotifyRequest(BaseModel):
     """Notify the warranty team when a customer leaves their email in chat."""
     message: str = ""
@@ -764,6 +773,86 @@ async def natural_start_warranty(session_id: str, body: WarrantyNaturalStartRequ
     payload = _quick_start_ticket(engine, session_id, issue_type, body.domain)
     payload["nlp_interpreted"] = True
     payload["interpreted_issue_type"] = issue_type
+    return payload
+
+
+@router.post("/api/v1/warranty/session/{session_id}/smart-start", tags=["warranty"])
+async def smart_start_warranty(session_id: str, body: WarrantySmartStartRequest):
+    """
+    Multi-step free-text intake.
+
+    LLM reads the customer's one-line description and produces an ordered
+    sequence of valid flowchart answer_keys. We auto-submit those keys so the
+    customer can skip 2~6 multiple-choice questions when their description is
+    clear (e.g. "OS-4000T footrest air not inflating" → defect → air →
+    footrest → terminal).
+
+    Behavior:
+      - On any failure / low confidence: behaves like quick-start defect (safe).
+      - Only auto-submits answer_keys that match the live flowchart options.
+      - Returns the same ticket-state payload as other warranty endpoints, plus
+        `smart_start` metadata explaining what was inferred.
+    """
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(status_code=422, detail="message must not be empty")
+
+    from warranty_intake import (  # noqa: WPS433
+        apply_prefill_to_engine,
+        extract_workflow_prefill,
+    )
+    from warranty_workflow import _NODES  # type: ignore  # noqa: WPS433
+
+    engine = _lazy_engine()
+    existing = engine.get_active_session_ticket(session_id)
+    if existing is not None:
+        _require_registered_model(existing)
+        ticket_id = str(existing.ticket_id)
+    else:
+        ticket_id, _root = engine.start_session(session_id, body.domain)
+
+    extraction = extract_workflow_prefill(free_text=message, nodes=_NODES)
+    answer_keys: list[str] = list(extraction.get("answer_keys") or [])
+
+    apply_result: dict[str, Any] = {
+        "applied": [],
+        "skipped": [],
+        "stopped_reason": "empty",
+        "final_node": engine.get_current_node(ticket_id),
+    }
+    if answer_keys:
+        apply_result = apply_prefill_to_engine(
+            engine=engine,
+            ticket_id=ticket_id,
+            nodes=_NODES,
+            answer_keys=answer_keys,
+        )
+
+    if not apply_result["applied"]:
+        # Nothing usable — fall back to a safe defect quick-start so the
+        # frontend still progresses past the root menu.
+        node = engine.get_current_node(ticket_id)
+        node_id = node.get("node_id") if node else None
+        try:
+            if node_id == "root":
+                engine.submit_answer(ticket_id, "warranty")
+                engine.submit_answer(ticket_id, "defect")
+            elif node_id == "issue_type":
+                engine.submit_answer(ticket_id, "defect")
+        except ValueError:
+            pass
+
+    ticket = engine.get_ticket(ticket_id)
+    node = engine.get_current_node(ticket_id)
+    payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    payload["smart_start"] = {
+        "source": extraction.get("source", "empty"),
+        "summary": extraction.get("summary", ""),
+        "applied_keys": apply_result["applied"],
+        "skipped_keys": apply_result["skipped"],
+        "stopped_reason": apply_result["stopped_reason"],
+        "model_name_hint": extraction.get("model_name", ""),
+    }
     return payload
 
 

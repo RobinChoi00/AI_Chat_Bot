@@ -162,8 +162,52 @@
         {"label": "Power issue (chair won't turn on or has power problems)", "answer_key": "power", "next": "defect_power_remote_on_q"},
         {"label": "Recline / position adjustment not working",            "answer_key": "recline",  "next": "defect_recline_which"},
         {"label": "Footrest issue",                                       "answer_key": "footrest", "next": "defect_footrest_which"},
+        {"label": "Heating / temperature issue",                          "answer_key": "heat",     "next": "defect_heating_which"},
         {"label": "Voice control issue",                                  "answer_key": "voice",    "next": "defect_voice_which"}
       ]
+    },
+
+    "defect_heating_which": {
+      "type": "question",
+      "prompt": "Which heating issue best describes your situation?",
+      "options": [
+        {"label": "Heating does not warm up at all",            "answer_key": "not_heating",  "next": "defect_heating_warmup_q"},
+        {"label": "Heat turns on and off / works intermittently", "answer_key": "intermittent", "next": "defect_heating_intermittent_terminal"},
+        {"label": "Heat feels too hot or uneven",                "answer_key": "too_hot",      "next": "defect_heating_too_hot_terminal"}
+      ]
+    },
+
+    "defect_heating_warmup_q": {
+      "type": "question",
+      "prompt": "Massage chair heat is mild and takes time to build up. Have you run the heated program for at least 10 minutes and confirmed heat is turned ON from the remote?",
+      "options": [
+        {"label": "Yes, ran for 10+ minutes with heat ON — still no warmth", "answer_key": "still_no_heat",   "next": "defect_heating_not_heating_terminal"},
+        {"label": "No — I'll try a 10-minute warm-up first",                 "answer_key": "will_try_warmup", "next": "defect_heating_not_heating_terminal"}
+      ]
+    },
+
+    "defect_heating_not_heating_terminal": {
+      "type": "terminal",
+      "action": "send_info",
+      "prompt": "Let's confirm heat is enabled and give the chair time to warm up before deciding it needs service.",
+      "internal_note": "Heat reported not working. Confirm 10+ min warm-up, heat icon on remote ON, no thick covers blocking element. If still cold after DIY, admin to check heating element.",
+      "evidence_required": []
+    },
+
+    "defect_heating_intermittent_terminal": {
+      "type": "terminal",
+      "action": "send_info",
+      "prompt": "Heat turning on and off can be normal cycling, but if heat fails completely after a while, our team can review the element.",
+      "internal_note": "Intermittent heat. DIY: time how long heat stays on, power cycle, retest. Admin to review if pattern repeats.",
+      "evidence_required": []
+    },
+
+    "defect_heating_too_hot_terminal": {
+      "type": "terminal",
+      "action": "send_info",
+      "prompt": "If heat feels too hot or uneven, stop using it and let the chair cool down before testing again. Our team can check the heating element if it persists.",
+      "internal_note": "Heat too hot / uneven. Safety first: stop use, cool 30 min, no thick blankets covering element. Escalate if repeats.",
+      "evidence_required": []
     },
 
     "defect_voice_which": {

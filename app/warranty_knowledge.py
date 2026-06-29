@@ -384,6 +384,21 @@ def _score_entry(
     return score
 
 
+# Hybrid scoring weights — keyword token overlap vs cosine similarity.
+# Keyword scores are capped at ~10, cosine is in [0, 1], so we scale cosine
+# up before mixing. Toggle the whole semantic layer off with
+# WARRANTY_SEMANTIC_SEARCH=0.
+_HYBRID_SEMANTIC_WEIGHT = 6.0
+_SEMANTIC_TOP_K = 12
+
+
+def _semantic_enabled() -> bool:
+    import os
+
+    flag = os.environ.get("WARRANTY_SEMANTIC_SEARCH", "1").strip().lower()
+    return flag not in ("0", "false", "no", "off")
+
+
 def search_knowledge(
     *,
     path_text: str,
@@ -400,16 +415,49 @@ def search_knowledge(
         path_tokens |= _token_set(model_name)
 
     category = _DEFECT_CATEGORY_MAP.get((defect_category or "").lower())
-    scored: list[tuple[float, KnowledgeEntry]] = []
-    for entry in entries:
-        score = _score_entry(entry, path_tokens, category)
-        if score >= 2.0:
-            scored.append((score, entry))
 
-    scored.sort(key=lambda x: x[0], reverse=True)
+    # Keyword scoring (existing path)
+    keyword_scores: dict[int, float] = {}
+    for idx, entry in enumerate(entries):
+        score = _score_entry(entry, path_tokens, category)
+        if score > 0:
+            keyword_scores[idx] = score
+
+    # Semantic layer (optional, graceful fallback)
+    semantic_scores: dict[int, float] = {}
+    if _semantic_enabled() and path_text.strip():
+        try:
+            from warranty_embeddings import semantic_search
+
+            query = path_text
+            if model_name:
+                query = f"{path_text} {model_name}"
+            sem_results = semantic_search(query, top_k=_SEMANTIC_TOP_K, category=category)
+            if sem_results:
+                entry_to_idx = {id(e): i for i, e in enumerate(entries)}
+                for sim, entry in sem_results:
+                    idx = entry_to_idx.get(id(entry))
+                    if idx is None:
+                        continue
+                    semantic_scores[idx] = sim
+        except Exception:
+            semantic_scores = {}
+
+    # Hybrid merge — both maps may be empty; keyword-only is the safety net.
+    combined: list[tuple[float, KnowledgeEntry]] = []
+    candidate_ids = set(keyword_scores.keys()) | set(semantic_scores.keys())
+    for idx in candidate_ids:
+        kw = keyword_scores.get(idx, 0.0)
+        sem = semantic_scores.get(idx, 0.0)
+        score = kw + sem * _HYBRID_SEMANTIC_WEIGHT
+        if score < 2.0 and sem < 0.35:
+            continue
+        combined.append((score, entries[idx]))
+
+    combined.sort(key=lambda x: x[0], reverse=True)
     seen_titles: set[str] = set()
     results: list[KnowledgeEntry] = []
-    for _score, entry in scored:
+    for _score, entry in combined:
         key = _normalize(entry.title)
         if key in seen_titles:
             continue

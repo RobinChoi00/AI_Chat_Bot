@@ -85,6 +85,15 @@ export interface TerminalEnrichment {
   defer_email?: boolean;
 }
 
+export interface SmartStartMetadata {
+  source: "llm" | "empty" | string;
+  summary: string;
+  applied_keys: string[];
+  skipped_keys: string[];
+  stopped_reason: string;
+  model_name_hint?: string;
+}
+
 export interface WarrantySessionResponse {
   session_id: string;
   ticket: WarrantyTicketState | null;
@@ -96,6 +105,7 @@ export interface WarrantySessionResponse {
   terminal_enrichment?: TerminalEnrichment | null;
   model_registered?: boolean;
   resolved_model?: string;
+  smart_start?: SmartStartMetadata | null;
 }
 
 export interface WarrantyContactResponse {

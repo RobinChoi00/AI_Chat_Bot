@@ -1033,6 +1033,527 @@ def format_footrest_self_help_message(*, diagnosis: dict[str, Any], repair_manua
     return "\n".join(parts)
 
 
+# ===========================================================================
+# Cosmetic / Recline / Heating / Delivery DIY builders
+# ===========================================================================
+
+_COSMETIC_STEPS: dict[str, tuple[str, ...]] = {
+    "footrest": (
+        "Take 2–3 clear photos of the damage in good lighting (avoid flash glare).",
+        "Include one wide shot showing the footrest in context, and one close-up of the damaged area.",
+        "If the damage is on the upholstery, capture it from straight on so the size is clear.",
+        "Have your order number ready so our team can match the case to your purchase.",
+    ),
+    "side_panel": (
+        "First, verify both side panels are fully seated — gently press them into place along all edges.",
+        "Check that no cables, hoses, or trim are caught between the panel and frame.",
+        "If the panel now sits correctly, retest and see whether the damage was really a fit issue.",
+        "If damage remains, take a wide and close-up photo of the panel area.",
+    ),
+    "base": (
+        "Take photos of the damage on the base from two angles (front and side).",
+        "Include a wide shot showing the base in context with the rest of the chair.",
+        "Avoid moving or covering the damaged area until photos are taken.",
+        "Note whether the damage was present at unboxing or appeared later.",
+    ),
+    "other": (
+        "Take a clear close-up photo of the damaged area and one wider shot showing where it is on the chair.",
+        "Note when you first noticed the damage — at unboxing, after assembly, or after use.",
+        "Avoid cleaning or covering the area until our team has seen the photos.",
+        "If the damage was visible at unboxing, take a photo of the shipping box as well.",
+    ),
+    "wg_install": (
+        "Take photos of the damage from a wide and close-up angle.",
+        "Capture the shipping box from outside if it is still available.",
+        "Note the White Glove crew's company name and delivery date if you have it.",
+        "Avoid moving the chair before photos are taken so our team can see how it was installed.",
+    ),
+    "signed_cleared": (
+        "Take clear photos of the damage and the box (if you still have it).",
+        "Note when you first noticed the damage — this helps our team assess the case.",
+        "Keep packaging materials if possible until our team confirms next steps.",
+    ),
+    "signed_damaged_visible": (
+        "Take photos of the damage on the chair and the damaged shipping box.",
+        "Locate the signed delivery receipt that notes 'Damaged' — a phone photo is fine.",
+        "Send all three together so our team can file the carrier claim quickly.",
+    ),
+    "signed_damaged_box_ok": (
+        "Take clear photos of the chair damage from multiple angles.",
+        "Locate the signed delivery receipt that notes 'Damaged' for the claim.",
+        "Note whether the damage may have happened during unboxing or after.",
+    ),
+    "noticed_later": (
+        "Take photos of the damage now, even if it appeared after a few days of use.",
+        "Note approximately when you first saw the damage and what you were doing.",
+        "Our team will review and may offer a small compensation for minor cases.",
+    ),
+    "side_fixed": (
+        "Now that the side panels are seated correctly, try the chair through one auto program.",
+        "Check whether the cosmetic concern was really a panel fit issue.",
+        "If everything looks good after the fix, no further action is needed.",
+    ),
+}
+
+_NODE_COSMETIC_SYMPTOM: dict[str, str] = {
+    "defect_cosmetic_photo_terminal": "other",
+    "defect_cosmetic_side_fixed_terminal": "side_fixed",
+    "defect_cosmetic_wg_terminal": "wg_install",
+    "defect_cosmetic_signed_cleared_terminal": "signed_cleared",
+    "defect_cosmetic_box_photos_terminal": "signed_damaged_visible",
+    "defect_cosmetic_replace_terminal": "signed_damaged_box_ok",
+}
+
+_COSMETIC_SUMMARY_LABELS: dict[str, str] = {
+    "footrest": "cosmetic damage on the footrest",
+    "side_panel": "cosmetic damage on the side panel",
+    "base": "cosmetic damage on the chair base",
+    "other": "cosmetic damage on the chair",
+    "wg_install": "cosmetic damage tied to White Glove delivery",
+    "signed_cleared": "cosmetic damage with a delivery receipt signed as Cleared",
+    "signed_damaged_visible": "cosmetic damage visible at unboxing with a damaged box",
+    "signed_damaged_box_ok": "cosmetic damage with the box looking fine",
+    "noticed_later": "cosmetic damage that was noticed after delivery",
+    "side_fixed": "a side panel that was not fully seated",
+}
+
+
+def infer_cosmetic_symptom_from_turns(turns, node_id: str = "") -> str:
+    """Pick the best cosmetic symptom key from the customer's path."""
+    if node_id in _NODE_COSMETIC_SYMPTOM:
+        return _NODE_COSMETIC_SYMPTOM[node_id]
+
+    answer_keys = [str(getattr(t, "answer_key", "") or "") for t in (turns or [])]
+    keys_set = set(answer_keys)
+
+    if "yes_white_glove" in keys_set:
+        return "wg_install"
+    if "signed_cleared" in keys_set:
+        return "signed_cleared"
+    if "signed_damaged" in keys_set and "yes_box_damaged" in keys_set:
+        return "signed_damaged_visible"
+    if "signed_damaged" in keys_set and "no_box_damage" in keys_set:
+        return "signed_damaged_box_ok"
+    if "noticed_later" in keys_set:
+        return "noticed_later"
+    if "panels_fixed" in keys_set:
+        return "side_fixed"
+    for key in reversed(answer_keys):
+        if key in ("footrest", "side_panel", "base", "other"):
+            return key
+    return "other"
+
+
+def build_cosmetic_diagnosis(
+    *,
+    symptom: str,
+    path_text: str,
+    model_name: str = "",
+) -> dict[str, Any]:
+    """Customer-safe guidance for cosmetic damage cases."""
+    base_steps = _COSMETIC_STEPS.get(symptom, _COSMETIC_STEPS["other"])
+    query = f"{path_text} cosmetic damage scratch dent upholstery panel base"
+    matches: list[KnowledgeEntry] = search_knowledge(
+        path_text=query,
+        defect_category="cosmetic",
+        model_name=model_name,
+        limit=3,
+    )
+    steps: list[str] = list(base_steps)
+    for entry in matches:
+        if entry.source in ("qa_csv", "auto_check"):
+            steps.extend(entry.customer_steps[:2])
+    steps = _dedupe_steps(steps)
+
+    model_display = (model_name or "your chair").strip()
+    label = _COSMETIC_SUMMARY_LABELS.get(symptom, "cosmetic damage")
+    summary = (
+        f"For your **{model_display}**, **{label}** is best handled by sending clear "
+        "photos so our team can assess repair vs. replacement."
+    )
+    if symptom == "wg_install":
+        summary = (
+            f"{summary} Because this was a White Glove delivery, we'll coordinate the "
+            "fix with the delivery provider at no cost to you."
+        )
+    elif symptom == "signed_cleared":
+        summary = (
+            f"{summary} Since the delivery was signed as Cleared, compensation can be "
+            "harder to secure — but we'll still review your photos."
+        )
+    elif symptom == "side_fixed":
+        summary = (
+            f"For your **{model_display}**, the side panel was not fully seated. Now that "
+            "it's in place, check whether the cosmetic concern is resolved."
+        )
+
+    return {
+        "summary": summary,
+        "steps": steps,
+        "sources": [entry.source for entry in matches[:3]],
+        "top_match": matches[0].title if matches else None,
+    }
+
+
+def format_cosmetic_self_help_message(*, diagnosis: dict[str, Any], repair_manual_url: str) -> str:
+    parts: list[str] = [str(diagnosis.get("summary") or "").strip()]
+    steps: list[str] = list(diagnosis.get("steps") or [])
+    if steps:
+        parts.append("\n\n**What to prepare before our team follows up:**")
+        for idx, step in enumerate(steps, start=1):
+            parts.append(f"{idx}. {step}")
+    parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
+    parts.append(
+        "\n\n**Would you like our warranty team to follow up on this cosmetic case?**"
+    )
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Recline DIY
+# ---------------------------------------------------------------------------
+
+_RECLINE_STEPS: dict[str, tuple[str, ...]] = {
+    "backrest": (
+        "Try reclining the backrest from both the remote and the side panel buttons.",
+        "Power cycle the chair: back switch OFF, wait 10 seconds, then ON, and retry.",
+        "Watch what happens when you press recline — does the chair attempt to move, make a sound, or stay still?",
+        "Check for anything behind the chair (wall, cable, blanket) that could block the backrest.",
+    ),
+    "zero_gravity": (
+        "Activate Zero Gravity from the remote and watch which sections move and which do not.",
+        "Try the individual recline functions (backrest, footrest) one by one to see which is stuck.",
+        "Power cycle the chair: back switch OFF, wait 10 seconds, then ON, and retry Zero Gravity.",
+        "Note whether the chair attempts the move and stops, or does nothing at all.",
+    ),
+    "footrest_recline": (
+        "Raise and lower the footrest from both the remote and the side panel buttons.",
+        "Check beneath the footrest for objects, cables, or packaging that may block the actuator.",
+        "Power cycle the chair: back switch OFF, wait 10 seconds, then ON, and retry the footrest.",
+        "Note whether the footrest moves slightly, makes a motor sound, or stays completely still.",
+    ),
+    "moves_on_off": (
+        "When you power the chair OFF, observe the stuck part — does it return to default on its own?",
+        "If it does return on power-off, the actuator likely needs replacement; note which one for our team.",
+        "Try the failing recline function one more time from the side panel buttons to confirm.",
+    ),
+    "stays_stuck": (
+        "When you power the chair OFF, confirm the stuck part does NOT move back to default.",
+        "Do not force the backrest or footrest by hand — note exactly which direction it is stuck.",
+        "Try the same function from the side panel buttons to rule out the remote.",
+    ),
+    "none_working": (
+        "Confirm the chair has power: lights on, remote responsive, side panel buttons working.",
+        "Try the side panel recline buttons (not the remote) to see if any recline function works.",
+        "Power cycle the chair: back switch OFF, wait 10 seconds, then ON, and test recline again.",
+        "Note exactly what happens — no movement at all, click sound, or partial movement.",
+    ),
+}
+
+_NODE_RECLINE_SYMPTOM: dict[str, str] = {
+    "defect_recline_actuator_terminal": "moves_on_off",
+    "defect_recline_main_pcb_wire_terminal": "stays_stuck",
+    "defect_recline_main_pcb_terminal": "none_working",
+}
+
+_RECLINE_SUMMARY_LABELS: dict[str, str] = {
+    "backrest": "a backrest recline that is not working",
+    "zero_gravity": "a Zero Gravity recline that is not working",
+    "footrest_recline": "a footrest recline that is not working",
+    "moves_on_off": "a recline part that returns to default when powered off",
+    "stays_stuck": "a recline part that stays stuck when powered off",
+    "none_working": "no recline function working at all",
+}
+
+
+def infer_recline_symptom_from_turns(turns, node_id: str = "") -> str:
+    """Pick best recline symptom from the customer's path."""
+    if node_id in _NODE_RECLINE_SYMPTOM:
+        return _NODE_RECLINE_SYMPTOM[node_id]
+    for turn in reversed(list(turns or [])):
+        key = str(getattr(turn, "answer_key", "") or "")
+        if key in ("moves_on_off", "stays_stuck", "none_working"):
+            return key
+        if key in ("backrest", "zero_gravity", "footrest_recline"):
+            return key
+    return "none_working"
+
+
+def build_recline_diagnosis(
+    *,
+    symptom: str,
+    path_text: str,
+    model_name: str = "",
+) -> dict[str, Any]:
+    """DIY steps for recline / position issues before team review."""
+    base_steps = _RECLINE_STEPS.get(symptom, _RECLINE_STEPS["none_working"])
+    query = f"{path_text} recline backrest zero gravity footrest actuator motor"
+    matches: list[KnowledgeEntry] = search_knowledge(
+        path_text=query,
+        defect_category="recline",
+        model_name=model_name,
+        limit=3,
+    )
+    steps: list[str] = list(base_steps)
+    steps = _merge_knowledge_steps(
+        steps=steps,
+        matches=matches,
+        fallback_len=len(base_steps),
+        defect_category="recline",
+    )
+    steps = _dedupe_steps(steps)
+
+    model_display = (model_name or "your chair").strip()
+    label = _RECLINE_SUMMARY_LABELS.get(symptom, "a recline issue")
+    summary = (
+        f"For your **{model_display}**, **{label}** is often related to a stuck "
+        "**actuator**, the **Main PCB**, or **blockage / power**. Try the steps below first."
+    )
+    if matches:
+        summary = f"{summary} Similar support cases suggest these checks before service."
+
+    return {
+        "summary": summary,
+        "steps": steps,
+        "sources": [entry.source for entry in matches[:3]],
+        "top_match": matches[0].title if matches else None,
+    }
+
+
+def format_recline_self_help_message(*, diagnosis: dict[str, Any], repair_manual_url: str) -> str:
+    parts: list[str] = [str(diagnosis.get("summary") or "").strip()]
+    steps: list[str] = list(diagnosis.get("steps") or [])
+    if steps:
+        parts.append("\n\n**What you can try:**")
+        for idx, step in enumerate(steps, start=1):
+            parts.append(f"{idx}. {step}")
+    parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
+    parts.append(
+        "\n\n**Would you like our warranty team to follow up if the recline still does not work?**"
+    )
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Heating DIY (new branch)
+# ---------------------------------------------------------------------------
+
+_HEATING_STEPS: dict[str, tuple[str, ...]] = {
+    "not_heating": (
+        "Confirm the heating function is turned ON from the remote — it is often a separate button or icon from the massage.",
+        "Run a heated auto program (or manual heat) for at least 10 minutes — heat builds up gradually and is mild by design.",
+        "After 10 minutes, carefully touch the back area or rollers (over the back pad) and check whether you feel warmth.",
+        "Power cycle the chair: back switch OFF, wait 10 seconds, then ON, and try heat again.",
+        "Note whether other heated zones (e.g. seat, calves) work while the back does not.",
+    ),
+    "intermittent": (
+        "Note whether heat works for a while and then stops, or starts cold and warms up slowly.",
+        "Try a different auto program or manual heat for at least 10 minutes and time how long heat stays on.",
+        "Power cycle the chair and test heat again to see if the issue repeats.",
+        "Record what time of day and how long the chair has been on when heat fails — this helps our team.",
+    ),
+    "too_hot": (
+        "Stop using the heat function immediately and turn the chair off.",
+        "Do not block the heating area with thick blankets or covers — the chair can build up trapped heat.",
+        "Let the chair cool down for at least 30 minutes before testing again.",
+        "If the heat still feels too hot or uneven on the next test, our team can check the heating element.",
+    ),
+}
+
+_NODE_HEATING_SYMPTOM: dict[str, str] = {
+    "defect_heating_not_heating_terminal": "not_heating",
+    "defect_heating_intermittent_terminal": "intermittent",
+    "defect_heating_too_hot_terminal": "too_hot",
+}
+
+_HEATING_SUMMARY_LABELS: dict[str, str] = {
+    "not_heating": "heating that does not warm up",
+    "intermittent": "heating that turns on and off",
+    "too_hot": "heating that feels too hot or uneven",
+}
+
+
+def infer_heating_symptom_from_turns(turns, node_id: str = "") -> str:
+    if node_id in _NODE_HEATING_SYMPTOM:
+        return _NODE_HEATING_SYMPTOM[node_id]
+    for turn in reversed(list(turns or [])):
+        key = str(getattr(turn, "answer_key", "") or "")
+        if key in ("not_heating", "intermittent", "too_hot"):
+            return key
+    return "not_heating"
+
+
+def build_heating_diagnosis(
+    *,
+    symptom: str,
+    path_text: str,
+    model_name: str = "",
+) -> dict[str, Any]:
+    """DIY steps for heating issues before team review."""
+    base_steps = _HEATING_STEPS.get(symptom, _HEATING_STEPS["not_heating"])
+    query = f"{path_text} heat heating roller warm temperature element"
+    matches: list[KnowledgeEntry] = search_knowledge(
+        path_text=query,
+        defect_category="heat",
+        model_name=model_name,
+        limit=3,
+    )
+    steps: list[str] = list(base_steps)
+    for entry in matches:
+        if entry.source in ("qa_csv", "auto_check", "freshdesk"):
+            steps.extend(entry.customer_steps[:2])
+    steps = _dedupe_steps(steps)
+
+    model_display = (model_name or "your chair").strip()
+    label = _HEATING_SUMMARY_LABELS.get(symptom, "a heating issue")
+    summary = (
+        f"For your **{model_display}**, **{label}** is often related to the **heating "
+        "element, setting, or warm-up time**. Heat in massage chairs is intentionally mild "
+        "and builds up gradually — give it at least 10 minutes before deciding it's broken."
+    )
+    if matches:
+        summary = f"{summary} Similar support cases suggest these checks before service."
+
+    return {
+        "summary": summary,
+        "steps": steps,
+        "sources": [entry.source for entry in matches[:3]],
+        "top_match": matches[0].title if matches else None,
+    }
+
+
+def format_heating_self_help_message(*, diagnosis: dict[str, Any], repair_manual_url: str) -> str:
+    parts: list[str] = [str(diagnosis.get("summary") or "").strip()]
+    steps: list[str] = list(diagnosis.get("steps") or [])
+    if steps:
+        parts.append("\n\n**What you can try:**")
+        for idx, step in enumerate(steps, start=1):
+            parts.append(f"{idx}. {step}")
+    parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
+    parts.append(
+        "\n\n**Would you like our warranty team to follow up if heating still does not work as expected?**"
+    )
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Delivery DIY (enriches existing tracking flow)
+# ---------------------------------------------------------------------------
+
+_DELIVERY_STEPS: dict[str, tuple[str, ...]] = {
+    "no_box_damage": (
+        "Keep the original packaging until our team confirms next steps.",
+        "Have your tracking number, order number, and checkout email ready.",
+        "If you don't see movement in the tracking after 3 business days, note the last scan location for our team.",
+    ),
+    "signed_cleared": (
+        "Take clear photos of the chair damage and the shipping box from multiple angles.",
+        "Note exactly when you first saw the damage relative to delivery (same day, next day, etc.).",
+        "Keep the packaging if possible — our team may use it to file a courtesy claim with the carrier.",
+        "Be honest about the signed receipt so our team can match the right resolution path for you.",
+    ),
+    "visible_at_unboxing": (
+        "Take photos of the chair damage and the damaged box BEFORE moving the chair.",
+        "Locate the signed delivery receipt that says 'Damaged' — a phone photo of it is fine.",
+        "Send all three together (damage, box, signed receipt) so our team can file the carrier claim quickly.",
+        "Do not throw away the box until our team has reviewed your photos.",
+    ),
+    "noticed_later": (
+        "Take photos of the damage now, even if it appeared after a few days of use.",
+        "Note approximately when you first saw the damage and what you were doing.",
+        "Keep your signed delivery receipt — our team will need it for any compensation review.",
+        "Minor cases are often resolved with a partial credit; major cases trigger a replacement review.",
+    ),
+}
+
+_NODE_DELIVERY_SYMPTOM: dict[str, str] = {
+    "delivery_no_box_damage_terminal": "no_box_damage",
+    "delivery_signed_cleared_terminal": "signed_cleared",
+    "delivery_replace_claim_terminal": "visible_at_unboxing",
+    "delivery_minor_comp_terminal": "noticed_later",
+}
+
+_DELIVERY_SUMMARY_LABELS: dict[str, str] = {
+    "no_box_damage": "a delivery with no visible box damage on arrival",
+    "signed_cleared": "delivery damage with a receipt signed as Cleared",
+    "visible_at_unboxing": "delivery damage visible immediately at unboxing",
+    "noticed_later": "delivery damage noticed after delivery",
+}
+
+
+def infer_delivery_symptom_from_turns(turns, node_id: str = "") -> str:
+    if node_id in _NODE_DELIVERY_SYMPTOM:
+        return _NODE_DELIVERY_SYMPTOM[node_id]
+    answer_keys = [str(getattr(t, "answer_key", "") or "") for t in (turns or [])]
+    keys_set = set(answer_keys)
+    if "no_box_damage" in keys_set:
+        return "no_box_damage"
+    if "signed_cleared" in keys_set:
+        return "signed_cleared"
+    if "visible_at_unboxing" in keys_set:
+        return "visible_at_unboxing"
+    if "noticed_later" in keys_set:
+        return "noticed_later"
+    return "no_box_damage"
+
+
+def build_delivery_diagnosis(
+    *,
+    symptom: str,
+    path_text: str,
+    model_name: str = "",
+) -> dict[str, Any]:
+    """Customer-safe guidance for delivery / freight cases before team review."""
+    base_steps = _DELIVERY_STEPS.get(symptom, _DELIVERY_STEPS["no_box_damage"])
+    query = f"{path_text} delivery tracking shipping box damage carrier"
+    matches: list[KnowledgeEntry] = search_knowledge(
+        path_text=query,
+        defect_category=None,
+        model_name=model_name,
+        limit=3,
+    )
+    steps: list[str] = list(base_steps)
+    steps = _dedupe_steps(steps)
+
+    model_display = (model_name or "your chair").strip()
+    label = _DELIVERY_SUMMARY_LABELS.get(symptom, "a delivery concern")
+    summary = (
+        f"For your **{model_display}**, **{label}** is usually handled by our team "
+        "after they review the photos and your signed delivery receipt."
+    )
+    if symptom == "visible_at_unboxing":
+        summary = (
+            f"{summary} Because damage was visible right at unboxing and the receipt notes "
+            "'Damaged', we can usually arrange a replacement or repair at no cost to you."
+        )
+    elif symptom == "signed_cleared":
+        summary = (
+            f"{summary} A receipt signed as 'Cleared' makes carrier compensation harder, "
+            "but we will still review what we can do."
+        )
+
+    return {
+        "summary": summary,
+        "steps": steps,
+        "sources": [entry.source for entry in matches[:3]],
+        "top_match": matches[0].title if matches else None,
+    }
+
+
+def format_delivery_self_help_message(*, diagnosis: dict[str, Any], repair_manual_url: str) -> str:
+    parts: list[str] = [str(diagnosis.get("summary") or "").strip()]
+    steps: list[str] = list(diagnosis.get("steps") or [])
+    if steps:
+        parts.append("\n\n**What to prepare before our team follows up:**")
+        for idx, step in enumerate(steps, start=1):
+            parts.append(f"{idx}. {step}")
+    parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
+    parts.append(
+        "\n\n**Would you like our warranty team to follow up on this delivery case?**"
+    )
+    return "\n".join(parts)
+
+
 def build_workflow_diagnosis(
     *,
     defect_category: Optional[str],

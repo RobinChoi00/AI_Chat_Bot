@@ -16,26 +16,38 @@ from install_videos import lookup_install_video
 from warranty_self_help import (
     HELP_OFFER_OPTIONS,
     build_air_diagnosis,
+    build_cosmetic_diagnosis,
+    build_delivery_diagnosis,
     build_footrest_diagnosis,
+    build_heating_diagnosis,
     build_install_air_hose_diagnosis,
     build_path_text,
     build_power_diagnosis,
+    build_recline_diagnosis,
     build_remote_diagnosis,
     build_rolling_noise_diagnosis,
     build_voice_diagnosis,
     build_workflow_diagnosis,
     format_air_self_help_message,
+    format_cosmetic_self_help_message,
+    format_delivery_self_help_message,
     format_diagnosis_message,
     format_footrest_self_help_message,
+    format_heating_self_help_message,
     format_install_air_hose_message,
     format_power_self_help_message,
+    format_recline_self_help_message,
     format_remote_self_help_message,
     format_rolling_noise_self_help_message,
     format_voice_self_help_message,
     infer_air_symptom_from_turns,
+    infer_cosmetic_symptom_from_turns,
     infer_defect_category_from_turns,
+    infer_delivery_symptom_from_turns,
     infer_footrest_symptom_from_turns,
+    infer_heating_symptom_from_turns,
     infer_power_symptom_from_turns,
+    infer_recline_symptom_from_turns,
     infer_remote_symptom_from_turns,
     infer_rolling_noise_type_from_turns,
     infer_voice_symptom_from_turns,
@@ -84,6 +96,34 @@ _FOOTREST_TERMINALS = frozenset({
     "defect_footrest_extend_terminal",
     "defect_footrest_foot_rollers_terminal",
     "defect_footrest_calf_roller_terminal",
+})
+
+_COSMETIC_TERMINALS = frozenset({
+    "defect_cosmetic_photo_terminal",
+    "defect_cosmetic_side_fixed_terminal",
+    "defect_cosmetic_wg_terminal",
+    "defect_cosmetic_signed_cleared_terminal",
+    "defect_cosmetic_box_photos_terminal",
+    "defect_cosmetic_replace_terminal",
+})
+
+_RECLINE_TERMINALS = frozenset({
+    "defect_recline_actuator_terminal",
+    "defect_recline_main_pcb_wire_terminal",
+    "defect_recline_main_pcb_terminal",
+})
+
+_HEATING_TERMINALS = frozenset({
+    "defect_heating_not_heating_terminal",
+    "defect_heating_intermittent_terminal",
+    "defect_heating_too_hot_terminal",
+})
+
+_DELIVERY_TERMINALS = frozenset({
+    "delivery_no_box_damage_terminal",
+    "delivery_signed_cleared_terminal",
+    "delivery_replace_claim_terminal",
+    "delivery_minor_comp_terminal",
 })
 
 
@@ -250,6 +290,74 @@ def _footrest_self_help_message(engine, ticket_id: str, ticket, node_id: str) ->
     return _help_offer_enrichment(body, diagnosis=diagnosis)
 
 
+def _cosmetic_self_help_message(engine, ticket_id: str, ticket, node_id: str) -> dict[str, Any]:
+    model_name = str(getattr(ticket, "model_name", "") or "")
+    turns = engine.get_turns(ticket_id)
+    path_text = build_path_text(turns)
+    symptom = infer_cosmetic_symptom_from_turns(turns, node_id=node_id)
+    diagnosis = build_cosmetic_diagnosis(
+        symptom=symptom,
+        path_text=path_text,
+        model_name=model_name,
+    )
+    body = format_cosmetic_self_help_message(
+        diagnosis=diagnosis,
+        repair_manual_url=REPAIR_MANUAL_URL,
+    )
+    return _help_offer_enrichment(body, diagnosis=diagnosis)
+
+
+def _recline_self_help_message(engine, ticket_id: str, ticket, node_id: str) -> dict[str, Any]:
+    model_name = str(getattr(ticket, "model_name", "") or "")
+    turns = engine.get_turns(ticket_id)
+    path_text = build_path_text(turns)
+    symptom = infer_recline_symptom_from_turns(turns, node_id=node_id)
+    diagnosis = build_recline_diagnosis(
+        symptom=symptom,
+        path_text=path_text,
+        model_name=model_name,
+    )
+    body = format_recline_self_help_message(
+        diagnosis=diagnosis,
+        repair_manual_url=REPAIR_MANUAL_URL,
+    )
+    return _help_offer_enrichment(body, diagnosis=diagnosis)
+
+
+def _heating_self_help_message(engine, ticket_id: str, ticket, node_id: str) -> dict[str, Any]:
+    model_name = str(getattr(ticket, "model_name", "") or "")
+    turns = engine.get_turns(ticket_id)
+    path_text = build_path_text(turns)
+    symptom = infer_heating_symptom_from_turns(turns, node_id=node_id)
+    diagnosis = build_heating_diagnosis(
+        symptom=symptom,
+        path_text=path_text,
+        model_name=model_name,
+    )
+    body = format_heating_self_help_message(
+        diagnosis=diagnosis,
+        repair_manual_url=REPAIR_MANUAL_URL,
+    )
+    return _help_offer_enrichment(body, diagnosis=diagnosis)
+
+
+def _delivery_self_help_message(engine, ticket_id: str, ticket, node_id: str) -> dict[str, Any]:
+    model_name = str(getattr(ticket, "model_name", "") or "")
+    turns = engine.get_turns(ticket_id)
+    path_text = build_path_text(turns)
+    symptom = infer_delivery_symptom_from_turns(turns, node_id=node_id)
+    diagnosis = build_delivery_diagnosis(
+        symptom=symptom,
+        path_text=path_text,
+        model_name=model_name,
+    )
+    body = format_delivery_self_help_message(
+        diagnosis=diagnosis,
+        repair_manual_url=REPAIR_MANUAL_URL,
+    )
+    return _help_offer_enrichment(body, diagnosis=diagnosis)
+
+
 def _workflow_end_message(
     engine,
     ticket_id: str,
@@ -315,6 +423,18 @@ def build_terminal_enrichment(
 
     if node_id in _FOOTREST_TERMINALS:
         return _footrest_self_help_message(engine, ticket_id, ticket, node_id)
+
+    if node_id in _COSMETIC_TERMINALS:
+        return _cosmetic_self_help_message(engine, ticket_id, ticket, node_id)
+
+    if node_id in _RECLINE_TERMINALS:
+        return _recline_self_help_message(engine, ticket_id, ticket, node_id)
+
+    if node_id in _HEATING_TERMINALS:
+        return _heating_self_help_message(engine, ticket_id, ticket, node_id)
+
+    if node_id in _DELIVERY_TERMINALS:
+        return _delivery_self_help_message(engine, ticket_id, ticket, node_id)
 
     if node_id == "install_send_video" or (
         issue_type == "installation" and action == "send_info"

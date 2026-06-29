@@ -189,33 +189,47 @@ def test_defect_voice_false_triggers_to_diy_terminal():
     assert result["is_terminal"] is True
 
 
-def test_defect_voice_not_working_to_diy_terminal():
+def test_defect_heating_not_heating_to_diy_terminal():
     ticket_id, _ = start()
 
     result = walk(ticket_id, [
         "warranty",
         "defect",
-        "voice",
-        "voice_no_response",
+        "heat",
+        "not_heating",
+        "still_no_heat",
     ])
 
-    assert result["next_node_id"] == "defect_voice_not_working_terminal"
+    assert result["next_node_id"] == "defect_heating_not_heating_terminal"
     assert result["is_terminal"] is True
-    assert str(ticket(ticket_id).status) == "send_info"
-    assert str(ticket(ticket_id).defect_type) == "voice"
+    assert str(ticket(ticket_id).defect_type) == "heat"
 
 
-def test_defect_voice_false_triggers_to_diy_terminal():
+def test_defect_heating_intermittent_to_diy_terminal():
     ticket_id, _ = start()
 
     result = walk(ticket_id, [
         "warranty",
         "defect",
-        "voice",
-        "false_triggers",
+        "heat",
+        "intermittent",
     ])
 
-    assert result["next_node_id"] == "defect_voice_false_triggers_terminal"
+    assert result["next_node_id"] == "defect_heating_intermittent_terminal"
+    assert result["is_terminal"] is True
+
+
+def test_defect_heating_too_hot_to_diy_terminal():
+    ticket_id, _ = start()
+
+    result = walk(ticket_id, [
+        "warranty",
+        "defect",
+        "heat",
+        "too_hot",
+    ])
+
+    assert result["next_node_id"] == "defect_heating_too_hot_terminal"
     assert result["is_terminal"] is True
 
 

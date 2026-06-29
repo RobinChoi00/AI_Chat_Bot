@@ -7,6 +7,7 @@ import {
   quickStartWarranty,
   naturalStartWarranty,
   registerWarrantyModel,
+  smartStartWarranty,
   submitWarrantyAnswer,
 } from "@/lib/api";
 import type {
@@ -269,7 +270,42 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       setInput("");
 
       try {
-        const resp = await naturalStartWarranty(sessionId, text, storeDomain);
+        // Prefer smart-start (multi-step LLM intake). Fall back to natural-start
+        // if the smart endpoint is missing on the server (older backend) so old
+        // deployments keep working.
+        let resp: WarrantySessionResponse;
+        try {
+          resp = await smartStartWarranty(sessionId, text, storeDomain);
+        } catch (smartErr: unknown) {
+          const smartMsg =
+            smartErr instanceof Error ? smartErr.message.toLowerCase() : "";
+          if (smartMsg.includes("404") || smartMsg.includes("405")) {
+            resp = await naturalStartWarranty(sessionId, text, storeDomain);
+          } else {
+            throw smartErr;
+          }
+        }
+
+        // If LLM confidently jumped 3+ steps, show a short confirmation so the
+        // customer knows we understood them before we present the next question.
+        const smart = resp.smart_start;
+        const jumped =
+          smart &&
+          smart.source === "llm" &&
+          smart.applied_keys &&
+          smart.applied_keys.length >= 3 &&
+          smart.summary;
+        if (jumped) {
+          await sleep(THINKING_DELAY_MS);
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content: `Got it — ${smart!.summary} Jumping ahead so you don't have to click through every question.`,
+            },
+          ]);
+        }
+
         applySessionResponse(resp);
         await appendAssistantFromResponse(resp.ticket, resp);
       } catch (err: unknown) {
@@ -281,7 +317,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         inputRef.current?.focus();
       }
     },
-    [loading, sessionId, applySessionResponse, appendAssistantFromResponse]
+    [loading, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse]
   );
 
   const sendMessage = useCallback(

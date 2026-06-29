@@ -259,3 +259,222 @@ def test_footrest_extend_terminal_includes_diy_steps():
         for step in result["diagnosis"]["steps"]
     )
     assert result["phase"] == "awaiting_help_consent"
+
+
+def test_cosmetic_wg_terminal_includes_photo_guidance():
+    node = {
+        "node_id": "defect_cosmetic_wg_terminal",
+        "type": "terminal",
+        "action": "awaiting_admin",
+        "prompt": "Please send photos of the damage.",
+        "evidence_required": ["damage_photos", "box_photos"],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("cosmetic"),
+                _Turn("other"),
+                _Turn("visible_at_unboxing"),
+                _Turn("yes_white_glove"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "What to prepare" in result["message"]
+    assert any("photo" in step.lower() for step in result["diagnosis"]["steps"])
+    assert "white glove" in result["message"].lower()
+    assert result["phase"] == "awaiting_help_consent"
+
+
+def test_cosmetic_side_fixed_terminal_uses_self_help():
+    node = {
+        "node_id": "defect_cosmetic_side_fixed_terminal",
+        "type": "terminal",
+        "action": "send_info",
+        "prompt": "Please check if the issue is resolved.",
+        "evidence_required": [],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("cosmetic"),
+                _Turn("side_panel"),
+                _Turn("panels_fixed"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "side panel" in result["message"].lower()
+    assert result["phase"] == "awaiting_help_consent"
+
+
+def test_recline_actuator_terminal_includes_diy_steps():
+    node = {
+        "node_id": "defect_recline_actuator_terminal",
+        "type": "terminal",
+        "action": "awaiting_admin",
+        "prompt": "Our team will review and arrange an actuator replacement.",
+        "evidence_required": [],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("recline"),
+                _Turn("backrest"),
+                _Turn("multiple_not_working"),
+                _Turn("moves_on_off"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "What you can try" in result["message"]
+    assert "actuator replacement" not in result["message"]
+    assert any(
+        "power" in step.lower() or "side panel" in step.lower()
+        for step in result["diagnosis"]["steps"]
+    )
+    assert result["phase"] == "awaiting_help_consent"
+
+
+def test_recline_main_pcb_terminal_uses_none_working_steps():
+    node = {
+        "node_id": "defect_recline_main_pcb_terminal",
+        "type": "terminal",
+        "action": "awaiting_admin",
+        "prompt": "Our team will arrange the Main PCB review.",
+        "evidence_required": [],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("recline"),
+                _Turn("backrest"),
+                _Turn("none_working"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "Main PCB review" not in result["message"]
+    assert "What you can try" in result["message"]
+    assert any(
+        "side panel" in step.lower() or "power cycle" in step.lower()
+        for step in result["diagnosis"]["steps"]
+    )
+
+
+def test_heating_not_heating_terminal_includes_warmup_steps():
+    node = {
+        "node_id": "defect_heating_not_heating_terminal",
+        "type": "terminal",
+        "action": "send_info",
+        "prompt": "Let's confirm heat is enabled.",
+        "evidence_required": [],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("heat"),
+                _Turn("not_heating"),
+                _Turn("will_try_warmup"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "What you can try" in result["message"]
+    assert any(
+        "10 minute" in step.lower() or "warm" in step.lower()
+        for step in result["diagnosis"]["steps"]
+    )
+    assert result["phase"] == "awaiting_help_consent"
+
+
+def test_heating_too_hot_terminal_includes_safety_steps():
+    node = {
+        "node_id": "defect_heating_too_hot_terminal",
+        "type": "terminal",
+        "action": "send_info",
+        "prompt": "If heat feels too hot, stop using it.",
+        "evidence_required": [],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [_Turn("defect"), _Turn("heat"), _Turn("too_hot")]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert any(
+        "cool" in step.lower() or "stop using" in step.lower()
+        for step in result["diagnosis"]["steps"]
+    )
+
+
+def test_delivery_replace_claim_terminal_includes_diy_prep():
+    node = {
+        "node_id": "delivery_replace_claim_terminal",
+        "type": "terminal",
+        "action": "awaiting_admin",
+        "prompt": "Please send photos of both the damaged box and the damage to the chair.",
+        "evidence_required": ["damage_photos", "box_photos", "signed_delivery_receipt"],
+    }
+
+    class _TicketDelivery:
+        ticket_id = "td1"
+        issue_type = "delivery"
+        model_name = "OS-4000T"
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("delivery"),
+                _Turn("yes_box_damage"),
+                _Turn("signed_damaged"),
+                _Turn("visible_at_unboxing"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDelivery(), node)
+    assert result is not None
+    assert "What to prepare" in result["message"]
+    assert any(
+        "receipt" in step.lower() or "photo" in step.lower()
+        for step in result["diagnosis"]["steps"]
+    )
+    assert result["phase"] == "awaiting_help_consent"
+
+
+def test_delivery_signed_cleared_terminal_warns_compensation_difficulty():
+    node = {
+        "node_id": "delivery_signed_cleared_terminal",
+        "type": "terminal",
+        "action": "awaiting_admin",
+        "prompt": "Since signed cleared, harder to claim.",
+        "evidence_required": ["damage_photos"],
+    }
+
+    class _TicketDelivery:
+        ticket_id = "td2"
+        issue_type = "delivery"
+        model_name = "OS-4000T"
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("delivery"),
+                _Turn("yes_box_damage"),
+                _Turn("signed_cleared"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDelivery(), node)
+    assert result is not None
+    assert "cleared" in result["message"].lower()
+    assert result["diagnosis"]["steps"]

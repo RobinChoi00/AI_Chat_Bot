@@ -203,6 +203,37 @@ export async function naturalStartWarranty(
 }
 
 /**
+ * Smart-start: free-text intake that fast-forwards multiple flowchart steps
+ * when the LLM is confident. Returns the same session payload as the other
+ * warranty endpoints plus a `smart_start` metadata block.
+ *
+ * CONTRACT: POST /api/v1/warranty/session/{session_id}/smart-start
+ */
+export async function smartStartWarranty(
+  sessionId: string,
+  message: string,
+  domain = "osaki.com"
+): Promise<WarrantySessionResponse> {
+  const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/smart-start`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, domain }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<WarrantySessionResponse>;
+}
+
+/**
  * Advance the warranty workflow by one step — NLP maps free text when needed.
  *
  * CONTRACT: POST /api/v1/warranty/{ticket_id}/answer

@@ -236,3 +236,132 @@ def test_build_footrest_diagnosis_includes_core_steps():
         infer_footrest_symptom_from_turns([], node_id="defect_footrest_foot_rollers_terminal")
         == "foot_rollers"
     )
+
+
+def test_build_cosmetic_diagnosis_includes_photo_guidance():
+    from warranty_self_help import (
+        build_cosmetic_diagnosis,
+        format_cosmetic_self_help_message,
+        infer_cosmetic_symptom_from_turns,
+    )
+
+    diagnosis = build_cosmetic_diagnosis(
+        symptom="footrest",
+        path_text="cosmetic damage footrest scratch",
+        model_name="OS-4000T",
+    )
+    assert diagnosis["steps"]
+    assert any("photo" in step.lower() for step in diagnosis["steps"])
+
+    msg = format_cosmetic_self_help_message(
+        diagnosis=diagnosis,
+        repair_manual_url="https://example.com/manual",
+    )
+    assert "What to prepare" in msg
+    assert "warranty team" in msg.lower()
+
+    wg_turns = [_Turn("cosmetic"), _Turn("other"), _Turn("yes_white_glove")]
+    assert infer_cosmetic_symptom_from_turns(wg_turns) == "wg_install"
+    box_turns = [
+        _Turn("cosmetic"),
+        _Turn("other"),
+        _Turn("noticed_later"),
+        _Turn("signed_damaged"),
+        _Turn("yes_box_damaged"),
+    ]
+    assert infer_cosmetic_symptom_from_turns(box_turns) == "signed_damaged_visible"
+    assert (
+        infer_cosmetic_symptom_from_turns([], node_id="defect_cosmetic_wg_terminal")
+        == "wg_install"
+    )
+
+
+def test_build_recline_diagnosis_includes_core_steps():
+    from warranty_self_help import (
+        build_recline_diagnosis,
+        format_recline_self_help_message,
+        infer_recline_symptom_from_turns,
+    )
+
+    diagnosis = build_recline_diagnosis(
+        symptom="moves_on_off",
+        path_text="recline backrest moves back when powered off actuator",
+        model_name="OS-4000T",
+    )
+    assert diagnosis["steps"]
+    assert any("power" in step.lower() for step in diagnosis["steps"])
+
+    msg = format_recline_self_help_message(
+        diagnosis=diagnosis,
+        repair_manual_url="https://example.com/manual",
+    )
+    assert "What you can try" in msg
+    assert "recline" in msg.lower()
+
+    turns = [_Turn("recline"), _Turn("backrest"), _Turn("multiple_not_working"), _Turn("moves_on_off")]
+    assert infer_recline_symptom_from_turns(turns) == "moves_on_off"
+    assert (
+        infer_recline_symptom_from_turns([], node_id="defect_recline_main_pcb_terminal")
+        == "none_working"
+    )
+
+
+def test_build_heating_diagnosis_includes_warmup_guidance():
+    from warranty_self_help import (
+        build_heating_diagnosis,
+        format_heating_self_help_message,
+        infer_heating_symptom_from_turns,
+    )
+
+    diagnosis = build_heating_diagnosis(
+        symptom="not_heating",
+        path_text="heat does not warm up back roller",
+        model_name="OS-4000T",
+    )
+    assert diagnosis["steps"]
+    assert any(
+        "10 minute" in step.lower() or "10-minute" in step.lower() or "warm" in step.lower()
+        for step in diagnosis["steps"]
+    )
+
+    msg = format_heating_self_help_message(
+        diagnosis=diagnosis,
+        repair_manual_url="https://example.com/manual",
+    )
+    assert "What you can try" in msg
+
+    turns = [_Turn("heat"), _Turn("intermittent")]
+    assert infer_heating_symptom_from_turns(turns) == "intermittent"
+    assert (
+        infer_heating_symptom_from_turns([], node_id="defect_heating_too_hot_terminal")
+        == "too_hot"
+    )
+
+
+def test_build_delivery_diagnosis_includes_photo_guidance():
+    from warranty_self_help import (
+        build_delivery_diagnosis,
+        format_delivery_self_help_message,
+        infer_delivery_symptom_from_turns,
+    )
+
+    diagnosis = build_delivery_diagnosis(
+        symptom="visible_at_unboxing",
+        path_text="delivery damage visible at unboxing signed damaged",
+        model_name="OS-4000T",
+    )
+    assert diagnosis["steps"]
+    assert any("photo" in step.lower() or "receipt" in step.lower() for step in diagnosis["steps"])
+
+    msg = format_delivery_self_help_message(
+        diagnosis=diagnosis,
+        repair_manual_url="https://example.com/manual",
+    )
+    assert "What to prepare" in msg
+
+    cleared_turns = [_Turn("delivery"), _Turn("yes_box_damage"), _Turn("signed_cleared")]
+    assert infer_delivery_symptom_from_turns(cleared_turns) == "signed_cleared"
+    assert (
+        infer_delivery_symptom_from_turns([], node_id="delivery_replace_claim_terminal")
+        == "visible_at_unboxing"
+    )

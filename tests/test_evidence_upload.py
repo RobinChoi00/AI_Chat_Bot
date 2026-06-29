@@ -419,6 +419,7 @@ class TestWarrantyContactEndpoint:
         assert str(evidences[0].customer_email) == "buyer@example.com"
 
         ticket = WarrantyEngine.get_ticket(ticket_id)
+        assert ticket is not None
         assert ticket.get_collected().get("customer_contact_email") == "buyer@example.com"
         assert ticket.get_collected().get("evidence_na") == "1"
         assert len(transcript_calls) == 1
