@@ -389,6 +389,11 @@ class WarrantyEmailNotifyRequest(BaseModel):
     chat_messages: Optional[List[Dict[str, str]]] = None
 
 
+class WarrantyRestartRequest(BaseModel):
+    """Abandon any in-progress ticket so the customer can start over."""
+    domain: str = "osaki.com"
+
+
 _QUICK_START_ISSUE_KEYS = frozenset({"installation", "delivery", "defect"})
 
 
@@ -753,6 +758,30 @@ async def get_warranty_session_state(session_id: str):
 
     node = engine.get_current_node(str(ticket.ticket_id))
     return _serialize_ticket_state(session_id, ticket, node, engine=engine)
+
+
+@router.post("/api/v1/warranty/session/{session_id}/restart", tags=["warranty"])
+async def restart_warranty_session(session_id: str, body: WarrantyRestartRequest):
+    """
+    Close any open ticket on this chat session so the customer can start over.
+
+    Behavior:
+      - Marks every non-resolved ticket on this session as `resolved` with
+        `admin_decision='abandoned'` so they drop out of the admin queue but
+        remain queryable for audit.
+      - Returns the same shape as `GET /session/{id}` (with ticket=null) so the
+        frontend can refresh its state from one response.
+    """
+    engine = _lazy_engine()
+    closed = engine.abandon_session_tickets(session_id)
+    payload: Dict[str, Any] = {
+        "session_id": session_id,
+        "ticket": None,
+        "restarted": True,
+        "closed_ticket_count": closed,
+        "domain": body.domain,
+    }
+    return payload
 
 
 @router.post("/api/v1/warranty/session/{session_id}/register-model", tags=["warranty"])

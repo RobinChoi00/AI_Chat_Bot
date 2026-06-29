@@ -6,6 +6,7 @@ import {
   getWarrantySession,
   quickStartWarranty,
   naturalStartWarranty,
+  restartWarrantySession,
   smartStartWarranty,
   submitWarrantyAnswer,
 } from "@/lib/api";
@@ -62,7 +63,7 @@ function assistantContentFromResponse(
 
 export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const storeDomain = resolveWarrantyStoreDomain();
-  const [sessionId] = useState<string>(() => {
+  const [sessionId, setSessionId] = useState<string>(() => {
     if (typeof window === "undefined") return uuidv4();
     const stored = sessionStorage.getItem("warranty_session_id");
     if (stored) return stored;
@@ -105,6 +106,41 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     const resp = await getWarrantySession(sessionId);
     return applySessionResponse(resp);
   }, [sessionId, applySessionResponse]);
+
+  const restartSession = useCallback(async () => {
+    if (loading) return;
+    if (typeof window !== "undefined") {
+      const ok = window.confirm(
+        "Start over? Your current answers will be cleared and a new case will begin."
+      );
+      if (!ok) return;
+    }
+    setError(null);
+    setLoading(true);
+    try {
+      try {
+        await restartWarrantySession(sessionId, storeDomain);
+      } catch {
+        // Even if the server call fails (offline / 404 on older backend),
+        // we still reset the client so the user is not stuck.
+      }
+      const newId = uuidv4();
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("warranty_session_id", newId);
+      }
+      setSessionId(newId);
+      setMessages([{ role: "assistant", content: WARRANTY_WELCOME_MESSAGE }]);
+      setWarrantyState(null);
+      setTerminalEnrichment(null);
+      setHelpConsent(null);
+      setContactSubmitted(false);
+      setOptionsUsed(false);
+      setInput("");
+    } finally {
+      setLoading(false);
+      inputRef.current?.focus();
+    }
+  }, [loading, sessionId, storeDomain]);
 
   useEffect(() => {
     let cancelled = false;
@@ -447,11 +483,36 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
             status={warrantyState.status}
             ticketId={warrantyState.ticket_id}
           />
-          {warrantyState.model_name && (
-            <span className="truncate text-right text-xs text-gray-500">
-              {warrantyState.model_name}
-            </span>
-          )}
+          <div className="flex items-center gap-3">
+            {warrantyState.model_name && (
+              <span className="truncate text-right text-xs text-gray-500">
+                {warrantyState.model_name}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={restartSession}
+              disabled={loading}
+              className="rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 disabled:opacity-50"
+              title="Clear current answers and start a new warranty case"
+            >
+              Start over
+            </button>
+          </div>
+        </div>
+      )}
+
+      {warrantyState?.ticket_id && embed && (
+        <div className="flex shrink-0 items-center justify-end gap-2 border-b border-gray-100 bg-white px-3 py-1.5">
+          <button
+            type="button"
+            onClick={restartSession}
+            disabled={loading}
+            className="rounded-full border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 disabled:opacity-50"
+            title="Clear current answers and start a new warranty case"
+          >
+            Start over
+          </button>
         </div>
       )}
 
@@ -619,11 +680,9 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
           )}
           <WarrantyTeamContactFooter className="mt-4 text-left" />
           <button
-            onClick={() => {
-              sessionStorage.removeItem("warranty_session_id");
-              window.location.reload();
-            }}
-            className="mt-3 min-h-[44px] text-sm text-brand-600 underline hover:text-brand-800"
+            onClick={restartSession}
+            disabled={loading}
+            className="mt-3 min-h-[44px] text-sm text-brand-600 underline hover:text-brand-800 disabled:opacity-50"
           >
             Start a new case
           </button>

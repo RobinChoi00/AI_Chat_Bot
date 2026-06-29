@@ -321,6 +321,46 @@ def test_register_model_rejects_issue_description(client):
     assert "problem description" in resp.json()["detail"].lower()
 
 
+def test_restart_session_abandons_active_ticket(client):
+    """Restart should close the in-progress ticket so the next call sees no
+    active session, allowing a clean restart without stale model/issue data."""
+    session_id = "cust-api-restart"
+    _register_model(client, session_id)
+
+    # Before restart: an active in_progress ticket exists.
+    status_before = client.get(f"/api/v1/warranty/session/{session_id}").json()
+    assert status_before["ticket"] is not None
+    assert status_before["ticket"]["status"] == "in_progress"
+
+    restart = client.post(
+        f"/api/v1/warranty/session/{session_id}/restart",
+        json={"domain": "osaki.com"},
+    )
+    assert restart.status_code == 200
+    body = restart.json()
+    assert body["restarted"] is True
+    assert body["ticket"] is None
+    assert body["closed_ticket_count"] >= 1
+
+    # After restart: GET session shows no active ticket.
+    status_after = client.get(f"/api/v1/warranty/session/{session_id}").json()
+    assert status_after["ticket"] is None
+
+
+def test_restart_is_idempotent_when_no_active_ticket(client):
+    """Calling restart with no open ticket should still succeed with count=0."""
+    session_id = "cust-api-restart-empty"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/restart",
+        json={"domain": "osaki.com"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["restarted"] is True
+    assert body["ticket"] is None
+    assert body["closed_ticket_count"] == 0
+
+
 def test_smart_start_sets_model_from_hint(client, monkeypatch):
     import warranty_intake as wi  # noqa: WPS433
 

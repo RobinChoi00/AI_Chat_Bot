@@ -312,6 +312,45 @@ class WarrantyEngine:
             )
 
     @staticmethod
+    def abandon_session_tickets(session_id: str) -> int:
+        """
+        Close any open (non-resolved) tickets for a session so the customer can
+        start fresh with a "Start over" action.
+
+        Tickets that have already been reviewed/resolved by the admin are left
+        untouched. Tickets currently in_progress, awaiting_admin_review,
+        awaiting_evidence, or send_info are marked resolved with
+        admin_decision='abandoned' so they drop out of the active queue but
+        stay queryable for audit.
+
+        Returns the number of tickets that were closed.
+        """
+        closed_statuses = {
+            "in_progress",
+            "awaiting_admin_review",
+            "awaiting_evidence",
+            "send_info",
+            "sales_handoff",
+            "admin_reviewing",
+            "need_more_information",
+        }
+        closed_count = 0
+        with warranty_db_session() as db:
+            tickets = (
+                db.query(WarrantyTicket)
+                .filter(WarrantyTicket.session_id == session_id)
+                .all()
+            )
+            for ticket in tickets:
+                if str(ticket.status or "") in closed_statuses:
+                    ticket.status = "resolved"
+                    ticket.admin_decision = "abandoned"
+                    if not ticket.decided_by:
+                        ticket.decided_by = "customer_restart"
+                    closed_count += 1
+        return closed_count
+
+    @staticmethod
     def get_tickets(
         status: Optional[str] = None,
         domain: Optional[str] = None,

@@ -234,6 +234,38 @@ export async function smartStartWarranty(
 }
 
 /**
+ * Abandon any in-progress warranty ticket so the customer can start over.
+ *
+ * Returns a session response with `ticket: null` (and `restarted: true`).
+ * The caller should also rotate the local `warranty_session_id` so any
+ * resolved/abandoned tickets stay out of the way of the new conversation.
+ *
+ * CONTRACT: POST /api/v1/warranty/session/{session_id}/restart
+ */
+export async function restartWarrantySession(
+  sessionId: string,
+  domain = "osaki.com"
+): Promise<WarrantySessionResponse & { restarted?: boolean; closed_ticket_count?: number }> {
+  const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/restart`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+/**
  * Advance the warranty workflow by one step — NLP maps free text when needed.
  *
  * CONTRACT: POST /api/v1/warranty/{ticket_id}/answer
