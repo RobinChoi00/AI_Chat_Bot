@@ -11,6 +11,6 @@ export const CHAT_WELCOME_MESSAGE =
 export const WARRANTY_WELCOME_MESSAGE =
   "Hello! 👋\n\n" +
   "This guide helps with **setup, warranty, and delivery** for your Osaki or Titan chair.\n\n" +
-  "First, which model do you have? Check the serial-number sticker on your chair " +
-  "(for example, OS-4000T, Solo Flex, or Hypnos 4D).\n\n" +
-  "Type your model below — we'll walk you through step-by-step fixes before our team follows up.";
+  "Tell us your **chair model and what's going wrong** in one message if you can " +
+  "(for example: *OS-4000T footrest air not inflating*).\n\n" +
+  "If you only know the model for now, type that — we'll ask about the issue next.";

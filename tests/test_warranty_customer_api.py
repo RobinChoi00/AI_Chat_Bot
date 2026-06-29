@@ -309,3 +309,40 @@ def test_submit_answer_nlp_maps_natural_language(client):
     data = resp.json()
     assert data.get("nlp_interpreted") is True
     assert data["ticket"]["current_node"]["node_id"] == "delivery_get_name"
+
+
+def test_register_model_rejects_issue_description(client):
+    session_id = "cust-api-symptom-as-model"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/register-model",
+        json={"model": "footrest air not inflating", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 422
+    assert "problem description" in resp.json()["detail"].lower()
+
+
+def test_smart_start_sets_model_from_hint(client, monkeypatch):
+    import warranty_intake as wi  # noqa: WPS433
+
+    monkeypatch.setattr(
+        wi,
+        "extract_workflow_prefill",
+        lambda **kwargs: {
+            "answer_keys": ["warranty", "defect", "air", "footrest"],
+            "model_name": "OS-4000T",
+            "confidence": "high",
+            "summary": "Footrest air not inflating on OS-4000T.",
+            "source": "llm",
+        },
+    )
+
+    session_id = "cust-api-smart-model-hint"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/smart-start",
+        json={"message": "OS-4000T footrest air not inflating", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ticket"]["model_name"] == "OS-4000T"
+    assert data["smart_start"]["model_name_hint"] == "OS-4000T"
+    assert len(data["smart_start"]["applied_keys"]) >= 3

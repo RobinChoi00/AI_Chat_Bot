@@ -6,7 +6,6 @@ import {
   getWarrantySession,
   quickStartWarranty,
   naturalStartWarranty,
-  registerWarrantyModel,
   smartStartWarranty,
   submitWarrantyAnswer,
 } from "@/lib/api";
@@ -170,36 +169,6 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     []
   );
 
-  const registerModel = useCallback(
-    async (text: string) => {
-      setError(null);
-      setLoading(true);
-      setMessages((prev) => [...prev, { role: "user", content: text }]);
-      setInput("");
-
-      try {
-        const resp = await registerWarrantyModel(sessionId, text.trim(), storeDomain);
-        applySessionResponse(resp);
-        const resolved = resp.resolved_model ?? resp.ticket?.model_name ?? text.trim();
-        await sleep(THINKING_DELAY_MS);
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: `Thanks! I have **${resolved}** registered.\n\nWhat type of issue can we help you with? Choose an option below or describe it in your own words.`,
-          },
-        ]);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : "Something went wrong.";
-        setError(msg);
-      } finally {
-        setLoading(false);
-        inputRef.current?.focus();
-      }
-    },
-    [sessionId, applySessionResponse]
-  );
-
   const handleQuickStart = useCallback(
     async (issueType: "installation" | "delivery" | "defect", label: string) => {
       if (loading) return;
@@ -222,7 +191,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         inputRef.current?.focus();
       }
     },
-    [loading, sessionId, applySessionResponse, appendAssistantFromResponse]
+    [loading, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse]
   );
 
   const advanceWarranty = useCallback(
@@ -259,7 +228,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     [warrantyState?.ticket_id, loading, applySessionResponse, appendAssistantFromResponse]
   );
 
-  const startViaNaturalLanguage = useCallback(
+  const startViaSmartIntake = useCallback(
     async (text: string) => {
       if (loading) return;
       setError(null);
@@ -270,9 +239,6 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       setInput("");
 
       try {
-        // Prefer smart-start (multi-step LLM intake). Fall back to natural-start
-        // if the smart endpoint is missing on the server (older backend) so old
-        // deployments keep working.
         let resp: WarrantySessionResponse;
         try {
           resp = await smartStartWarranty(sessionId, text, storeDomain);
@@ -286,8 +252,6 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
           }
         }
 
-        // If LLM confidently jumped 3+ steps, show a short confirmation so the
-        // customer knows we understood them before we present the next question.
         const smart = resp.smart_start;
         const jumped =
           smart &&
@@ -295,18 +259,33 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
           smart.applied_keys &&
           smart.applied_keys.length >= 3 &&
           smart.summary;
+
+        applySessionResponse(resp);
+
         if (jumped) {
           await sleep(THINKING_DELAY_MS);
           setMessages((prev) => [
             ...prev,
             {
               role: "assistant",
-              content: `Got it — ${smart!.summary} Jumping ahead so you don't have to click through every question.`,
+              content: `Got it — ${smart!.summary} I'll skip the extra menu questions and take you straight to the next step.`,
+            },
+          ]);
+        } else if (
+          resp.ticket?.ready_for_issue_type &&
+          resp.ticket?.model_name &&
+          resp.ticket?.current_node?.node_id === "issue_type"
+        ) {
+          await sleep(THINKING_DELAY_MS);
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content: `Thanks — I have **${resp.ticket!.model_name}** on file.\n\nWhat type of issue can we help you with? Choose below or describe it in your own words.`,
             },
           ]);
         }
 
-        applySessionResponse(resp);
         await appendAssistantFromResponse(resp.ticket, resp);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Something went wrong.";
@@ -325,20 +304,22 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       if (!text.trim() || loading) return;
 
       const trimmed = text.trim();
-      const hasModel = Boolean(
-        warrantyState?.model_confirmed || warrantyState?.model_name
-      );
+      const atFirstIntake =
+        !warrantyState?.issue_type &&
+        (!warrantyState?.ticket_id ||
+          warrantyState?.current_node?.node_id === "root" ||
+          warrantyState?.current_node?.node_id === "issue_type");
       const atIssueType =
         warrantyState?.ready_for_issue_type ||
         warrantyState?.current_node?.node_id === "issue_type";
 
-      if (!hasModel) {
-        await registerModel(trimmed);
+      if (atFirstIntake) {
+        await startViaSmartIntake(trimmed);
         return;
       }
 
       if (atIssueType && !warrantyState?.issue_type) {
-        await startViaNaturalLanguage(trimmed);
+        await startViaSmartIntake(trimmed);
         return;
       }
 
@@ -353,7 +334,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         return;
       }
     },
-    [loading, warrantyState, registerModel, startViaNaturalLanguage, advanceWarranty, helpConsent]
+    [loading, warrantyState, startViaSmartIntake, advanceWarranty, helpConsent]
   );
 
   function handleSubmit(e: FormEvent) {
@@ -396,16 +377,19 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     warrantyState?.status === "admin_reviewing";
   const isTerminal = warrantyState?.current_node?.is_terminal ?? false;
 
-  const needsModelRegistration =
+  const needsFirstIntake =
     sessionChecked &&
     !isTerminal &&
-    !(warrantyState?.model_confirmed || warrantyState?.model_name);
+    !warrantyState?.issue_type &&
+    (!warrantyState?.ticket_id ||
+      warrantyState?.current_node?.node_id === "root" ||
+      warrantyState?.current_node?.node_id === "issue_type");
 
   const showIssueTypeOptions =
     sessionChecked &&
     !loading &&
     !isTerminal &&
-    !needsModelRegistration &&
+    !needsFirstIntake &&
     (warrantyState?.ready_for_issue_type ||
       (!!warrantyState?.model_name &&
         warrantyState?.current_node?.node_id === "issue_type" &&
@@ -443,8 +427,8 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     !isTerminal ||
     (isTerminal && helpConsent === null && !contactSubmitted && !showHelpOffer);
 
-  const inputPlaceholder = needsModelRegistration
-    ? "Enter your chair model (e.g. OS-4000T, Solo Flex)…"
+  const inputPlaceholder = needsFirstIntake
+    ? "Model + issue (e.g. OS-4000T footrest air not inflating)…"
     : showIssueTypeOptions
       ? "Describe your issue (e.g. my chair won't turn on)…"
       : warrantyState?.ticket_id

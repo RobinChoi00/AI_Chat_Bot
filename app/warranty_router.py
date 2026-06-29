@@ -472,6 +472,37 @@ def _register_model_ticket(
     if not raw:
         raise HTTPException(status_code=422, detail="model must not be empty")
 
+    lower = raw.lower()
+    issue_markers = (
+        "not working",
+        "not inflating",
+        "won't",
+        "wont",
+        "doesn't",
+        "doesnt",
+        "broken",
+        "damaged",
+        "no air",
+        "not turn",
+        "not power",
+        "false trigger",
+        "too hot",
+        "too loud",
+        "making noise",
+        "delivery",
+        "tracking",
+        "installation",
+    )
+    if any(marker in lower for marker in issue_markers) or len(raw.split()) >= 4:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "That sounds like a problem description, not a chair model. "
+                "Try describing model and issue together (e.g. 'OS-4000T footrest air not inflating'), "
+                "or enter just your model (e.g. OS-4000T)."
+            ),
+        )
+
     resolved = resolve_model_name(raw) or raw
     ticket = engine.get_active_session_ticket(session_id)
     ticket_id: str
@@ -828,6 +859,13 @@ async def smart_start_warranty(session_id: str, body: WarrantySmartStartRequest)
             answer_keys=answer_keys,
         )
 
+    model_hint = str(extraction.get("model_name") or "").strip()
+    if model_hint:
+        from product_catalog import resolve_model_name  # noqa: WPS433
+
+        resolved_model = resolve_model_name(model_hint) or model_hint
+        engine.set_model_name(ticket_id, resolved_model)
+
     if not apply_result["applied"]:
         # Nothing usable — fall back to a safe defect quick-start so the
         # frontend still progresses past the root menu.
@@ -1147,10 +1185,10 @@ async def admin_sync_freshdesk(
     pages = max(1, min(int(max_pages), 20))
     try:
         result = sync_freshdesk_knowledge(max_pages=pages)
-    except EnvironmentError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except requests.exceptions.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"Freshdesk API error: {exc}") from exc
+    except EnvironmentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     clear_knowledge_cache()
     entries = load_knowledge_entries()
