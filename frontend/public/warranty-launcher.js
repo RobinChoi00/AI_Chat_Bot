@@ -116,7 +116,12 @@
     "@keyframes osakiWarrantySlideUp{from{opacity:0;transform:translateY(24px)}" +
     "to{opacity:1;transform:translateY(0)}}" +
     "@keyframes osakiWarrantyPulse{0%,100%{box-shadow:0 8px 28px rgba(0,0,0,.35),0 0 0 0 rgba(201,169,98,.4)}" +
-    "50%{box-shadow:0 8px 28px rgba(0,0,0,.35),0 0 0 10px rgba(201,169,98,0)}}";
+    "50%{box-shadow:0 8px 28px rgba(0,0,0,.35),0 0 0 10px rgba(201,169,98,0)}}" +
+    "body.osaki-warranty-panel-open shopify-shop-app," +
+    "body.osaki-warranty-panel-open #shopify-shop-app," +
+    "body.osaki-warranty-panel-open [id^='shopify-block-shopify-shop']," +
+    "body.osaki-warranty-panel-open iframe[src*='shop.app']{" +
+    "display:none!important;visibility:hidden!important;pointer-events:none!important}";
   document.head.appendChild(styles);
 
   if (!document.body) {
@@ -187,10 +192,20 @@
   var frame = panel.querySelector("#osaki-warranty-frame");
   var closeBtn = panel.querySelector("#osaki-warranty-close");
   var open = false;
+  var SHOP_PANEL_CLASS = "osaki-warranty-panel-open";
+
+  function hideShopWidgets() {
+    document.body.classList.add(SHOP_PANEL_CLASS);
+  }
+
+  function showShopWidgets() {
+    document.body.classList.remove(SHOP_PANEL_CLASS);
+  }
 
   function openPanel() {
     if (open) return;
     open = true;
+    hideShopWidgets();
     if (teaser && teaser.parentNode) {
       sessionStorage.setItem(TEASER_KEY, "1");
       teaser.remove();
@@ -210,6 +225,7 @@
     open = false;
     panel.classList.remove("open");
     document.body.style.overflow = "";
+    showShopWidgets();
     btn.focus();
   }
 
