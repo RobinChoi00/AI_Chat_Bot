@@ -901,6 +901,13 @@ except ImportError:
     from warranty_router import router as warranty_router  # type: ignore
 app.include_router(warranty_router)
 
+# RingCentral warranty phone IVR (ApplicationExtension webhooks)
+try:
+    from app.ringcentral_router import router as ringcentral_router
+except ImportError:
+    from ringcentral_router import router as ringcentral_router  # type: ignore
+app.include_router(ringcentral_router)
+
 # 🚦 Rate limiting: shared Limiter from cost_guard. We attach the SlowAPI
 # middleware/handler so that exceeding the per-IP budget returns HTTP 429
 # (instead of leaking a stack trace) with a clear Retry-After header.

@@ -56,3 +56,4 @@ frontend/out/
 .vscode/
 .idea/faiss_index/
 db_data/
+rc_audio_cache/

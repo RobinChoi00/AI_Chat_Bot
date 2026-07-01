@@ -122,3 +122,7 @@ xlrd==2.0.2
 xxhash==3.6.0
 yarl==1.23.0
 zstandard==0.25.0
+
+# --- RingCentral phone IVR ---
+PyJWT==2.10.1
+cryptography==44.0.2
