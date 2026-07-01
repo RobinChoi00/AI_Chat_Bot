@@ -217,6 +217,37 @@ class WarrantyEngine:
             db.add(ticket)
         return ticket_id, _node_view(_ROOT)
 
+    _QUICK_START_ISSUES = frozenset({"installation", "delivery", "defect"})
+
+    @staticmethod
+    def advance_to_issue_type(ticket_id: str, issue_type: str) -> dict:
+        """
+        Skip the root and issue_type menus and land on the issue entry node.
+
+        Used by the phone IVR (defect-only after hours) and mirrors web
+        quick-start: warranty → installation | delivery | defect.
+        """
+        issue_type = (issue_type or "").strip().lower()
+        if issue_type not in WarrantyEngine._QUICK_START_ISSUES:
+            raise ValueError(
+                f"issue_type must be one of: {sorted(WarrantyEngine._QUICK_START_ISSUES)}"
+            )
+
+        node = WarrantyEngine.get_current_node(ticket_id)
+        if node is None:
+            raise ValueError(f"Ticket {ticket_id!r} not found.")
+
+        node_id = node.get("node_id")
+        if node_id == "root":
+            WarrantyEngine.submit_answer(ticket_id, "warranty")
+            return WarrantyEngine.submit_answer(ticket_id, issue_type)
+        if node_id == "issue_type":
+            return WarrantyEngine.submit_answer(ticket_id, issue_type)
+
+        raise ValueError(
+            f"Cannot advance to {issue_type!r} from node {node_id!r}."
+        )
+
     # ------------------------------------------------------------------
     # Read current state
     # ------------------------------------------------------------------

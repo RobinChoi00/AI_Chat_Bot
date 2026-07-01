@@ -144,6 +144,23 @@ def test_installation_model_to_send_info():
     assert str(turns[2].answer_key) == "model_name"
 
 
+def test_advance_to_issue_type_defect():
+    """Phone IVR skips root/issue_type and lands on defect_problem_type."""
+    ticket_id, root = start("phone-defect", "phone")
+    assert root["node_id"] == "root"
+
+    result = WarrantyEngine.advance_to_issue_type(ticket_id, "defect")
+    assert result["next_node_id"] == "defect_problem_type"
+    assert result["next_node"]["type"] == "question"
+
+    t = ticket(ticket_id)
+    assert str(t.issue_type) == "defect"
+    turns = WarrantyEngine.get_turns(ticket_id)
+    assert len(turns) == 2
+    assert str(turns[0].answer_key) == "warranty"
+    assert str(turns[1].answer_key) == "defect"
+
+
 def test_installation_footrest_air_to_diy_terminal():
     ticket_id, _ = start()
 

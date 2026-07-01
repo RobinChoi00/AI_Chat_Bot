@@ -3,8 +3,8 @@ ringcentral_ivr.py
 ==================
 Orchestrate RingCentral IVR callbacks with WarrantyEngine.
 
-Call flow (DTMF-only MVP):
-  on-call-enter  → start ticket → play menu
+Call flow (DTMF-only MVP, defect troubleshooting):
+  on-call-enter  → start ticket → skip to defect_problem_type → play menu
   Play complete  → collect DTMF
   Collect digit  → submit_answer OR forward/hangup at terminal
 """
@@ -109,7 +109,12 @@ def _transfer(ctx: VoiceCallContext, reason: str) -> None:
     ctx.awaiting_command = None
 
 
-def _present_node(ctx: VoiceCallContext, node: dict) -> None:
+def _present_node(
+    ctx: VoiceCallContext,
+    node: dict,
+    *,
+    intro_prefix: str = "",
+) -> None:
     node_type = node.get("type")
     if node_type == "terminal":
         _present_terminal(ctx, node)
@@ -122,7 +127,7 @@ def _present_node(ctx: VoiceCallContext, node: dict) -> None:
         _play_script(ctx, script, phase=IvrPhase.MENU)
         return
     if node_type in ("question", "instruction"):
-        script = build_menu_script(node)
+        script = f"{intro_prefix}{build_menu_script(node)}"
         _play_script(ctx, script, phase=IvrPhase.MENU)
         return
     logger.warning("Unsupported node type %s — transferring", node_type)
@@ -161,8 +166,13 @@ def handle_call_enter(payload: dict[str, Any]) -> None:
 
     engine = _lazy_engine()
     caller = _caller_phone(payload)
-    ticket_id, root_node = engine.start_session(session_id, "phone")
+    ticket_id, _root = engine.start_session(session_id, "phone")
     _store_caller_metadata(ticket_id, caller)
+    result = engine.advance_to_issue_type(ticket_id, "defect")
+    entry_node = result.get("next_node") or engine.get_current_node(ticket_id)
+    if not entry_node:
+        logger.error("RC IVR failed to advance to defect for ticket=%s", ticket_id)
+        return
 
     ctx = VoiceCallContext(
         session_id=session_id,
@@ -171,8 +181,18 @@ def handle_call_enter(payload: dict[str, Any]) -> None:
         caller_phone=caller,
     )
     set_call_context(ctx)
-    logger.info("RC IVR started session=%s ticket=%s caller=%s", session_id, ticket_id, caller)
-    _present_node(ctx, root_node)
+    logger.info(
+        "RC IVR started session=%s ticket=%s caller=%s node=%s",
+        session_id,
+        ticket_id,
+        caller,
+        entry_node.get("node_id"),
+    )
+    intro = (
+        "Welcome to Osaki and Titan after-hours warranty support. "
+        "Let's troubleshoot a chair defect. "
+    )
+    _present_node(ctx, entry_node, intro_prefix=intro)
 
 
 def _handle_menu_digit(ctx: VoiceCallContext, digit: str) -> None:
