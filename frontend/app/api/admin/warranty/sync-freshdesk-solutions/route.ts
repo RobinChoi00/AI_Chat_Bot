@@ -1,7 +1,8 @@
 /**
- * POST /api/admin/warranty/sync-freshdesk
+ * POST /api/admin/warranty/sync-freshdesk-solutions
  *
- * Server-side proxy to FastAPI POST /admin/warranty/sync-freshdesk.
+ * Proxy: pulls Freshdesk KB (Solutions) articles into the warranty
+ * knowledge base. Optionally schedules a FAISS rebuild.
  */
 import { NextResponse } from "next/server";
 import { getBackendUrl } from "@/lib/backendUrl";
@@ -19,18 +20,20 @@ export async function POST(request: Request) {
     const adminKey = requireAdminKey();
     const url = new URL(request.url);
     const qs = new URLSearchParams();
-    for (const key of ["max_pages", "months_back", "llm_rescue", "rebuild_faiss"]) {
+    for (const key of ["max_articles", "rebuild_faiss"]) {
       const v = url.searchParams.get(key);
       if (v !== null) qs.set(key, v);
     }
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
-    const upstream = await fetch(`${BACKEND}/admin/warranty/sync-freshdesk${suffix}`, {
-      method: "POST",
-      headers: { "X-Admin-Key": adminKey },
-      cache: "no-store",
-      signal: AbortSignal.timeout(180_000),
-    });
-
+    const upstream = await fetch(
+      `${BACKEND}/admin/warranty/sync-freshdesk-solutions${suffix}`,
+      {
+        method: "POST",
+        headers: { "X-Admin-Key": adminKey },
+        cache: "no-store",
+        signal: AbortSignal.timeout(180_000),
+      },
+    );
     const data: unknown = await upstream.json();
     return NextResponse.json(data, { status: upstream.status });
   } catch (err) {

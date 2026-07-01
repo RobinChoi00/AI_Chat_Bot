@@ -37,7 +37,15 @@ from typing import Any, Dict, List, Optional, cast
 
 import pytz
 import requests
-from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    UploadFile,
+)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -758,13 +766,29 @@ def _serialize_ticket_state(
                 "label": opt.get("label", ""),
             })
 
+    if engine is None:
+        engine = _lazy_engine()
+
     terminal_enrichment: Optional[Dict[str, Any]] = None
+    step_enrichment: Optional[Dict[str, Any]] = None
+    assistant_message: Optional[str] = None
+
     if node and node.get("type") == "terminal":
         from warranty_terminal_enrichment import build_terminal_enrichment  # noqa: WPS433
 
-        if engine is None:
-            engine = _lazy_engine()
         terminal_enrichment = build_terminal_enrichment(engine, ticket, node)
+        if terminal_enrichment:
+            assistant_message = (
+                str(terminal_enrichment.get("message") or "").strip() or None
+            )
+    elif node:
+        from warranty_step_enrichment import build_step_enrichment  # noqa: WPS433
+
+        step_enrichment = build_step_enrichment(engine, ticket, node)
+        if step_enrichment:
+            assistant_message = (
+                str(step_enrichment.get("message") or "").strip() or None
+            )
 
     payload: Dict[str, Any] = {
         "session_id": session_id,
@@ -790,7 +814,10 @@ def _serialize_ticket_state(
     }
     if terminal_enrichment:
         payload["terminal_enrichment"] = terminal_enrichment
-        payload["assistant_message"] = terminal_enrichment.get("message")
+    if step_enrichment:
+        payload["step_enrichment"] = step_enrichment
+    if assistant_message:
+        payload["assistant_message"] = assistant_message
     return payload
 
 
@@ -1267,32 +1294,77 @@ async def admin_warranty_note(
 
 @router.post("/admin/warranty/sync-freshdesk", tags=["admin-warranty"])
 async def admin_sync_freshdesk(
+    background_tasks: BackgroundTasks,
     x_admin_key: Optional[str] = Header(default=None),
-    max_pages: int = 5,
+    max_pages: int = 10,
+    months_back: int = 12,
+    llm_rescue: bool = True,
+    rebuild_faiss: bool = False,
 ):
     """
-    Pull resolved Freshdesk tickets into data/freshdesk_tickets.json and
-    reload warranty self-help knowledge cache. Admin-only.
+    Pull resolved Freshdesk tickets into data/freshdesk_tickets.json, then
+    optionally run the LLM rescue pass so tickets whose agent replies don't
+    yield extractable steps still land in the knowledge base. Admin-only.
+
+    Query params
+    ------------
+    max_pages : total Freshdesk Search pages to fetch (1..60, default 10).
+        Each page returns up to 30 Resolved/Closed tickets only.
+    months_back : calendar months to scan, newest first (1..36, default 12).
+    llm_rescue : run ``freshdesk_ticket_summarizer`` after sync when
+        OPENAI_API_KEY is set (default True). Set false to skip the LLM cost.
     """
     _require_admin(x_admin_key)
 
     try:
-        from freshdesk_sync import sync_freshdesk_knowledge  # noqa: WPS433
+        from freshdesk_sync import _OUTPUT_PATH, sync_freshdesk_knowledge  # noqa: WPS433
         from warranty_knowledge import clear_knowledge_cache, load_knowledge_entries  # noqa: WPS433
+        from freshdesk_ticket_summarizer import (  # noqa: WPS433
+            is_enabled as summarizer_enabled,
+            summarize_missing_tickets,
+        )
     except ImportError:
-        from app.freshdesk_sync import sync_freshdesk_knowledge  # type: ignore  # noqa: WPS433
+        from app.freshdesk_sync import (  # type: ignore  # noqa: WPS433
+            _OUTPUT_PATH,
+            sync_freshdesk_knowledge,
+        )
         from app.warranty_knowledge import (  # type: ignore  # noqa: WPS433
             clear_knowledge_cache,
             load_knowledge_entries,
         )
+        from app.freshdesk_ticket_summarizer import (  # type: ignore  # noqa: WPS433
+            is_enabled as summarizer_enabled,
+            summarize_missing_tickets,
+        )
 
-    pages = max(1, min(int(max_pages), 20))
+    pages = max(1, min(int(max_pages), 60))
+    months = max(1, min(int(months_back), 36))
     try:
-        result = sync_freshdesk_knowledge(max_pages=pages)
+        result = sync_freshdesk_knowledge(max_pages=pages, months_back=months)
     except requests.exceptions.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"Freshdesk API error: {exc}") from exc
     except EnvironmentError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    summarize_stats: Optional[Dict[str, Any]] = None
+    if llm_rescue and result.get("ok") and summarizer_enabled():
+        try:
+            with open(_OUTPUT_PATH, encoding="utf-8") as handle:
+                import json as _json
+
+                raw_tickets = _json.load(handle)
+        except (OSError, ValueError):
+            raw_tickets = []
+        if raw_tickets:
+            try:
+                summarize_stats = summarize_missing_tickets(raw_tickets)
+                logger.info(
+                    "Freshdesk LLM rescue — %s",
+                    summarize_stats,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Freshdesk LLM rescue failed: %s", exc)
+                summarize_stats = {"error": str(exc)}
 
     clear_knowledge_cache()
     entries = load_knowledge_entries()
@@ -1305,11 +1377,178 @@ async def admin_sync_freshdesk(
         freshdesk_entries,
     )
 
-    return {
+    freshdesk_kb_entries = sum(
+        1 for entry in entries if entry.source == "freshdesk_kb"
+    )
+    response: Dict[str, Any] = {
         **result,
         "knowledge_freshdesk_entries": freshdesk_entries,
+        "knowledge_freshdesk_kb_entries": freshdesk_kb_entries,
+        "knowledge_total_entries": len(entries),
+        "llm_rescue_enabled": bool(llm_rescue and summarizer_enabled()),
+    }
+    if summarize_stats is not None:
+        response["llm_rescue_stats"] = summarize_stats
+
+    if rebuild_faiss and result.get("ok"):
+        try:
+            from warranty_faiss_rebuilder import (  # noqa: WPS433
+                get_status as _faiss_status,
+                rebuild_freshdesk_qa_index,
+            )
+        except ImportError:
+            from app.warranty_faiss_rebuilder import (  # type: ignore  # noqa: WPS433
+                get_status as _faiss_status,
+                rebuild_freshdesk_qa_index,
+            )
+        if _faiss_status().get("running"):
+            response["faiss_rebuild_scheduled"] = False
+            response["faiss_rebuild_reason"] = "already_running"
+        else:
+            background_tasks.add_task(rebuild_freshdesk_qa_index)
+            response["faiss_rebuild_scheduled"] = True
+
+    return response
+
+
+@router.get("/admin/warranty/freshdesk-solutions/probe", tags=["admin-warranty"])
+async def admin_probe_freshdesk_solutions(
+    x_admin_key: Optional[str] = Header(default=None),
+):
+    """
+    Read-only probe of the Freshdesk Solutions/KB. Cheap enough to run
+    interactively so admins can decide whether to invest in KB ingest.
+    """
+    _require_admin(x_admin_key)
+    try:
+        from freshdesk_sync import probe_freshdesk_solutions  # noqa: WPS433
+    except ImportError:
+        from app.freshdesk_sync import probe_freshdesk_solutions  # type: ignore  # noqa: WPS433
+
+    try:
+        return probe_freshdesk_solutions()
+    except requests.exceptions.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Freshdesk API error: {exc}") from exc
+    except EnvironmentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post(
+    "/admin/warranty/sync-freshdesk-solutions",
+    tags=["admin-warranty"],
+)
+async def admin_sync_freshdesk_solutions(
+    background_tasks: BackgroundTasks,
+    x_admin_key: Optional[str] = Header(default=None),
+    max_articles: int = 500,
+    rebuild_faiss: bool = False,
+):
+    """
+    Ingest Freshdesk KB(Solutions) articles into
+    ``data/freshdesk_solutions.json`` and refresh the warranty knowledge
+    cache. Admin-only.
+    """
+    _require_admin(x_admin_key)
+
+    try:
+        from freshdesk_sync import sync_freshdesk_solutions  # noqa: WPS433
+        from warranty_knowledge import clear_knowledge_cache, load_knowledge_entries  # noqa: WPS433
+    except ImportError:
+        from app.freshdesk_sync import sync_freshdesk_solutions  # type: ignore  # noqa: WPS433
+        from app.warranty_knowledge import (  # type: ignore  # noqa: WPS433
+            clear_knowledge_cache,
+            load_knowledge_entries,
+        )
+
+    n = max(1, min(int(max_articles), 5000))
+    try:
+        result = sync_freshdesk_solutions(max_articles=n)
+    except requests.exceptions.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Freshdesk API error: {exc}") from exc
+    except EnvironmentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    clear_knowledge_cache()
+    entries = load_knowledge_entries()
+    kb_entries = sum(1 for entry in entries if entry.source == "freshdesk_kb")
+
+    logger.info(
+        "Freshdesk Solutions sync — ok=%s articles=%s knowledge_kb=%s",
+        result.get("ok"),
+        result.get("article_count"),
+        kb_entries,
+    )
+    response: Dict[str, Any] = {
+        **result,
+        "knowledge_freshdesk_kb_entries": kb_entries,
         "knowledge_total_entries": len(entries),
     }
+    if rebuild_faiss and result.get("ok"):
+        try:
+            from warranty_faiss_rebuilder import (  # noqa: WPS433
+                get_status as _faiss_status,
+                rebuild_freshdesk_qa_index,
+            )
+        except ImportError:
+            from app.warranty_faiss_rebuilder import (  # type: ignore  # noqa: WPS433
+                get_status as _faiss_status,
+                rebuild_freshdesk_qa_index,
+            )
+        if _faiss_status().get("running"):
+            response["faiss_rebuild_scheduled"] = False
+            response["faiss_rebuild_reason"] = "already_running"
+        else:
+            background_tasks.add_task(rebuild_freshdesk_qa_index)
+            response["faiss_rebuild_scheduled"] = True
+    return response
+
+
+@router.get("/admin/warranty/faiss/status", tags=["admin-warranty"])
+async def admin_faiss_status(
+    x_admin_key: Optional[str] = Header(default=None),
+):
+    """Report the last freshdesk_qa FAISS rebuild status (admin-only)."""
+    _require_admin(x_admin_key)
+    try:
+        from warranty_faiss_rebuilder import get_status  # noqa: WPS433
+    except ImportError:
+        from app.warranty_faiss_rebuilder import get_status  # type: ignore  # noqa: WPS433
+    return get_status()
+
+
+@router.post("/admin/warranty/rebuild-faiss", tags=["admin-warranty"])
+async def admin_rebuild_faiss(
+    background_tasks: BackgroundTasks,
+    x_admin_key: Optional[str] = Header(default=None),
+    wait: bool = False,
+):
+    """
+    Rebuild the freshdesk_qa FAISS index used by the general-purpose
+    ``/api/v1/chat`` endpoint. Admin-only.
+
+    By default returns immediately (``202 Accepted``-style) and runs the
+    rebuild in a BackgroundTask; poll ``/admin/warranty/faiss/status`` for
+    progress. Set ``?wait=true`` to block until it finishes (mostly for the
+    CLI + tests).
+    """
+    _require_admin(x_admin_key)
+    try:
+        from warranty_faiss_rebuilder import get_status, rebuild_freshdesk_qa_index  # noqa: WPS433
+    except ImportError:
+        from app.warranty_faiss_rebuilder import (  # type: ignore  # noqa: WPS433
+            get_status,
+            rebuild_freshdesk_qa_index,
+        )
+
+    current = get_status()
+    if current.get("running"):
+        return {"scheduled": False, **current, "message": "Already running."}
+
+    if wait:
+        return rebuild_freshdesk_qa_index()
+
+    background_tasks.add_task(rebuild_freshdesk_qa_index)
+    return {"scheduled": True, "message": "FAISS rebuild scheduled in background."}
 
 
 @router.get(

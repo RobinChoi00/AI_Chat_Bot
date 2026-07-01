@@ -22,6 +22,7 @@ from typing import Optional
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _QA_PATH = _PROJECT_ROOT / "raw_data" / "Warranty Daily Report - Q&A.csv"
 _FRESHDESK_PATH = _PROJECT_ROOT / "data" / "freshdesk_tickets.json"
+_FRESHDESK_KB_PATH = _PROJECT_ROOT / "data" / "freshdesk_solutions.json"
 _AUTOCHECK_PATH = _PROJECT_ROOT / "raw_data" / "Auto-Check.csv"
 
 _DEFECT_CATEGORY_MAP: dict[str, str] = {
@@ -275,6 +276,23 @@ def _load_qa_entries() -> list[KnowledgeEntry]:
     return entries
 
 
+def _load_freshdesk_summary_cache() -> dict:
+    """
+    Return the LLM-rescued Freshdesk summaries produced by
+    ``freshdesk_ticket_summarizer.summarize_missing_tickets``.
+
+    Loaded lazily so that a stale cache never breaks knowledge loading.
+    """
+    try:
+        from freshdesk_ticket_summarizer import content_hash, load_summary_cache  # type: ignore
+    except ImportError:
+        return {}
+    try:
+        return load_summary_cache()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _load_freshdesk_entries() -> list[KnowledgeEntry]:
     if not _FRESHDESK_PATH.is_file():
         return []
@@ -284,6 +302,13 @@ def _load_freshdesk_entries() -> list[KnowledgeEntry]:
             tickets = json.load(handle)
     except (json.JSONDecodeError, OSError):
         return []
+
+    # Optional LLM-rescued steps for tickets whose regex extraction failed.
+    summaries = _load_freshdesk_summary_cache()
+    try:
+        from freshdesk_ticket_summarizer import content_hash  # type: ignore
+    except ImportError:
+        content_hash = None  # type: ignore[assignment]
 
     entries: list[KnowledgeEntry] = []
     for ticket in tickets:
@@ -296,16 +321,33 @@ def _load_freshdesk_entries() -> list[KnowledgeEntry]:
             continue
         blob = f"{subject} {question}"
         steps = _extract_customer_steps(answer)
+        category_hint: str | None = None
+        summary_diagnostic: str = ""
+        # ``freshdesk`` regardless of rescue path so downstream filters that
+        # already look for ``source == "freshdesk"`` keep working; the LLM
+        # rescue only shows up in sync stats via the summary cache size.
+        source = "freshdesk"
+
+        if not steps and summaries and content_hash is not None:
+            key = content_hash(subject, question, answer)
+            cached = summaries.get(key)
+            if cached and cached.steps:
+                steps = tuple(cached.steps)
+                category_hint = (cached.category or "").strip().lower() or None
+                summary_diagnostic = cached.summary
+
         if not steps:
             continue
-        category = _infer_category(blob)
+
+        category = category_hint or _infer_category(blob)
         title = _clean_freshdesk_title(subject, question)
+        diagnostic_text = summary_diagnostic or question
         entries.append(
             KnowledgeEntry(
-                source="freshdesk",
+                source=source,
                 category=category,
                 title=title,
-                diagnostic=question[:300],
+                diagnostic=diagnostic_text[:300],
                 customer_steps=steps,
             )
         )
@@ -346,11 +388,56 @@ def _load_autocheck_entries() -> list[KnowledgeEntry]:
     return entries
 
 
+def _load_freshdesk_kb_entries() -> list[KnowledgeEntry]:
+    """
+    Load Freshdesk Solutions (Knowledge Base) articles as knowledge entries.
+
+    KB articles are typically already customer-facing and structured, so we
+    accept the whole description as a single "step blob" and let the same
+    ``_extract_customer_steps`` guard turn it into safe bullets.
+    """
+    if not _FRESHDESK_KB_PATH.is_file():
+        return []
+
+    try:
+        with _FRESHDESK_KB_PATH.open(encoding="utf-8") as handle:
+            articles = json.load(handle)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    entries: list[KnowledgeEntry] = []
+    for article in articles or []:
+        title = str(article.get("title") or "").strip()
+        description = str(article.get("description_text") or "").strip()
+        if not title or not description:
+            continue
+        steps = _extract_customer_steps(description)
+        if not steps:
+            # KB article without imperative bullets — keep the description as
+            # a single-step diagnostic so semantic search can still find it.
+            trimmed = re.sub(r"\s+", " ", description)[:_MAX_CUSTOMER_STEP_LEN]
+            if not trimmed:
+                continue
+            steps = (trimmed,)
+        blob = f"{title} {description[:400]}"
+        entries.append(
+            KnowledgeEntry(
+                source="freshdesk_kb",
+                category=_infer_category(blob),
+                title=title[:80] + ("..." if len(title) > 80 else ""),
+                diagnostic=description[:300],
+                customer_steps=steps,
+            )
+        )
+    return entries
+
+
 @lru_cache(maxsize=1)
 def load_knowledge_entries() -> tuple[KnowledgeEntry, ...]:
     combined: list[KnowledgeEntry] = []
     combined.extend(_load_qa_entries())
     combined.extend(_load_freshdesk_entries())
+    combined.extend(_load_freshdesk_kb_entries())
     combined.extend(_load_autocheck_entries())
     return tuple(combined)
 
@@ -379,6 +466,10 @@ def _score_entry(
         score += 1.5
     elif entry.source == "auto_check":
         score += 1.0
+    elif entry.source == "freshdesk_kb":
+        # KB articles are curated help content and usually more precise
+        # than raw ticket threads — give them a small bump.
+        score += 1.2
     if entry.customer_steps:
         score += 1.0
     return score
