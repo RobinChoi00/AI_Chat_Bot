@@ -355,6 +355,163 @@ export async function submitWarrantyContact(
 }
 
 /**
+ * Send a "save & continue later" email link for the current warranty session.
+ *
+ * CONTRACT: POST /api/v1/warranty/session/{session_id}/resume-link
+ */
+export async function sendWarrantyResumeLink(
+  sessionId: string,
+  customerEmail: string
+): Promise<{ sent: boolean; customer_email: string; expires_in_days: number }> {
+  const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(
+    sessionId
+  )}/resume-link`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ customer_email: customerEmail }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<{
+    sent: boolean;
+    customer_email: string;
+    expires_in_days: number;
+  }>;
+}
+
+/**
+ * Exchange a signed resume token for the underlying session/ticket mapping.
+ *
+ * CONTRACT: GET /api/v1/warranty/resume/{token}
+ */
+export async function resumeWarrantyFromToken(token: string): Promise<{
+  ticket_id: string;
+  session_id: string;
+  status: string;
+  domain?: string;
+  expires_at: number;
+}> {
+  const url = `${getApiBase()}/api/v1/warranty/resume/${encodeURIComponent(token)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<{
+    ticket_id: string;
+    session_id: string;
+    status: string;
+    domain?: string;
+    expires_at: number;
+  }>;
+}
+
+/**
+ * Submit thumbs-up / thumbs-down feedback for an assistant message.
+ *
+ * CONTRACT: POST /api/v1/feedback
+ * Body: { session_id, rating: "up"|"down", message_content, comment?, context?, ticket_id? }
+ */
+export interface ChatFeedbackPayload {
+  sessionId: string;
+  rating: "up" | "down";
+  messageContent: string;
+  comment?: string;
+  context?: "warranty" | "chat";
+  domain?: string;
+  ticketId?: string;
+}
+
+export async function submitChatFeedback(
+  payload: ChatFeedbackPayload
+): Promise<{ ok: boolean; feedback_id: number; rating: "up" | "down" }> {
+  const url = `${getApiBase()}/api/v1/feedback`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: payload.sessionId,
+      rating: payload.rating,
+      message_content: payload.messageContent,
+      comment: payload.comment,
+      context: payload.context ?? "warranty",
+      domain: payload.domain,
+      ticket_id: payload.ticketId,
+    }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<{
+    ok: boolean;
+    feedback_id: number;
+    rating: "up" | "down";
+  }>;
+}
+
+/**
+ * Append a customer follow-up note after the warranty workflow ends.
+ *
+ * CONTRACT: POST /api/v1/warranty/{ticket_id}/customer-note
+ * Body: { note: string }  → { customer_notes: {text, created_at}[] }
+ *
+ * Used when the customer hides the contact form and types extra context
+ * into the chat input during the terminal step.
+ */
+export interface CustomerNoteEntry {
+  text: string;
+  created_at: string;
+}
+
+export async function submitCustomerNote(
+  ticketId: string,
+  note: string
+): Promise<{ ticket_id: string; customer_notes: CustomerNoteEntry[] }> {
+  const url = `${getApiBase()}/api/v1/warranty/${encodeURIComponent(ticketId)}/customer-note`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<{
+    ticket_id: string;
+    customer_notes: CustomerNoteEntry[];
+  }>;
+}
+
+/**
  * Upload an evidence file for a warranty ticket.
  *
  * CONTRACT: POST /api/v1/warranty/{ticket_id}/evidence (multipart/form-data)

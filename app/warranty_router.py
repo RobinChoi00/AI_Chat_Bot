@@ -31,13 +31,19 @@ import mimetypes
 import os
 import re
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
+import pytz
 import requests
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+
+def _now_cst_iso() -> str:
+    return datetime.now(pytz.timezone("America/Chicago")).isoformat()
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +354,75 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         "email_notified": True,
         "case_summary": case_summary,
         "case_summary_source": summary_payload.get("source", ""),
+    }
+
+
+class WarrantyCustomerNoteRequest(BaseModel):
+    """Free-text follow-up note the customer types after reaching a terminal node."""
+    note: str
+
+
+_MAX_CUSTOMER_NOTE_LEN = 1000
+_MAX_CUSTOMER_NOTES = 20
+
+
+@router.post("/api/v1/warranty/{ticket_id}/customer-note", tags=["warranty"])
+async def append_customer_note(ticket_id: str, body: WarrantyCustomerNoteRequest):
+    """
+    Append a customer-typed follow-up note to a ticket after the workflow ends.
+
+    Notes land in ``collected_data["customer_notes"]`` as a list of
+    ``{text, created_at}`` entries so the admin can see extra context the
+    customer added while the contact form was hidden.
+    """
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    note = (body.note or "").strip()
+    if not note:
+        raise HTTPException(status_code=422, detail="Note text must not be empty.")
+    if len(note) > _MAX_CUSTOMER_NOTE_LEN:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Note is too long (max {_MAX_CUSTOMER_NOTE_LEN} characters).",
+        )
+
+    engine = _lazy_engine()
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+
+    now_iso = _now_cst_iso()
+
+    with warranty_db_session() as db:
+        ticket_row = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        if ticket_row is None:
+            raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+
+        collected = ticket_row.get_collected()
+        existing = collected.get("customer_notes")
+        notes: List[Dict[str, str]] = list(existing) if isinstance(existing, list) else []
+        notes.append({"text": note, "created_at": now_iso})
+        if len(notes) > _MAX_CUSTOMER_NOTES:
+            notes = notes[-_MAX_CUSTOMER_NOTES:]
+        collected["customer_notes"] = notes
+        import json as _json  # noqa: WPS433
+        ticket_row.collected_data = _json.dumps(collected)
+        stored = notes
+
+    logger.info(
+        "warranty customer note appended ticket=%s len=%d total=%d",
+        ticket_id,
+        len(note),
+        len(stored),
+    )
+
+    return {
+        "ticket_id": ticket_id,
+        "customer_notes": stored,
     }
 
 

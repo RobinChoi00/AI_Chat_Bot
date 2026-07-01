@@ -361,6 +361,67 @@ def test_restart_is_idempotent_when_no_active_ticket(client):
     assert body["closed_ticket_count"] == 0
 
 
+def test_customer_note_appends_to_collected_data(client):
+    """Customer follow-up notes should append to collected_data.customer_notes."""
+    session_id = "cust-api-note"
+    _register_model(client, session_id)
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "defect", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+
+    resp1 = client.post(
+        f"/api/v1/warranty/{ticket_id}/customer-note",
+        json={"note": "I also noticed a rattling sound."},
+    )
+    assert resp1.status_code == 200
+    notes1 = resp1.json()["customer_notes"]
+    assert len(notes1) == 1
+    assert notes1[0]["text"] == "I also noticed a rattling sound."
+    assert notes1[0]["created_at"]
+
+    resp2 = client.post(
+        f"/api/v1/warranty/{ticket_id}/customer-note",
+        json={"note": "It happens only on recline."},
+    )
+    assert resp2.status_code == 200
+    notes2 = resp2.json()["customer_notes"]
+    assert len(notes2) == 2
+    assert notes2[1]["text"] == "It happens only on recline."
+
+
+def test_customer_note_rejects_empty_and_too_long(client):
+    session_id = "cust-api-note-invalid"
+    _register_model(client, session_id)
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "defect", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+
+    empty = client.post(
+        f"/api/v1/warranty/{ticket_id}/customer-note",
+        json={"note": "   "},
+    )
+    assert empty.status_code == 422
+
+    long_text = "x" * 1500
+    too_long = client.post(
+        f"/api/v1/warranty/{ticket_id}/customer-note",
+        json={"note": long_text},
+    )
+    assert too_long.status_code == 422
+
+
+def test_customer_note_unknown_ticket_returns_404(client):
+    resp = client.post(
+        "/api/v1/warranty/does-not-exist/customer-note",
+        json={"note": "hello"},
+    )
+    assert resp.status_code == 404
+
+
 def test_smart_start_sets_model_from_hint(client, monkeypatch):
     import warranty_intake as wi  # noqa: WPS433
 

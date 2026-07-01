@@ -3,10 +3,16 @@
 import type { ReactNode } from "react";
 import type { ChatMessage } from "@/lib/types";
 import SpeakButton from "./SpeakButton";
+import FeedbackButtons from "./FeedbackButtons";
 
 interface Props {
   message: ChatMessage;
   isStreaming?: boolean;
+  feedbackSessionId?: string;
+  feedbackTicketId?: string;
+  feedbackDomain?: string;
+  feedbackContext?: "warranty" | "chat";
+  showFeedback?: boolean;
 }
 
 const LINK_RE = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
@@ -102,7 +108,15 @@ function renderInline(text: string, keyPrefix: string) {
   return parts;
 }
 
-export default function ChatMessageBubble({ message, isStreaming }: Props) {
+export default function ChatMessageBubble({
+  message,
+  isStreaming,
+  feedbackSessionId,
+  feedbackTicketId,
+  feedbackDomain,
+  feedbackContext,
+  showFeedback,
+}: Props) {
   const isUser = message.role === "user";
   const lines = message.content.split("\n");
 
@@ -134,7 +148,18 @@ export default function ChatMessageBubble({ message, isStreaming }: Props) {
           )}
         </div>
         {!isUser && !isStreaming && message.content.trim() && (
-          <SpeakButton text={message.content} className="mt-1.5" />
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <SpeakButton text={message.content} />
+            {showFeedback && feedbackSessionId && (
+              <FeedbackButtons
+                sessionId={feedbackSessionId}
+                messageContent={message.content}
+                ticketId={feedbackTicketId}
+                domain={feedbackDomain}
+                context={feedbackContext}
+              />
+            )}
+          </div>
         )}
       </div>
 

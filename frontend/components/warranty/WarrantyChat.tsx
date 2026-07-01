@@ -7,7 +7,9 @@ import {
   quickStartWarranty,
   naturalStartWarranty,
   restartWarrantySession,
+  resumeWarrantyFromToken,
   smartStartWarranty,
+  submitCustomerNote,
   submitWarrantyAnswer,
 } from "@/lib/api";
 import type {
@@ -21,6 +23,7 @@ import ChatMessageBubble from "./ChatMessageBubble";
 import AnswerOptions from "./AnswerOptions";
 import CollapsibleOptionPanel from "./CollapsibleOptionPanel";
 import EvidenceUploader from "./EvidenceUploader";
+import SaveProgressButton from "./SaveProgressButton";
 import TicketStatusBadge from "./TicketStatusBadge";
 import { formatTerminalPrompt, WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
 import { WARRANTY_WELCOME_MESSAGE } from "@/lib/welcomeMessage";
@@ -71,6 +74,9 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     sessionStorage.setItem("warranty_session_id", newId);
     return newId;
   });
+  const [resumeStatus, setResumeStatus] = useState<
+    "idle" | "resuming" | "resumed" | "failed"
+  >("idle");
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -84,6 +90,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const [helpConsent, setHelpConsent] = useState<"yes" | "no" | null>(null);
   const [optionsPanelExpanded, setOptionsPanelExpanded] = useState(true);
   const [issueTypePanelExpanded, setIssueTypePanelExpanded] = useState(true);
+  const [emailPanelCollapsed, setEmailPanelCollapsed] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -135,6 +142,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       setHelpConsent(null);
       setContactSubmitted(false);
       setOptionsUsed(false);
+      setEmailPanelCollapsed(false);
       setInput("");
     } finally {
       setLoading(false);
@@ -143,6 +151,46 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   }, [loading, sessionId, storeDomain]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("resume");
+    if (!token) return;
+
+    let cancelled = false;
+    setResumeStatus("resuming");
+    (async () => {
+      try {
+        const data = await resumeWarrantyFromToken(token);
+        if (cancelled) return;
+        sessionStorage.setItem("warranty_session_id", data.session_id);
+        setSessionId(data.session_id);
+        setResumeStatus("resumed");
+      } catch (err) {
+        if (cancelled) return;
+        console.warn("warranty resume failed", err);
+        setResumeStatus("failed");
+      } finally {
+        try {
+          params.delete("resume");
+          const q = params.toString();
+          const cleanPath =
+            window.location.pathname + (q ? `?${q}` : "") + window.location.hash;
+          window.history.replaceState({}, "", cleanPath);
+        } catch {
+          // ignore — pushing state is best-effort
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    // Wait until any ?resume= handoff finishes so we don't hydrate against
+    // the stale local sessionId before the URL token remaps us.
+    if (resumeStatus === "resuming") return;
+
     let cancelled = false;
     (async () => {
       try {
@@ -179,7 +227,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     return () => {
       cancelled = true;
     };
-  }, [refreshWarrantyState]);
+  }, [refreshWarrantyState, resumeStatus]);
 
   const workflowOptionCount = warrantyState?.current_node?.options?.length ?? 0;
   const workflowNodeId = warrantyState?.current_node?.node_id ?? "";
@@ -335,6 +383,36 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     [loading, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse]
   );
 
+  const submitFollowUpNote = useCallback(
+    async (text: string) => {
+      const ticketId = warrantyState?.ticket_id;
+      if (!ticketId || loading) return;
+      setError(null);
+      setLoading(true);
+      setMessages((prev) => [...prev, { role: "user", content: text }]);
+      setInput("");
+      try {
+        await submitCustomerNote(ticketId, text);
+        await sleep(THINKING_DELAY_MS);
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content:
+              "Got it — I've added that note to your case for our warranty team.",
+          },
+        ]);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Could not save your note.";
+        setError(msg);
+      } finally {
+        setLoading(false);
+        inputRef.current?.focus();
+      }
+    },
+    [loading, warrantyState?.ticket_id]
+  );
+
   const sendMessage = useCallback(
     async (text: string) => {
       if (!text.trim() || loading) return;
@@ -348,6 +426,16 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       const atIssueType =
         warrantyState?.ready_for_issue_type ||
         warrantyState?.current_node?.node_id === "issue_type";
+
+      const atTerminal =
+        !!warrantyState?.current_node?.is_terminal ||
+        warrantyState?.status === "awaiting_admin_review" ||
+        warrantyState?.status === "admin_reviewing";
+
+      if (atTerminal && helpConsent === "yes" && !contactSubmitted && warrantyState?.ticket_id) {
+        await submitFollowUpNote(trimmed);
+        return;
+      }
 
       if (atFirstIntake) {
         await startViaSmartIntake(trimmed);
@@ -370,7 +458,15 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         return;
       }
     },
-    [loading, warrantyState, startViaSmartIntake, advanceWarranty, helpConsent]
+    [
+      loading,
+      warrantyState,
+      helpConsent,
+      contactSubmitted,
+      startViaSmartIntake,
+      advanceWarranty,
+      submitFollowUpNote,
+    ]
   );
 
   function handleSubmit(e: FormEvent) {
@@ -453,23 +549,26 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     !contactSubmitted &&
     helpOfferOptions.length > 0;
 
-  const showEmailSection =
-    isTerminal &&
-    helpConsent === "yes" &&
-    !contactSubmitted &&
-    warrantyState?.ticket_id;
+  const inEmailStep = Boolean(
+    isTerminal && helpConsent === "yes" && !contactSubmitted && warrantyState?.ticket_id
+  );
+
+  const showEmailSection = inEmailStep;
 
   const showInputBar =
     !isTerminal ||
+    inEmailStep ||
     (isTerminal && helpConsent === null && !contactSubmitted && !showHelpOffer);
 
   const inputPlaceholder = needsFirstIntake
     ? "Model + issue (e.g. OS-4000T footrest air not inflating)…"
     : showIssueTypeOptions
       ? "Describe your issue (e.g. my chair won't turn on)…"
-      : warrantyState?.ticket_id
-        ? "Type your answer…"
-        : "Enter your chair model…";
+      : inEmailStep
+        ? "Anything else our team should know? Type here…"
+        : warrantyState?.ticket_id
+          ? "Type your answer…"
+          : "Enter your chair model…";
 
   return (
     <div
@@ -478,16 +577,19 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       }`}
     >
       {warrantyState && !embed && (
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-100 bg-white px-4 py-2">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-white px-4 py-2">
           <TicketStatusBadge
             status={warrantyState.status}
             ticketId={warrantyState.ticket_id}
           />
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             {warrantyState.model_name && (
               <span className="truncate text-right text-xs text-gray-500">
                 {warrantyState.model_name}
               </span>
+            )}
+            {warrantyState.ticket_id && !isTerminal && (
+              <SaveProgressButton sessionId={sessionId} disabled={loading} />
             )}
             <button
               type="button"
@@ -503,7 +605,10 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       )}
 
       {warrantyState?.ticket_id && embed && (
-        <div className="flex shrink-0 items-center justify-end gap-2 border-b border-gray-100 bg-white px-3 py-1.5">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-b border-gray-100 bg-white px-3 py-1.5">
+          {!isTerminal && (
+            <SaveProgressButton sessionId={sessionId} disabled={loading} />
+          )}
           <button
             type="button"
             onClick={restartSession}
@@ -528,7 +633,15 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       <div className="chat-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-4">
         <div className="space-y-4">
           {messages.map((msg, i) => (
-            <ChatMessageBubble key={i} message={msg} />
+            <ChatMessageBubble
+              key={i}
+              message={msg}
+              showFeedback={msg.role === "assistant"}
+              feedbackSessionId={sessionId}
+              feedbackTicketId={warrantyState?.ticket_id}
+              feedbackDomain={storeDomain}
+              feedbackContext="warranty"
+            />
           ))}
         </div>
 
@@ -609,10 +722,12 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       )}
 
       {showEmailSection && (
-        <div className="shrink-0 border-t border-gray-100 bg-white p-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-4">
+        <div className="shrink-0 border-t border-gray-100 bg-white p-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:p-4">
           <EvidenceUploader
             ticketId={warrantyState!.ticket_id}
             evidenceRequired={warrantyState!.current_node?.evidence_required}
+            collapsed={emailPanelCollapsed}
+            onToggleCollapsed={setEmailPanelCollapsed}
             onContactSuccess={() => {
               setContactSubmitted(true);
               setMessages((prev) => [

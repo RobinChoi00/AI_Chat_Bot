@@ -908,6 +908,20 @@ except ImportError:
     from ringcentral_router import router as ringcentral_router  # type: ignore
 app.include_router(ringcentral_router)
 
+# Chat feedback (👍 / 👎) — persisted per session for quality analysis.
+try:
+    from app.chat_feedback import router as chat_feedback_router
+except ImportError:
+    from chat_feedback import router as chat_feedback_router  # type: ignore
+app.include_router(chat_feedback_router)
+
+# Warranty resume links — email a signed URL to continue an in-progress case.
+try:
+    from app.warranty_resume import router as warranty_resume_router
+except ImportError:
+    from warranty_resume import router as warranty_resume_router  # type: ignore
+app.include_router(warranty_resume_router)
+
 # 🚦 Rate limiting: shared Limiter from cost_guard. We attach the SlowAPI
 # middleware/handler so that exceeding the per-IP budget returns HTTP 429
 # (instead of leaking a stack trace) with a clear Retry-After header.
