@@ -12,6 +12,7 @@ RC_SERVER                        https://platform.ringcentral.com
 RC_CLIENT_ID
 RC_CLIENT_SECRET
 RC_USER_JWT                        JWT token from Developer Console → Credentials (recommended)
+RC_USER_JWT_FILE                   Optional file path (avoids .env paste corruption)
 RC_JWT_PRIVATE_KEY                 Optional PEM path — only if using self-signed JWT
 RC_JWT_CLAIM_SUB                   Extension ID — only with RC_JWT_PRIVATE_KEY
 RC_WARRANTY_TRANSFER_TO          E.164 for ext.3 queue (PSTN/direct number)
@@ -54,10 +55,34 @@ def _load_private_key() -> str:
     return raw.replace("\\n", "\n")
 
 
+def _read_env(name: str) -> str:
+    """Read env var and strip whitespace / optional surrounding quotes."""
+    return os.getenv(name, "").strip().strip('"').strip("'")
+
+
+def _load_user_jwt() -> str:
+    """Load RC user JWT from file (preferred) or env var."""
+    file_path = _read_env("RC_USER_JWT_FILE")
+    if file_path:
+        path = Path(file_path)
+        if not path.is_file():
+            raise RuntimeError(f"RC_USER_JWT_FILE not found: {file_path}")
+        token = path.read_text(encoding="utf-8").strip().strip('"').strip("'")
+        if token:
+            return token
+
+    return _read_env("RC_USER_JWT") or _read_env("RC_JWT")
+
+
 def _build_jwt_assertion() -> str:
     """Return the JWT assertion for the OAuth token request."""
-    user_jwt = os.getenv("RC_USER_JWT", "").strip()
+    user_jwt = _load_user_jwt()
     if user_jwt:
+        if not user_jwt.startswith("eyJ"):
+            raise RuntimeError(
+                "RC_USER_JWT must be a JWT string starting with 'eyJ' — "
+                "check for truncation or extra characters in .env."
+            )
         return user_jwt
 
     try:
@@ -96,6 +121,10 @@ def get_access_token(*, force_refresh: bool = False) -> str:
             return _cached_token
 
         assertion = _build_jwt_assertion()
+        client_id = _read_env("RC_CLIENT_ID")
+        client_secret = _read_env("RC_CLIENT_SECRET")
+        if not client_id or not client_secret:
+            raise RuntimeError("RC_CLIENT_ID and RC_CLIENT_SECRET must be set.")
         resp = requests.post(
             f"{RC_SERVER}/restapi/oauth/token",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -103,7 +132,7 @@ def get_access_token(*, force_refresh: bool = False) -> str:
                 "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "assertion": assertion,
             },
-            auth=(RC_CLIENT_ID, RC_CLIENT_SECRET),
+            auth=(client_id, client_secret),
             timeout=30,
         )
         if resp.status_code >= 400:
