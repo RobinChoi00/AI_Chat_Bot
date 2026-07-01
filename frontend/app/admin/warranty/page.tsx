@@ -64,7 +64,7 @@ export default async function AdminWarrantyQueuePage({
             ← Home
           </Link>
           <span className="text-gray-300">|</span>
-          <div>
+          <div className="flex-1">
             <h1 className="text-base font-semibold text-gray-900">
               🔐 Admin — Warranty Tickets
             </h1>
@@ -72,6 +72,12 @@ export default async function AdminWarrantyQueuePage({
               INTERNAL USE ONLY — Do not share this page
             </p>
           </div>
+          <Link
+            href="/admin/warranty/dashboard"
+            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100"
+          >
+            Completion dashboard →
+          </Link>
         </div>
       </header>
 

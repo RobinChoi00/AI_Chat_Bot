@@ -922,6 +922,20 @@ except ImportError:
     from warranty_resume import router as warranty_resume_router  # type: ignore
 app.include_router(warranty_resume_router)
 
+# Warranty completion-rate dashboard (admin only).
+try:
+    from app.warranty_metrics import router as warranty_metrics_router
+except ImportError:
+    from warranty_metrics import router as warranty_metrics_router  # type: ignore
+app.include_router(warranty_metrics_router)
+
+# Warranty serial-label OCR (customer photo → chair model auto-detection).
+try:
+    from app.warranty_ocr import router as warranty_ocr_router
+except ImportError:
+    from warranty_ocr import router as warranty_ocr_router  # type: ignore
+app.include_router(warranty_ocr_router)
+
 # 🚦 Rate limiting: shared Limiter from cost_guard. We attach the SlowAPI
 # middleware/handler so that exceeding the per-IP budget returns HTTP 429
 # (instead of leaking a stack trace) with a clear Retry-After header.

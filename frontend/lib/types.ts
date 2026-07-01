@@ -9,6 +9,12 @@
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  /**
+   * When true, the ChatMessageBubble reveals text one chunk at a time so the
+   * response *feels* streamed (real backend SSE can slot in later without any
+   * UI change — the same animation ends as soon as the full content lands).
+   */
+  animate?: boolean;
 }
 
 export interface ChatRequest {

@@ -24,6 +24,7 @@ import AnswerOptions from "./AnswerOptions";
 import CollapsibleOptionPanel from "./CollapsibleOptionPanel";
 import EvidenceUploader from "./EvidenceUploader";
 import SaveProgressButton from "./SaveProgressButton";
+import SerialPhotoButton from "./SerialPhotoButton";
 import TicketStatusBadge from "./TicketStatusBadge";
 import { formatTerminalPrompt, WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
 import { WARRANTY_WELCOME_MESSAGE } from "@/lib/welcomeMessage";
@@ -31,7 +32,14 @@ import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 
 import { resolveWarrantyStoreDomain } from "@/lib/warrantyStoreDomain";
 
-const THINKING_DELAY_MS = 1500;
+// Short "reviewing your answer…" pause before the assistant bubble appears.
+// Kept small because ChatMessageBubble now types the response out on its own,
+// giving the actual streamed-response perception.
+const THINKING_DELAY_MS = 400;
+
+function assistantMessage(content: string): ChatMessage {
+  return { role: "assistant", content, animate: true };
+}
 
 const EMAIL_THANK_YOU =
   `Thank you! Our warranty team at ${WARRANTY_CONTACT_EMAIL} will respond within 24 hours.`;
@@ -248,7 +256,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       await sleep(THINKING_DELAY_MS);
       const content = assistantContentFromResponse(ticket, resp);
       if (!content) return;
-      setMessages((prev) => [...prev, { role: "assistant", content }]);
+      setMessages((prev) => [...prev, assistantMessage(content)]);
     },
     []
   );
@@ -296,7 +304,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
           await sleep(THINKING_DELAY_MS);
           setMessages((prev) => [
             ...prev,
-            { role: "assistant", content: resp.tracking_summary!.message },
+            assistantMessage(resp.tracking_summary!.message),
           ]);
         }
         await appendAssistantFromResponse(resp.ticket, resp);
@@ -350,10 +358,9 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
           await sleep(THINKING_DELAY_MS);
           setMessages((prev) => [
             ...prev,
-            {
-              role: "assistant",
-              content: `Got it — ${smart!.summary} I'll skip the extra menu questions and take you straight to the next step.`,
-            },
+            assistantMessage(
+              `Got it — ${smart!.summary} I'll skip the extra menu questions and take you straight to the next step.`
+            ),
           ]);
         } else if (
           resp.ticket?.ready_for_issue_type &&
@@ -363,10 +370,9 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
           await sleep(THINKING_DELAY_MS);
           setMessages((prev) => [
             ...prev,
-            {
-              role: "assistant",
-              content: `Thanks — I have **${resp.ticket!.model_name}** on file.\n\nWhat type of issue can we help you with? Choose below or describe it in your own words.`,
-            },
+            assistantMessage(
+              `Thanks — I have **${resp.ticket!.model_name}** on file.\n\nWhat type of issue can we help you with? Choose below or describe it in your own words.`
+            ),
           ]);
         }
 
@@ -396,11 +402,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         await sleep(THINKING_DELAY_MS);
         setMessages((prev) => [
           ...prev,
-          {
-            role: "assistant",
-            content:
-              "Got it — I've added that note to your case for our warranty team.",
-          },
+          assistantMessage("Got it — I've added that note to your case for our warranty team."),
         ]);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Could not save your note.";
@@ -491,16 +493,14 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       setHelpConsent("yes");
       setMessages((prev) => [
         ...prev,
-        {
-          role: "assistant",
-          content:
-            "No problem — please share your email below so our warranty team can follow up. " +
-            "Photos or videos are optional.",
-        },
+        assistantMessage(
+          "No problem — please share your email below so our warranty team can follow up. " +
+            "Photos or videos are optional."
+        ),
       ]);
     } else {
       setHelpConsent("no");
-      setMessages((prev) => [...prev, { role: "assistant", content: SELF_HELP_CLOSING }]);
+      setMessages((prev) => [...prev, assistantMessage(SELF_HELP_CLOSING)]);
     }
   }
 
@@ -732,21 +732,18 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
               setContactSubmitted(true);
               setMessages((prev) => [
                 ...prev,
-                {
-                  role: "assistant",
-                  content:
-                    "Thank you — your email has been received. Our warranty team will follow up within 24 hours.",
-                },
+                assistantMessage(
+                  "Thank you — your email has been received. Our warranty team will follow up within 24 hours."
+                ),
               ]);
             }}
             onUploadSuccess={(filename) => {
               setContactSubmitted(true);
               setMessages((prev) => [
                 ...prev,
-                {
-                  role: "assistant",
-                  content: `Thank you — "${filename}" has been received. Our team will review it shortly.`,
-                },
+                assistantMessage(
+                  `Thank you — "${filename}" has been received. Our team will review it shortly.`
+                ),
               ]);
             }}
           />
@@ -758,6 +755,18 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
           onSubmit={handleSubmit}
           className="shrink-0 border-t border-gray-200 bg-white px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-4"
         >
+          {needsFirstIntake && (
+            <div className="mb-2">
+              <SerialPhotoButton
+                disabled={loading}
+                onModelDetected={(name) => {
+                  const suffix = input.trim() ? ` ${input.trim()}` : "";
+                  setInput(`${name}${suffix}`);
+                  inputRef.current?.focus();
+                }}
+              />
+            </div>
+          )}
           <div className="flex items-end gap-2 rounded-2xl border border-gray-200 bg-gray-50 p-2 focus-within:border-brand-500 focus-within:ring-1 focus-within:ring-brand-500">
             <textarea
               ref={inputRef}

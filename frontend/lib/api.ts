@@ -511,6 +511,46 @@ export async function submitCustomerNote(
   }>;
 }
 
+// ---------------------------------------------------------------------------
+// Serial-label OCR
+// ---------------------------------------------------------------------------
+
+export interface SerialOcrResponse {
+  model_name: string | null;
+  serial_number: string | null;
+  raw_text: string;
+  confidence: "high" | "medium" | "low";
+}
+
+/**
+ * Send a photo of the warranty sticker on the chair to the backend so it can
+ * auto-detect the chair model + serial number.
+ *
+ * CONTRACT: POST /api/v1/warranty/ocr/serial (multipart/form-data)
+ *   file: image/*  (≤ 8 MB)
+ *
+ * The backend never persists the uploaded photo — it just returns the
+ * extracted fields. The caller is responsible for showing them back to the
+ * customer for confirmation before starting a warranty intake.
+ */
+export async function extractSerialFromPhoto(file: File): Promise<SerialOcrResponse> {
+  const url = `${getApiBase()}/api/v1/warranty/ocr/serial`;
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch(url, { method: "POST", body: formData });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<SerialOcrResponse>;
+}
+
 /**
  * Upload an evidence file for a warranty ticket.
  *

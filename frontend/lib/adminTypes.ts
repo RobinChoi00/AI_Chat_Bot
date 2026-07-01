@@ -92,6 +92,71 @@ export interface TicketDetailResponse {
 }
 
 // ------------------------------------------------------------
+// Warranty completion-rate dashboard
+// ------------------------------------------------------------
+
+export interface MetricsRange {
+  days: number;
+  start: string;
+  end: string;
+  abandon_threshold_hours: number;
+}
+
+export interface MetricsTotals {
+  started: number;
+  reached_terminal: number;
+  completion_rate_pct: number;
+  contact_captured: number;
+  contact_rate_pct: number;
+  admin_decided: number;
+  resolved: number;
+  resolved_rate_pct: number;
+  abandoned: number;
+  abandoned_rate_pct: number;
+  median_turns_to_terminal: number;
+}
+
+export interface MetricsStatusRow {
+  status: string;
+  count: number;
+}
+
+export interface MetricsIssueRow {
+  issue_type: string;
+  count: number;
+  completed: number;
+  completion_rate_pct: number;
+}
+
+export interface MetricsDomainRow {
+  domain: string;
+  count: number;
+  completed: number;
+  completion_rate_pct: number;
+}
+
+export interface MetricsTerminalRow {
+  node_id: string;
+  count: number;
+}
+
+export interface MetricsDailyRow {
+  day: string;
+  started: number;
+  completed: number;
+}
+
+export interface WarrantyMetricsResponse {
+  range: MetricsRange;
+  totals: MetricsTotals;
+  by_status: MetricsStatusRow[];
+  by_issue_type: MetricsIssueRow[];
+  by_domain: MetricsDomainRow[];
+  top_terminals: MetricsTerminalRow[];
+  daily_started: MetricsDailyRow[];
+}
+
+// ------------------------------------------------------------
 // Request bodies
 // ------------------------------------------------------------
 

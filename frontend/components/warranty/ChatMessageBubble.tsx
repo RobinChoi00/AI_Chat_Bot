@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import type { ChatMessage } from "@/lib/types";
+import { useTypewriter } from "@/lib/useTypewriter";
 import SpeakButton from "./SpeakButton";
 import FeedbackButtons from "./FeedbackButtons";
 
@@ -118,7 +119,14 @@ export default function ChatMessageBubble({
   showFeedback,
 }: Props) {
   const isUser = message.role === "user";
-  const lines = message.content.split("\n");
+  const shouldAnimate = !isUser && !isStreaming && Boolean(message.animate);
+  const { visible, done } = useTypewriter({
+    text: message.content,
+    enabled: shouldAnimate,
+  });
+  const displayed = shouldAnimate ? visible : message.content;
+  const lines = displayed.split("\n");
+  const showActions = !isUser && !isStreaming && done && message.content.trim();
 
   return (
     <div className={`flex w-full ${isUser ? "justify-end" : "justify-start"}`}>
@@ -143,11 +151,11 @@ export default function ChatMessageBubble({
               {renderInline(line, `line-${i}`)}
             </span>
           ))}
-          {isStreaming && (
+          {(isStreaming || (shouldAnimate && !done)) && (
             <span className="ml-1 inline-block h-3 w-1.5 animate-pulse rounded-sm bg-current opacity-70" />
           )}
         </div>
-        {!isUser && !isStreaming && message.content.trim() && (
+        {showActions && (
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             <SpeakButton text={message.content} />
             {showFeedback && feedbackSessionId && (
