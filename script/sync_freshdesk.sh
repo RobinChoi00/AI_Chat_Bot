@@ -2,7 +2,7 @@
 # Weekly Freshdesk → warranty knowledge sync (run from project root on EC2).
 #
 # Uses Search API: Resolved/Closed tickets only (see freshdesk_sync.py).
-# Defaults: 10 search pages (~300 resolved) × up to 12 calendar months.
+# Defaults: 30 search pages (~900 resolved cap) × up to 12 calendar months.
 #
 # Cron example (Sundays 3:00 AM):
 #   0 3 * * 0 /home/ubuntu/AI_Chat_Bot/script/sync_freshdesk.sh
@@ -14,7 +14,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-MAX_PAGES="${FRESHDESK_SYNC_MAX_PAGES:-10}"
+MAX_PAGES="${FRESHDESK_SYNC_MAX_PAGES:-30}"
 MONTHS_BACK="${FRESHDESK_SYNC_MONTHS_BACK:-12}"
 
 mkdir -p "$ROOT/logs"

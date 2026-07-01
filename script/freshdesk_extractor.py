@@ -43,8 +43,8 @@ def main() -> None:
     parser.add_argument(
         "--max-pages",
         type=int,
-        default=10,
-        help="Max Freshdesk Search pages to fetch (default 10, up to 60)",
+        default=30,
+        help="Max Freshdesk Search pages to fetch (default 30, up to 60)",
     )
     parser.add_argument(
         "--months-back",

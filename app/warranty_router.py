@@ -1298,7 +1298,7 @@ async def admin_warranty_note(
 async def admin_sync_freshdesk(
     background_tasks: BackgroundTasks,
     x_admin_key: Optional[str] = Header(default=None),
-    max_pages: int = 10,
+    max_pages: int = 30,
     months_back: int = 12,
     llm_rescue: bool = True,
     rebuild_faiss: bool = False,
@@ -1310,7 +1310,7 @@ async def admin_sync_freshdesk(
 
     Query params
     ------------
-    max_pages : total Freshdesk Search pages to fetch (1..60, default 10).
+    max_pages : total Freshdesk Search pages to fetch (1..60, default 30).
         Each page returns up to 30 Resolved/Closed tickets only.
     months_back : calendar months to scan, newest first (1..36, default 12).
     llm_rescue : run ``freshdesk_ticket_summarizer`` after sync when

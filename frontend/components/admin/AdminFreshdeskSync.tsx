@@ -76,6 +76,8 @@ export default function AdminFreshdeskSync() {
 
   const [llmRescue, setLlmRescue] = useState(true);
   const [rebuildAfter, setRebuildAfter] = useState(false);
+  const [syncMaxPages, setSyncMaxPages] = useState(30);
+  const [syncMonthsBack, setSyncMonthsBack] = useState(12);
 
   const [ticketResult, setTicketResult] = useState<TicketSyncResult | null>(null);
   const [kbResult, setKbResult] = useState<SolutionsSyncResult | null>(null);
@@ -105,6 +107,8 @@ export default function AdminFreshdeskSync() {
     setTicketResult(null);
     try {
       const qs = new URLSearchParams({
+        max_pages: String(syncMaxPages),
+        months_back: String(syncMonthsBack),
         llm_rescue: llmRescue ? "true" : "false",
         rebuild_faiss: rebuildAfter ? "true" : "false",
       });
@@ -205,6 +209,32 @@ export default function AdminFreshdeskSync() {
             className="h-3.5 w-3.5"
           />
           <span>Rebuild FAISS after sync</span>
+        </label>
+        <label className="flex items-center gap-1.5 text-indigo-900">
+          <span>Search pages</span>
+          <input
+            type="number"
+            min={1}
+            max={60}
+            value={syncMaxPages}
+            onChange={(event) =>
+              setSyncMaxPages(Math.min(60, Math.max(1, Number(event.target.value) || 30)))
+            }
+            className="w-14 rounded border border-indigo-200 px-1.5 py-0.5 text-xs"
+          />
+        </label>
+        <label className="flex items-center gap-1.5 text-indigo-900">
+          <span>Months back</span>
+          <input
+            type="number"
+            min={1}
+            max={36}
+            value={syncMonthsBack}
+            onChange={(event) =>
+              setSyncMonthsBack(Math.min(36, Math.max(1, Number(event.target.value) || 12)))
+            }
+            className="w-14 rounded border border-indigo-200 px-1.5 py-0.5 text-xs"
+          />
         </label>
       </div>
 
