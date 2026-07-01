@@ -50,6 +50,17 @@ def test_build_step_enrichment_skips_without_turns():
     assert step_enrich.build_step_enrichment(engine, ticket, node) is None
 
 
+def test_build_step_enrichment_skips_before_issue_type_selected():
+    engine = _FakeEngine([_turn("warranty", node_id="root")])
+    ticket = SimpleNamespace(ticket_id="t1", issue_type="", model_name="Maestro")
+    node = {
+        "node_id": "issue_type",
+        "type": "question",
+        "prompt": "What type of problem are you experiencing with your chair?",
+    }
+    assert step_enrich.build_step_enrichment(engine, ticket, node) is None
+
+
 def test_build_step_enrichment_uses_freshdesk_tips(monkeypatch):
     fake_matches = [
         KnowledgeEntry(

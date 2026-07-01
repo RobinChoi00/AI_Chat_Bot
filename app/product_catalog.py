@@ -287,3 +287,29 @@ def resolve_model_name(raw: str) -> Optional[str]:
                 token_matches.append((key, title))
 
     return _pick_best_catalog_title(token_matches, norm=norm, tokens=tokens)
+
+
+# Customer words that mean they are describing an issue — not model-only intake.
+_ISSUE_HINT_RE = re.compile(
+    r"\b("
+    r"power|won't|wont|not working|doesn't|doesnt|broken|defect|delivery|"
+    r"install|installation|air|heat|error|code|remote|footrest|mech|massage|"
+    r"problem|issue|help|replace|ship|damaged|missing|stuck|noise|smell|leak|"
+    r"inflat|deflat|turn on|turn off|won t|does not|do not|can't|cant"
+    r")\b",
+    re.I,
+)
+
+
+def looks_like_model_only(raw: str) -> Optional[str]:
+    """
+    Return a catalog model name when *raw* looks like the customer typed only
+    their chair model (no issue description). Used to avoid auto-advancing into
+    defect troubleshooting or KB enrichment before issue type is chosen.
+    """
+    text = (raw or "").strip()
+    if len(text) < 2 or len(text) > 60:
+        return None
+    if _ISSUE_HINT_RE.search(text):
+        return None
+    return resolve_model_name(text)

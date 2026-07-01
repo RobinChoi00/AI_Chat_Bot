@@ -135,9 +135,13 @@ _SYSTEM_PROMPT = (
     "4. After that, only include further answer_keys you are clearly "
     "confident about from the customer's words. It is OK and preferred to "
     "stop early; the workflow will ask the missing questions normally.\n"
-    "5. Each answer_key belongs to one node — keys are not interchangeable "
+    "5. If the customer message is ONLY a chair model name with NO issue "
+    "description (e.g. \"Maestro\", \"OS-4000T\"), return "
+    'answer_keys: ["warranty"], set model_name, confidence: high, and stop '
+    "— do NOT pick defect/air/power or any symptom branch.\n"
+    "6. Each answer_key belongs to one node — keys are not interchangeable "
     "between nodes. Pick at most one key per node.\n"
-    "6. Return JSON only, no prose, in the schema:\n"
+    "7. Return JSON only, no prose, in the schema:\n"
     "{\n"
     '  "answer_keys": ["warranty", "defect", "air", "footrest"],\n'
     '  "model_name": "OS-4000T" or null,\n'
@@ -180,6 +184,22 @@ def extract_workflow_prefill(
         return empty
     if len(text) > _MAX_FREE_TEXT_LEN:
         text = text[:_MAX_FREE_TEXT_LEN]
+
+    try:
+        from product_catalog import looks_like_model_only  # noqa: WPS433
+
+        model_only = looks_like_model_only(text)
+    except ImportError:
+        model_only = None
+
+    if model_only:
+        return {
+            "answer_keys": ["warranty"],
+            "model_name": model_only,
+            "confidence": "high",
+            "summary": f"Chair model: {model_only}.",
+            "source": "model_only",
+        }
 
     client = _openai_client()
     if client is None:

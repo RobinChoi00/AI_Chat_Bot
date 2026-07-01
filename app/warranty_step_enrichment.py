@@ -122,6 +122,10 @@ def build_step_enrichment(
         return None
 
     issue_type = str(getattr(ticket, "issue_type", "") or "").lower()
+    if not issue_type:
+        # Model-only or issue-type menu — don't infer symptoms from KB yet.
+        return None
+
     model_name = str(getattr(ticket, "model_name", "") or "")
     path_text = build_path_text(turns)
     defect_category = infer_defect_category_from_turns(turns)

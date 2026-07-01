@@ -447,3 +447,32 @@ def test_smart_start_sets_model_from_hint(client, monkeypatch):
     assert data["ticket"]["model_name"] == "OS-4000T"
     assert data["smart_start"]["model_name_hint"] == "OS-4000T"
     assert len(data["smart_start"]["applied_keys"]) >= 3
+
+
+def test_smart_start_model_only_stays_on_issue_type(client, monkeypatch):
+    import warranty_intake as wi  # noqa: WPS433
+
+    monkeypatch.setattr(
+        wi,
+        "extract_workflow_prefill",
+        lambda **kwargs: {
+            "answer_keys": ["warranty"],
+            "model_name": "Maestro",
+            "confidence": "high",
+            "summary": "Chair model: Maestro.",
+            "source": "model_only",
+        },
+    )
+
+    session_id = "cust-api-smart-model-only"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/smart-start",
+        json={"message": "Maestro", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "Maestro" in data["ticket"]["model_name"]
+    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
+    assert not data["ticket"].get("issue_type")
+    assert data["smart_start"]["applied_keys"] == ["warranty"]
+    assert data.get("step_enrichment") is None

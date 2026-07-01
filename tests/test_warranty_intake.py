@@ -129,6 +129,28 @@ def test_extract_returns_empty_when_no_client(monkeypatch):
     assert out["source"] == "empty"
 
 
+def test_extract_model_only_skips_llm_and_defect_branch(monkeypatch):
+    """Typing only a model name must not pre-select a symptom path."""
+    import product_catalog as pc
+
+    monkeypatch.setattr(
+        pc,
+        "looks_like_model_only",
+        lambda text: "Maestro" if text.strip().lower() == "maestro" else None,
+    )
+
+    def _boom():
+        raise AssertionError("LLM should not run for model-only intake")
+
+    monkeypatch.setattr(warranty_intake, "_openai_client", _boom)
+
+    out = extract_workflow_prefill(free_text="Maestro", nodes=_NODES)
+    assert out["source"] == "model_only"
+    assert out["answer_keys"] == ["warranty"]
+    assert out["model_name"] == "Maestro"
+    assert out["confidence"] == "high"
+
+
 # ---------------------------------------------------------------------------
 # apply_prefill_to_engine
 # ---------------------------------------------------------------------------

@@ -998,15 +998,17 @@ async def smart_start_warranty(session_id: str, body: WarrantySmartStartRequest)
         engine.set_model_name(ticket_id, resolved_model)
 
     if not apply_result["applied"]:
-        # Nothing usable — fall back to a safe defect quick-start so the
-        # frontend still progresses past the root menu.
+        # Nothing usable — fall back to defect quick-start only when the
+        # customer described an issue, not when they typed a model name only.
         node = engine.get_current_node(ticket_id)
         node_id = node.get("node_id") if node else None
+        model_only = extraction.get("source") == "model_only"
         try:
             if node_id == "root":
                 engine.submit_answer(ticket_id, "warranty")
-                engine.submit_answer(ticket_id, "defect")
-            elif node_id == "issue_type":
+                if not model_only:
+                    engine.submit_answer(ticket_id, "defect")
+            elif node_id == "issue_type" and not model_only:
                 engine.submit_answer(ticket_id, "defect")
         except ValueError:
             pass
