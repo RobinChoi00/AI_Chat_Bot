@@ -519,6 +519,14 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     warrantyState?.status === "awaiting_admin_review" ||
     warrantyState?.status === "admin_reviewing";
   const needsCustomerReply = Boolean(warrantyState?.needs_customer_reply);
+  const customerReplyMessage = needsCustomerReply
+    ? (warrantyState?.customer_message ?? null)
+    : null;
+  const resolvedTeamMessage =
+    warrantyState?.status === "resolved"
+      ? (warrantyState?.customer_message ?? null)
+      : null;
+  const caseReference = warrantyState?.case_reference ?? null;
   const isTerminal = warrantyState?.current_node?.is_terminal ?? false;
 
   const needsFirstIntake =
@@ -641,9 +649,9 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         <div className="mx-4 mt-3 shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
           <p className="text-sm font-medium text-amber-800">Under Support Review</p>
           <p className="mt-0.5 text-xs text-amber-700">
-            {warrantyState?.case_reference ? (
+            {caseReference ? (
               <>
-                Your case reference is <strong>{warrantyState.case_reference}</strong>.
+                Your case reference is <strong>{caseReference}</strong>.
                 {" "}Save this number — our team will follow up within 24 hours.
               </>
             ) : (
@@ -653,11 +661,11 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         </div>
       )}
 
-      {needsCustomerReply && warrantyState?.customer_message && (
+      {customerReplyMessage && (
         <div className="mx-4 mt-3 shrink-0 rounded-xl border border-yellow-200 bg-yellow-50 px-4 py-3">
           <p className="text-sm font-medium text-yellow-900">We need a little more information</p>
           <p className="mt-1 whitespace-pre-wrap text-sm text-yellow-800">
-            {warrantyState.customer_message}
+            {customerReplyMessage}
           </p>
           <p className="mt-2 text-xs text-yellow-700">
             Reply in the box below — we&apos;ll notify our warranty team.
@@ -665,11 +673,11 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         </div>
       )}
 
-      {warrantyState?.status === "resolved" && warrantyState?.customer_message && (
+      {resolvedTeamMessage && (
         <div className="mx-4 mt-3 shrink-0 rounded-xl border border-green-200 bg-green-50 px-4 py-3">
           <p className="text-sm font-medium text-green-900">Update from our warranty team</p>
           <p className="mt-1 whitespace-pre-wrap text-sm text-green-800">
-            {warrantyState.customer_message}
+            {resolvedTeamMessage}
           </p>
         </div>
       )}
