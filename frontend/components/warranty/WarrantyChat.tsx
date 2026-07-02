@@ -641,7 +641,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         <div className="mx-4 mt-3 shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
           <p className="text-sm font-medium text-amber-800">Under Support Review</p>
           <p className="mt-0.5 text-xs text-amber-700">
-            {warrantyState.case_reference ? (
+            {warrantyState?.case_reference ? (
               <>
                 Your case reference is <strong>{warrantyState.case_reference}</strong>.
                 {" "}Save this number — our team will follow up within 24 hours.
@@ -653,7 +653,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         </div>
       )}
 
-      {needsCustomerReply && warrantyState.customer_message && (
+      {needsCustomerReply && warrantyState?.customer_message && (
         <div className="mx-4 mt-3 shrink-0 rounded-xl border border-yellow-200 bg-yellow-50 px-4 py-3">
           <p className="text-sm font-medium text-yellow-900">We need a little more information</p>
           <p className="mt-1 whitespace-pre-wrap text-sm text-yellow-800">
@@ -665,7 +665,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         </div>
       )}
 
-      {warrantyState?.status === "resolved" && warrantyState.customer_message && (
+      {warrantyState?.status === "resolved" && warrantyState?.customer_message && (
         <div className="mx-4 mt-3 shrink-0 rounded-xl border border-green-200 bg-green-50 px-4 py-3">
           <p className="text-sm font-medium text-green-900">Update from our warranty team</p>
           <p className="mt-1 whitespace-pre-wrap text-sm text-green-800">
