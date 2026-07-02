@@ -13,7 +13,7 @@ import pytest
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(APP_DIR))
 
-from ringcentral_ivr import handle_call_enter  # noqa: E402
+from ringcentral_ivr import handle_call_enter, handle_command_update  # noqa: E402
 from ringcentral_voice import get_call_context  # noqa: E402
 from warranty_workflow import WarrantyEngine  # noqa: E402
 
@@ -85,3 +85,44 @@ def test_handle_call_enter_during_business_hours_transfers_immediately():
     mock_play.assert_not_called()
     mock_engine.assert_not_called()
     assert get_call_context("rc-session-hours") is None
+
+
+def test_menu_repeat_zero_replays_current_prompt():
+    payload = {
+        "sessionId": "rc-session-repeat",
+        "inParty": {
+            "id": "party-repeat",
+            "from": {"phoneNumber": "+15551234567"},
+        },
+    }
+    with (
+        patch("ringcentral_ivr.is_warranty_business_hours", return_value=False),
+        patch("ringcentral_ivr.play_prompt") as mock_play,
+        patch("ringcentral_ivr.collect_digits") as mock_collect,
+        patch("ringcentral_ivr.resolve_play_uri", return_value="https://example.com/menu.wav"),
+        patch("ringcentral_ivr.forward_call") as mock_forward,
+    ):
+        handle_call_enter(payload)
+        handle_command_update(
+            {
+                "sessionId": "rc-session-repeat",
+                "status": "Completed",
+                "command": "Play",
+                "partyId": "party-repeat",
+            }
+        )
+        handle_command_update(
+            {
+                "sessionId": "rc-session-repeat",
+                "status": "Completed",
+                "command": "Collect",
+                "partyId": "party-repeat",
+                "parameters": {"digits": "0"},
+            }
+        )
+
+    ctx = get_call_context("rc-session-repeat")
+    assert ctx is not None
+    assert mock_play.call_count >= 2
+    mock_forward.assert_not_called()
+    mock_collect.assert_called()

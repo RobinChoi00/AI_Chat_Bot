@@ -11,10 +11,12 @@ APP_DIR = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(APP_DIR))
 
 from ringcentral_voice import (  # noqa: E402
-    AGENT_DTMF,
+    REPEAT_DTMF,
+    build_after_hours_closure_script,
     build_menu_script,
     build_terminal_script,
     menu_dtmf_patterns,
+    post_diy_dtmf_patterns,
 )
 
 
@@ -31,16 +33,29 @@ def test_build_menu_script_includes_dtmf_options():
     assert "Press 1 for Installation Issue" in script
     assert "Press 2 for Delivery Issue" in script
     assert "Press 3 for Defect" in script
-    assert f"Press {AGENT_DTMF} to speak with a warranty specialist" in script
+    assert f"Press {REPEAT_DTMF} to hear these options again" in script
 
 
-def test_menu_dtmf_patterns_includes_agent_escape():
+def test_menu_dtmf_patterns_includes_repeat():
     node = {"options": [{"label": "A"}, {"label": "B"}]}
-    assert menu_dtmf_patterns(node) == ["1", "2", AGENT_DTMF]
+    assert menu_dtmf_patterns(node) == ["1", "2", REPEAT_DTMF]
 
 
 def test_build_terminal_script_includes_post_diy_prompt():
     node = {"prompt": "Try reconnecting the air hose."}
     script = build_terminal_script(node, None)
     assert "Press 1 if that fixed the issue" in script
-    assert "Press 2 to speak with a warranty specialist" in script
+    assert f"Press {REPEAT_DTMF} to hear these steps again" in script
+    assert "specialist" not in script.lower()
+
+
+def test_build_after_hours_closure_script_mentions_business_hours():
+    script = build_after_hours_closure_script()
+    assert "Press 1 to end this call" in script
+    assert f"Press {REPEAT_DTMF} to hear this message again" in script
+    assert "specialist" not in script.lower()
+    assert "connecting you" not in script.lower()
+
+
+def test_post_diy_patterns_are_repeat_or_hangup_only():
+    assert post_diy_dtmf_patterns() == ["1", REPEAT_DTMF]

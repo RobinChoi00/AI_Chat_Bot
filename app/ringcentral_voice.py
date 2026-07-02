@@ -24,10 +24,9 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 RC_AUDIO_CACHE_DIR = Path(__file__).resolve().parent.parent / "rc_audio_cache"
 RC_AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Always offer 0 during menu collect → transfer to warranty agent.
-AGENT_DTMF = "0"
+# After-hours IVR: 0 replays the current prompt (no live agent transfer).
+REPEAT_DTMF = "0"
 POST_DIY_FIXED_DTMF = "1"
-POST_DIY_AGENT_DTMF = "2"
 
 
 class IvrPhase(str, Enum):
@@ -80,7 +79,7 @@ def build_menu_script(node: dict) -> str:
         if len(label) > 120:
             label = label[:117] + "..."
         lines.append(f"Press {idx} for {label}.")
-    lines.append(f"Press {AGENT_DTMF} to speak with a warranty specialist.")
+    lines.append(f"Press {REPEAT_DTMF} to hear these options again.")
     return " ".join(lines)
 
 
@@ -108,21 +107,38 @@ def build_terminal_script(node: dict, enrichment: Optional[dict[str, Any]] = Non
 
     parts.append(
         f"Press {POST_DIY_FIXED_DTMF} if that fixed the issue. "
-        f"Press {POST_DIY_AGENT_DTMF} to speak with a warranty specialist."
+        f"Press {REPEAT_DTMF} to hear these steps again."
     )
     return " ".join(parts)
+
+
+def build_after_hours_closure_script() -> str:
+    """Closing message when the workflow ends outside live agent hours."""
+    try:
+        from config import WARRANTY_BUSINESS_HOURS  # type: ignore
+
+        hours = str(WARRANTY_BUSINESS_HOURS or "Mon-Fri, 10:00 AM - 6:00 PM CST")
+    except Exception:
+        hours = "Monday through Friday, ten A M to six P M Central time"
+    return (
+        "Thank you. We have recorded your answers for our warranty team. "
+        f"Their phone line is open {hours}. "
+        "You can also start a warranty chat on our website anytime. "
+        f"Press {POST_DIY_FIXED_DTMF} to end this call. "
+        f"Press {REPEAT_DTMF} to hear this message again."
+    )
 
 
 def menu_dtmf_patterns(node: dict) -> list[str]:
     """Allowed DTMF keys for a question node (+ agent escape)."""
     count = len(node.get("options") or [])
     patterns = [str(i) for i in range(1, count + 1)]
-    patterns.append(AGENT_DTMF)
+    patterns.append(REPEAT_DTMF)
     return patterns
 
 
 def post_diy_dtmf_patterns() -> list[str]:
-    return [POST_DIY_FIXED_DTMF, POST_DIY_AGENT_DTMF, AGENT_DTMF]
+    return [POST_DIY_FIXED_DTMF, REPEAT_DTMF]
 
 
 def audio_cache_key(text: str) -> str:

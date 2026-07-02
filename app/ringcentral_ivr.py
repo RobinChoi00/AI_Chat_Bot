@@ -7,7 +7,8 @@ Call flow (DTMF-only MVP, defect troubleshooting):
   on-call-enter  → if warranty business hours: forward to agent immediately
                  → else start ticket → skip to defect_problem_type → play menu
   Play complete  → collect DTMF
-  Collect digit  → submit_answer OR forward/hangup at terminal
+  Collect digit  → submit_answer, replay (0), or hangup at terminal
+  After-hours: no live agent transfer — press 0 replays the current prompt.
 """
 
 from __future__ import annotations
@@ -24,9 +25,10 @@ from ringcentral_client import (
 )
 from ringcentral_hours import is_warranty_business_hours
 from ringcentral_voice import (
-    AGENT_DTMF,
     IvrPhase,
+    REPEAT_DTMF,
     VoiceCallContext,
+    build_after_hours_closure_script,
     build_menu_script,
     build_terminal_script,
     get_call_context,
@@ -123,8 +125,8 @@ def _present_node(
         return
     if node_type == "question_text":
         script = (
-            "We need a few details that are easier with a specialist. "
-            f"Press {AGENT_DTMF} to speak with a warranty agent now."
+            "This step needs details that are easier on our website warranty chat. "
+            f"Press {REPEAT_DTMF} to hear the previous options again."
         )
         _play_script(ctx, script, phase=IvrPhase.MENU)
         return
@@ -142,12 +144,8 @@ def _present_terminal(ctx: VoiceCallContext, node: dict) -> None:
         _transfer(ctx, "sales_handoff")
         return
     if action in ("awaiting_admin", "awaiting_admin_review", "awaiting_evidence"):
-        script = (
-            "Thank you. I am connecting you with a warranty specialist "
-            "who can review your case."
-        )
-        _play_script(ctx, script, phase=IvrPhase.DONE)
-        ctx.awaiting_command = "PlayThenTransfer"
+        script = build_after_hours_closure_script()
+        _play_script(ctx, script, phase=IvrPhase.POST_DIY)
         return
 
     engine = _lazy_engine()
@@ -206,9 +204,21 @@ def handle_call_enter(payload: dict[str, Any]) -> None:
     _present_node(ctx, entry_node, intro_prefix=intro)
 
 
+def _replay_current_node(ctx: VoiceCallContext) -> None:
+    engine = _lazy_engine()
+    node = engine.get_current_node(ctx.ticket_id)
+    if node is None:
+        logger.warning("RC IVR repeat with missing node ticket=%s", ctx.ticket_id)
+        return
+    if node.get("type") == "terminal":
+        _present_terminal(ctx, node)
+        return
+    _present_node(ctx, node)
+
+
 def _handle_menu_digit(ctx: VoiceCallContext, digit: str) -> None:
-    if digit == AGENT_DTMF:
-        _transfer(ctx, "caller_requested_agent")
+    if digit == REPEAT_DTMF:
+        _replay_current_node(ctx)
         return
 
     engine = _lazy_engine()
@@ -218,7 +228,7 @@ def _handle_menu_digit(ctx: VoiceCallContext, digit: str) -> None:
         return
 
     if node.get("type") == "question_text":
-        _transfer(ctx, "question_text")
+        _replay_current_node(ctx)
         return
 
     try:
@@ -234,8 +244,8 @@ def _handle_menu_digit(ctx: VoiceCallContext, digit: str) -> None:
 
 
 def _handle_post_diy_digit(ctx: VoiceCallContext, digit: str) -> None:
-    if digit in (AGENT_DTMF, "2"):
-        _transfer(ctx, "post_diy_need_agent")
+    if digit == REPEAT_DTMF:
+        _replay_current_node(ctx)
         return
     if digit == "1":
         logger.info("RC IVR resolved on call session=%s ticket=%s", ctx.session_id, ctx.ticket_id)
@@ -243,7 +253,7 @@ def _handle_post_diy_digit(ctx: VoiceCallContext, digit: str) -> None:
         ctx.phase = IvrPhase.DONE
         ctx.awaiting_command = None
         return
-    script = "Sorry, press 1 if the issue is fixed, or 2 for an agent."
+    script = "Sorry, press 1 if the issue is fixed, or press 0 to hear the message again."
     _play_script(ctx, script, phase=IvrPhase.POST_DIY)
 
 
@@ -263,13 +273,10 @@ def handle_command_update(payload: dict[str, Any]) -> None:
     ctx.party_id = party_id
 
     if command == "Play":
-        if ctx.awaiting_command == "PlayThenTransfer":
-            _transfer(ctx, "terminal_admin")
-            return
         if ctx.phase == IvrPhase.MENU:
             node = _lazy_engine().get_current_node(ctx.ticket_id) or {}
             if node.get("type") == "question_text":
-                _start_collect(ctx, [AGENT_DTMF])
+                _start_collect(ctx, [REPEAT_DTMF])
             else:
                 _start_collect(ctx, menu_dtmf_patterns(node))
             return
