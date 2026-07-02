@@ -102,9 +102,14 @@ def _heuristic_option_match(options: list[dict], text: str) -> Optional[str]:
     for opt in options:
         label = _normalize(str(opt.get("label", "")))
         key = str(opt.get("answer_key", ""))
-        if norm == _normalize(key):
+        key_norm = _normalize(key)
+        if key_norm and norm == key_norm:
             return key
-        if label and (norm == label or label in norm or norm in label):
+        if label and norm == label:
+            return key
+        # Require a substantial label phrase in the user's text — avoids
+        # matching short fragments like "no" or "air" to the wrong option.
+        if label and len(label) >= 12 and label in norm:
             return key
 
     keys = [str(o.get("answer_key", "")) for o in options]

@@ -478,3 +478,84 @@ def test_delivery_signed_cleared_terminal_warns_compensation_difficulty():
     assert result is not None
     assert "cleared" in result["message"].lower()
     assert result["diagnosis"]["steps"]
+
+
+def test_unmapped_rolling_no_movement_terminal_uses_flowchart_prompt_not_generic_diy():
+    node = {
+        "node_id": "defect_rolling_no_movement_terminal",
+        "type": "terminal",
+        "action": "awaiting_admin",
+        "prompt": (
+            "Our team will review and arrange the necessary service for the massage mechanism."
+        ),
+        "evidence_required": ["video_of_issue"],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("rolling"),
+                _Turn("no_movement"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "massage mechanism" in result["message"].lower()
+    assert "What you can try" not in result["message"]
+    assert "What to prepare" in result["message"]
+    assert "video" in result["message"].lower()
+    assert result["phase"] == "awaiting_help_consent"
+
+
+def test_unmapped_rolling_worked_terminal_softens_repair_language():
+    node = {
+        "node_id": "defect_rolling_worked_terminal",
+        "type": "terminal",
+        "action": "awaiting_admin",
+        "prompt": "Our team will diagnose and arrange the appropriate repair.",
+        "evidence_required": ["video_of_issue"],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("rolling"),
+                _Turn("worked_before_stopped"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "appropriate repair" not in result["message"].lower()
+    assert "review your case" in result["message"].lower()
+    assert "What to prepare" in result["message"]
+    assert result["diagnosis"]["steps"]
+
+
+def test_unmapped_rolling_power_no_move_terminal_includes_category_prep_hints():
+    node = {
+        "node_id": "defect_rolling_power_no_move_terminal",
+        "type": "terminal",
+        "action": "awaiting_admin",
+        "prompt": (
+            "Our team will assess and arrange the necessary repair for the massage mechanism."
+        ),
+        "evidence_required": ["video_of_issue"],
+    }
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("rolling"),
+                _Turn("power_but_no_move"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
+    assert result is not None
+    assert "What you can try" not in result["message"]
+    assert any(
+        "air" in step.lower() or "video" in step.lower()
+        for step in result["diagnosis"]["steps"]
+    )

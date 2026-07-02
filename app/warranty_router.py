@@ -646,13 +646,13 @@ def _register_model_ticket(
     return payload
 
 
-def _validate_delivery_text_before_submit(engine, ticket_id: str, answer: str) -> None:
+def _validate_text_before_submit(engine, ticket_id: str, answer: str) -> None:
     node = engine.get_current_node(ticket_id)
     if not node or node.get("type") != "question_text":
         return
 
     node_id = str(node.get("node_id") or "")
-    if node_id not in ("delivery_get_name", "delivery_get_tracking_number"):
+    if node_id not in _DELIVERY_TEXT_NODES:
         return
 
     ticket = engine.get_ticket(ticket_id)
@@ -663,13 +663,38 @@ def _validate_delivery_text_before_submit(engine, ticket_id: str, answer: str) -
     validate_delivery_text_answer(node_id, answer, model_name=model_name)
 
 
+_DELIVERY_TEXT_NODES = frozenset(
+    {"delivery_get_name", "delivery_get_tracking_number"}
+)
+
+
+def _maybe_side_question_message(engine, ticket_id: str, answer: str) -> Optional[str]:
+    from warranty_intake_context import try_side_question_for_ticket  # noqa: WPS433
+
+    return try_side_question_for_ticket(engine, ticket_id, answer)
+
+
+def _build_side_question_response(
+    engine,
+    ticket_id: str,
+    message: str,
+) -> Dict[str, Any]:
+    ticket = engine.get_ticket(ticket_id)
+    node = engine.get_current_node(ticket_id)
+    session_id = str(getattr(ticket, "session_id", "") or "")
+    payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    payload["side_question"] = True
+    payload["assistant_message"] = message
+    return payload
+
+
 def _submit_answer_with_nlp(engine, ticket_id: str, answer: str) -> tuple[dict, bool]:
     """
     Submit a workflow answer; on option mismatch, map natural language via NLP.
 
     Returns (submit_result, nlp_interpreted).
     """
-    _validate_delivery_text_before_submit(engine, ticket_id, answer)
+    _validate_text_before_submit(engine, ticket_id, answer)
 
     try:
         return engine.submit_answer(ticket_id, answer), False
@@ -855,26 +880,16 @@ def _serialize_ticket_state(
     if engine is None:
         engine = _lazy_engine()
 
-    terminal_enrichment: Optional[Dict[str, Any]] = None
-    step_enrichment: Optional[Dict[str, Any]] = None
-    assistant_message: Optional[str] = None
+    from warranty_assistant_message import build_assistant_message_bundle  # noqa: WPS433
 
-    if node and node.get("type") == "terminal":
-        from warranty_terminal_enrichment import build_terminal_enrichment  # noqa: WPS433
-
-        terminal_enrichment = build_terminal_enrichment(engine, ticket, node)
-        if terminal_enrichment:
-            assistant_message = (
-                str(terminal_enrichment.get("message") or "").strip() or None
-            )
-    elif node:
-        from warranty_step_enrichment import build_step_enrichment  # noqa: WPS433
-
-        step_enrichment = build_step_enrichment(engine, ticket, node)
-        if step_enrichment:
-            assistant_message = (
-                str(step_enrichment.get("message") or "").strip() or None
-            )
+    enrichment = build_assistant_message_bundle(
+        engine=engine,
+        ticket=ticket,
+        node=node,
+    )
+    terminal_enrichment = enrichment.get("terminal_enrichment")
+    step_enrichment = enrichment.get("step_enrichment")
+    assistant_message = enrichment.get("assistant_message")
 
     payload: Dict[str, Any] = {
         "session_id": session_id,
@@ -1030,6 +1045,13 @@ async def natural_start_warranty(
     if ticket is not None:
         _require_registered_model(ticket)
     payload = _quick_start_ticket(engine, session_id, issue_type, body.domain)
+    from warranty_intake_context import persist_intake_summary  # noqa: WPS433
+
+    ticket = engine.get_ticket(str(payload.get("ticket", {}).get("ticket_id") or ""))
+    if ticket is None:
+        active = engine.get_active_session_ticket(session_id)
+        ticket = active
+    persist_intake_summary(ticket, raw_message=message)
     payload["nlp_interpreted"] = True
     payload["interpreted_issue_type"] = issue_type
     return payload
@@ -1052,7 +1074,8 @@ async def smart_start_warranty(
     footrest → terminal).
 
     Behavior:
-      - On any failure / low confidence: behaves like quick-start defect (safe).
+      - On failure / low confidence: advances only to the issue-type menu (never
+        silently defaults to defect).
       - Only auto-submits answer_keys that match the live flowchart options.
       - Returns the same ticket-state payload as other warranty endpoints, plus
         `smart_start` metadata explaining what was inferred.
@@ -1099,32 +1122,63 @@ async def smart_start_warranty(
         resolved_model = resolve_model_name(model_hint) or model_hint
         engine.set_model_name(ticket_id, resolved_model)
 
-    if not apply_result["applied"]:
-        # Nothing usable — fall back to defect quick-start only when the
-        # customer described an issue, not when they typed a model name only.
+    applied_keys_list: list[str] = list(apply_result.get("applied") or [])
+    if not applied_keys_list:
+        # Nothing usable — open the warranty menu only; never guess defect.
         node = engine.get_current_node(ticket_id)
         node_id = node.get("node_id") if node else None
-        model_only = extraction.get("source") == "model_only"
         try:
             if node_id == "root":
                 engine.submit_answer(ticket_id, "warranty")
-                if not model_only:
-                    engine.submit_answer(ticket_id, "defect")
-            elif node_id == "issue_type" and not model_only:
-                engine.submit_answer(ticket_id, "defect")
+                applied_keys_list = ["warranty"]
+                apply_result["applied"] = applied_keys_list
+                apply_result["stopped_reason"] = "done"
         except ValueError:
             pass
+
+    from warranty_intake_context import persist_intake_summary  # noqa: WPS433
+
+    ticket = engine.get_ticket(ticket_id)
+    persist_intake_summary(
+        ticket,
+        summary=str(extraction.get("summary") or "").strip(),
+        raw_message=message,
+    )
 
     ticket = engine.get_ticket(ticket_id)
     node = engine.get_current_node(ticket_id)
     payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+
+    inferred_issue_type: Optional[str] = None
+    if len(applied_keys_list) >= 2 and applied_keys_list[1] in (
+        "installation",
+        "delivery",
+        "defect",
+    ):
+        inferred_issue_type = applied_keys_list[1]
+
+    routing_confirmation: Optional[Dict[str, Any]] = None
+    if inferred_issue_type and len(applied_keys_list) >= 2:
+        summary = str(extraction.get("summary") or "").strip()
+        routing_confirmation = {
+            "inferred_issue_type": inferred_issue_type,
+            "applied_count": len(applied_keys_list),
+            "summary": summary,
+            "message": (
+                f"We're treating this as a {inferred_issue_type} issue"
+                + (f": {summary}" if summary else "")
+                + ". If that's wrong, tap **Start over** and choose again."
+            ),
+        }
+
     payload["smart_start"] = {
         "source": extraction.get("source", "empty"),
         "summary": extraction.get("summary", ""),
-        "applied_keys": apply_result["applied"],
+        "applied_keys": applied_keys_list,
         "skipped_keys": apply_result["skipped"],
         "stopped_reason": apply_result["stopped_reason"],
         "model_name_hint": extraction.get("model_name", ""),
+        "routing_confirmation": routing_confirmation,
     }
     return payload
 
@@ -1141,6 +1195,10 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
     answer = body.answer.strip()
     if not answer:
         raise HTTPException(status_code=422, detail="answer must not be empty")
+
+    side_message = _maybe_side_question_message(engine, ticket_id, answer)
+    if side_message:
+        return _build_side_question_response(engine, ticket_id, side_message)
 
     try:
         result, nlp_interpreted = _submit_answer_with_nlp(engine, ticket_id, answer)
@@ -1365,14 +1423,29 @@ async def admin_warranty_decision(
         evidences=evidences,
     )
 
+    from warranty_freshdesk_case import maybe_sync_admin_decision_to_freshdesk  # noqa: WPS433
+
+    freshdesk_sync = maybe_sync_admin_decision_to_freshdesk(
+        ticket_id,
+        decision=body.decision,
+        note=body.note or "",
+        customer_message=body.customer_message or "",
+        decided_by=body.decided_by or "",
+        engine=engine,
+    )
+    if freshdesk_sync.get("synced"):
+        ticket = engine.get_ticket(ticket_id) or ticket
+
     logger.info(
         f"⚖️  Admin decision — ticket={ticket_id} decision={body.decision} "
-        f"decided_by={body.decided_by} customer_email_sent={customer_email_sent}"
+        f"decided_by={body.decided_by} customer_email_sent={customer_email_sent} "
+        f"freshdesk_synced={freshdesk_sync.get('synced')}"
     )
     return {
         "ticket": _serialize_admin_ticket(ticket, turns=turns, evidences=evidences),
         "customer_email_sent": customer_email_sent,
         "customer_email_skip_reason": customer_email_skip_reason,
+        "freshdesk_sync": freshdesk_sync,
     }
 
 
@@ -1400,6 +1473,63 @@ async def admin_warranty_note(
     return {"ticket": ticket.to_dict()}
 
 
+@router.get("/admin/warranty/freshdesk-status", tags=["admin-warranty"])
+async def admin_freshdesk_status(
+    x_admin_key: Optional[str] = Header(default=None),
+    probe: bool = True,
+):
+    """Freshdesk connection, sync history, and on-disk knowledge snapshot."""
+    _require_admin(x_admin_key)
+
+    try:
+        from freshdesk_status import get_freshdesk_dashboard  # noqa: WPS433
+    except ImportError:
+        from app.freshdesk_status import get_freshdesk_dashboard  # type: ignore  # noqa: WPS433
+
+    return get_freshdesk_dashboard(probe_connection=probe)
+
+
+@router.post("/admin/warranty/{ticket_id}/freshdesk-link", tags=["admin-warranty"])
+async def admin_freshdesk_link(
+    ticket_id: str,
+    x_admin_key: Optional[str] = Header(default=None),
+):
+    """Create or return the Freshdesk ticket linked to a warranty case."""
+    _require_admin(x_admin_key)
+
+    engine = _lazy_engine()
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+
+    try:
+        from warranty_freshdesk_case import ensure_freshdesk_link  # noqa: WPS433
+    except ImportError:
+        from app.warranty_freshdesk_case import ensure_freshdesk_link  # type: ignore  # noqa: WPS433
+
+    result = ensure_freshdesk_link(ticket_id, engine=engine)
+    ticket = engine.get_ticket(ticket_id) or ticket
+    turns = engine.get_turns(ticket_id)
+    evidences = engine.get_evidences(ticket_id)
+
+    if result.get("error") and not result.get("freshdesk_ticket_id"):
+        raise HTTPException(
+            status_code=502,
+            detail=result.get("detail") or result.get("error") or "Freshdesk link failed.",
+        )
+
+    ok = bool(
+        result.get("created")
+        or result.get("reason") == "already_linked"
+        or result.get("freshdesk_ticket_id")
+    )
+    return {
+        "ok": ok,
+        "freshdesk": result,
+        "ticket": _serialize_admin_ticket(ticket, turns=turns, evidences=evidences),
+    }
+
+
 @router.post("/admin/warranty/sync-freshdesk", tags=["admin-warranty"])
 async def admin_sync_freshdesk(
     background_tasks: BackgroundTasks,
@@ -1407,7 +1537,7 @@ async def admin_sync_freshdesk(
     max_pages: int = 30,
     months_back: int = 12,
     llm_rescue: bool = True,
-    rebuild_faiss: bool = False,
+    rebuild_faiss: bool = True,
 ):
     """
     Pull resolved Freshdesk tickets into data/freshdesk_tickets.json, then
@@ -1421,6 +1551,8 @@ async def admin_sync_freshdesk(
     months_back : calendar months to scan, newest first (1..36, default 12).
     llm_rescue : run ``freshdesk_ticket_summarizer`` after sync when
         OPENAI_API_KEY is set (default True). Set false to skip the LLM cost.
+    rebuild_faiss : rebuild the ``freshdesk_qa`` FAISS index after a successful
+        sync (default True). Set false to skip the embedding cost.
     """
     _require_admin(x_admin_key)
 
@@ -1474,47 +1606,40 @@ async def admin_sync_freshdesk(
                 logger.warning("Freshdesk LLM rescue failed: %s", exc)
                 summarize_stats = {"error": str(exc)}
 
-    clear_knowledge_cache()
-    entries = load_knowledge_entries()
-    freshdesk_entries = sum(1 for entry in entries if entry.source == "freshdesk")
-
-    logger.info(
-        "Freshdesk sync — ok=%s tickets=%s knowledge_freshdesk=%s",
-        result.get("ok"),
-        result.get("ticket_count"),
-        freshdesk_entries,
+    from freshdesk_knowledge_refresh import (  # noqa: WPS433
+        build_knowledge_yield_stats,
+        invalidate_warranty_knowledge_caches,
+        log_ticket_sync_yield,
+        schedule_faiss_rebuild,
     )
 
-    freshdesk_kb_entries = sum(
-        1 for entry in entries if entry.source == "freshdesk_kb"
+    invalidate_warranty_knowledge_caches()
+    yield_stats = build_knowledge_yield_stats(
+        synced_ticket_rows=int(result.get("ticket_count") or 0),
+        resolved_scanned=int(result.get("resolved_scanned") or 0),
     )
+    log_ticket_sync_yield(
+        ok=bool(result.get("ok")),
+        ticket_count=int(result.get("ticket_count") or 0),
+        resolved_scanned=int(result.get("resolved_scanned") or 0),
+        stats=yield_stats,
+    )
+
     response: Dict[str, Any] = {
         **result,
-        "knowledge_freshdesk_entries": freshdesk_entries,
-        "knowledge_freshdesk_kb_entries": freshdesk_kb_entries,
-        "knowledge_total_entries": len(entries),
+        **yield_stats,
         "llm_rescue_enabled": bool(llm_rescue and summarizer_enabled()),
     }
     if summarize_stats is not None:
         response["llm_rescue_stats"] = summarize_stats
 
-    if rebuild_faiss and result.get("ok"):
-        try:
-            from warranty_faiss_rebuilder import (  # noqa: WPS433
-                get_status as _faiss_status,
-                rebuild_freshdesk_qa_index,
-            )
-        except ImportError:
-            from app.warranty_faiss_rebuilder import (  # type: ignore  # noqa: WPS433
-                get_status as _faiss_status,
-                rebuild_freshdesk_qa_index,
-            )
-        if _faiss_status().get("running"):
-            response["faiss_rebuild_scheduled"] = False
-            response["faiss_rebuild_reason"] = "already_running"
-        else:
-            background_tasks.add_task(rebuild_freshdesk_qa_index)
-            response["faiss_rebuild_scheduled"] = True
+    response.update(
+        schedule_faiss_rebuild(
+            background_tasks,
+            enabled=rebuild_faiss,
+            sync_ok=bool(result.get("ok")),
+        )
+    )
 
     return response
 
@@ -1549,7 +1674,7 @@ async def admin_sync_freshdesk_solutions(
     background_tasks: BackgroundTasks,
     x_admin_key: Optional[str] = Header(default=None),
     max_articles: int = 500,
-    rebuild_faiss: bool = False,
+    rebuild_faiss: bool = True,
 ):
     """
     Ingest Freshdesk KB(Solutions) articles into
@@ -1576,38 +1701,34 @@ async def admin_sync_freshdesk_solutions(
     except EnvironmentError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    clear_knowledge_cache()
-    entries = load_knowledge_entries()
-    kb_entries = sum(1 for entry in entries if entry.source == "freshdesk_kb")
-
-    logger.info(
-        "Freshdesk Solutions sync — ok=%s articles=%s knowledge_kb=%s",
-        result.get("ok"),
-        result.get("article_count"),
-        kb_entries,
+    from freshdesk_knowledge_refresh import (  # noqa: WPS433
+        build_knowledge_yield_stats,
+        invalidate_warranty_knowledge_caches,
+        log_kb_sync_yield,
+        schedule_faiss_rebuild,
     )
+
+    invalidate_warranty_knowledge_caches()
+    yield_stats = build_knowledge_yield_stats(
+        synced_kb_articles=int(result.get("article_count") or 0),
+    )
+    log_kb_sync_yield(
+        ok=bool(result.get("ok")),
+        article_count=int(result.get("article_count") or 0),
+        stats=yield_stats,
+    )
+
     response: Dict[str, Any] = {
         **result,
-        "knowledge_freshdesk_kb_entries": kb_entries,
-        "knowledge_total_entries": len(entries),
+        **yield_stats,
     }
-    if rebuild_faiss and result.get("ok"):
-        try:
-            from warranty_faiss_rebuilder import (  # noqa: WPS433
-                get_status as _faiss_status,
-                rebuild_freshdesk_qa_index,
-            )
-        except ImportError:
-            from app.warranty_faiss_rebuilder import (  # type: ignore  # noqa: WPS433
-                get_status as _faiss_status,
-                rebuild_freshdesk_qa_index,
-            )
-        if _faiss_status().get("running"):
-            response["faiss_rebuild_scheduled"] = False
-            response["faiss_rebuild_reason"] = "already_running"
-        else:
-            background_tasks.add_task(rebuild_freshdesk_qa_index)
-            response["faiss_rebuild_scheduled"] = True
+    response.update(
+        schedule_faiss_rebuild(
+            background_tasks,
+            enabled=rebuild_faiss,
+            sync_ok=bool(result.get("ok")),
+        )
+    )
     return response
 
 

@@ -22,12 +22,18 @@ APP_DIR = Path(__file__).resolve().parent.parent / "app"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-from freshdesk_sync import FreshdeskETL, _OUTPUT_PATH, sync_freshdesk_knowledge  # noqa: E402
+from freshdesk_sync import (  # noqa: E402
+    FreshdeskETL,
+    _OUTPUT_PATH,
+    sync_freshdesk_knowledge,
+    sync_freshdesk_solutions,
+)
 from freshdesk_ticket_summarizer import (  # noqa: E402
     is_enabled as summarizer_enabled,
     summarize_missing_tickets,
 )
 from warranty_knowledge import clear_knowledge_cache  # noqa: E402
+from freshdesk_knowledge_refresh import invalidate_warranty_knowledge_caches  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 load_dotenv()
@@ -57,6 +63,16 @@ def main() -> None:
         action="store_true",
         help="Skip the LLM rescue pass (regex-only steps).",
     )
+    parser.add_argument(
+        "--sync-kb",
+        action="store_true",
+        help="Also sync Freshdesk Solutions/KB to freshdesk_solutions.json.",
+    )
+    parser.add_argument(
+        "--no-rebuild-faiss",
+        action="store_true",
+        help="Skip freshdesk_qa FAISS rebuild after a successful sync.",
+    )
     args = parser.parse_args()
 
     if args.test:
@@ -85,7 +101,25 @@ def main() -> None:
             result["llm_rescue_stats"] = stats
             print(f"LLM rescue stats: {stats}")
 
-    clear_knowledge_cache()
+    if args.sync_kb:
+        kb_result = sync_freshdesk_solutions()
+        print(f"KB sync: {kb_result}")
+        if not kb_result.get("ok"):
+            raise SystemExit(1)
+
+    invalidate_warranty_knowledge_caches()
+
+    if result.get("ok") and not args.no_rebuild_faiss:
+        try:
+            from warranty_faiss_rebuilder import rebuild_freshdesk_qa_index  # noqa: E402
+
+            faiss_result = rebuild_freshdesk_qa_index()
+            result["faiss_rebuild"] = faiss_result
+            print(f"FAISS rebuild: {faiss_result}")
+        except Exception as exc:
+            result["faiss_rebuild_error"] = str(exc)
+            print(f"FAISS rebuild failed: {exc}")
+
     print(result)
     raise SystemExit(0 if result.get("ok") else 1)
 

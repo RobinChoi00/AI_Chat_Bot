@@ -12,6 +12,7 @@ import type {
   AdminWarrantyTicket,
   DecisionRequest,
   DecisionResponse,
+  FreshdeskLinkResponse,
   NoteRequest,
   TicketDetailResponse,
   TicketListResponse,
@@ -81,6 +82,24 @@ export async function submitAdminDecision(
     throw new Error(err.detail ?? `HTTP ${res.status}`);
   }
   return res.json() as Promise<DecisionResponse>;
+}
+
+// ------------------------------------------------------------
+// Freshdesk link
+// ------------------------------------------------------------
+
+export async function linkFreshdeskTicket(
+  ticketId: string
+): Promise<FreshdeskLinkResponse> {
+  const res = await fetch(
+    `${PROXY}/tickets/${encodeURIComponent(ticketId)}/freshdesk-link`,
+    { method: "POST" }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { detail?: string };
+    throw new Error(err.detail ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<FreshdeskLinkResponse>;
 }
 
 // ------------------------------------------------------------

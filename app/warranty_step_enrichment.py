@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from warranty_intake_context import enrich_path_text, intake_aware_step_summary
 from warranty_knowledge import KnowledgeEntry, search_knowledge
 from warranty_self_help import (
     _collect_fallback_hints,
@@ -127,7 +128,7 @@ def build_step_enrichment(
         return None
 
     model_name = str(getattr(ticket, "model_name", "") or "")
-    path_text = build_path_text(turns)
+    path_text = enrich_path_text(build_path_text(turns), ticket)
     defect_category = infer_defect_category_from_turns(turns)
 
     matches = search_knowledge(
@@ -157,6 +158,12 @@ def build_step_enrichment(
         )
     else:
         return None
+
+    summary = intake_aware_step_summary(
+        ticket=ticket,
+        turns=turns,
+        summary=summary,
+    )
 
     message = format_step_message(
         base_prompt=base_prompt,

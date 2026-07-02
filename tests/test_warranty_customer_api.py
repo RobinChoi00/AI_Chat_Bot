@@ -120,7 +120,14 @@ def test_submit_answer_advances_without_llm(client):
     assert len(node["options"]) >= 4
 
 
-def test_submit_answer_rejects_box_size_question_at_delivery_lookup(client):
+def test_submit_answer_side_questions_box_size_at_delivery_lookup(client, monkeypatch):
+    monkeypatch.setattr(
+        "warranty_side_questions.fetch_delivery_spec_answer",
+        lambda _model, spec: (
+            f"For **Titan Nido 3D**, here is what we have on {spec.title}:\n"
+            "- Carton Width: 34 inches"
+        ),
+    )
     session_id = "cust-api-box-size"
     _register_model(client, session_id, model="Titan Nido 3D")
     start = client.post(
@@ -137,11 +144,42 @@ def test_submit_answer_rejects_box_size_question_at_delivery_lookup(client):
         f"/api/v1/warranty/{ticket_id}/answer",
         json={"answer": "give me size of the box"},
     )
-    assert resp.status_code == 422
-    assert "order number" in resp.json()["detail"].lower()
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("side_question") is True
+    assert "Carton Width" in data.get("assistant_message", "")
+    assert "order number" in data.get("assistant_message", "").lower()
 
     session = client.get(f"/api/v1/warranty/session/{session_id}")
     assert session.json()["ticket"]["current_node"]["node_id"] == "delivery_get_name"
+
+
+def test_submit_answer_side_questions_box_size_on_defect_node(client, monkeypatch):
+    monkeypatch.setattr(
+        "warranty_side_questions.fetch_delivery_spec_answer",
+        lambda _model, spec: (
+            f"For **Titan Nido 3D**, here is what we have on {spec.title}:\n"
+            "- Carton Width: 34 inches"
+        ),
+    )
+    session_id = "cust-api-defect-box-size"
+    _register_model(client, session_id, model="Titan Nido 3D")
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "defect", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+    before_node = start.json()["ticket"]["current_node"]["node_id"]
+
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "What are the shipping box dimensions?"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("side_question") is True
+    assert "Carton Width" in data.get("assistant_message", "")
+    assert data["ticket"]["current_node"]["node_id"] == before_node
 
 
 def test_submit_answer_returns_tracking_summary(client, monkeypatch):
@@ -500,3 +538,57 @@ def test_smart_start_model_only_stays_on_issue_type(client, monkeypatch):
     assert not data["ticket"].get("issue_type")
     assert data["smart_start"]["applied_keys"] == ["warranty"]
     assert data.get("step_enrichment") is None
+
+
+def test_smart_start_empty_prefill_does_not_default_to_defect(client, monkeypatch):
+    import warranty_intake as wi  # noqa: WPS433
+
+    monkeypatch.setattr(
+        wi,
+        "extract_workflow_prefill",
+        lambda **kwargs: {
+            "answer_keys": [],
+            "model_name": "",
+            "confidence": "low",
+            "summary": "",
+            "source": "empty",
+        },
+    )
+
+    session_id = "cust-api-smart-no-defect-fallback"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/smart-start",
+        json={"message": "Where is my order?", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
+    assert not data["ticket"].get("issue_type")
+    assert "defect" not in data["smart_start"]["applied_keys"]
+
+
+def test_smart_start_routing_confirmation_when_issue_inferred(client, monkeypatch):
+    import warranty_intake as wi  # noqa: WPS433
+
+    monkeypatch.setattr(
+        wi,
+        "extract_workflow_prefill",
+        lambda **kwargs: {
+            "answer_keys": ["warranty", "delivery"],
+            "model_name": "",
+            "confidence": "high",
+            "summary": "Customer asking about shipping status.",
+            "source": "llm",
+        },
+    )
+
+    session_id = "cust-api-smart-routing-confirm"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/smart-start",
+        json={"message": "Where is my FedEx shipment?", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    confirm = data["smart_start"]["routing_confirmation"]
+    assert confirm["inferred_issue_type"] == "delivery"
+    assert "delivery" in confirm["message"].lower()

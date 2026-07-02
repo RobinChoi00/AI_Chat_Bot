@@ -6,6 +6,7 @@ import type {
 } from "@/lib/adminTypes";
 import AdminStatusBadge from "./AdminStatusBadge";
 import AdminEvidenceList from "./AdminEvidenceList";
+import AdminFreshdeskLinkButton from "./AdminFreshdeskLinkButton";
 
 interface Props {
   ticket: AdminWarrantyTicket;
@@ -95,21 +96,16 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
               )
             }
           />
-          {ticket.freshdesk_url && (
-            <Field
-              label="Freshdesk"
-              value={
-                <a
-                  href={ticket.freshdesk_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm font-medium text-indigo-700 underline-offset-2 hover:underline"
-                >
-                  Open ticket #{ticket.freshdesk_ticket_id}
-                </a>
-              }
-            />
-          )}
+          <Field
+            label="Freshdesk"
+            value={
+              <AdminFreshdeskLinkButton
+                ticketId={ticket.ticket_id}
+                freshdeskUrl={ticket.freshdesk_url}
+                freshdeskTicketId={ticket.freshdesk_ticket_id}
+              />
+            }
+          />
           <Field
             label="Status"
             value={<AdminStatusBadge status={ticket.status} size="md" />}

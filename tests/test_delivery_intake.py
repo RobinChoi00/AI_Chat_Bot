@@ -52,37 +52,55 @@ def test_detect_delivery_spec_question_doorway():
 
 def test_validate_delivery_get_name_answers_doorway_and_reprompts(monkeypatch):
     monkeypatch.setattr(
-        "delivery_intake.fetch_delivery_spec_answer",
+        "warranty_side_questions.fetch_delivery_spec_answer",
         lambda _model, spec: (
             f"For **Titan Nido 3D**, here is what we have on {spec.title}:\n"
             "- Minimum Doorway: 32 inches"
         ),
     )
-    with pytest.raises(ValueError) as exc:
-        validate_delivery_text_answer(
-            "delivery_get_name",
-            "What is the minimum doorway?",
-            model_name="Titan Nido 3D",
-        )
-    msg = str(exc.value)
+    node = {
+        "node_id": "delivery_get_name",
+        "type": "question_text",
+        "prompt": "Please provide your order number or email.",
+    }
+    from warranty_side_questions import try_answer_side_question  # noqa: E402
+
+    msg = try_answer_side_question(
+        node=node,
+        answer="What is the minimum doorway?",
+        model_name="Titan Nido 3D",
+        issue_type="delivery",
+        turns=[],
+    )
+    assert msg is not None
     assert "Minimum Doorway" in msg
     assert "order number" in msg.lower()
 
 
 def test_validate_delivery_get_name_rejects_box_size_question(monkeypatch):
     monkeypatch.setattr(
-        "delivery_intake.fetch_delivery_spec_answer",
+        "warranty_side_questions.fetch_delivery_spec_answer",
         lambda _model, spec: (
             f"For **Titan Nido 3D**, here is what we have on {spec.title}:\n"
             "- Carton Width: 34 inches"
         ),
     )
-    with pytest.raises(ValueError, match="order number"):
-        validate_delivery_text_answer(
-            "delivery_get_name",
-            "give me size of the box",
-            model_name="Titan Nido 3D",
-        )
+    node = {
+        "node_id": "delivery_get_name",
+        "type": "question_text",
+        "prompt": "Please provide your order number or email.",
+    }
+    from warranty_side_questions import try_answer_side_question  # noqa: E402
+
+    msg = try_answer_side_question(
+        node=node,
+        answer="give me size of the box",
+        model_name="Titan Nido 3D",
+        issue_type="delivery",
+        turns=[],
+    )
+    assert msg is not None
+    assert "order number" in msg.lower()
 
 
 def test_validate_delivery_get_name_accepts_email():

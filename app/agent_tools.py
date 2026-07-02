@@ -548,7 +548,14 @@ def tool_get_showroom_info(*, target_domain: str) -> str:
     )
 
 
-def _format_warranty_node(ticket_id: str, node: dict, is_start: bool = False) -> str:
+def _format_warranty_node(
+    ticket_id: str,
+    node: dict,
+    *,
+    engine=None,
+    ticket=None,
+    is_start: bool = False,
+) -> str:
     """Format a non-terminal warranty node for the LLM to paraphrase."""
     header = "WARRANTY_TICKET_STARTED" if is_start else "WARRANTY_CONTINUE"
     lines = [
@@ -565,17 +572,103 @@ def _format_warranty_node(ticket_id: str, node: dict, is_start: bool = False) ->
             lines.append(f"  - answer_key={opt.get('answer_key', '?')} | Label: {opt['label']}")
     else:
         lines.append("OPTIONS: (free text — accept any input)")
-    lines += [
-        "",
-        "INSTRUCTION: Present the PROMPT to the customer verbatim (same meaning). "
-        "Present OPTIONS exactly as listed. "
-        "When the customer responds, map their answer to the closest answer_key and call answer_warranty_question. "
-        "DO NOT make any warranty decision yourself. DO NOT invent steps or outcomes. SUPPRESS_LEAD_FOOTER",
-    ]
+
+    if engine is not None and ticket is not None:
+        enrich_lines, has_customer_message = _enrichment_tool_lines(
+            engine=engine,
+            ticket=ticket,
+            node=node,
+        )
+        lines.extend(enrich_lines)
+    else:
+        has_customer_message = False
+
+    if not has_customer_message:
+        lines += [
+            "",
+            "INSTRUCTION: Present the PROMPT to the customer verbatim (same meaning). "
+            "Present OPTIONS exactly as listed. "
+            "When the customer responds, map their answer to the closest answer_key and call answer_warranty_question. "
+            "DO NOT make any warranty decision yourself. DO NOT invent steps or outcomes. SUPPRESS_LEAD_FOOTER",
+        ]
+    else:
+        lines += [
+            "",
+            "INSTRUCTION: Deliver CUSTOMER_MESSAGE to the customer verbatim (same facts and workflow question). "
+            "When the customer responds, map their answer to the closest answer_key and call answer_warranty_question. "
+            "DO NOT make any warranty decision yourself. DO NOT invent steps or outcomes. SUPPRESS_LEAD_FOOTER",
+        ]
     return "\n".join(lines)
 
 
-def _format_warranty_result(ticket_id: str, result: dict) -> str:
+def _enrichment_tool_lines(*, engine, ticket, node: dict) -> tuple[list[str], bool]:
+    from warranty_assistant_message import build_assistant_message_bundle  # noqa: WPS433
+
+    bundle = build_assistant_message_bundle(engine=engine, ticket=ticket, node=node)
+    message = str(bundle.get("assistant_message") or "").strip()
+    if not message:
+        return ["", "CUSTOMER_MESSAGE: (none — use PROMPT above)"], False
+    return ["", "CUSTOMER_MESSAGE:", message], True
+
+
+def _terminal_instruction_lines(
+    *,
+    terminal_class: str,
+    evidence: list,
+    evidence_email: str,
+    has_customer_message: bool,
+) -> list[str]:
+    if has_customer_message:
+        lines = [
+            "INSTRUCTION: Deliver CUSTOMER_MESSAGE to the customer verbatim. "
+            "Do NOT invent repair steps, parts, replacements, or outcomes beyond CUSTOMER_MESSAGE. "
+        ]
+        if terminal_class == "awaiting_admin_review":
+            lines[0] += (
+                "DO NOT promise replacement, tech dispatch, compensation, refund, or approval. "
+            )
+            if "video_of_issue" in evidence:
+                email = evidence_email or "service@osakititan.com"
+                lines[0] += (
+                    f"Also ask the customer to send a photo or video of the issue to {email}. "
+                )
+            lines[0] += "AWAITING_ADMIN_REVIEW=TRUE"
+        return lines
+
+    if terminal_class == "awaiting_admin_review":
+        evidence_hint = ""
+        if "video_of_issue" in evidence:
+            email = evidence_email or "service@osakititan.com"
+            evidence_hint = (
+                f" Also ask the customer to send a photo or video of the issue to {email}."
+            )
+        return [
+            "INSTRUCTION: Deliver the PROMPT_FOR_CUSTOMER verbatim. "
+            "DO NOT promise replacement, tech dispatch, compensation, refund, or any approval. "
+            "The prompt already says 'our team will review' — keep that language exactly."
+            + evidence_hint
+            + " AWAITING_ADMIN_REVIEW=TRUE"
+        ]
+    if terminal_class == "send_info":
+        return [
+            "INSTRUCTION: Deliver the PROMPT_FOR_CUSTOMER. "
+            "This is a self-service step — you may briefly explain the how-to if helpful."
+        ]
+    if terminal_class in ("awaiting_evidence", "request_evidence"):
+        return [
+            f"INSTRUCTION: Ask customer to send the evidence to {evidence_email or 'service@osakititan.com'}. "
+            "Tell them someone will follow up after review."
+        ]
+    return ["INSTRUCTION: Deliver the PROMPT_FOR_CUSTOMER verbatim."]
+
+
+def _format_warranty_result(
+    ticket_id: str,
+    result: dict,
+    *,
+    engine=None,
+    ticket=None,
+) -> str:
     """Format a warranty transition result for the LLM to paraphrase."""
     next_node = result["next_node"]
     is_terminal = result["is_terminal"]
@@ -599,32 +692,22 @@ def _format_warranty_result(ticket_id: str, result: dict) -> str:
             lines.append(f"EVIDENCE_SEND_TO: {evidence_email}")
         lines.append(f"INTERNAL_NOTE: {internal_note}")
         lines += [""]
-        if terminal_class == "awaiting_admin_review":
-            evidence_hint = ""
-            if "video_of_issue" in evidence:
-                email = evidence_email or "service@osakititan.com"
-                evidence_hint = (
-                    f" Also ask the customer to send a photo or video of the issue to {email}."
-                )
-            lines.append(
-                "INSTRUCTION: Deliver the PROMPT_FOR_CUSTOMER verbatim. "
-                "DO NOT promise replacement, tech dispatch, compensation, refund, or any approval. "
-                "The prompt already says 'our team will review' — keep that language exactly."
-                + evidence_hint
-                + " AWAITING_ADMIN_REVIEW=TRUE"
+        has_customer_message = False
+        if engine is not None and ticket is not None:
+            enrich_lines, has_customer_message = _enrichment_tool_lines(
+                engine=engine,
+                ticket=ticket,
+                node=next_node,
             )
-        elif terminal_class == "send_info":
-            lines.append(
-                "INSTRUCTION: Deliver the PROMPT_FOR_CUSTOMER. "
-                "This is a self-service step — you may briefly explain the how-to if helpful."
+            lines.extend(enrich_lines)
+        lines.extend(
+            _terminal_instruction_lines(
+                terminal_class=str(terminal_class),
+                evidence=list(evidence),
+                evidence_email=str(evidence_email or ""),
+                has_customer_message=has_customer_message,
             )
-        elif terminal_class in ("awaiting_evidence", "request_evidence"):
-            lines.append(
-                f"INSTRUCTION: Ask customer to send the evidence to {evidence_email or 'service@osakititan.com'}. "
-                "Tell them someone will follow up after review."
-            )
-        else:
-            lines.append("INSTRUCTION: Deliver the PROMPT_FOR_CUSTOMER verbatim.")
+        )
         lines.append("SUPPRESS_LEAD_FOOTER")
         return "\n".join(lines)
 
@@ -643,16 +726,94 @@ def _format_warranty_result(ticket_id: str, result: dict) -> str:
             lines.append(f"  - answer_key={opt.get('answer_key', '?')} | Label: {opt['label']}")
     else:
         lines.append("OPTIONS: (free text — accept any input)")
-    lines += [
-        "",
-        "INSTRUCTION: Present PROMPT and OPTIONS verbatim (same meaning). "
-        "When they respond, call warranty_answer with the matching answer_key. "
-        "DO NOT make any warranty decision yourself. DO NOT invent steps or outcomes. SUPPRESS_LEAD_FOOTER",
-    ]
+
+    if engine is not None and ticket is not None:
+        enrich_lines, has_customer_message = _enrichment_tool_lines(
+            engine=engine,
+            ticket=ticket,
+            node=next_node,
+        )
+        lines.extend(enrich_lines)
+    else:
+        has_customer_message = False
+
+    if not has_customer_message:
+        lines += [
+            "",
+            "INSTRUCTION: Present PROMPT and OPTIONS verbatim (same meaning). "
+            "When they respond, call warranty_answer with the matching answer_key. "
+            "DO NOT make any warranty decision yourself. DO NOT invent steps or outcomes. SUPPRESS_LEAD_FOOTER",
+        ]
+    else:
+        lines += [
+            "",
+            "INSTRUCTION: Deliver CUSTOMER_MESSAGE to the customer verbatim (same facts and workflow question). "
+            "When they respond, call warranty_answer with the matching answer_key. "
+            "DO NOT make any warranty decision yourself. DO NOT invent steps or outcomes. SUPPRESS_LEAD_FOOTER",
+        ]
     return "\n".join(lines)
 
 
-def tool_start_warranty_workflow(*, session_id: str, domain: str) -> str:
+def _format_warranty_side_question(ticket_id: str, message: str) -> str:
+    return "\n".join([
+        "WARRANTY_SIDE_QUESTION",
+        f"TICKET_ID: {ticket_id}",
+        "CUSTOMER_MESSAGE:",
+        message.strip(),
+        "",
+        "INSTRUCTION: Deliver CUSTOMER_MESSAGE to the customer verbatim. "
+        "The workflow did NOT advance — wait for their answer to the current question. "
+        "DO NOT make any warranty decision yourself. DO NOT invent steps or outcomes. "
+        "SUPPRESS_LEAD_FOOTER",
+    ])
+
+
+def _submit_warranty_answer_with_fallback(
+    engine,
+    ticket_id: str,
+    answer_key: str,
+    customer_text: str = "",
+) -> dict:
+    """Submit answer_key; on mismatch optionally map customer_text via NLP."""
+    try:
+        return engine.submit_answer(ticket_id, answer_key)
+    except ValueError as exc:
+        msg = str(exc)
+        if "did not match any option" not in msg:
+            raise
+
+        raw = (customer_text or "").strip()
+        if not raw:
+            raise
+
+        node = engine.get_current_node(ticket_id)
+        if not node:
+            raise
+
+        from warranty_nlp import interpret_warranty_answer  # noqa: WPS433
+
+        mapped = interpret_warranty_answer(node, raw)
+        if not mapped:
+            raise
+
+        if node.get("type") == "question_text":
+            return engine.submit_answer(
+                ticket_id,
+                mapped,
+                customer_display=raw,
+            )
+
+        if mapped == answer_key:
+            raise
+
+        return engine.submit_answer(
+            ticket_id,
+            mapped,
+            customer_display=raw,
+        )
+
+
+def tool_start_warranty_workflow(*, session_id: str, domain: str, issue_hint: str = "") -> str:
     """Start a new warranty intake session and return the first question node."""
     # Runtime validation
     if not session_id or not isinstance(session_id, str):
@@ -667,8 +828,20 @@ def tool_start_warranty_workflow(*, session_id: str, domain: str) -> str:
 
     try:
         ticket_id, node = WarrantyEngine.start_session(session_id, domain or "unknown")
+        ticket = WarrantyEngine.get_ticket(ticket_id)
+        hint = str(issue_hint or "").strip()
+        if hint and ticket is not None:
+            from warranty_intake_context import persist_intake_summary  # noqa: WPS433
+
+            persist_intake_summary(ticket, summary=hint, raw_message=hint)
         logger.info(f"🎫 Warranty started — session={session_id} ticket={ticket_id} domain={domain}")
-        return _format_warranty_node(ticket_id, node, is_start=True)
+        return _format_warranty_node(
+            ticket_id,
+            node,
+            engine=WarrantyEngine,
+            ticket=ticket,
+            is_start=True,
+        )
     except Exception as e:
         logger.error(f"start_warranty_workflow error: {e}")
         return f"WARRANTY_ERROR: {e}"
@@ -678,7 +851,12 @@ def tool_start_warranty_workflow(*, session_id: str, domain: str) -> str:
 tool_warranty_start = tool_start_warranty_workflow
 
 
-def tool_answer_warranty_question(*, ticket_id: str, answer_key: str) -> str:
+def tool_answer_warranty_question(
+    *,
+    ticket_id: str,
+    answer_key: str,
+    customer_text: str = "",
+) -> str:
     """Submit the customer's answer to the current warranty node and advance the workflow."""
     # Runtime validation
     if not ticket_id or not isinstance(ticket_id, str):
@@ -693,15 +871,38 @@ def tool_answer_warranty_question(*, ticket_id: str, answer_key: str) -> str:
     except Exception as e:
         return f"WARRANTY_UNAVAILABLE: {e}"
 
+    side_probe = (customer_text or answer_key or "").strip()
+    if side_probe:
+        from warranty_intake_context import try_side_question_for_ticket  # noqa: WPS433
+
+        side_message = try_side_question_for_ticket(WarrantyEngine, ticket_id, side_probe)
+        if side_message:
+            logger.info(
+                f"🎫 Warranty side question — ticket={ticket_id} "
+                f"probe={side_probe[:80]!r}"
+            )
+            return _format_warranty_side_question(ticket_id, side_message)
+
     try:
-        result = WarrantyEngine.submit_answer(ticket_id, answer_key)
+        result = _submit_warranty_answer_with_fallback(
+            WarrantyEngine,
+            ticket_id,
+            answer_key,
+            customer_text=customer_text,
+        )
+        ticket = WarrantyEngine.get_ticket(ticket_id)
         logger.info(
             f"🎫 Warranty answer — ticket={ticket_id} answer_key={answer_key} "
             f"next_node={result.get('next_node_id')} terminal={result.get('is_terminal')} "
             f"terminal_class={result.get('terminal_class')} "
             f"awaiting_admin={result.get('terminal_class') == 'awaiting_admin_review'}"
         )
-        return _format_warranty_result(ticket_id, result)
+        return _format_warranty_result(
+            ticket_id,
+            result,
+            engine=WarrantyEngine,
+            ticket=ticket,
+        )
     except ValueError as e:
         # Answer didn't match — give the LLM the valid options so it can ask again
         try:
@@ -1018,8 +1219,16 @@ TOOL_SCHEMAS: List[Any] = [
                             "Must exactly match one of the answer_key values listed in OPTIONS."
                         ),
                     },
+                    "customer_text": {
+                        "type": "string",
+                        "description": (
+                            "The customer's exact message for this turn. Required so side "
+                            "questions (specs, box size, general FAQ) can be answered without "
+                            "advancing the workflow."
+                        ),
+                    },
                 },
-                "required": ["ticket_id", "answer_key"],
+                "required": ["ticket_id", "answer_key", "customer_text"],
             },
         },
     },

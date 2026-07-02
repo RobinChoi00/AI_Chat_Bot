@@ -15,6 +15,7 @@ from config import REPAIR_MANUAL_URL, WARRANTY_BUSINESS_HOURS, WARRANTY_PHONE, W
 from install_videos import lookup_install_video
 from warranty_self_help import (
     HELP_OFFER_OPTIONS,
+    build_admin_review_diagnosis,
     build_air_diagnosis,
     build_cosmetic_diagnosis,
     build_delivery_diagnosis,
@@ -28,6 +29,7 @@ from warranty_self_help import (
     build_rolling_noise_diagnosis,
     build_voice_diagnosis,
     build_workflow_diagnosis,
+    format_admin_review_message,
     format_air_self_help_message,
     format_cosmetic_self_help_message,
     format_delivery_self_help_message,
@@ -383,6 +385,34 @@ def _workflow_end_message(
     return _help_offer_enrichment(message, diagnosis=diagnosis)
 
 
+def _admin_review_terminal_message(
+    engine,
+    ticket_id: str,
+    ticket,
+    node: dict,
+) -> dict[str, Any]:
+    node_id = str(node.get("node_id") or "")
+    base_prompt = str(node.get("prompt") or "").strip()
+    evidence_required = list(node.get("evidence_required") or [])
+    turns = engine.get_turns(ticket_id)
+    category = infer_defect_category_from_turns(turns)
+    model_name = str(getattr(ticket, "model_name", "") or "")
+
+    diagnosis = build_admin_review_diagnosis(
+        base_prompt=base_prompt,
+        evidence_required=evidence_required,
+        node_id=node_id,
+        turns=turns,
+        defect_category=category,
+        model_name=model_name,
+    )
+    message = format_admin_review_message(
+        diagnosis=diagnosis,
+        repair_manual_url=REPAIR_MANUAL_URL,
+    )
+    return _help_offer_enrichment(message, diagnosis=diagnosis)
+
+
 def build_terminal_enrichment(
     engine,
     ticket,
@@ -441,5 +471,8 @@ def build_terminal_enrichment(
     ):
         model_name = str(getattr(ticket, "model_name", "") or "")
         return _install_message(model_name, base_prompt)
+
+    if action == "awaiting_admin":
+        return _admin_review_terminal_message(engine, ticket_id, ticket, node)
 
     return _workflow_end_message(engine, ticket_id, ticket, node)

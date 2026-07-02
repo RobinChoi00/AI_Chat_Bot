@@ -438,15 +438,22 @@ def sync_freshdesk_solutions(*, max_articles: int = 500) -> dict[str, Any]:
             articles.append(article)
     except requests.exceptions.RequestException as exc:
         logger.error("Freshdesk Solutions sync failed: %s", exc)
-        return {
+        result = {
             "ok": False,
             "article_count": 0,
             "output_path": str(_SOLUTIONS_PATH),
             "message": f"Freshdesk API error: {exc}",
         }
+        try:
+            from freshdesk_status import record_sync_result  # noqa: WPS433
+
+            record_sync_result("kb", result)
+        except ImportError:
+            pass
+        return result
 
     if not articles:
-        return {
+        result = {
             "ok": False,
             "article_count": 0,
             "output_path": str(_SOLUTIONS_PATH),
@@ -455,18 +462,32 @@ def sync_freshdesk_solutions(*, max_articles: int = 500) -> dict[str, Any]:
                 "has no Solutions content, or the API key lacks permission."
             ),
         }
+        try:
+            from freshdesk_status import record_sync_result  # noqa: WPS433
+
+            record_sync_result("kb", result)
+        except ImportError:
+            pass
+        return result
 
     _SOLUTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _SOLUTIONS_PATH.open("w", encoding="utf-8") as handle:
         json.dump(articles, handle, ensure_ascii=False, indent=2)
 
-    return {
+    result = {
         "ok": True,
         "article_count": len(articles),
         "output_path": str(_SOLUTIONS_PATH),
         "domain": etl.domain,
         "message": f"Saved {len(articles)} Freshdesk KB articles.",
     }
+    try:
+        from freshdesk_status import record_sync_result  # noqa: WPS433
+
+        record_sync_result("kb", result)
+    except ImportError:
+        pass
+    return result
 
 
 def probe_freshdesk_solutions() -> dict[str, Any]:
@@ -494,7 +515,7 @@ def sync_freshdesk_knowledge(
     out_path = _OUTPUT_PATH
 
     if not extracted:
-        return {
+        result = {
             "ok": False,
             "ticket_count": 0,
             "output_path": str(out_path),
@@ -506,6 +527,13 @@ def sync_freshdesk_knowledge(
                 f"last {months_back} month(s)."
             ),
         }
+        try:
+            from freshdesk_status import record_sync_result  # noqa: WPS433
+
+            record_sync_result("tickets", result)
+        except ImportError:
+            pass
+        return result
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as handle:
@@ -517,7 +545,7 @@ def sync_freshdesk_knowledge(
         fetch_stats.get("resolved_scanned"),
         out_path,
     )
-    return {
+    result = {
         "ok": True,
         "ticket_count": len(extracted),
         "output_path": str(out_path),
@@ -525,3 +553,10 @@ def sync_freshdesk_knowledge(
         **fetch_stats,
         "message": f"Saved {len(extracted)} Freshdesk Q&A entries.",
     }
+    try:
+        from freshdesk_status import record_sync_result  # noqa: WPS433
+
+        record_sync_result("tickets", result)
+    except ImportError:
+        pass
+    return result

@@ -106,6 +106,13 @@ export interface StepEnrichment {
   paraphrased?: boolean;
 }
 
+export interface SmartStartRoutingConfirmation {
+  inferred_issue_type: string;
+  applied_count: number;
+  summary: string;
+  message: string;
+}
+
 export interface SmartStartMetadata {
   source: "llm" | "empty" | string;
   summary: string;
@@ -113,6 +120,7 @@ export interface SmartStartMetadata {
   skipped_keys: string[];
   stopped_reason: string;
   model_name_hint?: string;
+  routing_confirmation?: SmartStartRoutingConfirmation | null;
 }
 
 export interface WarrantySessionResponse {
@@ -128,6 +136,7 @@ export interface WarrantySessionResponse {
   model_registered?: boolean;
   resolved_model?: string;
   smart_start?: SmartStartMetadata | null;
+  side_question?: boolean;
 }
 
 export interface WarrantyContactResponse {

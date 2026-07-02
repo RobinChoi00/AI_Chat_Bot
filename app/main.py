@@ -993,13 +993,16 @@ W1. When tool result begins with WARRANTY_TICKET_STARTED, WARRANTY_CONTINUE, or 
     you are inside a guided warranty intake workflow. Follow the INSTRUCTION section exactly.
 W2. Present the PROMPT to the customer verbatim (same meaning, same facts).
     Do NOT add repair steps, replacement promises, or extra questions.
-W3. When the customer answers, extract the intent and call warranty_answer with the closest answer_key.
-    Do NOT guess or invent the next step — the tool decides.
-W4. When WARRANTY_TERMINAL_REACHED with ACTION=awaiting_admin:
+W3. When the customer answers, call answer_warranty_question with:
+    - answer_key = closest VALID option key
+    - customer_text = the customer's exact message for this turn (required)
+    Side questions (specs, box size, general FAQ) are answered without advancing the workflow.
+W4. When the tool returns WARRANTY_SIDE_QUESTION, deliver CUSTOMER_MESSAGE verbatim and wait.
+W5. When WARRANTY_TERMINAL_REACHED with ACTION=awaiting_admin:
     - DO NOT promise replacement, part shipment, tech dispatch, compensation, or refund.
     - The PROMPT already says "our team will review" — use that language exactly.
     - The customer_message will be delivered ONLY after an admin approves it.
-W5. NEVER skip the warranty_answer tool to jump to a conclusion. Every step must go through the tool.
+W6. NEVER skip the warranty_answer tool to jump to a conclusion. Every step must go through the tool.
 
 # CORE RULES (NEVER VIOLATE)
 1. ZERO HALLUCINATION. Never invent specs, prices, dimensions, promo codes,
@@ -1139,7 +1142,13 @@ except ImportError:
     from intent_router import infer_forced_tool  # type: ignore
 
 
-def _execute_tool(name: str, args: Dict[str, Any], target_domain: str) -> str:
+def _execute_tool(
+    name: str,
+    args: Dict[str, Any],
+    target_domain: str,
+    *,
+    fallback_customer_text: str = "",
+) -> str:
     """Dispatch a tool call to its Python handler. Always returns a string."""
     # Retrievers are None only if init failed; the chat endpoint already
     # short-circuits with HTTP 500 before reaching here, but we re-assert
@@ -1202,13 +1211,18 @@ def _execute_tool(name: str, args: Dict[str, Any], target_domain: str) -> str:
             return tool_start_warranty_workflow(
                 session_id=args.get("_session_id", ""),
                 domain=target_domain,
+                issue_hint=str(args.get("issue_hint") or "").strip(),
             )
         if name in ("warranty_answer", "answer_warranty_question"):
             ticket_id = args.get("ticket_id", "")
             answer_key = args.get("answer_key", "")
+            customer_text = str(
+                args.get("customer_text") or fallback_customer_text or ""
+            ).strip()
             result_str = tool_answer_warranty_question(
                 ticket_id=ticket_id,
                 answer_key=answer_key,
+                customer_text=customer_text,
             )
             # Structured warranty-state log (downstream monitoring)
             logger.info(
@@ -1459,10 +1473,17 @@ async def chat_endpoint(
                 f"YOUR TASK:\n"
                 f"1. The customer's message is their answer to CURRENT_QUESTION.\n"
                 f"2. Map their answer to the closest VALID answer_key.\n"
-                f"3. Call answer_warranty_question(ticket_id='{_active_warranty_ticket.ticket_id}', answer_key=<matched_key>).\n"
-                f"4. If the customer asks a clarifying question instead of answering, answer it "
-                f"briefly then re-ask CURRENT_QUESTION.\n"
-                f"5. DO NOT make warranty decisions. DO NOT show the sales footer."
+                f"3. Call answer_warranty_question(\n"
+                f"     ticket_id='{_active_warranty_ticket.ticket_id}',\n"
+                f"     answer_key=<matched_key>,\n"
+                f"     customer_text=<customer's exact message>\n"
+                f"   ).\n"
+                f"4. When the tool returns CUSTOMER_MESSAGE, deliver it to the customer verbatim — "
+                f"it already includes Freshdesk-backed tips and the workflow question.\n"
+                f"5. When the tool returns WARRANTY_SIDE_QUESTION, deliver CUSTOMER_MESSAGE verbatim — "
+                f"the workflow did not advance.\n"
+                f"6. DO NOT answer side questions yourself or advance the workflow without the tool.\n"
+                f"7. DO NOT make warranty decisions. DO NOT show the sales footer."
             )
 
         # Typed as List[Any] so we can pass plain dicts (matching the OpenAI
@@ -1599,7 +1620,12 @@ async def chat_endpoint(
                         # Inject session_id for warranty_start (LLM can't know it)
                         if tc.function.name in ("warranty_start", "start_warranty_workflow"):
                             args["_session_id"] = chat_request.session_id
-                        result = _execute_tool(tc.function.name, args, target_domain)
+                        result = _execute_tool(
+                            tc.function.name,
+                            args,
+                            target_domain,
+                            fallback_customer_text=user_query,
+                        )
                         tools_called.append(tc.function.name)
                         tool_results.append(result)
                         logger.info(f"🛠️ Tool [{tc.function.name}] → {len(result)} chars")

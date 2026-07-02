@@ -56,6 +56,60 @@ _NODE_HINTS: dict[str, tuple[str, ...]] = {
     "defect_air_base_hose_terminal": (
         "Inspect base air hose connections for kinks or loose fittings.",
     ),
+    "defect_rolling_no_movement_terminal": (
+        "Record a short video showing whether the massage heads move at all when the chair powers off.",
+        "Confirm the power cord and back switch work — note any fuse issues for our team.",
+        "Note which massage programs you tried and whether side panel controls behave the same way.",
+    ),
+    "defect_rolling_worked_terminal": (
+        "Note approximately when the massage heads last worked normally.",
+        "Record a short video showing current head movement during manual mode.",
+        "Try power cycling the chair once and note whether movement changes at all.",
+    ),
+    "defect_rolling_power_no_move_terminal": (
+        "Record a short video showing the heads attempting to move during manual or auto mode.",
+        "Note whether air inflation still works — on some models a broken air system can block mech movement.",
+        "Try one full up/down cycle and note where movement stops or stalls.",
+    ),
+}
+
+_CATEGORY_ADMIN_PREP_HINTS: dict[str, tuple[str, ...]] = {
+    "rolling": (
+        "Record a short video of the massage mechanism while the issue occurs.",
+        "Note which mode you were using (manual, auto, or up/down) when the problem happens.",
+    ),
+    "power": (
+        "Note what happens when you toggle the back power switch and try the side panel buttons.",
+        "Confirm the power cord and outlet are working before our team reviews the case.",
+    ),
+    "remote": (
+        "Note whether the remote screen turns on and which commands still respond.",
+        "Reseat the remote cable if you can do so safely and note any visible cable damage.",
+    ),
+    "air": (
+        "Note which air areas fail to inflate and whether you hear air blowing or hissing nearby.",
+        "Check visible air hose connections in the affected area without opening internal panels.",
+    ),
+    "recline": (
+        "Note which recline function fails and whether the stuck part moves when the chair powers off.",
+        "Try the same function from the side panel buttons if your model has them.",
+    ),
+    "footrest": (
+        "Note whether the footrest moves at all from the remote and side panel buttons.",
+        "Check for objects or cables blocking footrest travel before our team reviews the case.",
+    ),
+    "cosmetic": (
+        "Take clear photos of the damage from wide and close-up angles in good lighting.",
+        "Note when you first noticed the damage relative to delivery or assembly.",
+    ),
+    "heat": (
+        "Note how long you ran heat before deciding it failed and which zones feel cold or too hot.",
+        "Power cycle the chair once and retest heat for at least 10 minutes before follow-up.",
+    ),
+    "voice": (
+        "Note which voice commands you tried and whether background noise may be triggering the mic.",
+        "Confirm side panel connections are seated if the chair was recently installed.",
+    ),
 }
 
 _ANSWER_KEY_HINTS: dict[str, tuple[str, ...]] = {
@@ -501,14 +555,7 @@ def build_path_text(turns) -> str:
     return " ".join(parts)
 
 
-def _collect_fallback_hints(turns, node_id: str) -> tuple[str, ...]:
-    hints: list[str] = []
-    if node_id in _NODE_HINTS:
-        hints.extend(_NODE_HINTS[node_id])
-    for turn in turns:
-        key = str(getattr(turn, "answer_key", "") or "")
-        if key in _ANSWER_KEY_HINTS:
-            hints.extend(_ANSWER_KEY_HINTS[key])
+def _dedupe_hint_lines(hints: list[str], *, limit: int = 4) -> tuple[str, ...]:
     seen: set[str] = set()
     unique: list[str] = []
     for hint in hints:
@@ -517,7 +564,47 @@ def _collect_fallback_hints(turns, node_id: str) -> tuple[str, ...]:
             continue
         seen.add(norm)
         unique.append(hint)
-    return tuple(unique[:4])
+    return tuple(unique[:limit])
+
+
+def _collect_fallback_hints(turns, node_id: str) -> tuple[str, ...]:
+    hints: list[str] = []
+    if node_id in _NODE_HINTS:
+        hints.extend(_NODE_HINTS[node_id])
+    for turn in turns:
+        key = str(getattr(turn, "answer_key", "") or "")
+        if key in _ANSWER_KEY_HINTS:
+            hints.extend(_ANSWER_KEY_HINTS[key])
+    return _dedupe_hint_lines(hints)
+
+
+def _collect_admin_review_prep_hints(
+    turns,
+    node_id: str,
+    defect_category: Optional[str],
+) -> tuple[str, ...]:
+    hints: list[str] = list(_collect_fallback_hints(turns, node_id))
+    if defect_category in _CATEGORY_ADMIN_PREP_HINTS:
+        hints.extend(_CATEGORY_ADMIN_PREP_HINTS[defect_category])
+    return _dedupe_hint_lines(hints, limit=5)
+
+
+def _evidence_prep_steps(evidence_required: list[str]) -> list[str]:
+    if not evidence_required:
+        return []
+    from warranty_workflow import WarrantyEngine  # noqa: WPS433 — lazy import avoids cycles
+
+    all_types = WarrantyEngine.get_evidence_specs().get("evidence_types", {})
+    steps: list[str] = []
+    for key in evidence_required:
+        spec = all_types.get(key, {})
+        label = str(spec.get("label") or key.replace("_", " ")).strip()
+        instructions = str(spec.get("instructions") or "").strip()
+        if instructions:
+            steps.append(f"{label}: {instructions}")
+        else:
+            steps.append(f"Please provide {label}.")
+    return steps
 
 
 def _friendly_match_summary(
@@ -1640,10 +1727,67 @@ def format_diagnosis_message(diagnosis: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def build_admin_review_diagnosis(
+    *,
+    base_prompt: str,
+    evidence_required: list[str] | None = None,
+    node_id: str = "",
+    turns=None,
+    defect_category: Optional[str] = None,
+    model_name: str = "",
+) -> dict[str, Any]:
+    """
+    Customer-safe summary for unmapped ``awaiting_admin`` terminals.
+
+    Uses the flowchart prompt (softened when it mentions parts/repair) plus
+    evidence and path-specific prep steps — not generic KB DIY fallbacks.
+    """
+    softened = soften_terminal_prompt(base_prompt)
+    summary = softened or str(base_prompt or "").strip()
+    if not summary:
+        model_display = (model_name or "your chair").strip()
+        if defect_category:
+            label = _CATEGORY_LABELS.get(defect_category, defect_category)
+            summary = (
+                f"Based on your answers, our team will review this **{label}** issue "
+                f"with your {model_display}."
+            )
+        else:
+            summary = "Based on your answers, our team will review this case and follow up with next steps."
+
+    steps: list[str] = _evidence_prep_steps(list(evidence_required or []))
+    steps.extend(
+        _collect_admin_review_prep_hints(turns or (), node_id, defect_category),
+    )
+    steps = _dedupe_steps(steps)
+
+    return {
+        "summary": summary,
+        "steps": steps,
+        "sources": [],
+        "top_match": None,
+    }
+
+
+def format_admin_review_message(*, diagnosis: dict[str, Any], repair_manual_url: str) -> str:
+    """Format admin-review terminal enrichment (prep steps, not DIY troubleshooting)."""
+    parts: list[str] = [str(diagnosis.get("summary") or "").strip()]
+    steps: list[str] = list(diagnosis.get("steps") or [])
+    if steps:
+        parts.append("\n\n**What to prepare before our team follows up:**")
+        for idx, step in enumerate(steps, start=1):
+            parts.append(f"{idx}. {step}")
+    parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
+    parts.append(
+        "\n\n**Would you like our warranty team to follow up on this case?**"
+    )
+    return "\n".join(parts)
+
+
 def soften_terminal_prompt(prompt: str) -> str:
     lower = (prompt or "").lower()
     if re.search(
-        r"\b(replace|repair or replacement|pcb|actuator|compensation|refund|technician|"
+        r"\b(replace|repair|repair or replacement|pcb|actuator|compensation|refund|technician|"
         r"send a tech|dispatch|arrange a replacement)\b",
         lower,
     ):

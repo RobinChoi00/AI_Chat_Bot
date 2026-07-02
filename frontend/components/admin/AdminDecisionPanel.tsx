@@ -76,6 +76,7 @@ export default function AdminDecisionPanel({ ticketId, currentStatus }: Props) {
   const [emailSent, setEmailSent] = useState<boolean | null>(null);
   const [emailSkipReason, setEmailSkipReason] =
     useState<CustomerEmailSkipReason | null>(null);
+  const [freshdeskSynced, setFreshdeskSynced] = useState<boolean | null>(null);
 
   const cfg = selected ? DECISIONS[selected] : null;
 
@@ -87,6 +88,7 @@ export default function AdminDecisionPanel({ ticketId, currentStatus }: Props) {
     setDone(false);
     setEmailSent(null);
     setEmailSkipReason(null);
+    setFreshdeskSynced(null);
   }
 
   function handleCancel() {
@@ -109,6 +111,7 @@ export default function AdminDecisionPanel({ ticketId, currentStatus }: Props) {
       setDone(true);
       setEmailSent(result.customer_email_sent);
       setEmailSkipReason(result.customer_email_skip_reason);
+      setFreshdeskSynced(result.freshdesk_sync?.synced ?? null);
       setSelected(null);
       router.refresh();
     } catch (err) {
@@ -139,6 +142,16 @@ export default function AdminDecisionPanel({ ticketId, currentStatus }: Props) {
           {!emailSent && emailSkipReason && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               {SKIP_REASON_LABELS[emailSkipReason]}
+            </div>
+          )}
+          {freshdeskSynced && (
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-800">
+              Freshdesk ticket updated with this decision.
+            </div>
+          )}
+          {freshdeskSynced === false && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Decision saved. Freshdesk was not updated (disabled or link failed).
             </div>
           )}
         </div>

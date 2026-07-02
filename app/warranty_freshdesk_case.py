@@ -87,10 +87,43 @@ def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
     return "\n".join(lines)
 
 
+def _apply_freshdesk_routing(payload: Dict[str, Any]) -> None:
+    group_id = os.getenv("FRESHDESK_WARRANTY_GROUP_ID", "").strip()
+    if group_id.isdigit():
+        payload["group_id"] = int(group_id)
+    product_id = os.getenv("FRESHDESK_WARRANTY_PRODUCT_ID", "").strip()
+    if product_id.isdigit():
+        payload["product_id"] = int(product_id)
+
+
+def _post_private_note(fd_id: str, body: str) -> Dict[str, Any]:
+    cfg = _client()
+    try:
+        response = requests.post(
+            f"{cfg['base_url']}/tickets/{fd_id}/notes",
+            auth=cfg["auth"],
+            headers=cfg["headers"],
+            json={"body": body, "private": True},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        logger.warning("Freshdesk note failed for fd=%s: %s", fd_id, exc)
+        return {"posted": False, "error": str(exc)}
+
+    if response.status_code >= 400:
+        return {
+            "posted": False,
+            "error": f"http_{response.status_code}",
+            "detail": (response.text or "")[:300],
+        }
+    return {"posted": True, "freshdesk_ticket_id": fd_id}
+
+
 def maybe_create_freshdesk_case(
     ticket_id: str,
     *,
     engine=None,
+    allow_any_status: bool = False,
 ) -> Dict[str, Any]:
     """
     Create a Freshdesk ticket once when a warranty case reaches admin review.
@@ -124,7 +157,7 @@ def maybe_create_freshdesk_case(
             "freshdesk_url": url,
         }
 
-    if str(ticket.status) not in (
+    if not allow_any_status and str(ticket.status) not in (
         "awaiting_admin_review",
         "awaiting_evidence",
         "admin_reviewing",
@@ -156,6 +189,8 @@ def maybe_create_freshdesk_case(
     }
     if customer_email:
         payload["email"] = customer_email
+
+    _apply_freshdesk_routing(payload)
 
     cfg = _client()
     try:
@@ -217,6 +252,89 @@ def maybe_create_freshdesk_case(
     }
 
 
+_DECISION_LABELS: Dict[str, str] = {
+    "admin_reviewing": "Reviewing",
+    "need_more_information": "Need more information",
+    "approved": "Approved",
+    "rejected": "Rejected",
+    "closed": "Closed",
+}
+
+
+def maybe_sync_admin_decision_to_freshdesk(
+    ticket_id: str,
+    *,
+    decision: str,
+    note: str = "",
+    customer_message: str = "",
+    decided_by: str = "",
+    engine=None,
+) -> Dict[str, Any]:
+    """Ensure a Freshdesk link exists and append the admin decision as a private note."""
+    if not _freshdesk_enabled():
+        return {"synced": False, "skipped": True, "reason": "freshdesk_disabled"}
+
+    link = maybe_create_freshdesk_case(
+        ticket_id,
+        engine=engine,
+        allow_any_status=True,
+    )
+    fd_id = str(link.get("freshdesk_ticket_id") or "").strip()
+    if not fd_id:
+        if engine is None:
+            from warranty_workflow import WarrantyEngine  # noqa: WPS433
+
+            engine = WarrantyEngine
+        ticket = engine.get_ticket(ticket_id)
+        if ticket is not None:
+            collected = ticket.get_collected()
+            fd_id = str(collected.get("freshdesk_ticket_id") or "").strip()
+
+    if not fd_id or not fd_id.isdigit():
+        return {
+            "synced": False,
+            "error": link.get("error") or "no_freshdesk_link",
+            "detail": link.get("detail"),
+        }
+
+    label = _DECISION_LABELS.get(decision, decision)
+    lines = [
+        "Admin decision recorded in the warranty portal:",
+        "",
+        f"Decision: {label} ({decision})",
+    ]
+    if decided_by:
+        lines.append(f"Decided by: {decided_by}")
+    if note.strip():
+        lines.append("")
+        lines.append("Internal note:")
+        lines.append(note.strip())
+    if customer_message.strip():
+        lines.append("")
+        lines.append("Customer message (also emailed when configured):")
+        lines.append(customer_message.strip())
+
+    posted = _post_private_note(fd_id, "\n".join(lines))
+    if not posted.get("posted"):
+        return {"synced": False, **posted}
+
+    return {
+        "synced": True,
+        "freshdesk_ticket_id": fd_id,
+        "freshdesk_url": freshdesk_ticket_url(_client()["domain"], fd_id),
+        "link_created": bool(link.get("created")),
+    }
+
+
+def ensure_freshdesk_link(ticket_id: str, *, engine=None) -> Dict[str, Any]:
+    """Manual retry: create or return the linked Freshdesk ticket."""
+    return maybe_create_freshdesk_case(
+        ticket_id,
+        engine=engine,
+        allow_any_status=True,
+    )
+
+
 def maybe_add_freshdesk_customer_reply(
     ticket_id: str,
     note_text: str,
@@ -241,32 +359,12 @@ def maybe_add_freshdesk_customer_reply(
     if not fd_id or not fd_id.isdigit():
         return {"posted": False, "skipped": True, "reason": "no_freshdesk_link"}
 
-    cfg = _client()
     body = (
         "Customer follow-up via warranty chat:\n\n"
         f"{note_text.strip()}\n\n"
         f"Case reference: {collected.get('case_reference') or case_reference_for_ticket(ticket)}"
     )
-    try:
-        response = requests.post(
-            f"{cfg['base_url']}/tickets/{fd_id}/notes",
-            auth=cfg["auth"],
-            headers=cfg["headers"],
-            json={"body": body, "private": True},
-            timeout=15,
-        )
-    except requests.RequestException as exc:
-        logger.warning("Freshdesk note failed for %s: %s", ticket_id, exc)
-        return {"posted": False, "error": str(exc)}
-
-    if response.status_code >= 400:
-        return {
-            "posted": False,
-            "error": f"http_{response.status_code}",
-            "detail": (response.text or "")[:300],
-        }
-
-    return {"posted": True, "freshdesk_ticket_id": fd_id}
+    return _post_private_note(fd_id, body)
 
 
 def schedule_freshdesk_case_creation(ticket_id: str) -> None:

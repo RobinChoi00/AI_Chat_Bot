@@ -1,5 +1,6 @@
 """Tests for outbound Freshdesk case creation from warranty tickets."""
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -98,6 +99,40 @@ def test_maybe_create_freshdesk_case_creates_and_persists(monkeypatch):
         collected = saved.get_collected()
         assert collected["freshdesk_ticket_id"] == "99901"
         assert collected["case_reference"].startswith("WR-")
+
+
+def test_maybe_sync_admin_decision_posts_private_note(monkeypatch):
+    monkeypatch.setenv("WARRANTY_FRESHDESK_CREATE_CASE", "1")
+    monkeypatch.setenv("FRESHDESK_DOMAIN", "titanchair.freshdesk.com")
+    monkeypatch.setenv("FRESHDESK_API_KEY", "test-key")
+
+    fake_ticket = _FakeTicket()
+    fake_ticket.collected_data = json.dumps({"freshdesk_ticket_id": "555"})
+    engine = MagicMock()
+    engine.get_ticket.return_value = fake_ticket
+
+    posted: list[dict] = []
+
+    def _fake_post(url, *args, **kwargs):
+        posted.append({"url": url, "json": kwargs.get("json")})
+        return MagicMock(status_code=201, text="ok")
+
+    monkeypatch.setattr("warranty_freshdesk_case.requests.post", _fake_post)
+
+    from warranty_freshdesk_case import maybe_sync_admin_decision_to_freshdesk  # noqa: W402
+
+    result = maybe_sync_admin_decision_to_freshdesk(
+        "tid-123",
+        decision="approved",
+        note="Looks good",
+        customer_message="Your claim is approved.",
+        decided_by="admin",
+        engine=engine,
+    )
+    assert result["synced"] is True
+    assert posted
+    assert "Admin decision recorded" in posted[0]["json"]["body"]
+    assert "approved" in posted[0]["json"]["body"]
 
 
 def test_evidence_to_dict_public_hides_file_path():

@@ -62,16 +62,47 @@ def test_admin_sync_freshdesk_success(admin_client):
     }
 
     with patch("freshdesk_sync.sync_freshdesk_knowledge", return_value=fake_result):
-        res = admin_client.post(
-            "/admin/warranty/sync-freshdesk",
-            headers={"X-Admin-Key": ADMIN_KEY},
-        )
+        with patch(
+            "warranty_faiss_rebuilder.get_status", return_value={"running": False}
+        ):
+            with patch("warranty_faiss_rebuilder.rebuild_freshdesk_qa_index") as rebuild:
+                res = admin_client.post(
+                    "/admin/warranty/sync-freshdesk?rebuild_faiss=false",
+                    headers={"X-Admin-Key": ADMIN_KEY},
+                )
 
     assert res.status_code == 200
     body = res.json()
     assert body["ok"] is True
     assert body["ticket_count"] == 2
     assert "knowledge_total_entries" in body
+    assert "knowledge_yield" in body
+    rebuild.assert_not_called()
+
+
+def test_admin_sync_freshdesk_schedules_faiss_by_default(admin_client):
+    fake_result = {
+        "ok": True,
+        "ticket_count": 2,
+        "resolved_scanned": 10,
+        "output_path": "/tmp/freshdesk_tickets.json",
+        "domain": "example.freshdesk.com",
+        "message": "Saved 2 Freshdesk Q&A entries.",
+    }
+
+    with patch("freshdesk_sync.sync_freshdesk_knowledge", return_value=fake_result):
+        with patch(
+            "warranty_faiss_rebuilder.get_status", return_value={"running": False}
+        ):
+            with patch("warranty_faiss_rebuilder.rebuild_freshdesk_qa_index") as rebuild:
+                res = admin_client.post(
+                    "/admin/warranty/sync-freshdesk",
+                    headers={"X-Admin-Key": ADMIN_KEY},
+                )
+
+    assert res.status_code == 200
+    assert res.json().get("faiss_rebuild_scheduled") is True
+    rebuild.assert_called_once()
 
 
 def test_admin_sync_freshdesk_missing_env(admin_client):

@@ -186,4 +186,26 @@ export interface DecisionResponse {
   ticket: AdminWarrantyTicket;
   customer_email_sent: boolean;
   customer_email_skip_reason: CustomerEmailSkipReason | null;
+  freshdesk_sync?: {
+    synced?: boolean;
+    skipped?: boolean;
+    reason?: string;
+    freshdesk_ticket_id?: string;
+    freshdesk_url?: string;
+    error?: string;
+  } | null;
+}
+
+export interface FreshdeskLinkResponse {
+  ok: boolean;
+  freshdesk: {
+    created?: boolean;
+    skipped?: boolean;
+    reason?: string;
+    freshdesk_ticket_id?: string;
+    freshdesk_url?: string;
+    error?: string;
+    detail?: string;
+  };
+  ticket: AdminWarrantyTicket;
 }

@@ -300,6 +300,15 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       try {
         const resp = await submitWarrantyAnswer(ticketId, answer);
         applySessionResponse(resp);
+        if (resp.side_question && resp.assistant_message) {
+          await sleep(THINKING_DELAY_MS);
+          setMessages((prev) => [
+            ...prev,
+            assistantMessage(resp.assistant_message!),
+          ]);
+          setOptionsUsed(false);
+          return;
+        }
         if (resp.tracking_summary?.message) {
           await sleep(THINKING_DELAY_MS);
           setMessages((prev) => [
@@ -345,21 +354,29 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         }
 
         const smart = resp.smart_start;
+        const routingConfirm = smart?.routing_confirmation;
         const jumped =
-          smart &&
-          smart.source === "llm" &&
-          smart.applied_keys &&
-          smart.applied_keys.length >= 3 &&
-          smart.summary;
+          routingConfirm?.message ||
+          (smart &&
+            smart.source === "llm" &&
+            smart.applied_keys &&
+            smart.applied_keys.length >= 3 &&
+            smart.summary);
 
         applySessionResponse(resp);
 
-        if (jumped) {
+        if (routingConfirm?.message) {
+          await sleep(THINKING_DELAY_MS);
+          setMessages((prev) => [
+            ...prev,
+            assistantMessage(routingConfirm.message),
+          ]);
+        } else if (jumped && smart?.summary) {
           await sleep(THINKING_DELAY_MS);
           setMessages((prev) => [
             ...prev,
             assistantMessage(
-              `Got it — ${smart!.summary} I'll skip the extra menu questions and take you straight to the next step.`
+              `Got it — ${smart.summary} I'll skip the extra menu questions and take you straight to the next step.`
             ),
           ]);
         } else if (

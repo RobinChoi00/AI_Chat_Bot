@@ -52,6 +52,15 @@ class TestHeuristicOptionMatch:
         node = {"type": "question", "prompt": "Tracking?", "options": options}
         assert nlp.interpret_warranty_answer(node, "I don't have a tracking number") == "no_tracking"
 
+    def test_norm_not_matched_inside_longer_label(self, monkeypatch):
+        options = [
+            {"answer_key": "repair", "label": "Repair air pump"},
+            {"answer_key": "replace", "label": "Replace unit"},
+        ]
+        node = {"type": "question", "prompt": "Next step?", "options": options}
+        monkeypatch.setattr(nlp, "_llm_json", lambda _prompt, **kwargs: None)
+        assert nlp.interpret_warranty_answer(node, "air") is None
+
 
 class TestLlmFallback:
     def test_issue_type_from_llm(self, monkeypatch):

@@ -100,6 +100,37 @@ def test_build_step_enrichment_uses_freshdesk_tips(monkeypatch):
     assert result["message"].rstrip().endswith("do you hear a click?")
 
 
+def test_build_step_enrichment_uses_intake_summary_in_search(monkeypatch):
+    captured: dict = {}
+
+    def _fake_search(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(step_enrich, "search_knowledge", _fake_search)
+
+    ticket = SimpleNamespace(ticket_id="t1", issue_type="defect", model_name="OS-4000T")
+    ticket.get_collected = lambda: {"intake_summary": "Footrest air not inflating."}
+    ticket.set_collected = lambda key, value: None
+
+    engine = _FakeEngine(
+        [
+            _turn("warranty", node_id="root"),
+            _turn("defect", node_id="issue_type"),
+            _turn("air", node_id="defect_problem_type"),
+        ]
+    )
+    node = {
+        "node_id": "defect_air_footrest",
+        "type": "question",
+        "prompt": "Does air blow through the hose?",
+    }
+
+    result = step_enrich.build_step_enrichment(engine, ticket, node)
+    assert result is None
+    assert "Footrest air not inflating" in captured.get("path_text", "")
+
+
 def test_format_step_message_keeps_prompt_at_end():
     msg = step_enrich.format_step_message(
         base_prompt="Which part is affected?",

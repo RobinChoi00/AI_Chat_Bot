@@ -8,6 +8,11 @@ interface TicketSyncResult {
   knowledge_freshdesk_entries?: number;
   knowledge_freshdesk_kb_entries?: number;
   knowledge_total_entries?: number;
+  knowledge_yield?: {
+    ticket_rows_to_knowledge_pct?: number | null;
+    resolved_to_knowledge_pct?: number | null;
+    kb_articles_to_knowledge_pct?: number | null;
+  };
   resolved_scanned?: number;
   usable_qa_pairs?: number;
   search_pages_fetched?: number;
@@ -31,6 +36,9 @@ interface SolutionsSyncResult {
   article_count?: number;
   knowledge_freshdesk_kb_entries?: number;
   knowledge_total_entries?: number;
+  knowledge_yield?: {
+    kb_articles_to_knowledge_pct?: number | null;
+  };
   faiss_rebuild_scheduled?: boolean;
   message?: string;
   detail?: string;
@@ -59,6 +67,38 @@ interface FaissStatus {
   detail?: string;
 }
 
+interface FreshdeskStatus {
+  configured?: boolean;
+  connection_ok?: boolean | null;
+  domain?: string | null;
+  portal_url?: string | null;
+  outbound?: {
+    create_case_enabled?: boolean;
+    group_id?: string | null;
+    product_id?: string | null;
+  };
+  files?: {
+    tickets?: { exists?: boolean; count?: number; modified_at?: string | null };
+    kb?: { exists?: boolean; count?: number; modified_at?: string | null };
+  };
+  last_sync?: {
+    tickets?: { last_sync_at?: string; ok?: boolean; ticket_count?: number; message?: string };
+    kb?: { last_sync_at?: string; ok?: boolean; article_count?: number; message?: string };
+  };
+  stale?: { tickets?: boolean; kb?: boolean };
+  knowledge?: { total?: number; freshdesk?: number; freshdesk_kb?: number };
+  detail?: string;
+}
+
+function formatIso(iso?: string | null): string {
+  if (!iso) return "never";
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
 function formatTs(ts?: number): string {
   if (!ts) return "";
   try {
@@ -75,7 +115,7 @@ export default function AdminFreshdeskSync() {
   const [rebuildLoading, setRebuildLoading] = useState(false);
 
   const [llmRescue, setLlmRescue] = useState(true);
-  const [rebuildAfter, setRebuildAfter] = useState(false);
+  const [rebuildAfter, setRebuildAfter] = useState(true);
   const [syncMaxPages, setSyncMaxPages] = useState(30);
   const [syncMonthsBack, setSyncMonthsBack] = useState(12);
 
@@ -83,11 +123,23 @@ export default function AdminFreshdeskSync() {
   const [kbResult, setKbResult] = useState<SolutionsSyncResult | null>(null);
   const [probe, setProbe] = useState<KbProbeResult | null>(null);
   const [faiss, setFaiss] = useState<FaissStatus | null>(null);
+  const [fdStatus, setFdStatus] = useState<FreshdeskStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void refreshFaiss();
+    void refreshFreshdeskStatus();
   }, []);
+
+  async function refreshFreshdeskStatus() {
+    try {
+      const res = await fetch("/api/admin/warranty/freshdesk-status");
+      const data = (await res.json()) as FreshdeskStatus;
+      if (res.ok) setFdStatus(data);
+    } catch {
+      // Non-fatal.
+    }
+  }
 
   async function refreshFaiss() {
     try {
@@ -121,6 +173,7 @@ export default function AdminFreshdeskSync() {
       }
       setTicketResult(data);
       if (rebuildAfter) setTimeout(() => void refreshFaiss(), 2000);
+      void refreshFreshdeskStatus();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Ticket sync failed.");
     } finally {
@@ -145,6 +198,7 @@ export default function AdminFreshdeskSync() {
       }
       setKbResult(data);
       if (rebuildAfter) setTimeout(() => void refreshFaiss(), 2000);
+      void refreshFreshdeskStatus();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "KB sync failed.");
     } finally {
@@ -191,6 +245,69 @@ export default function AdminFreshdeskSync() {
 
   return (
     <div className="space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
+      {fdStatus && (
+        <div className="rounded-md border border-indigo-200 bg-white px-3 py-2 text-xs text-indigo-950">
+          <div className="mb-1 flex flex-wrap items-center gap-2">
+            <strong>Freshdesk health</strong>
+            {!fdStatus.configured ? (
+              <span className="rounded bg-amber-100 px-2 py-0.5 text-amber-900">
+                credentials missing
+              </span>
+            ) : fdStatus.connection_ok ? (
+              <span className="rounded bg-green-100 px-2 py-0.5 text-green-800">
+                API reachable
+              </span>
+            ) : fdStatus.connection_ok === false ? (
+              <span className="rounded bg-red-100 px-2 py-0.5 text-red-800">
+                API unreachable
+              </span>
+            ) : null}
+            {fdStatus.outbound?.create_case_enabled && (
+              <span className="rounded bg-indigo-100 px-2 py-0.5 text-indigo-800">
+                outbound cases on
+              </span>
+            )}
+          </div>
+          <div className="grid gap-1 text-[11px] text-indigo-900/90 sm:grid-cols-2">
+            <div>
+              Tickets JSON:{" "}
+              <strong>{fdStatus.files?.tickets?.count ?? 0}</strong>
+              {fdStatus.stale?.tickets && (
+                <span className="ml-1 text-amber-700">(stale)</span>
+              )}
+              {" · "}
+              last sync {formatIso(fdStatus.last_sync?.tickets?.last_sync_at)}
+            </div>
+            <div>
+              KB JSON: <strong>{fdStatus.files?.kb?.count ?? 0}</strong>
+              {fdStatus.stale?.kb && (
+                <span className="ml-1 text-amber-700">(stale)</span>
+              )}
+              {" · "}
+              last sync {formatIso(fdStatus.last_sync?.kb?.last_sync_at)}
+            </div>
+            <div>
+              Loaded knowledge:{" "}
+              <strong>{fdStatus.knowledge?.freshdesk ?? 0}</strong> tickets +{" "}
+              <strong>{fdStatus.knowledge?.freshdesk_kb ?? 0}</strong> KB
+            </div>
+            {fdStatus.portal_url && (
+              <div>
+                Portal:{" "}
+                <a
+                  href={fdStatus.portal_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                >
+                  {fdStatus.domain}
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-3 text-xs">
         <label className="flex items-center gap-1.5 text-indigo-900">
           <input
@@ -306,6 +423,13 @@ export default function AdminFreshdeskSync() {
               {ticketResult.llm_rescue_stats.skipped ?? 0}
             </>
           )}
+          {ticketResult.knowledge_yield?.ticket_rows_to_knowledge_pct != null && (
+            <>
+              {" "}
+              · yield{" "}
+              <strong>{ticketResult.knowledge_yield.ticket_rows_to_knowledge_pct}%</strong>
+            </>
+          )}
           {ticketResult.faiss_rebuild_scheduled && (
             <> · FAISS rebuild scheduled</>
           )}
@@ -321,6 +445,13 @@ export default function AdminFreshdeskSync() {
         <div className="rounded-md border border-emerald-200 bg-white px-3 py-2 text-xs text-emerald-900">
           <strong>{kbResult.article_count ?? 0}</strong> KB articles →{" "}
           <strong>{kbResult.knowledge_freshdesk_kb_entries ?? 0}</strong> KB entries
+          {kbResult.knowledge_yield?.kb_articles_to_knowledge_pct != null && (
+            <>
+              {" "}
+              · yield{" "}
+              <strong>{kbResult.knowledge_yield.kb_articles_to_knowledge_pct}%</strong>
+            </>
+          )}
           {kbResult.faiss_rebuild_scheduled && <> · FAISS rebuild scheduled</>}
         </div>
       )}

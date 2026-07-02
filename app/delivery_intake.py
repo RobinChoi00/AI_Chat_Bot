@@ -25,9 +25,9 @@ _QUESTION_WORDS_RE = re.compile(
 )
 
 _BOX_SIZE_Q_RE = re.compile(
-    r"\b(box|carton|crate|package|shipping).{0,40}\b(size|dimension|measure|"
+    r"\b(box|carton|crate|package|shipping).{0,40}\b(size|sizes|dimension|dimensions|measure|"
     r"length|width|height|big|large)\b|"
-    r"\b(size|dimension).{0,40}\b(box|carton|crate|package)\b|"
+    r"\b(size|sizes|dimension|dimensions).{0,40}\b(box|carton|crate|package)\b|"
     r"\bwhat size\b|\bsize of (the )?(box|carton|package)\b|"
     r"\bhow big\b|\bcarton dimensions\b|\bshipping dimensions\b",
     re.IGNORECASE,
@@ -264,18 +264,7 @@ def validate_delivery_text_answer(
     if not text:
         raise ValueError("Please enter a response before continuing.")
 
-    spec = detect_delivery_spec_question(text)
-
     if node_id == "delivery_get_name":
-        if spec:
-            raise ValueError(
-                _build_spec_side_answer(
-                    model_name=model_name,
-                    spec=spec,
-                    reprompt=_reprompt_order_or_email(),
-                )
-            )
-
         from warranty_email import extract_email  # noqa: WPS433
 
         embedded_email = extract_email(text)
@@ -287,15 +276,6 @@ def validate_delivery_text_answer(
         raise ValueError(_reprompt_order_or_email())
 
     if node_id == "delivery_get_tracking_number":
-        if spec:
-            raise ValueError(
-                _build_spec_side_answer(
-                    model_name=model_name,
-                    spec=spec,
-                    reprompt=_reprompt_tracking_number(),
-                )
-            )
-
         if is_plausible_tracking_number(text):
             return
 
