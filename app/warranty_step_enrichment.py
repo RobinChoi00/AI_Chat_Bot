@@ -25,7 +25,7 @@ import logging
 from typing import Any, Optional
 
 from warranty_intake_context import enrich_path_text, intake_aware_step_summary
-from warranty_knowledge import KnowledgeEntry, search_knowledge
+from warranty_knowledge import KnowledgeEntry, contextual_search_knowledge
 from warranty_self_help import (
     _collect_fallback_hints,
     _friendly_match_summary,
@@ -127,12 +127,19 @@ def build_step_enrichment(
         # Model-only or issue-type menu — don't infer symptoms from KB yet.
         return None
 
+    # Delivery/installation mid-flow prompts are self-explanatory (tracking, order
+    # lookup, setup). Generic KB search here often pulls unrelated defect tickets
+    # (Voice PCB, footrest, etc.) because defect_category is unset on these paths.
+    if issue_type in ("delivery", "installation"):
+        return None
+
     model_name = str(getattr(ticket, "model_name", "") or "")
     path_text = enrich_path_text(build_path_text(turns), ticket)
     defect_category = infer_defect_category_from_turns(turns)
 
-    matches = search_knowledge(
+    matches = contextual_search_knowledge(
         path_text=path_text,
+        issue_type=issue_type,
         defect_category=defect_category,
         model_name=model_name,
         limit=2,

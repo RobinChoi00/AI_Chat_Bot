@@ -557,3 +557,138 @@ def search_knowledge(
         if len(results) >= limit:
             break
     return results
+
+
+_DELIVERY_TOPIC_RE = re.compile(
+    r"\b(delivery|shipping|tracking|carrier|freight|fedex|ups|usps|"
+    r"shipment|in transit|unboxing|box damage|signed cleared|"
+    r"delivery receipt|expedite|warehouse|order status)\b",
+    re.I,
+)
+
+_INSTALL_TOPIC_RE = re.compile(
+    r"\b(install|installation|assembly|setup|video|footrest hose|"
+    r"air hose|white glove|wg install)\b",
+    re.I,
+)
+
+_REPAIR_ONLY_MARKERS = (
+    "voice pcb",
+    "main pcb",
+    "remote fuse",
+    "actuator",
+    "heating element",
+    "massage mechanism",
+    "footrest mechanism",
+    "recline motor",
+    "ghost voice",
+    "false trigger",
+    "blown fuse",
+)
+
+_REPAIR_CATEGORIES = frozenset({"power", "remote", "air", "mech", "footrest", "heat", "voice"})
+
+
+def _entry_text_blob(entry: KnowledgeEntry) -> str:
+    return " ".join((entry.title, entry.diagnostic, " ".join(entry.customer_steps)))
+
+
+def _filter_delivery_entries(
+    entries: list[KnowledgeEntry],
+    limit: int,
+) -> list[KnowledgeEntry]:
+    filtered: list[KnowledgeEntry] = []
+    for entry in entries:
+        blob = _entry_text_blob(entry).lower()
+        if _DELIVERY_TOPIC_RE.search(blob):
+            filtered.append(entry)
+            continue
+        if any(marker in blob for marker in _REPAIR_ONLY_MARKERS):
+            continue
+        if entry.category in _REPAIR_CATEGORIES:
+            continue
+        if entry.category == "general" and ("ship" in blob or "delivery" in blob):
+            filtered.append(entry)
+    return filtered[:limit]
+
+
+def _filter_installation_entries(
+    entries: list[KnowledgeEntry],
+    limit: int,
+) -> list[KnowledgeEntry]:
+    filtered: list[KnowledgeEntry] = []
+    for entry in entries:
+        blob = _entry_text_blob(entry).lower()
+        if _INSTALL_TOPIC_RE.search(blob):
+            filtered.append(entry)
+            continue
+        if entry.category == "air" and any(
+            token in blob for token in ("hose", "footrest", "install")
+        ):
+            filtered.append(entry)
+            continue
+        if any(marker in blob for marker in _REPAIR_ONLY_MARKERS):
+            if not _INSTALL_TOPIC_RE.search(blob):
+                continue
+        if entry.category in {"power", "remote", "voice", "heat"} and not _INSTALL_TOPIC_RE.search(
+            blob
+        ):
+            continue
+        if entry.category == "general":
+            filtered.append(entry)
+    return filtered[:limit]
+
+
+def contextual_search_knowledge(
+    *,
+    path_text: str,
+    issue_type: str = "",
+    defect_category: Optional[str] = None,
+    model_name: str = "",
+    limit: int = 3,
+) -> list[KnowledgeEntry]:
+    """
+    Issue-type-aware KB search so delivery/installation paths do not pull
+    unrelated defect tickets, and defect paths do not search before category
+    is known.
+    """
+    issue = (issue_type or "").strip().lower()
+
+    if issue == "delivery":
+        query = f"delivery shipping tracking order status carrier freight {path_text}"
+        raw = search_knowledge(
+            path_text=query,
+            defect_category=None,
+            model_name=model_name,
+            limit=max(limit * 3, 6),
+        )
+        return _filter_delivery_entries(raw, limit)
+
+    if issue == "installation":
+        query = f"installation assembly setup footrest air hose video {path_text}"
+        raw = search_knowledge(
+            path_text=query,
+            defect_category="air",
+            model_name=model_name,
+            limit=max(limit * 2, 4),
+        )
+        return _filter_installation_entries(raw, limit)
+
+    if issue == "defect":
+        if not defect_category:
+            return []
+        return search_knowledge(
+            path_text=path_text,
+            defect_category=defect_category,
+            model_name=model_name,
+            limit=limit,
+        )
+
+    if not defect_category:
+        return []
+    return search_knowledge(
+        path_text=path_text,
+        defect_category=defect_category,
+        model_name=model_name,
+        limit=limit,
+    )

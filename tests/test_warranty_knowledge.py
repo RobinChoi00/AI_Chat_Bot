@@ -43,6 +43,39 @@ def test_search_power_path(tmp_path, monkeypatch):
     )
 
 
+def test_contextual_search_skips_defect_without_category():
+    wk.load_knowledge_entries.cache_clear()
+    results = wk.contextual_search_knowledge(
+        path_text="chair won't turn on power remote",
+        issue_type="defect",
+        defect_category=None,
+        limit=3,
+    )
+    assert results == []
+
+
+def test_contextual_search_filters_repair_entries_on_delivery():
+    wk.load_knowledge_entries.cache_clear()
+    repair = wk.KnowledgeEntry(
+        source="freshdesk",
+        category="voice",
+        title="Voice crackling speaker",
+        diagnostic="Replacing the Voice PCB often fixes crackling speaker issues.",
+        customer_steps=("Check the footrest mechanism.",),
+    )
+    delivery = wk.KnowledgeEntry(
+        source="freshdesk",
+        category="general",
+        title="Carrier tracking delay",
+        diagnostic="Delivery tracking may lag until the carrier scans the shipment.",
+        customer_steps=("Check your order confirmation email for tracking.",),
+    )
+
+    filtered = wk._filter_delivery_entries([repair, delivery], limit=3)
+    assert len(filtered) == 1
+    assert filtered[0].title == "Carrier tracking delay"
+
+
 def test_extract_customer_steps_filters_internal():
     steps = wk._extract_customer_steps(
         "Replace main PCB immediately.",

@@ -9,7 +9,12 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from warranty_knowledge import KnowledgeEntry, map_workflow_defect_category, search_knowledge
+from warranty_knowledge import (
+    KnowledgeEntry,
+    contextual_search_knowledge,
+    map_workflow_defect_category,
+    search_knowledge,
+)
 
 _DEFECT_CATEGORY_KEYS = frozenset({
     "power", "remote", "air", "rolling", "recline", "footrest", "cosmetic", "heat", "voice",
@@ -1593,8 +1598,9 @@ def build_delivery_diagnosis(
     """Customer-safe guidance for delivery / freight cases before team review."""
     base_steps = _DELIVERY_STEPS.get(symptom, _DELIVERY_STEPS["no_box_damage"])
     query = f"{path_text} delivery tracking shipping box damage carrier"
-    matches: list[KnowledgeEntry] = search_knowledge(
+    matches: list[KnowledgeEntry] = contextual_search_knowledge(
         path_text=query,
+        issue_type="delivery",
         defect_category=None,
         model_name=model_name,
         limit=3,
@@ -1653,8 +1659,9 @@ def build_workflow_diagnosis(
     """
     Build structured diagnosis from Freshdesk/Q&A/Auto-Check + workflow context.
     """
-    matches: list[KnowledgeEntry] = search_knowledge(
+    matches: list[KnowledgeEntry] = contextual_search_knowledge(
         path_text=path_text,
+        issue_type=issue_type,
         defect_category=defect_category,
         model_name=model_name,
         limit=3,

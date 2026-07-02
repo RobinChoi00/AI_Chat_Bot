@@ -20,7 +20,7 @@ from delivery_intake import (
     is_plausible_tracking_number,
 )
 from warranty_intake_context import enrich_path_text
-from warranty_knowledge import search_knowledge
+from warranty_knowledge import contextual_search_knowledge
 from warranty_self_help import (
     _collect_fallback_hints,
     _friendly_match_summary,
@@ -187,8 +187,9 @@ def _format_knowledge_side_answer(
         ticket,
     )
     defect_category = infer_defect_category_from_turns(turns)
-    matches = search_knowledge(
+    matches = contextual_search_knowledge(
         path_text=path_text,
+        issue_type=issue_type,
         defect_category=defect_category,
         model_name=model_name,
         limit=2,

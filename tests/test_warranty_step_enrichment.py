@@ -75,7 +75,7 @@ def test_build_step_enrichment_uses_freshdesk_tips(monkeypatch):
         )
     ]
 
-    monkeypatch.setattr(step_enrich, "search_knowledge", lambda **kwargs: fake_matches)
+    monkeypatch.setattr(step_enrich, "contextual_search_knowledge", lambda **kwargs: fake_matches)
 
     engine = _FakeEngine(
         [
@@ -107,7 +107,7 @@ def test_build_step_enrichment_uses_intake_summary_in_search(monkeypatch):
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr(step_enrich, "search_knowledge", _fake_search)
+    monkeypatch.setattr(step_enrich, "contextual_search_knowledge", _fake_search)
 
     ticket = SimpleNamespace(ticket_id="t1", issue_type="defect", model_name="OS-4000T")
     ticket.get_collected = lambda: {"intake_summary": "Footrest air not inflating."}
@@ -129,6 +129,62 @@ def test_build_step_enrichment_uses_intake_summary_in_search(monkeypatch):
     result = step_enrich.build_step_enrichment(engine, ticket, node)
     assert result is None
     assert "Footrest air not inflating" in captured.get("path_text", "")
+
+
+def test_build_step_enrichment_skips_delivery_path(monkeypatch):
+    fake_matches = [
+        KnowledgeEntry(
+            source="freshdesk",
+            category="voice",
+            title="Voice crackling",
+            diagnostic="Voice PCB",
+            customer_steps=(
+                "Replacing the Voice PCB often fixes crackling speaker issues.",
+                "Checking the footrest mechanism can help with any related problems.",
+            ),
+        )
+    ]
+    monkeypatch.setattr(step_enrich, "contextual_search_knowledge", lambda **kwargs: fake_matches)
+
+    engine = _FakeEngine(
+        [
+            _turn("warranty", node_id="root"),
+            _turn("delivery", node_id="issue_type"),
+            _turn("no_tracking", node_id="delivery_tracking_q"),
+        ]
+    )
+    ticket = SimpleNamespace(ticket_id="t1", issue_type="delivery", model_name="OS-4000T")
+    node = {
+        "node_id": "delivery_get_name",
+        "type": "question_text",
+        "prompt": "Please provide your order number OR the email address used at checkout.",
+    }
+
+    assert step_enrich.build_step_enrichment(engine, ticket, node) is None
+
+
+def test_build_step_enrichment_skips_defect_before_category(monkeypatch):
+    """Before power/air/etc. is chosen, generic KB often matches wrong tickets."""
+
+    def _should_not_search(**kwargs):
+        raise AssertionError("search_knowledge should not run before defect category is known")
+
+    monkeypatch.setattr("warranty_knowledge.search_knowledge", _should_not_search)
+
+    engine = _FakeEngine(
+        [
+            _turn("warranty", node_id="root"),
+            _turn("defect", node_id="issue_type"),
+        ]
+    )
+    ticket = SimpleNamespace(ticket_id="t1", issue_type="defect", model_name="OS-4000T")
+    node = {
+        "node_id": "defect_problem_type",
+        "type": "question",
+        "prompt": "What type of problem are you experiencing with your chair?",
+    }
+
+    assert step_enrich.build_step_enrichment(engine, ticket, node) is None
 
 
 def test_format_step_message_keeps_prompt_at_end():
