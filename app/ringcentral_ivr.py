@@ -4,7 +4,8 @@ ringcentral_ivr.py
 Orchestrate RingCentral IVR callbacks with WarrantyEngine.
 
 Call flow (DTMF-only MVP, defect troubleshooting):
-  on-call-enter  → start ticket → skip to defect_problem_type → play menu
+  on-call-enter  → if warranty business hours: forward to agent immediately
+                 → else start ticket → skip to defect_problem_type → play menu
   Play complete  → collect DTMF
   Collect digit  → submit_answer OR forward/hangup at terminal
 """
@@ -21,6 +22,7 @@ from ringcentral_client import (
     hangup,
     play_prompt,
 )
+from ringcentral_hours import is_warranty_business_hours
 from ringcentral_voice import (
     AGENT_DTMF,
     IvrPhase,
@@ -164,8 +166,17 @@ def handle_call_enter(payload: dict[str, Any]) -> None:
         logger.error("RC on-call-enter missing sessionId/partyId: %s", payload)
         return
 
-    engine = _lazy_engine()
     caller = _caller_phone(payload)
+    if is_warranty_business_hours():
+        logger.info(
+            "RC IVR business hours — direct transfer session=%s caller=%s",
+            session_id,
+            caller,
+        )
+        forward_call(session_id=session_id, party_id=party_id)
+        return
+
+    engine = _lazy_engine()
     ticket_id, _root = engine.start_session(session_id, "phone")
     _store_caller_metadata(ticket_id, caller)
     result = engine.advance_to_issue_type(ticket_id, "defect")

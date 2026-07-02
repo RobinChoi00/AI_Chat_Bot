@@ -36,6 +36,7 @@ def test_handle_call_enter_starts_at_defect_problem_type():
         },
     }
     with (
+        patch("ringcentral_ivr.is_warranty_business_hours", return_value=False),
         patch("ringcentral_ivr.play_prompt") as mock_play,
         patch("ringcentral_ivr.resolve_play_uri", return_value="https://example.com/menu.wav"),
     ):
@@ -59,3 +60,28 @@ def test_handle_call_enter_starts_at_defect_problem_type():
         "audio_uri"
     )
     assert play_uri  # TTS URI generated
+
+
+def test_handle_call_enter_during_business_hours_transfers_immediately():
+    payload = {
+        "sessionId": "rc-session-hours",
+        "inParty": {
+            "id": "party-hours",
+            "from": {"phoneNumber": "+18888482630"},
+        },
+    }
+    with (
+        patch("ringcentral_ivr.is_warranty_business_hours", return_value=True),
+        patch("ringcentral_ivr.forward_call") as mock_forward,
+        patch("ringcentral_ivr.play_prompt") as mock_play,
+        patch("ringcentral_ivr._lazy_engine") as mock_engine,
+    ):
+        handle_call_enter(payload)
+
+    mock_forward.assert_called_once_with(
+        session_id="rc-session-hours",
+        party_id="party-hours",
+    )
+    mock_play.assert_not_called()
+    mock_engine.assert_not_called()
+    assert get_call_context("rc-session-hours") is None
