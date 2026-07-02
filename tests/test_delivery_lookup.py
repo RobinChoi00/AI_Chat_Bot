@@ -33,6 +33,38 @@ def test_format_unavailable_message():
     assert "not found" in msg
 
 
+def test_format_unavailable_message_includes_self_service_links():
+    msg = format_warranty_tracking_message(
+        TrackingSnapshot(source="unavailable", available=False, error="not found"),
+        domain="osakiusa.com",
+        lookup_kind="order",
+        raw_input="buyer@example.com",
+    )
+    assert "Track on our website" in msg
+    assert "https://osakiusa.com/apps/track123" in msg
+
+
+def test_build_carrier_tracking_url_ups():
+    from delivery_lookup import build_carrier_tracking_url
+
+    url = build_carrier_tracking_url("1Z999AA10123456784")
+    assert "ups.com" in url
+    assert "1Z999AA10123456784" in url
+
+
+def test_build_self_service_lookup_links_for_tracking():
+    from delivery_lookup import build_self_service_lookup_links
+
+    links = build_self_service_lookup_links(
+        domain="titanchair.com",
+        lookup_kind="tracking",
+        raw_input="1Z999AA10123456784",
+    )
+    labels = [label for label, _url in links]
+    assert "Track on our website" in labels
+    assert "Track with the carrier" in labels
+
+
 def test_format_success_message_includes_tracking():
     snap = TrackingSnapshot(
         source="track123",

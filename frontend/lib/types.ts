@@ -61,11 +61,15 @@ export interface WarrantyNode {
 
 export interface WarrantyTicketState {
   ticket_id: string;
+  case_reference?: string | null;
   status: TicketStatus;
   issue_type: string;
   model_name: string;
   model_confirmed?: boolean;
   ready_for_issue_type?: boolean;
+  needs_customer_reply?: boolean;
+  customer_message?: string | null;
+  admin_decision?: string | null;
   current_node: WarrantyNode | null;
 }
 

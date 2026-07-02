@@ -205,6 +205,19 @@ class WarrantyEvidence(Base):
             "created_at":        cast(datetime, self.created_at).isoformat() if self.created_at is not None else None,
         }
 
+    def to_dict_public(self) -> dict:
+        """Browser-safe evidence metadata (no server filesystem paths)."""
+        return {
+            "id":                self.id,
+            "ticket_id":         self.ticket_id,
+            "evidence_type":     self.evidence_type,
+            "original_filename": self.original_filename,
+            "mime_type":         self.mime_type,
+            "file_size_bytes":   self.file_size_bytes,
+            "emailed":           bool(self.emailed),
+            "created_at":        cast(datetime, self.created_at).isoformat() if self.created_at is not None else None,
+        }
+
 
 # ---------------------------------------------------------------------------
 # Create tables (idempotent — safe to call multiple times)

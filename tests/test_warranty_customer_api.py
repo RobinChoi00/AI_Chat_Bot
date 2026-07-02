@@ -120,6 +120,30 @@ def test_submit_answer_advances_without_llm(client):
     assert len(node["options"]) >= 4
 
 
+def test_submit_answer_rejects_box_size_question_at_delivery_lookup(client):
+    session_id = "cust-api-box-size"
+    _register_model(client, session_id, model="Titan Nido 3D")
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "delivery", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "no_tracking"},
+    )
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "give me size of the box"},
+    )
+    assert resp.status_code == 422
+    assert "order number" in resp.json()["detail"].lower()
+
+    session = client.get(f"/api/v1/warranty/session/{session_id}")
+    assert session.json()["ticket"]["current_node"]["node_id"] == "delivery_get_name"
+
+
 def test_submit_answer_returns_tracking_summary(client, monkeypatch):
     from delivery_lookup import TrackingSnapshot
 
@@ -135,7 +159,7 @@ def test_submit_answer_returns_tracking_summary(client, monkeypatch):
     monkeypatch.setattr("delivery_lookup.lookup_by_order_or_email", lambda *_a, **_k: None)
     monkeypatch.setattr(
         "delivery_lookup.format_warranty_tracking_message",
-        lambda snap: f"Status: {snap.status}",
+        lambda snap, **_k: f"Status: {snap.status}",
     )
     monkeypatch.setattr("delivery_lookup.persist_snapshot", lambda *_a, **_k: None)
 
@@ -174,7 +198,7 @@ def test_get_session_returns_ticket_after_admin_terminal(client, monkeypatch):
     )
     monkeypatch.setattr(
         "delivery_lookup.format_warranty_tracking_message",
-        lambda snap: "lookup pending",
+        lambda snap, **_k: "lookup pending",
     )
     monkeypatch.setattr("delivery_lookup.persist_snapshot", lambda *_a, **_k: None)
     monkeypatch.setattr(
@@ -248,7 +272,7 @@ def test_submit_answer_notifies_on_email_in_text(client, monkeypatch):
     monkeypatch.setattr("delivery_lookup.lookup_by_order_or_email", lambda *_a, **_k: unavailable)
     monkeypatch.setattr(
         "delivery_lookup.format_warranty_tracking_message",
-        lambda snap: "lookup pending",
+        lambda snap, **_k: "lookup pending",
     )
     monkeypatch.setattr("delivery_lookup.persist_snapshot", lambda *_a, **_k: None)
 

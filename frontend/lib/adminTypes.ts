@@ -30,6 +30,7 @@ export type AdminDecision =
 
 export interface AdminWarrantyTicket {
   ticket_id: string;
+  case_reference?: string | null;
   session_id: string;
   domain: string;
   current_node_id: string;
@@ -43,6 +44,8 @@ export interface AdminWarrantyTicket {
   admin_note: string | null;
   decided_by: string | null;
   customer_message: string | null;
+  freshdesk_ticket_id?: string | null;
+  freshdesk_url?: string | null;
   created_at: string | null;
   updated_at: string | null;
 }

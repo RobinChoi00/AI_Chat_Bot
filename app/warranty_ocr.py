@@ -49,8 +49,22 @@ import os
 import re
 from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
+
+try:
+    from cost_guard import limiter  # noqa: WPS433
+except ImportError:  # pragma: no cover
+    class _NoopLimiter:  # noqa: WPS441
+        def limit(self, *_args, **_kwargs):
+            def decorator(fn):
+                return fn
+
+            return decorator
+
+    limiter = _NoopLimiter()
+
+_WARRANTY_OCR_RATE = os.getenv("WARRANTY_OCR_RATE_LIMIT", "10/minute")
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["warranty-ocr"])
@@ -210,7 +224,8 @@ def extract_serial_from_image_bytes(data: bytes, *, mime: str = "image/jpeg") ->
 
 
 @router.post("/api/v1/warranty/ocr/serial", response_model=OcrResponse)
-async def ocr_serial_label(file: UploadFile = File(...)) -> OcrResponse:
+@limiter.limit(_WARRANTY_OCR_RATE)
+async def ocr_serial_label(request: Request, file: UploadFile = File(...)) -> OcrResponse:
     """
     Read a serial-label photo and return a normalized model name.
 

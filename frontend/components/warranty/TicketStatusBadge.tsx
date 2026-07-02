@@ -3,6 +3,7 @@ import type { TicketStatus } from "@/lib/types";
 interface Props {
   status: TicketStatus | null | undefined;
   ticketId?: string | null;
+  caseReference?: string | null;
 }
 
 const STATUS_CONFIG: Record<
@@ -19,7 +20,7 @@ const STATUS_CONFIG: Record<
   resolved:              { label: "Resolved",            color: "bg-green-100 text-green-800 border-green-200", icon: "✅" },
 };
 
-export default function TicketStatusBadge({ status, ticketId }: Props) {
+export default function TicketStatusBadge({ status, ticketId, caseReference }: Props) {
   if (!status) return null;
 
   const cfg = STATUS_CONFIG[status] ?? {
@@ -36,11 +37,15 @@ export default function TicketStatusBadge({ status, ticketId }: Props) {
         <span>{cfg.icon}</span>
         {cfg.label}
       </span>
-      {ticketId && (
+      {caseReference ? (
+        <span className="pl-1 font-mono text-[10px] text-gray-500">
+          {caseReference}
+        </span>
+      ) : ticketId ? (
         <span className="pl-1 font-mono text-[10px] text-gray-400">
           #{ticketId.slice(0, 8)}
         </span>
-      )}
+      ) : null}
     </div>
   );
 }

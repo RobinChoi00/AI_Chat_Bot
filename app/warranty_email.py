@@ -802,3 +802,57 @@ def maybe_send_admin_decision_customer_email(
     if not EMAIL_SENDER or not EMAIL_PASSWORD:
         return False, "smtp_not_configured"
     return False, "send_failed"
+
+
+def send_customer_followup_notification(
+    *,
+    ticket,
+    note_text: str,
+    turns: Optional[Sequence[Any]] = None,
+) -> bool:
+    """Notify the warranty team when a customer adds a follow-up note."""
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        logger.error(
+            "Customer follow-up not sent — EMAIL_SENDER / EMAIL_PASSWORD not configured."
+        )
+        return False
+
+    from warranty_case_ref import case_reference_for_ticket  # noqa: WPS433
+
+    case_ref = case_reference_for_ticket(ticket)
+    customer_email = resolve_customer_email(ticket, turns=turns) or "unknown"
+    subject = f"[Warranty Reply] {case_ref} — customer follow-up"
+    body_lines = [
+        "A customer replied in the warranty chat after an admin request for more information.",
+        "",
+        f"Case reference: {case_ref}",
+        f"Ticket ID: {ticket.ticket_id}",
+        f"Status: {ticket.status}",
+        f"Model: {ticket.model_name or '—'}",
+        f"Customer email: {customer_email}",
+        "",
+        "Customer message:",
+        note_text.strip(),
+        "",
+        "Please review this case in the warranty admin portal.",
+    ]
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = WARRANTY_TEAM_EMAIL
+    if customer_email != "unknown":
+        msg["Reply-To"] = customer_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText("\n".join(body_lines), "plain", "utf-8"))
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.send_message(msg)
+        logger.info("Customer follow-up email sent for ticket=%s ref=%s", ticket.ticket_id, case_ref)
+        return True
+    except smtplib.SMTPException as exc:
+        logger.error("Customer follow-up email failed: %s", exc)
+        return False

@@ -86,6 +86,31 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
             }
           />
           <Field
+            label="Case Reference"
+            value={
+              ticket.case_reference ? (
+                <span className="font-mono text-sm font-semibold">{ticket.case_reference}</span>
+              ) : (
+                "—"
+              )
+            }
+          />
+          {ticket.freshdesk_url && (
+            <Field
+              label="Freshdesk"
+              value={
+                <a
+                  href={ticket.freshdesk_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm font-medium text-indigo-700 underline-offset-2 hover:underline"
+                >
+                  Open ticket #{ticket.freshdesk_ticket_id}
+                </a>
+              }
+            />
+          )}
+          <Field
             label="Status"
             value={<AdminStatusBadge status={ticket.status} size="md" />}
           />

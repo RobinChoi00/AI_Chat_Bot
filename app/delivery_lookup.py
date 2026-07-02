@@ -14,7 +14,19 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+from store_config import get_order_tracking_page_url
+
+_CARRIER_TRACKING_URLS = {
+    "ups": "https://www.ups.com/track?tracknum={tn}",
+    "fedex": "https://www.fedex.com/fedextrack/?trknbr={tn}",
+    "usps": "https://tools.usps.com/go/TrackConfirmAction?tLabels={tn}",
+    "dhl": "https://www.dhl.com/global-en/home/tracking/tracking-express.html?submit=1&tracking-id={tn}",
+    "ontrac": "https://www.ontrac.com/tracking/?number={tn}",
+    "lasership": "https://www.lasership.com/track/{tn}",
+    "amazon": "https://track.amazon.com/tracking/{tn}",
+}
 
 
 @dataclass
@@ -148,15 +160,17 @@ def _snapshot_from_tracking_data(
 
 def parse_order_or_email(raw: str) -> tuple[str, str]:
     """Split customer input into (order_number, email). Either may be empty."""
+    from delivery_intake import is_plausible_email, is_plausible_order_id  # noqa: WPS433
+
     text = (raw or "").strip()
     if not text:
         return "", ""
-    if "@" in text:
+    if is_plausible_email(text):
         return "", text
     clean = text.replace("#", "").strip()
-    if re.fullmatch(r"[\w.+-]+@[\w.-]+\.\w+", text):
-        return "", text
-    return clean, ""
+    if is_plausible_order_id(clean):
+        return clean, ""
+    return "", ""
 
 
 def lookup_by_tracking_number(tracking_number: str, domain: str) -> TrackingSnapshot:
@@ -219,14 +233,94 @@ def lookup_by_order_or_email(raw: str, domain: str) -> TrackingSnapshot:
     return _snapshot_from_tracking_data(data, source="shopify")
 
 
-def format_warranty_tracking_message(snapshot: TrackingSnapshot) -> str:
+_CARRIER_PATTERNS = [
+    (r"^1Z[A-Z0-9]{16}$", "ups"),
+    (r"^9[2-5]\d{20,}$", "usps"),
+    (r"^(94|93|92|95)\d{18,}$", "usps"),
+    (r"^\d{20,22}$", "usps"),
+    (r"^\d{12,15}$", "fedex"),
+    (r"^C\d{8,}$", "ontrac"),
+    (r"^1LS\d+$", "lasership"),
+    (r"^TBA\d+$", "amazon"),
+]
+
+
+def _infer_carrier_slug(tracking_number: str, carrier: str = "") -> str:
+    carrier_lower = (carrier or "").lower()
+    for slug in _CARRIER_TRACKING_URLS:
+        if slug in carrier_lower:
+            return slug
+
+    tn = re.sub(r"\s+", "", (tracking_number or "").strip())
+    for pattern, slug in _CARRIER_PATTERNS:
+        if re.match(pattern, tn, re.IGNORECASE):
+            return slug
+    return ""
+
+
+def build_carrier_tracking_url(tracking_number: str, carrier: str = "") -> str:
+    """Best-effort direct carrier tracking URL when live API lookup fails."""
+    tn = re.sub(r"\s+", "", (tracking_number or "").strip())
+    if not tn:
+        return ""
+
+    slug = _infer_carrier_slug(tn, carrier)
+    template = _CARRIER_TRACKING_URLS.get(slug)
+    if template:
+        return template.format(tn=tn)
+    return ""
+
+
+def build_self_service_lookup_links(
+    *,
+    domain: str,
+    lookup_kind: str,
+    raw_input: str = "",
+) -> List[Tuple[str, str]]:
+    """
+    Return (label, url) pairs the customer can use when automatic lookup fails.
+    """
+    links: List[Tuple[str, str]] = []
+    store_url = get_order_tracking_page_url(domain)
+    if store_url:
+        links.append(("Track on our website", store_url))
+
+    if lookup_kind == "tracking":
+        carrier_url = build_carrier_tracking_url(raw_input)
+        if carrier_url:
+            links.append(("Track with the carrier", carrier_url))
+
+    return links
+
+
+def format_warranty_tracking_message(
+    snapshot: TrackingSnapshot,
+    *,
+    domain: str = "",
+    lookup_kind: str = "",
+    raw_input: str = "",
+) -> str:
     """Customer-facing English message for the warranty chat (no sales footer)."""
     if not snapshot.available:
-        return (
-            "We couldn't verify your delivery details automatically right now. "
-            "Our support team will look this up and follow up with you."
-            + (f"\n\n({snapshot.error})" if snapshot.error else "")
+        lines = [
+            "We couldn't verify your delivery details automatically right now.",
+            "Our support team will look this up and follow up with you.",
+        ]
+        if snapshot.error:
+            lines.append(f"\n({snapshot.error})")
+
+        help_links = build_self_service_lookup_links(
+            domain=domain,
+            lookup_kind=lookup_kind,
+            raw_input=raw_input,
         )
+        if help_links:
+            lines.append("")
+            lines.append("You can also check directly here:")
+            for label, url in help_links:
+                lines.append(f"- [{label}]({url})")
+
+        return "\n".join(lines)
 
     order_lines = _order_details_lines(snapshot)
 

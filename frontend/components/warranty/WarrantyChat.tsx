@@ -439,6 +439,12 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         return;
       }
 
+      if (warrantyState?.needs_customer_reply && warrantyState?.ticket_id) {
+        await submitFollowUpNote(trimmed);
+        await refreshWarrantyState();
+        return;
+      }
+
       if (atFirstIntake) {
         await startViaSmartIntake(trimmed);
         return;
@@ -455,7 +461,11 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         return;
       }
 
-      if (warrantyState?.current_node?.is_terminal && helpConsent === null) {
+      if (
+        warrantyState?.current_node?.is_terminal &&
+        helpConsent === null &&
+        !warrantyState?.needs_customer_reply
+      ) {
         setError("Please tap Yes or No below so we know how to help next.");
         return;
       }
@@ -468,6 +478,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       startViaSmartIntake,
       advanceWarranty,
       submitFollowUpNote,
+      refreshWarrantyState,
     ]
   );
 
@@ -507,6 +518,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const isAwaitingAdmin =
     warrantyState?.status === "awaiting_admin_review" ||
     warrantyState?.status === "admin_reviewing";
+  const needsCustomerReply = Boolean(warrantyState?.needs_customer_reply);
   const isTerminal = warrantyState?.current_node?.is_terminal ?? false;
 
   const needsFirstIntake =
@@ -556,11 +568,14 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const showEmailSection = inEmailStep;
 
   const showInputBar =
+    needsCustomerReply ||
     !isTerminal ||
     inEmailStep ||
     (isTerminal && helpConsent === null && !contactSubmitted && !showHelpOffer);
 
-  const inputPlaceholder = needsFirstIntake
+  const inputPlaceholder = needsCustomerReply
+    ? "Type your reply to our team here…"
+    : needsFirstIntake
     ? "Model + issue (e.g. OS-4000T footrest air not inflating)…"
     : showIssueTypeOptions
       ? "Describe your issue (e.g. my chair won't turn on)…"
@@ -581,6 +596,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
           <TicketStatusBadge
             status={warrantyState.status}
             ticketId={warrantyState.ticket_id}
+            caseReference={warrantyState.case_reference}
           />
           <div className="flex flex-wrap items-center gap-2">
             {warrantyState.model_name && (
@@ -625,7 +641,35 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         <div className="mx-4 mt-3 shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
           <p className="text-sm font-medium text-amber-800">Under Support Review</p>
           <p className="mt-0.5 text-xs text-amber-700">
-            Your case has been prepared for support team review.
+            {warrantyState.case_reference ? (
+              <>
+                Your case reference is <strong>{warrantyState.case_reference}</strong>.
+                {" "}Save this number — our team will follow up within 24 hours.
+              </>
+            ) : (
+              "Your case has been prepared for support team review."
+            )}
+          </p>
+        </div>
+      )}
+
+      {needsCustomerReply && warrantyState.customer_message && (
+        <div className="mx-4 mt-3 shrink-0 rounded-xl border border-yellow-200 bg-yellow-50 px-4 py-3">
+          <p className="text-sm font-medium text-yellow-900">We need a little more information</p>
+          <p className="mt-1 whitespace-pre-wrap text-sm text-yellow-800">
+            {warrantyState.customer_message}
+          </p>
+          <p className="mt-2 text-xs text-yellow-700">
+            Reply in the box below — we&apos;ll notify our warranty team.
+          </p>
+        </div>
+      )}
+
+      {warrantyState?.status === "resolved" && warrantyState.customer_message && (
+        <div className="mx-4 mt-3 shrink-0 rounded-xl border border-green-200 bg-green-50 px-4 py-3">
+          <p className="text-sm font-medium text-green-900">Update from our warranty team</p>
+          <p className="mt-1 whitespace-pre-wrap text-sm text-green-800">
+            {warrantyState.customer_message}
           </p>
         </div>
       )}

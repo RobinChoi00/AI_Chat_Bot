@@ -44,6 +44,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Request,
     UploadFile,
 )
 from fastapi.responses import FileResponse
@@ -59,6 +60,20 @@ logger = logging.getLogger(__name__)
 # Router — all endpoints registered here are included by main.py
 # ---------------------------------------------------------------------------
 router = APIRouter()
+
+try:
+    from cost_guard import limiter  # noqa: WPS433
+except ImportError:  # pragma: no cover — tests without full deps
+    class _NoopLimiter:  # noqa: WPS441
+        def limit(self, *_args, **_kwargs):
+            def decorator(fn):
+                return fn
+
+            return decorator
+
+    limiter = _NoopLimiter()
+
+_WARRANTY_LLM_RATE = os.getenv("WARRANTY_LLM_RATE_LIMIT", "20/minute")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -420,6 +435,22 @@ async def append_customer_note(ticket_id: str, body: WarrantyCustomerNoteRequest
         import json as _json  # noqa: WPS433
         ticket_row.collected_data = _json.dumps(collected)
         stored = notes
+        ticket_status = str(ticket_row.status)
+
+    turns = engine.get_turns(ticket_id)
+    ticket = engine.get_ticket(ticket_id)
+
+    team_notified = False
+    if ticket_status == "need_more_information" and ticket is not None:
+        from warranty_email import send_customer_followup_notification  # noqa: WPS433
+        from warranty_freshdesk_case import maybe_add_freshdesk_customer_reply  # noqa: WPS433
+
+        team_notified = send_customer_followup_notification(
+            ticket=ticket,
+            note_text=note,
+            turns=turns,
+        )
+        maybe_add_freshdesk_customer_reply(ticket_id, note, engine=engine)
 
     logger.info(
         "warranty customer note appended ticket=%s len=%d total=%d",
@@ -431,6 +462,7 @@ async def append_customer_note(ticket_id: str, body: WarrantyCustomerNoteRequest
     return {
         "ticket_id": ticket_id,
         "customer_notes": stored,
+        "team_notified": team_notified,
     }
 
 
@@ -614,12 +646,31 @@ def _register_model_ticket(
     return payload
 
 
+def _validate_delivery_text_before_submit(engine, ticket_id: str, answer: str) -> None:
+    node = engine.get_current_node(ticket_id)
+    if not node or node.get("type") != "question_text":
+        return
+
+    node_id = str(node.get("node_id") or "")
+    if node_id not in ("delivery_get_name", "delivery_get_tracking_number"):
+        return
+
+    ticket = engine.get_ticket(ticket_id)
+    model_name = str(getattr(ticket, "model_name", None) or "")
+
+    from delivery_intake import validate_delivery_text_answer  # noqa: WPS433
+
+    validate_delivery_text_answer(node_id, answer, model_name=model_name)
+
+
 def _submit_answer_with_nlp(engine, ticket_id: str, answer: str) -> tuple[dict, bool]:
     """
     Submit a workflow answer; on option mismatch, map natural language via NLP.
 
     Returns (submit_result, nlp_interpreted).
     """
+    _validate_delivery_text_before_submit(engine, ticket_id, answer)
+
     try:
         return engine.submit_answer(ticket_id, answer), False
     except ValueError as exc:
@@ -676,6 +727,7 @@ def _finalize_answer_response(
     previous_node = result.get("previous_node_id")
     if previous_node in ("delivery_get_tracking_number", "delivery_get_name"):
         from delivery_lookup import (  # noqa: WPS433
+            build_self_service_lookup_links,
             format_warranty_tracking_message,
             lookup_by_order_or_email,
             lookup_by_tracking_number,
@@ -687,15 +739,30 @@ def _finalize_answer_response(
 
         lookup_text = answer
         if previous_node == "delivery_get_tracking_number":
+            lookup_kind = "tracking"
             snapshot = lookup_by_tracking_number(lookup_text, domain)
         else:
+            lookup_kind = "order"
             snapshot = lookup_by_order_or_email(lookup_text, domain)
 
         persist_snapshot(ticket_id, snapshot)
+        self_service_links = build_self_service_lookup_links(
+            domain=domain,
+            lookup_kind=lookup_kind,
+            raw_input=lookup_text,
+        )
         tracking_summary = {
             "available": snapshot.available,
-            "message": format_warranty_tracking_message(snapshot),
+            "message": format_warranty_tracking_message(
+                snapshot,
+                domain=domain,
+                lookup_kind=lookup_kind,
+                raw_input=lookup_text,
+            ),
             "snapshot": snapshot.to_dict(),
+            "self_service_links": [
+                {"label": label, "url": url} for label, url in self_service_links
+            ],
         }
 
     ticket = engine.get_ticket(ticket_id)
@@ -729,7 +796,26 @@ def _finalize_answer_response(
         payload["email_notified"] = True
     if nlp_interpreted:
         payload["nlp_interpreted"] = True
+
+    if result.get("is_terminal") or str(ticket.status) in (
+        "awaiting_admin_review",
+        "awaiting_evidence",
+    ):
+        from warranty_freshdesk_case import schedule_freshdesk_case_creation  # noqa: WPS433
+
+        schedule_freshdesk_case_creation(ticket_id)
+
     return payload
+
+
+def _case_reference_for(ticket) -> str:
+    from warranty_case_ref import case_reference_for_ticket  # noqa: WPS433
+
+    collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
+    stored = str(collected.get("case_reference") or "").strip()
+    if stored:
+        return stored
+    return case_reference_for_ticket(ticket)
 
 
 def _serialize_ticket_state(
@@ -794,6 +880,7 @@ def _serialize_ticket_state(
         "session_id": session_id,
         "ticket": {
             "ticket_id":    ticket_id,
+            "case_reference": _case_reference_for(ticket),
             "status":       str(ticket.status),
             "issue_type":   str(ticket.issue_type or ""),
             "model_name":   str(ticket.model_name or ""),
@@ -801,6 +888,11 @@ def _serialize_ticket_state(
             "ready_for_issue_type": (
                 node_id == "issue_type" and bool(str(ticket.model_name or "").strip())
             ),
+            "needs_customer_reply": str(ticket.status) == "need_more_information",
+            "customer_message": (
+                str(ticket.customer_message or "").strip() or None
+            ),
+            "admin_decision": str(ticket.admin_decision or "").strip() or None,
             "current_node": {
                 "node_id":            node_id,
                 "node_type":          node_type,
@@ -906,7 +998,12 @@ async def quick_start_warranty(session_id: str, body: WarrantyQuickStartRequest)
 
 
 @router.post("/api/v1/warranty/session/{session_id}/natural-start", tags=["warranty"])
-async def natural_start_warranty(session_id: str, body: WarrantyNaturalStartRequest):
+@limiter.limit(_WARRANTY_LLM_RATE)
+async def natural_start_warranty(
+    request: Request,
+    session_id: str,
+    body: WarrantyNaturalStartRequest,
+):
     """
     Start warranty intake from free-text — LLM maps message to issue type, then
     runs the same deterministic flowchart as quick-start.
@@ -939,7 +1036,12 @@ async def natural_start_warranty(session_id: str, body: WarrantyNaturalStartRequ
 
 
 @router.post("/api/v1/warranty/session/{session_id}/smart-start", tags=["warranty"])
-async def smart_start_warranty(session_id: str, body: WarrantySmartStartRequest):
+@limiter.limit(_WARRANTY_LLM_RATE)
+async def smart_start_warranty(
+    request: Request,
+    session_id: str,
+    body: WarrantySmartStartRequest,
+):
     """
     Multi-step free-text intake.
 
@@ -1118,7 +1220,7 @@ async def list_evidence(ticket_id: str):
     return {
         "ticket_id":    ticket_id,
         "ticket_status": str(ticket.status),
-        "evidence":     [e.to_dict() for e in evidences],
+        "evidence":     [e.to_dict_public() for e in evidences],
     }
 
 
@@ -1156,6 +1258,10 @@ def _serialize_admin_ticket(ticket, turns=None, evidences=None) -> dict:
     from warranty_email import resolve_customer_email  # noqa: WPS433
 
     payload = ticket.to_dict()
+    payload["case_reference"] = _case_reference_for(ticket)
+    collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
+    payload["freshdesk_ticket_id"] = collected.get("freshdesk_ticket_id")
+    payload["freshdesk_url"] = collected.get("freshdesk_url")
     payload["customer_email"] = resolve_customer_email(ticket, turns=turns, evidences=evidences)
     return payload
 
