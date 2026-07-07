@@ -23,6 +23,7 @@ from ringcentral_client import (
     hangup,
     play_prompt,
 )
+from ringcentral_followup import send_call_followup_sms
 from ringcentral_hours import is_warranty_business_hours
 from ringcentral_voice import (
     IvrPhase,
@@ -304,3 +305,4 @@ def handle_call_exit(payload: dict[str, Any]) -> None:
     ctx = pop_call_context(session_id)
     if ctx:
         logger.info("RC IVR call exit session=%s ticket=%s", session_id, ctx.ticket_id)
+        send_call_followup_sms(ctx.caller_phone, ticket_id=ctx.ticket_id)

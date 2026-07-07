@@ -17,6 +17,7 @@ RC_JWT_PRIVATE_KEY                 Optional PEM path — only if using self-sign
 RC_JWT_CLAIM_SUB                   Extension ID — only with RC_JWT_PRIVATE_KEY
 RC_WARRANTY_TRANSFER_TO          E.164 for ext.3 queue (PSTN/direct number)
 RC_WARRANTY_TRANSFER_EXTENSION     Optional internal extension, e.g. 103
+RC_SMS_FROM_NUMBER               E.164 outbound SMS sender (Warranty line)
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ RC_CLIENT_SECRET = os.getenv("RC_CLIENT_SECRET", "")
 RC_JWT_CLAIM_SUB = os.getenv("RC_JWT_CLAIM_SUB", "")
 RC_WARRANTY_TRANSFER_TO = os.getenv("RC_WARRANTY_TRANSFER_TO", "")
 RC_WARRANTY_TRANSFER_EXTENSION = os.getenv("RC_WARRANTY_TRANSFER_EXTENSION", "")
+RC_SMS_FROM_NUMBER = os.getenv("RC_SMS_FROM_NUMBER", "")
 
 _token_lock = threading.Lock()
 _cached_token: Optional[str] = None
@@ -291,6 +293,42 @@ def hangup(*, session_id: str, party_id: str) -> None:
             resp.text[:300],
         )
         resp.raise_for_status()
+
+
+def send_sms(
+    *,
+    to: str,
+    text: str,
+    from_number: str = "",
+) -> dict[str, Any]:
+    """Send an SMS from the configured Warranty extension."""
+    to_num = (to or "").strip()
+    from_num = (from_number or RC_SMS_FROM_NUMBER).strip()
+    body = (text or "").strip()
+    if not to_num:
+        raise RuntimeError("send_sms requires a recipient phone number.")
+    if not from_num:
+        raise RuntimeError("Set RC_SMS_FROM_NUMBER or pass from_number.")
+    if not body:
+        raise RuntimeError("send_sms requires non-empty text.")
+
+    resp = _request(
+        "POST",
+        f"{RC_SERVER}/restapi/v1.0/account/~/extension/~/sms",
+        json_body={
+            "from": {"phoneNumber": from_num},
+            "to": [{"phoneNumber": to_num}],
+            "text": body,
+        },
+    )
+    if resp.status_code >= 400:
+        logger.error(
+            "RingCentral SMS error %s: %s",
+            resp.status_code,
+            resp.text[:300],
+        )
+        resp.raise_for_status()
+    return resp.json() if resp.text else {}
 
 
 def reset_token_cache() -> None:
