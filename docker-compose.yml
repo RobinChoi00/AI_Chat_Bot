@@ -25,6 +25,7 @@ services:
       - ./uploaded_evidence:/app/uploaded_evidence
       - ./data:/app/data
       - ./raw_data:/app/raw_data:ro
+      - ./rc_audio_cache:/app/rc_audio_cache
     logging:
       driver: "json-file"
       options:

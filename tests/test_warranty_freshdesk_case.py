@@ -101,6 +101,71 @@ def test_maybe_create_freshdesk_case_creates_and_persists(monkeypatch):
         assert collected["case_reference"].startswith("WR-")
 
 
+def test_maybe_create_freshdesk_case_phone_ivr_uses_caller_phone(monkeypatch):
+    monkeypatch.setenv("WARRANTY_FRESHDESK_CREATE_CASE", "1")
+    monkeypatch.setenv("FRESHDESK_DOMAIN", "titanchair.freshdesk.com")
+    monkeypatch.setenv("FRESHDESK_API_KEY", "test-key")
+
+    fake_ticket = _FakeTicket()
+    fake_ticket.status = "in_progress"
+    fake_ticket.collected_data = json.dumps(
+        {"channel": "phone", "caller_phone": "+15551234567"}
+    )
+    engine = MagicMock()
+    engine.get_ticket.return_value = fake_ticket
+    engine.get_turns.return_value = []
+
+    captured: list[dict] = []
+
+    class FakeResponse:
+        status_code = 201
+
+        @staticmethod
+        def json():
+            return {"id": 88801}
+
+    def _fake_post(url, *args, **kwargs):
+        captured.append(kwargs.get("json") or {})
+        return FakeResponse()
+
+    monkeypatch.setattr("warranty_freshdesk_case.requests.post", _fake_post)
+
+    mem_engine = __import__("sqlalchemy").create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+    )
+    from sqlalchemy.orm import sessionmaker
+
+    import warranty_models as wm
+
+    wm.Base.metadata.create_all(bind=mem_engine)
+    session_factory = sessionmaker(bind=mem_engine)
+    monkeypatch.setattr(wm, "_engine", mem_engine)
+    monkeypatch.setattr(wm, "_SessionFactory", session_factory)
+
+    with session_factory() as db:
+        row = wm.WarrantyTicket(
+            ticket_id="tid-123",
+            session_id="sess-1",
+            domain="phone",
+            status="in_progress",
+            current_node_id="issue_type",
+            collected_data=fake_ticket.collected_data,
+        )
+        db.add(row)
+        db.commit()
+
+    from warranty_freshdesk_case import maybe_create_freshdesk_case  # noqa: W402
+
+    result = maybe_create_freshdesk_case("tid-123", engine=engine, allow_any_status=True)
+    assert result["created"] is True
+    assert captured
+    payload = captured[0]
+    assert payload["phone"] == "+15551234567"
+    assert "phone-ivr" in payload["tags"]
+    assert "Caller phone" in payload["description"]
+
+
 def test_maybe_sync_admin_decision_posts_private_note(monkeypatch):
     monkeypatch.setenv("WARRANTY_FRESHDESK_CREATE_CASE", "1")
     monkeypatch.setenv("FRESHDESK_DOMAIN", "titanchair.freshdesk.com")

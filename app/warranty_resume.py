@@ -209,7 +209,24 @@ def _resolve_resume_base_url(domain: str) -> str:
         return "https://osakimassage.com"
     if "osakititan" in d or "osaki-titan" in d:
         return "https://osaki-titan.com"
+    if d == "phone":
+        return os.getenv("WARRANTY_PHONE_RESUME_BASE_URL", "https://titanchair.com").rstrip("/")
     return "https://www.osaki.com"
+
+
+def build_warranty_resume_url(
+    ticket_id: str,
+    session_id: str,
+    domain: str = "",
+) -> Optional[str]:
+    """Return a signed resume URL for SMS/email, or None when signing is unavailable."""
+    try:
+        token = create_resume_token(ticket_id, session_id)
+    except RuntimeError as exc:
+        logger.warning("warranty resume URL unavailable ticket=%s: %s", ticket_id, exc)
+        return None
+    base = _resolve_resume_base_url(domain)
+    return f"{base}/warranty?resume={token}"
 
 
 @router.post("/api/v1/warranty/session/{session_id}/resume-link")
@@ -230,17 +247,12 @@ async def send_warranty_resume_link(session_id: str, body: ResumeLinkRequest):
         )
     ticket_id = str(ticket.ticket_id)
 
-    try:
-        token = create_resume_token(ticket_id, session_id)
-    except RuntimeError as exc:
-        logger.error("warranty_resume misconfigured: %s", exc)
+    resume_url = build_warranty_resume_url(ticket_id, session_id, str(ticket.domain or ""))
+    if not resume_url:
         raise HTTPException(
             status_code=503,
             detail="Save & continue is temporarily unavailable.",
-        ) from exc
-
-    base = _resolve_resume_base_url(str(ticket.domain or ""))
-    resume_url = f"{base}/warranty?resume={token}"
+        )
 
     ticket.set_collected("resume_email", email)  # detached ORM copy update (best-effort)
     _send_resume_email_async(

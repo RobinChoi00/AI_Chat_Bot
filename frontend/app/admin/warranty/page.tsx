@@ -15,7 +15,7 @@ import { getBackendUrl } from "@/lib/backendUrl";
 
 const BACKEND = getBackendUrl();
 
-async function fetchTickets(status?: string): Promise<TicketListResponse> {
+async function fetchTickets(status?: string, channel?: string): Promise<TicketListResponse> {
   const adminKey = process.env.ADMIN_API_KEY;
   if (!adminKey) {
     return { total: 0, offset: 0, tickets: [] };
@@ -23,6 +23,7 @@ async function fetchTickets(status?: string): Promise<TicketListResponse> {
 
   const qs = new URLSearchParams({ limit: "100" });
   if (status) qs.set("status", status);
+  if (channel) qs.set("channel", channel);
 
   const res = await fetch(`${BACKEND}/admin/warranty/tickets?${qs}`, {
     headers: { "X-Admin-Key": adminKey },
@@ -41,16 +42,16 @@ async function fetchTickets(status?: string): Promise<TicketListResponse> {
 export default async function AdminWarrantyQueuePage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string }>;
+  searchParams: Promise<{ status?: string; channel?: string }>;
 }) {
-  const { status } = await searchParams;
+  const { status, channel } = await searchParams;
   const adminConfigured = !!process.env.ADMIN_API_KEY;
 
   let data: TicketListResponse = { total: 0, offset: 0, tickets: [] };
   let fetchError: string | null = null;
 
   try {
-    data = await fetchTickets(status);
+    data = await fetchTickets(status, channel);
   } catch {
     fetchError = "Failed to load tickets from the backend.";
   }
@@ -100,7 +101,7 @@ export default async function AdminWarrantyQueuePage({
 
         {/* Filters + refresh */}
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <AdminQueueFilters currentStatus={status} total={data.total} />
+          <AdminQueueFilters currentStatus={status} currentChannel={channel} total={data.total} />
           <AdminFreshdeskSync />
         </div>
 

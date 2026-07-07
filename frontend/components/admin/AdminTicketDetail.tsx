@@ -5,6 +5,7 @@ import type {
   AdminWarrantyTurn,
 } from "@/lib/adminTypes";
 import AdminStatusBadge from "./AdminStatusBadge";
+import AdminChannelBadge from "./AdminChannelBadge";
 import AdminEvidenceList from "./AdminEvidenceList";
 import AdminFreshdeskLinkButton from "./AdminFreshdeskLinkButton";
 
@@ -43,9 +44,17 @@ function formatDate(iso: string | null): string {
 
 export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
   const collectedEntries = Object.entries(ticket.collected_data ?? {}).filter(
-    ([key]) => key !== "customer_contact_email" && key !== "tracking_snapshot"
+    ([key]) =>
+      ![
+        "customer_contact_email",
+        "tracking_snapshot",
+        "channel",
+        "caller_phone",
+        "followup_sent_at",
+      ].includes(key)
   );
   const customerEmail = ticket.customer_email;
+  const isPhone = (ticket.channel || "").toLowerCase() === "phone";
 
   return (
     <div className="space-y-6">
@@ -54,7 +63,20 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-emerald-700">
           Customer Contact
         </h2>
-        {customerEmail ? (
+        {isPhone && ticket.caller_phone ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <AdminChannelBadge channel="phone" />
+            <a
+              href={`tel:${ticket.caller_phone}`}
+              className="text-lg font-semibold font-mono text-emerald-900 underline-offset-2 hover:underline"
+            >
+              {ticket.caller_phone}
+            </a>
+            <span className="rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-medium text-sky-800">
+              After-hours phone IVR
+            </span>
+          </div>
+        ) : customerEmail ? (
           <div className="flex flex-wrap items-center gap-3">
             <a
               href={`mailto:${customerEmail}`}
@@ -114,6 +136,22 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
             <span className="break-all font-mono text-xs">{ticket.session_id}</span>
           } />
           <Field label="Domain" value={ticket.domain} />
+          <Field
+            label="Channel"
+            value={<AdminChannelBadge channel={ticket.channel} />}
+          />
+          <Field
+            label="Caller Phone"
+            value={
+              ticket.caller_phone ? (
+                <a href={`tel:${ticket.caller_phone}`} className="font-mono text-sm text-sky-700 underline-offset-2 hover:underline">
+                  {ticket.caller_phone}
+                </a>
+              ) : (
+                "—"
+              )
+            }
+          />
           <Field label="Issue Type" value={ticket.issue_type} />
           <Field label="Defect Type" value={ticket.defect_type} />
           <Field label="Model Name" value={ticket.model_name} />

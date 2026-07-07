@@ -51,8 +51,15 @@ def freshdesk_ticket_url(domain: str, ticket_id: int | str) -> str:
 def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
     from warranty_email import resolve_customer_email  # noqa: WPS433
 
+    collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
+    channel = str(collected.get("channel") or "").strip().lower()
+    if channel == "phone":
+        opener = "Warranty case submitted via after-hours phone IVR."
+    else:
+        opener = "Warranty chat case submitted via the Osaki/Titan warranty bot."
+
     lines = [
-        "Warranty chat case submitted via the Osaki/Titan warranty bot.",
+        opener,
         "",
         f"Case reference: {case_ref}",
         f"Internal ticket ID: {ticket.ticket_id}",
@@ -63,11 +70,13 @@ def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
         f"Model: {ticket.model_name or '—'}",
         f"Terminal node: {ticket.current_node_id}",
     ]
+    caller_phone = str(collected.get("caller_phone") or "").strip()
+    if caller_phone:
+        lines.append(f"Caller phone: {caller_phone}")
+
     email = resolve_customer_email(ticket, turns=turns)
     if email:
         lines.append(f"Customer email: {email}")
-
-    collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
     tracking_raw = collected.get("tracking_snapshot")
     if tracking_raw:
         lines.append("")
@@ -187,8 +196,19 @@ def maybe_create_freshdesk_case(
         "tags": ["warranty-bot", case_ref],
         "source": 2,
     }
+    channel = str(collected.get("channel") or "").strip().lower()
+    if channel == "phone":
+        payload["tags"].append("phone-ivr")
     if customer_email:
         payload["email"] = customer_email
+    else:
+        caller_phone = str(collected.get("caller_phone") or "").strip()
+        if caller_phone:
+            payload["phone"] = caller_phone
+            payload["name"] = "Warranty Phone Caller"
+        else:
+            fallback = os.getenv("WARRANTY_FRESHDESK_FALLBACK_EMAIL", "service@osakititan.com").strip()
+            payload["email"] = fallback or "service@osakititan.com"
 
     _apply_freshdesk_routing(payload)
 
@@ -367,14 +387,18 @@ def maybe_add_freshdesk_customer_reply(
     return _post_private_note(fd_id, body)
 
 
-def schedule_freshdesk_case_creation(ticket_id: str) -> None:
+def schedule_freshdesk_case_creation(
+    ticket_id: str,
+    *,
+    allow_any_status: bool = False,
+) -> None:
     """Fire-and-forget Freshdesk case creation (non-blocking HTTP handler)."""
     if not _freshdesk_enabled():
         return
 
     def _run() -> None:
         try:
-            maybe_create_freshdesk_case(ticket_id)
+            maybe_create_freshdesk_case(ticket_id, allow_any_status=allow_any_status)
         except Exception as exc:
             logger.warning("background Freshdesk create failed for %s: %s", ticket_id, exc)
 

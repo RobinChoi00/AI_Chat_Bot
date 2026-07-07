@@ -1320,6 +1320,8 @@ def _serialize_admin_ticket(ticket, turns=None, evidences=None) -> dict:
     collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
     payload["freshdesk_ticket_id"] = collected.get("freshdesk_ticket_id")
     payload["freshdesk_url"] = collected.get("freshdesk_url")
+    payload["channel"] = collected.get("channel")
+    payload["caller_phone"] = collected.get("caller_phone")
     payload["customer_email"] = resolve_customer_email(ticket, turns=turns, evidences=evidences)
     return payload
 
@@ -1328,6 +1330,7 @@ def _serialize_admin_ticket(ticket, turns=None, evidences=None) -> dict:
 async def list_warranty_tickets(
     status: Optional[str] = None,
     domain: Optional[str] = None,
+    channel: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
     x_admin_key: Optional[str] = Header(default=None),
@@ -1335,13 +1338,14 @@ async def list_warranty_tickets(
     """
     List warranty tickets.  Admin-only.
 
-    Optional query params: status, domain, limit, offset.
+    Optional query params: status, domain, channel, limit, offset.
     """
     _require_admin(x_admin_key)
     engine = _lazy_engine()
     tickets = engine.get_tickets(
         status=status,
         domain=domain,
+        channel=channel,
         limit=min(limit, 200),
         offset=offset,
     )

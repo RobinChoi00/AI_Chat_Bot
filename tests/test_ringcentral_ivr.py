@@ -27,7 +27,7 @@ def _clear_call_contexts():
     _call_contexts.clear()
 
 
-def test_handle_call_enter_starts_at_defect_problem_type():
+def test_handle_call_enter_starts_at_issue_type_menu():
     payload = {
         "sessionId": "rc-session-1",
         "inParty": {
@@ -48,11 +48,11 @@ def test_handle_call_enter_starts_at_defect_problem_type():
 
     node = WarrantyEngine.get_current_node(ctx.ticket_id)
     assert node is not None
-    assert node["node_id"] == "defect_problem_type"
+    assert node["node_id"] == "issue_type"
 
     ticket = WarrantyEngine.get_ticket(ctx.ticket_id)
     assert ticket is not None
-    assert str(ticket.issue_type) == "defect"
+    assert ticket.issue_type is None
     assert ticket.get_collected().get("channel") == "phone"
 
     mock_play.assert_called_once()
@@ -60,6 +60,49 @@ def test_handle_call_enter_starts_at_defect_problem_type():
         "audio_uri"
     )
     assert play_uri  # TTS URI generated
+
+
+def test_issue_type_digit_three_advances_to_defect_menu():
+    payload = {
+        "sessionId": "rc-session-defect",
+        "inParty": {
+            "id": "party-defect",
+            "from": {"phoneNumber": "+15551234567"},
+        },
+    }
+    with (
+        patch("ringcentral_ivr.is_warranty_business_hours", return_value=False),
+        patch("ringcentral_ivr.play_prompt"),
+        patch("ringcentral_ivr.collect_digits"),
+        patch("ringcentral_ivr.resolve_play_uri", return_value="https://example.com/menu.wav"),
+    ):
+        handle_call_enter(payload)
+        handle_command_update(
+            {
+                "sessionId": "rc-session-defect",
+                "status": "Completed",
+                "command": "Play",
+                "partyId": "party-defect",
+            }
+        )
+        handle_command_update(
+            {
+                "sessionId": "rc-session-defect",
+                "status": "Completed",
+                "command": "Collect",
+                "partyId": "party-defect",
+                "parameters": {"digits": "3"},
+            }
+        )
+
+    ctx = get_call_context("rc-session-defect")
+    assert ctx is not None
+    node = WarrantyEngine.get_current_node(ctx.ticket_id)
+    assert node is not None
+    assert node["node_id"] == "defect_problem_type"
+    ticket = WarrantyEngine.get_ticket(ctx.ticket_id)
+    assert ticket is not None
+    assert str(ticket.issue_type) == "defect"
 
 
 def test_handle_call_enter_during_business_hours_transfers_immediately():

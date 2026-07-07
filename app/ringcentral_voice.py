@@ -21,7 +21,8 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-RC_AUDIO_CACHE_DIR = Path(__file__).resolve().parent.parent / "rc_audio_cache"
+_DEFAULT_RC_AUDIO_CACHE = Path(__file__).resolve().parent.parent / "rc_audio_cache"
+RC_AUDIO_CACHE_DIR = Path(os.getenv("RC_AUDIO_CACHE_DIR", str(_DEFAULT_RC_AUDIO_CACHE)))
 RC_AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # After-hours IVR: 0 replays the current prompt (no live agent transfer).

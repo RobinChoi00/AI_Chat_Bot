@@ -5,6 +5,7 @@ import type { AdminTicketStatus } from "@/lib/adminTypes";
 
 interface Props {
   currentStatus: string | undefined;
+  currentChannel: string | undefined;
   total: number;
 }
 
@@ -21,13 +22,32 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "resolved",              label: "Resolved" },
 ];
 
-export default function AdminQueueFilters({ currentStatus, total }: Props) {
+const CHANNEL_OPTIONS: { value: string; label: string }[] = [
+  { value: "",      label: "All channels" },
+  { value: "phone", label: "Phone IVR" },
+  { value: "web",   label: "Web chat" },
+];
+
+export default function AdminQueueFilters({
+  currentStatus,
+  currentChannel,
+  total,
+}: Props) {
   const router = useRouter();
 
-  function handleStatusChange(val: string) {
+  function pushFilters(status: string, channel: string) {
     const params = new URLSearchParams();
-    if (val) params.set("status", val);
+    if (status) params.set("status", status);
+    if (channel) params.set("channel", channel);
     router.push(`/admin/warranty${params.size ? `?${params}` : ""}`);
+  }
+
+  function handleStatusChange(val: string) {
+    pushFilters(val, currentChannel ?? "");
+  }
+
+  function handleChannelChange(val: string) {
+    pushFilters(currentStatus ?? "", val);
   }
 
   return (
@@ -44,6 +64,21 @@ export default function AdminQueueFilters({ currentStatus, total }: Props) {
       >
         {STATUS_OPTIONS.map((o) => (
           <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+
+      <label className="text-sm font-medium text-gray-600">
+        Channel:
+      </label>
+      <select
+        value={currentChannel ?? ""}
+        onChange={(e) => handleChannelChange(e.target.value)}
+        className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+      >
+        {CHANNEL_OPTIONS.map((o) => (
+          <option key={o.value || "all"} value={o.value}>
             {o.label}
           </option>
         ))}

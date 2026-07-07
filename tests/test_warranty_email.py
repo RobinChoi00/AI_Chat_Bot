@@ -11,6 +11,7 @@ sys.path.insert(0, str(APP_DIR))
 from warranty_email import (  # noqa: E402
     build_admin_decision_customer_body,
     build_evidence_notification_body,
+    build_phone_ivr_team_email_body,
     build_transcript_body,
     extract_email,
     maybe_send_admin_decision_customer_email,
@@ -18,6 +19,7 @@ from warranty_email import (  # noqa: E402
     resolve_customer_email,
     send_admin_decision_customer_email,
     send_evidence_upload_notification,
+    send_phone_ivr_team_email,
 )
 
 
@@ -66,6 +68,39 @@ def test_build_transcript_body_includes_turns():
     assert "T-1" in body
     assert "What model?" in body
     assert "My chair is broken" in body
+
+
+def test_build_phone_ivr_team_email_body_includes_caller_and_turns():
+    body = build_phone_ivr_team_email_body(
+        caller_phone="+15551234567",
+        session_id="rc-session-1",
+        ticket_id="T-IVR-1",
+        case_reference="WR-20260701-ABC123",
+        ticket_status="in_progress",
+        issue_type="defect",
+        model_name="OS-4000T",
+        current_node_id="defect_air",
+        turns=[FakeTurn("defect_problem_type", "What type of problem?", "1")],
+        sms_sent=True,
+    )
+    assert "+15551234567" in body
+    assert "WR-20260701-ABC123" in body
+    assert "What type of problem?" in body
+    assert "Sent to caller's phone number." in body
+    assert "After-hours warranty phone IVR" in body
+
+
+def test_send_phone_ivr_team_email_skips_without_smtp_config(monkeypatch):
+    monkeypatch.setattr("warranty_email.EMAIL_SENDER", "")
+    monkeypatch.setattr("warranty_email.EMAIL_PASSWORD", "")
+    assert (
+        send_phone_ivr_team_email(
+            caller_phone="+15551234567",
+            session_id="rc-session-2",
+            ticket_id="T-IVR-2",
+        )
+        is False
+    )
 
 
 def test_maybe_send_records_collected_data(monkeypatch):

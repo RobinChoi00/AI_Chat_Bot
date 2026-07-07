@@ -385,16 +385,21 @@ class WarrantyEngine:
     def get_tickets(
         status: Optional[str] = None,
         domain: Optional[str] = None,
+        channel: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[WarrantyTicket]:
-        """List tickets filtered by status and/or domain."""
+        """List tickets filtered by status, domain, and/or intake channel."""
         with warranty_db_session() as db:
             q = db.query(WarrantyTicket)
             if status:
                 q = q.filter(WarrantyTicket.status == status)
             if domain:
                 q = q.filter(WarrantyTicket.domain.contains(domain))
+            if channel == "phone":
+                q = q.filter(WarrantyTicket.collected_data.like('%"channel": "phone"%'))
+            elif channel == "web":
+                q = q.filter(~WarrantyTicket.collected_data.like('%"channel": "phone"%'))
             return (
                 q.order_by(WarrantyTicket.created_at.desc())
                 .limit(limit)

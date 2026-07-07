@@ -3,12 +3,13 @@ ringcentral_ivr.py
 ==================
 Orchestrate RingCentral IVR callbacks with WarrantyEngine.
 
-Call flow (DTMF-only MVP, defect troubleshooting):
+Call flow (DTMF-only MVP, warranty after hours):
   on-call-enter  → if warranty business hours: forward to agent immediately
-                 → else start ticket → skip to defect_problem_type → play menu
+                 → else start ticket → warranty menu → issue type (install/delivery/defect)
   Play complete  → collect DTMF
   Collect digit  → submit_answer, replay (0), or hangup at terminal
   After-hours: no live agent transfer — press 0 replays the current prompt.
+  on-call-exit   → SMS + team email (service@ → Freshdesk via inbox integration)
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from ringcentral_client import (
     hangup,
     play_prompt,
 )
-from ringcentral_followup import send_call_followup_sms
+from ringcentral_followup import send_phone_call_followups
 from ringcentral_hours import is_warranty_business_hours
 from ringcentral_voice import (
     IvrPhase,
@@ -178,10 +179,10 @@ def handle_call_enter(payload: dict[str, Any]) -> None:
     engine = _lazy_engine()
     ticket_id, _root = engine.start_session(session_id, "phone")
     _store_caller_metadata(ticket_id, caller)
-    result = engine.advance_to_issue_type(ticket_id, "defect")
-    entry_node = result.get("next_node") or engine.get_current_node(ticket_id)
+    engine.submit_answer(ticket_id, "warranty")
+    entry_node = engine.get_current_node(ticket_id)
     if not entry_node:
-        logger.error("RC IVR failed to advance to defect for ticket=%s", ticket_id)
+        logger.error("RC IVR failed to advance to issue_type for ticket=%s", ticket_id)
         return
 
     ctx = VoiceCallContext(
@@ -200,7 +201,6 @@ def handle_call_enter(payload: dict[str, Any]) -> None:
     )
     intro = (
         "Welcome to Osaki and Titan after-hours warranty support. "
-        "Let's troubleshoot a chair defect. "
     )
     _present_node(ctx, entry_node, intro_prefix=intro)
 
@@ -305,4 +305,8 @@ def handle_call_exit(payload: dict[str, Any]) -> None:
     ctx = pop_call_context(session_id)
     if ctx:
         logger.info("RC IVR call exit session=%s ticket=%s", session_id, ctx.ticket_id)
-        send_call_followup_sms(ctx.caller_phone, ticket_id=ctx.ticket_id)
+        send_phone_call_followups(
+            caller_phone=ctx.caller_phone,
+            ticket_id=ctx.ticket_id,
+            session_id=ctx.session_id,
+        )

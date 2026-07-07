@@ -40,6 +40,8 @@ export interface AdminWarrantyTicket {
   model_name: string | null;
   collected_data: Record<string, string>;
   customer_email: string | null;
+  channel?: string | null;
+  caller_phone?: string | null;
   admin_decision: string | null;
   admin_note: string | null;
   decided_by: string | null;

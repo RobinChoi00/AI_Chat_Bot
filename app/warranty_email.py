@@ -162,6 +162,73 @@ def build_transcript_body(
     return "\n".join(lines)
 
 
+def build_phone_ivr_team_email_body(
+    *,
+    caller_phone: str,
+    session_id: str,
+    ticket_id: Optional[str] = None,
+    case_reference: str = "",
+    ticket_status: str = "",
+    issue_type: str = "",
+    model_name: str = "",
+    current_node_id: str = "",
+    turns: Sequence[Any],
+    case_summary: str = "",
+    case_summary_source: str = "",
+    sms_sent: bool = False,
+) -> str:
+    """Format a plain-text summary for the warranty team after a phone IVR call."""
+    lines = [
+        "After-hours warranty phone IVR — caller disconnected.",
+        "",
+        f"Caller Phone   : {caller_phone or '(unknown)'}",
+        f"Session ID     : {session_id}",
+    ]
+    if ticket_id:
+        lines.append(f"Ticket ID      : {ticket_id}")
+    if case_reference:
+        lines.append(f"Case Reference : {case_reference}")
+    if issue_type:
+        lines.append(f"Issue Type     : {issue_type}")
+    if model_name:
+        lines.append(f"Model          : {model_name}")
+    if ticket_status:
+        lines.append(f"Ticket Status  : {ticket_status}")
+    if current_node_id:
+        lines.append(f"Last Node      : {current_node_id}")
+
+    if case_summary:
+        lines.extend(_case_summary_email_lines(case_summary, case_summary_source))
+
+    if turns:
+        lines.extend(["", "--- Workflow steps ---"])
+        for turn in turns:
+            node_id = getattr(turn, "node_id", "") or turn.get("node_id", "")
+            prompt = getattr(turn, "node_prompt", "") or turn.get("node_prompt", "")
+            answer = getattr(turn, "customer_answer", "") or turn.get("customer_answer", "")
+            lines.append(f"[{node_id}]")
+            if prompt:
+                lines.append(f"Q: {prompt}")
+            if answer:
+                lines.append(f"A: {answer}")
+            lines.append("")
+
+    lines.extend(
+        [
+            "",
+            "Follow-up SMS  : "
+            + ("Sent to caller's phone number." if sms_sent else "Not sent (disabled or invalid number)."),
+            "",
+            f"Warranty inbox : {WARRANTY_TEAM_EMAIL}",
+            f"Business hours : {WARRANTY_BUSINESS_HOURS}",
+            f"Phone          : {WARRANTY_PHONE}",
+            "",
+            "-- Sent automatically by Osaki/Titan Warranty Phone IVR --",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _resolve_case_summary(
     *,
     issue_type: str = "",
@@ -272,6 +339,88 @@ def send_warranty_transcript_email(
         return True
     except smtplib.SMTPException as exc:
         logger.error("Warranty transcript email failed: %s", exc)
+        return False
+
+
+def send_phone_ivr_team_email(
+    *,
+    caller_phone: str,
+    session_id: str,
+    ticket_id: Optional[str] = None,
+    case_reference: str = "",
+    ticket_status: str = "",
+    issue_type: str = "",
+    model_name: str = "",
+    current_node_id: str = "",
+    turns: Optional[Sequence[Any]] = None,
+    case_summary: str = "",
+    case_summary_source: str = "",
+    sms_sent: bool = False,
+) -> bool:
+    """Email the warranty team inbox after an after-hours phone IVR call ends."""
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        logger.error(
+            "Phone IVR team email not sent — EMAIL_SENDER / EMAIL_PASSWORD not configured."
+        )
+        return False
+
+    summary_payload = _resolve_case_summary(
+        issue_type=issue_type,
+        model_name=model_name,
+        turns=turns,
+        terminal_node_id=current_node_id,
+        case_summary=case_summary,
+        case_summary_source=case_summary_source,
+    )
+    summary_text = summary_payload["summary"]
+    summary_source = summary_payload.get("source", "")
+    subject_hint = summary_payload.get("suggested_subject") or ""
+
+    subject_ref = case_reference or ticket_id or session_id[:8]
+    phone_hint = (caller_phone or "").strip() or "unknown caller"
+    if subject_hint:
+        subject = f"[Warranty Phone IVR] {subject_hint} ({subject_ref})"
+    else:
+        subject = f"[Warranty Phone IVR] {phone_hint} ({subject_ref})"
+
+    body = build_phone_ivr_team_email_body(
+        caller_phone=caller_phone,
+        session_id=session_id,
+        ticket_id=ticket_id,
+        case_reference=case_reference,
+        ticket_status=ticket_status,
+        issue_type=issue_type,
+        model_name=model_name,
+        current_node_id=current_node_id,
+        turns=turns or [],
+        case_summary=summary_text,
+        case_summary_source=summary_source,
+        sms_sent=sms_sent,
+    )
+
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = WARRANTY_TEAM_EMAIL
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.send_message(msg)
+        logger.info(
+            "Phone IVR team email sent to %s ticket=%s session=%s caller=%s",
+            WARRANTY_TEAM_EMAIL,
+            ticket_id,
+            session_id,
+            caller_phone,
+        )
+        return True
+    except smtplib.SMTPException as exc:
+        logger.error("Phone IVR team email failed: %s", exc)
         return False
 
 
