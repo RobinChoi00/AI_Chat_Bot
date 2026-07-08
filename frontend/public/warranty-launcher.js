@@ -39,7 +39,8 @@
     }
   }
 
-  var TEASER_KEY = "osaki_warranty_launcher_teaser_v1";
+  var TEASER_KEY = "osaki_warranty_launcher_teaser_v2";
+  var TEASER_AUTO_HIDE_MS = 4500;
   var Z = 2147483000;
 
   var styles = document.createElement("style");
@@ -48,15 +49,14 @@
     "line-height:1.35;-webkit-font-smoothing:antialiased;" +
     "--ow-gold:#c9a962;--ow-gold-light:#e8d5a3;--ow-dark:#0f1419;--ow-dark-mid:#1a2332}" +
     "#osaki-warranty-teaser{position:fixed;right:max(16px,env(safe-area-inset-right));" +
-    "bottom:calc(188px + env(safe-area-inset-bottom));max-width:min(240px,calc(100vw - 32px));" +
+    "bottom:calc(188px + env(safe-area-inset-bottom));max-width:min(200px,calc(100vw - 32px));" +
     "background:#fff;border:1px solid #e5e7eb;border-right:3px solid var(--ow-gold);" +
-    "border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:" +
+    "border-radius:10px;padding:8px 12px;box-shadow:0 6px 18px rgba(0,0,0,.12);z-index:" +
     Z +
-    ";animation:osakiWarrantyFadeIn .35s ease}" +
-    "#osaki-warranty-teaser p{margin:0 0 6px;font-size:12px;color:#111827;font-weight:600}" +
-    "#osaki-warranty-teaser span{display:block;font-size:11px;color:#4b5563;font-weight:400;line-height:1.4}" +
-    "#osaki-warranty-teaser button{margin-top:6px;border:0;background:transparent;" +
-    "color:#6b7280;font-size:10px;cursor:pointer;padding:0}" +
+    ";animation:osakiWarrantyFadeIn .3s ease;pointer-events:none}" +
+    "#osaki-warranty-teaser.hiding{animation:osakiWarrantyFadeOut .35s ease forwards}" +
+    "#osaki-warranty-teaser p{margin:0;font-size:13px;color:#111827;font-weight:600;" +
+    "letter-spacing:.01em;white-space:nowrap}" +
     "#osaki-warranty-btn{position:fixed;right:max(16px,env(safe-area-inset-right));" +
     "bottom:calc(116px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:8px;" +
     "flex-direction:row-reverse;" +
@@ -88,7 +88,9 @@
     "@media(max-width:639px){#osaki-warranty-btn{padding:5px;border-radius:50%;" +
     "width:50px;height:50px;justify-content:center;gap:0;flex-direction:row;" +
     "bottom:calc(132px + env(safe-area-inset-bottom))}" +
-    "#osaki-warranty-teaser{bottom:calc(196px + env(safe-area-inset-bottom))}" +
+    "#osaki-warranty-teaser{bottom:calc(196px + env(safe-area-inset-bottom));" +
+    "padding:6px 10px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.14)}" +
+    "#osaki-warranty-teaser p{font-size:12px}" +
     "#osaki-warranty-btn .label{display:none}" +
     "#osaki-warranty-btn .icon-wrap{width:38px;height:38px}" +
     "#osaki-warranty-btn .icon-main{font-size:20px}}" +
@@ -113,6 +115,8 @@
     "#osaki-warranty-frame{flex:1;border:0;width:100%;background:#f9fafb}" +
     "@keyframes osakiWarrantyFadeIn{from{opacity:0;transform:translateY(8px)}" +
     "to{opacity:1;transform:translateY(0)}}" +
+    "@keyframes osakiWarrantyFadeOut{from{opacity:1;transform:translateY(0)}" +
+    "to{opacity:0;transform:translateY(6px)}}" +
     "@keyframes osakiWarrantySlideUp{from{opacity:0;transform:translateY(24px)}" +
     "to{opacity:1;transform:translateY(0)}}" +
     "@keyframes osakiWarrantyPulse{0%,100%{box-shadow:0 8px 28px rgba(0,0,0,.35),0 0 0 0 rgba(201,169,98,.4)}" +
@@ -138,25 +142,25 @@
   document.body.appendChild(root);
 
   var teaser = null;
+
+  function hideTeaser() {
+    if (!teaser || !teaser.parentNode) return;
+    sessionStorage.setItem(TEASER_KEY, "1");
+    teaser.classList.add("hiding");
+    setTimeout(function () {
+      if (teaser && teaser.parentNode) teaser.remove();
+      teaser = null;
+    }, 350);
+  }
+
   if (!sessionStorage.getItem(TEASER_KEY)) {
     teaser = document.createElement("div");
     teaser.id = "osaki-warranty-teaser";
-    teaser.innerHTML =
-      "<p>🛡️ Setup, warranty &amp; delivery help</p>" +
-      "<span>Step-by-step guide for your chair — before you call or email.</span>" +
-      '<button type="button" aria-label="Dismiss">Dismiss</button>';
+    teaser.setAttribute("role", "status");
+    teaser.setAttribute("aria-live", "polite");
+    teaser.innerHTML = "<p>Need Help</p>";
     root.appendChild(teaser);
-    teaser.querySelector("button").addEventListener("click", function () {
-      sessionStorage.setItem(TEASER_KEY, "1");
-      teaser.remove();
-      teaser = null;
-    });
-    setTimeout(function () {
-      if (teaser && teaser.parentNode) {
-        sessionStorage.setItem(TEASER_KEY, "1");
-        teaser.remove();
-      }
-    }, 12000);
+    setTimeout(hideTeaser, TEASER_AUTO_HIDE_MS);
   }
 
   var btn = document.createElement("button");
@@ -206,11 +210,7 @@
     if (open) return;
     open = true;
     hideShopWidgets();
-    if (teaser && teaser.parentNode) {
-      sessionStorage.setItem(TEASER_KEY, "1");
-      teaser.remove();
-      teaser = null;
-    }
+    if (teaser && teaser.parentNode) hideTeaser();
     frame.src =
       baseUrl +
       "/warranty/embed?store=" +
