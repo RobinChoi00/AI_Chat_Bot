@@ -85,7 +85,7 @@ interface FreshdeskStatus {
     tickets?: { last_sync_at?: string; ok?: boolean; ticket_count?: number; message?: string };
     kb?: { last_sync_at?: string; ok?: boolean; article_count?: number; message?: string };
   };
-  stale?: { tickets?: boolean; kb?: boolean };
+  stale?: { tickets?: boolean; kb?: boolean; threshold_days?: number };
   knowledge?: { total?: number; freshdesk?: number; freshdesk_kb?: number };
   detail?: string;
 }
@@ -245,6 +245,22 @@ export default function AdminFreshdeskSync() {
 
   return (
     <div className="space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
+      {fdStatus?.stale?.tickets || fdStatus?.stale?.kb ? (
+        <div
+          className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+          role="status"
+        >
+          <strong>Knowledge may be stale.</strong>{" "}
+          Ticket sync
+          {fdStatus.stale?.tickets ? " is overdue" : " is OK"}
+          {fdStatus.stale?.kb ? "; KB sync is overdue" : "; KB sync is OK"}
+          {" "}
+          (threshold: {fdStatus.stale?.threshold_days ?? 7} days). Run sync below,
+          or schedule{" "}
+          <code className="rounded bg-amber-100 px-1 text-xs">script/sync_freshdesk.sh</code>{" "}
+          weekly on EC2.
+        </div>
+      ) : null}
       {fdStatus && (
         <div className="rounded-md border border-indigo-200 bg-white px-3 py-2 text-xs text-indigo-950">
           <div className="mb-1 flex flex-wrap items-center gap-2">

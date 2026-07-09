@@ -81,9 +81,9 @@ _WARRANTY_LLM_RATE = os.getenv("WARRANTY_LLM_RATE_LIMIT", "20/minute")
 _UPLOAD_ROOT = Path(__file__).resolve().parent.parent / "uploaded_evidence"
 _UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
-_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf", ".mp4", ".mov"}
+_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".pdf", ".mp4", ".mov"}
 _ALLOWED_MIME_PREFIXES = {
-    "image/jpeg", "image/png", "application/pdf",
+    "image/jpeg", "image/png", "image/webp", "application/pdf",
     "video/mp4", "video/quicktime",
 }
 _MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
@@ -155,7 +155,7 @@ async def upload_evidence(
     """
     Upload an evidence file for a warranty ticket.
 
-    Accepts: jpg, jpeg, png, pdf, mp4, mov (max 20 MB).
+    Accepts: jpg, jpeg, png, webp, pdf, mp4, mov (max 20 MB).
     Saves to:  uploaded_evidence/warranty/{ticket_id}/{uuid}_{filename}
     Stores metadata in WarrantyEvidence table.
     Requires customer_email and notifies the warranty evidence distribution list.
@@ -260,7 +260,6 @@ async def upload_evidence(
         "evidence_type":     evidence_type,
         "original_filename": original_filename,
         "customer_email":    normalized_email,
-        "saved_path":        str(dest_path),
         "mime_type":         mime,
         "file_size_bytes":   len(data),
     }

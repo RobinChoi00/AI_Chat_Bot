@@ -72,6 +72,25 @@ function assistantContentFromResponse(
   );
 }
 
+/** Restore the last assistant bubble after refresh / resume (uses enrichment when present). */
+function hydrationAssistantContent(
+  ticket: WarrantyTicketState | null,
+  resp: WarrantySessionResponse
+): string | null {
+  const node = ticket?.current_node;
+  if (!node) return null;
+
+  if (node.is_terminal) {
+    return assistantContentFromResponse(ticket, resp) ?? node.prompt ?? null;
+  }
+
+  if (resp.assistant_message?.trim()) {
+    return resp.assistant_message.trim();
+  }
+
+  return node.prompt ?? null;
+}
+
 export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const storeDomain = resolveWarrantyStoreDomain();
   const [sessionId, setSessionId] = useState<string>(() => {
@@ -206,13 +225,10 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         if (cancelled) return;
         const ticket = resp.ticket;
         if (ticket?.current_node?.is_terminal && ticket.current_node.prompt) {
-          setMessages([
-            {
-              role: "assistant",
-              content:
-                assistantContentFromResponse(ticket, resp) ?? ticket.current_node.prompt,
-            },
-          ]);
+          const content = hydrationAssistantContent(ticket, resp);
+          if (content) {
+            setMessages([{ role: "assistant", content }]);
+          }
         } else if (ticket?.ready_for_issue_type && ticket.model_name) {
           setMessages([
             { role: "assistant", content: WARRANTY_WELCOME_MESSAGE },
@@ -222,7 +238,10 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
             },
           ]);
         } else if (ticket?.current_node?.prompt && !ticket.current_node.is_terminal) {
-          setMessages([{ role: "assistant", content: ticket.current_node.prompt }]);
+          const content = hydrationAssistantContent(ticket, resp);
+          if (content) {
+            setMessages([{ role: "assistant", content }]);
+          }
         } else if (!ticket?.ticket_id) {
           setMessages([{ role: "assistant", content: WARRANTY_WELCOME_MESSAGE }]);
         }

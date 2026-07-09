@@ -593,13 +593,5 @@ export async function uploadEvidence(
     throw new Error(detail);
   }
 
-  const data = (await res.json()) as EvidenceUploadResponse & {
-    saved_path?: string;
-  };
-
-  // Strip internal server path before returning to UI
-  // TODO(contract-gap): Ideally the backend should not return saved_path at all
-  //   in the customer-facing response. Tracked in docs/warranty_api_contract.md.
-  const { saved_path: _stripped, ...safe } = data;
-  return safe;
+  return (await res.json()) as EvidenceUploadResponse;
 }

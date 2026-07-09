@@ -188,6 +188,7 @@ def get_freshdesk_dashboard(*, probe_connection: bool = True) -> dict[str, Any]:
         "stale": {
             "tickets": _is_stale(tickets_sync.get("last_sync_at")),
             "kb": _is_stale(kb_sync.get("last_sync_at")),
+            "threshold_days": _STALE_DAYS,
         },
         "knowledge": _knowledge_counts(),
     }

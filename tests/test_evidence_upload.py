@@ -170,6 +170,20 @@ class TestEvidenceUploadEndpoint:
         body = response.json()
         assert body["original_filename"] == "receipt.pdf"
 
+    def test_webp_upload_accepted(self, client):
+        ticket_id = _make_ticket("webp-test")
+        webp_data = b"RIFF" + b"\x00" * 8 + b"WEBP"
+
+        response = client.post(
+            f"/api/v1/warranty/{ticket_id}/evidence",
+            data=_upload_form("photo_of_defect"),
+            files={"file": ("defect.webp", io.BytesIO(webp_data), "image/webp")},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["original_filename"] == "defect.webp"
+        assert "saved_path" not in body
+
     def test_invalid_extension_rejected(self, client):
         """Uploading a .exe file is rejected with HTTP 422."""
         ticket_id = _make_ticket("ext-test")
@@ -210,12 +224,16 @@ class TestEvidenceUploadEndpoint:
         # Should succeed (sanitisation, not rejection)
         assert response.status_code == 200, response.text
         body = response.json()
-        saved_path = Path(body["saved_path"])
-        # Verify the saved path is inside tmp_path (the mocked _UPLOAD_ROOT)
+        assert "saved_path" not in body
+
+        from warranty_workflow import WarrantyEngine
+
+        evidences = WarrantyEngine.get_evidences(ticket_id)
+        assert len(evidences) == 1
+        saved_path = Path(str(evidences[0].file_path))
         assert str(saved_path).startswith(str(tmp_path)), (
             f"File was saved outside upload root! saved_path={saved_path}"
         )
-        # The filename must NOT contain '..' components
         assert ".." not in saved_path.parts, (
             f"Saved path contains '..' components: {saved_path}"
         )

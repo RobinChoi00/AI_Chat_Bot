@@ -161,7 +161,7 @@ Upload an evidence file for an open warranty ticket.
   "ticket_status": "awaiting_admin_review",
   "evidence_type": "damage_photos",
   "original_filename": "front_damage.jpg",
-  "saved_path": "/app/uploaded_evidence/warranty/3f9a1234-.../abc123_front_damage.jpg",
+  "customer_email": "customer@example.com",
   "mime_type": "image/jpeg",
   "file_size_bytes": 245760
 }

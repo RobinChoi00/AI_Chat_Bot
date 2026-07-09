@@ -168,9 +168,9 @@ export interface EvidenceUploadResponse {
   ticket_status: string;
   evidence_type: string;
   original_filename: string;
+  customer_email?: string;
+  mime_type?: string;
   file_size_bytes: number;
-  // NOTE: saved_path is returned by the backend but MUST NOT be displayed
-  // to the customer — it is an internal server path.
 }
 
 // ------------------------------------------------------------

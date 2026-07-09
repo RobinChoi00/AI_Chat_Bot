@@ -76,3 +76,4 @@ def test_get_freshdesk_dashboard_without_credentials(monkeypatch, tmp_path):
     assert dash["files"]["tickets"]["count"] == 1
     assert dash["files"]["kb"]["count"] == 1
     assert dash["stale"]["tickets"] is True
+    assert dash["stale"]["threshold_days"] == 7

@@ -253,3 +253,9 @@ def test_serialize_ticket_state_includes_step_enrichment(monkeypatch):
     body = resp.json()
     assert body.get("assistant_message") == "Freshdesk tip\n\nNext question?"
     assert body.get("step_enrichment", {}).get("phase") == "workflow_step"
+
+    get_resp = client.get(f"/api/v1/warranty/session/{session_id}")
+    assert get_resp.status_code == 200
+    get_body = get_resp.json()
+    assert get_body.get("assistant_message") == "Freshdesk tip\n\nNext question?"
+    assert get_body.get("step_enrichment", {}).get("phase") == "workflow_step"
