@@ -15,18 +15,24 @@ import {
 import type {
   AnswerOption,
   ChatMessage,
+  StepEnrichment,
   TerminalEnrichment,
   WarrantySessionResponse,
   WarrantyTicketState,
 } from "@/lib/types";
+import {
+  assistantContentFromResponse,
+  hydrationAssistantContent,
+} from "@/lib/warrantyHydration";
 import ChatMessageBubble from "./ChatMessageBubble";
+import StepEnrichmentPanel from "./StepEnrichmentPanel";
 import AnswerOptions from "./AnswerOptions";
 import CollapsibleOptionPanel from "./CollapsibleOptionPanel";
 import EvidenceUploader from "./EvidenceUploader";
 import SaveProgressButton from "./SaveProgressButton";
 import SerialPhotoButton from "./SerialPhotoButton";
 import TicketStatusBadge from "./TicketStatusBadge";
-import { formatTerminalPrompt, WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
+import { WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
 import { WARRANTY_WELCOME_MESSAGE } from "@/lib/welcomeMessage";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 
@@ -58,39 +64,6 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function assistantContentFromResponse(
-  ticket: WarrantyTicketState | null,
-  resp: Pick<WarrantySessionResponse, "assistant_message" | "terminal_enrichment">
-): string | null {
-  const node = ticket?.current_node;
-  if (!node?.prompt && !resp.assistant_message) return null;
-  return formatTerminalPrompt(
-    node?.prompt ?? "",
-    node?.evidence_required,
-    node?.evidence_email,
-    resp.assistant_message ?? resp.terminal_enrichment?.message
-  );
-}
-
-/** Restore the last assistant bubble after refresh / resume (uses enrichment when present). */
-function hydrationAssistantContent(
-  ticket: WarrantyTicketState | null,
-  resp: WarrantySessionResponse
-): string | null {
-  const node = ticket?.current_node;
-  if (!node) return null;
-
-  if (node.is_terminal) {
-    return assistantContentFromResponse(ticket, resp) ?? node.prompt ?? null;
-  }
-
-  if (resp.assistant_message?.trim()) {
-    return resp.assistant_message.trim();
-  }
-
-  return node.prompt ?? null;
-}
-
 export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const storeDomain = resolveWarrantyStoreDomain();
   const [sessionId, setSessionId] = useState<string>(() => {
@@ -111,6 +84,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [warrantyState, setWarrantyState] = useState<WarrantyTicketState | null>(null);
   const [terminalEnrichment, setTerminalEnrichment] = useState<TerminalEnrichment | null>(null);
+  const [stepEnrichment, setStepEnrichment] = useState<StepEnrichment | null>(null);
   const [optionsUsed, setOptionsUsed] = useState(false);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [contactSubmitted, setContactSubmitted] = useState(false);
@@ -124,11 +98,12 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading, helpConsent]);
+  }, [messages, loading, helpConsent, stepEnrichment]);
 
   const applySessionResponse = useCallback((resp: WarrantySessionResponse) => {
     setWarrantyState(resp.ticket);
     setTerminalEnrichment(resp.terminal_enrichment ?? null);
+    setStepEnrichment(resp.step_enrichment ?? null);
     if (resp.terminal_enrichment?.phase === "awaiting_help_consent") {
       setHelpConsent(null);
     }
@@ -166,6 +141,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       setMessages([{ role: "assistant", content: WARRANTY_WELCOME_MESSAGE }]);
       setWarrantyState(null);
       setTerminalEnrichment(null);
+      setStepEnrichment(null);
       setHelpConsent(null);
       setContactSubmitted(false);
       setOptionsUsed(false);
@@ -731,6 +707,14 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
               feedbackContext="warranty"
             />
           ))}
+
+          {!isTerminal && stepEnrichment && (
+            <div className="flex justify-start">
+              <div className="max-w-[92%] sm:max-w-[85%]">
+                <StepEnrichmentPanel enrichment={stepEnrichment} />
+              </div>
+            </div>
+          )}
         </div>
 
         {showIssueTypeOptions && (
