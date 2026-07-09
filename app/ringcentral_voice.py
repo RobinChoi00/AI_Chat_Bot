@@ -31,8 +31,10 @@ POST_DIY_FIXED_DTMF = "1"
 
 
 class IvrPhase(str, Enum):
+    CONNECTING = "connecting"
     MENU = "menu"
     POST_DIY = "post_diy"
+    SALES_TRANSFER = "sales_transfer"
     DONE = "done"
 
 
@@ -115,18 +117,92 @@ def build_terminal_script(node: dict, enrichment: Optional[dict[str, Any]] = Non
 
 def build_after_hours_closure_script() -> str:
     """Closing message when the workflow ends outside live agent hours."""
-    try:
-        from config import WARRANTY_BUSINESS_HOURS  # type: ignore
+    from ringcentral_hours import next_warranty_open_phrase, warranty_hours_text  # noqa: WPS433
 
-        hours = str(WARRANTY_BUSINESS_HOURS or "Mon-Fri, 10:00 AM - 6:00 PM CST")
-    except Exception:
-        hours = "Monday through Friday, ten A M to six P M Central time"
+    hours = warranty_hours_text()
+    next_open = next_warranty_open_phrase()
     return (
         "Thank you. We have recorded your answers for our warranty team. "
-        f"Their phone line is open {hours}. "
-        "You can also start a warranty chat on our website anytime. "
+        f"Warranty phone support is open {hours}. "
+        f"Please call back {next_open}. "
+        "You can also continue on our website warranty chat anytime. "
+        "When you hang up, we will text you a link to pick up where you left off. "
         f"Press {POST_DIY_FIXED_DTMF} to end this call. "
         f"Press {REPEAT_DTMF} to hear this message again."
+    )
+
+
+def build_after_hours_welcome_script() -> str:
+    """Opening message when the warranty line is closed — sets expectations."""
+    from ringcentral_hours import (  # noqa: WPS433
+        next_warranty_open_phrase,
+        sales_hours_text,
+        warranty_hours_text,
+    )
+
+    hours = warranty_hours_text()
+    next_open = next_warranty_open_phrase()
+    sales_note = sales_hours_text()
+    parts = [
+        "Thank you for calling Osaki and Titan warranty support.",
+        "Our warranty service department is closed right now.",
+        f"Warranty phone hours are {hours}.",
+        f"Please call back {next_open}.",
+        "To help us assist you faster, please have your invoice, order number, "
+        "serial number photos, or any ticket reference ready before you call.",
+        "After this call you will receive a text message with a link to continue online.",
+    ]
+    if sales_note:
+        parts.append(sales_note)
+    parts.append("You can still use our automated warranty assistant now.")
+    return " ".join(parts)
+
+
+def build_business_hours_connect_script() -> str:
+    """Played before connecting to a live warranty agent during open hours."""
+    from ringcentral_hours import warranty_hours_text  # noqa: WPS433
+
+    hours = warranty_hours_text()
+    return (
+        "Thank you for calling Osaki and Titan warranty support. "
+        f"Our warranty team is open {hours}. "
+        "Please have your invoice, order number, or ticket reference ready. "
+        "We are now connecting you to the next available warranty specialist. "
+        "Please stay on the line."
+    )
+
+
+def build_sales_transfer_script() -> str:
+    """Announce before transferring to sales during business hours."""
+    return (
+        "This option is handled by our sales team, not warranty. "
+        "We are now transferring your call to sales. Please stay on the line."
+    )
+
+
+def build_after_hours_sales_closed_script() -> str:
+    """Sales handoff is not available when warranty is closed."""
+    from ringcentral_hours import next_warranty_open_phrase, warranty_hours_text  # noqa: WPS433
+
+    hours = warranty_hours_text()
+    next_open = next_warranty_open_phrase()
+    return (
+        "Our warranty service department is closed, so we cannot transfer you to sales for warranty help. "
+        f"Warranty phone hours are {hours}. "
+        f"Please call back {next_open}, or use our website warranty chat. "
+        "When you hang up, we will text you a link to continue your case online. "
+        f"Press {POST_DIY_FIXED_DTMF} to end this call. "
+        f"Press {REPEAT_DTMF} to hear this message again."
+    )
+
+
+def build_question_text_handoff_script() -> str:
+    """Phone cannot capture free-text — direct caller to SMS resume link."""
+    return (
+        "This step needs your order number, tracking details, or other written information, "
+        "which is easier on our website. "
+        "When you finish this call we will text you a link to continue. "
+        f"Press {REPEAT_DTMF} to hear the previous options again."
     )
 
 

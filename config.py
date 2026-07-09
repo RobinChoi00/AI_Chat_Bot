@@ -11,6 +11,11 @@ SUPPORT_BUSINESS_HOURS = "Mon-Fri, 9:30 AM - 6:30 PM / Sat, 10:00 AM - 4:00 PM C
 
 WARRANTY_PHONE = "+1-888-848-2630 ext. 3"
 WARRANTY_BUSINESS_HOURS = "Mon-Fri, 10:00 AM - 6:00 PM CST"
+# Shown on after-hours IVR when sales may still answer on weekends (configure per ops).
+SALES_BUSINESS_HOURS = os.environ.get(
+    "SALES_BUSINESS_HOURS",
+    "Sales may be available on Saturdays — warranty phone support is weekdays only.",
+)
 
 SALES_PHONE_BY_DOMAIN = {
     "osakiusa":          "+1-888-501-5988",

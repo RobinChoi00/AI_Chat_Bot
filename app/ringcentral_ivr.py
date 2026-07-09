@@ -3,13 +3,13 @@ ringcentral_ivr.py
 ==================
 Orchestrate RingCentral IVR callbacks with WarrantyEngine.
 
-Call flow (DTMF-only MVP, warranty after hours):
-  on-call-enter  → if warranty business hours: forward to agent immediately
-                 → else start ticket → warranty menu → issue type (install/delivery/defect)
-  Play complete  → collect DTMF
-  Collect digit  → submit_answer, replay (0), or hangup at terminal
-  After-hours: no live agent transfer — press 0 replays the current prompt.
-  on-call-exit   → SMS + team email (service@ → Freshdesk via inbox integration)
+Call flow:
+  on-call-enter (open)   → closed-hours message N/A; play connect script → forward to warranty queue
+  on-call-enter (closed) → after-hours welcome (closed + hours + docs) → issue type menu → …
+  Play complete          → collect DTMF, connect forward, or sales transfer
+  on-call-exit           → SMS + team email (after-hours tickets only)
+
+After-hours: no silent transfer to sales — sales_handoff plays closed message instead.
 """
 
 from __future__ import annotations
@@ -30,8 +30,12 @@ from ringcentral_voice import (
     IvrPhase,
     REPEAT_DTMF,
     VoiceCallContext,
-    build_after_hours_closure_script,
+    build_after_hours_sales_closed_script,
+    build_after_hours_welcome_script,
+    build_business_hours_connect_script,
     build_menu_script,
+    build_question_text_handoff_script,
+    build_sales_transfer_script,
     build_terminal_script,
     get_call_context,
     menu_dtmf_patterns,
@@ -87,6 +91,36 @@ def _store_caller_metadata(ticket_id: str, caller: str) -> None:
             ticket.set_collected("caller_phone", caller)
 
 
+def _log_business_hours_connect(session_id: str, caller: str) -> str:
+    """Record open-hours calls forwarded to the live warranty queue."""
+    import uuid
+
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    ticket_id = str(uuid.uuid4())
+    with warranty_db_session() as db:
+        ticket = WarrantyTicket(
+            ticket_id=ticket_id,
+            session_id=session_id,
+            domain="phone",
+            status="closed",
+            current_node_id="phone_live_forward",
+            collected_data="{}",
+        )
+        db.add(ticket)
+        ticket.set_collected("channel", "phone")
+        if caller:
+            ticket.set_collected("caller_phone", caller)
+        ticket.set_collected("ivr_path", "business_hours_live_forward")
+    logger.info(
+        "RC IVR logged live forward ticket=%s session=%s caller=%s",
+        ticket_id,
+        session_id,
+        caller,
+    )
+    return ticket_id
+
+
 def _play_script(ctx: VoiceCallContext, script: str, *, phase: IvrPhase) -> None:
     uri = resolve_play_uri(script)
     play_prompt(session_id=ctx.session_id, party_id=ctx.party_id, audio_uri=uri)
@@ -115,6 +149,17 @@ def _transfer(ctx: VoiceCallContext, reason: str) -> None:
     ctx.awaiting_command = None
 
 
+def _forward_to_warranty_queue(ctx: VoiceCallContext) -> None:
+    logger.info(
+        "RC IVR connecting to warranty queue session=%s caller=%s",
+        ctx.session_id,
+        ctx.caller_phone,
+    )
+    forward_call(session_id=ctx.session_id, party_id=ctx.party_id)
+    ctx.phase = IvrPhase.DONE
+    ctx.awaiting_command = None
+
+
 def _present_node(
     ctx: VoiceCallContext,
     node: dict,
@@ -126,28 +171,35 @@ def _present_node(
         _present_terminal(ctx, node)
         return
     if node_type == "question_text":
-        script = (
-            "This step needs details that are easier on our website warranty chat. "
-            f"Press {REPEAT_DTMF} to hear the previous options again."
-        )
-        _play_script(ctx, script, phase=IvrPhase.MENU)
+        _play_script(ctx, build_question_text_handoff_script(), phase=IvrPhase.MENU)
         return
     if node_type in ("question", "instruction"):
         script = f"{intro_prefix}{build_menu_script(node)}"
         _play_script(ctx, script, phase=IvrPhase.MENU)
         return
     logger.warning("Unsupported node type %s — transferring", node_type)
-    _transfer(ctx, "unsupported_node")
+    if is_warranty_business_hours():
+        _transfer(ctx, "unsupported_node")
+    else:
+        _play_script(
+            ctx,
+            build_after_hours_sales_closed_script(),
+            phase=IvrPhase.POST_DIY,
+        )
 
 
 def _present_terminal(ctx: VoiceCallContext, node: dict) -> None:
     action = str(node.get("action") or "awaiting_admin")
     if action == "sales_handoff":
-        _transfer(ctx, "sales_handoff")
+        if is_warranty_business_hours():
+            _play_script(ctx, build_sales_transfer_script(), phase=IvrPhase.SALES_TRANSFER)
+        else:
+            _play_script(ctx, build_after_hours_sales_closed_script(), phase=IvrPhase.POST_DIY)
         return
     if action in ("awaiting_admin", "awaiting_admin_review", "awaiting_evidence"):
-        script = build_after_hours_closure_script()
-        _play_script(ctx, script, phase=IvrPhase.POST_DIY)
+        from ringcentral_voice import build_after_hours_closure_script  # noqa: WPS433
+
+        _play_script(ctx, build_after_hours_closure_script(), phase=IvrPhase.POST_DIY)
         return
 
     engine = _lazy_engine()
@@ -168,12 +220,22 @@ def handle_call_enter(payload: dict[str, Any]) -> None:
 
     caller = _caller_phone(payload)
     if is_warranty_business_hours():
+        ticket_id = _log_business_hours_connect(session_id, caller)
         logger.info(
-            "RC IVR business hours — direct transfer session=%s caller=%s",
+            "RC IVR business hours — connect message then forward session=%s caller=%s ticket=%s",
             session_id,
             caller,
+            ticket_id,
         )
-        forward_call(session_id=session_id, party_id=party_id)
+        ctx = VoiceCallContext(
+            session_id=session_id,
+            party_id=party_id,
+            ticket_id=ticket_id,
+            caller_phone=caller,
+            phase=IvrPhase.CONNECTING,
+        )
+        set_call_context(ctx)
+        _play_script(ctx, build_business_hours_connect_script(), phase=IvrPhase.CONNECTING)
         return
 
     engine = _lazy_engine()
@@ -199,9 +261,7 @@ def handle_call_enter(payload: dict[str, Any]) -> None:
         caller,
         entry_node.get("node_id"),
     )
-    intro = (
-        "Welcome to Osaki and Titan after-hours warranty support. "
-    )
+    intro = f"{build_after_hours_welcome_script()} "
     _present_node(ctx, entry_node, intro_prefix=intro)
 
 
@@ -225,7 +285,8 @@ def _handle_menu_digit(ctx: VoiceCallContext, digit: str) -> None:
     engine = _lazy_engine()
     node = engine.get_current_node(ctx.ticket_id)
     if node is None:
-        _transfer(ctx, "missing_node")
+        if is_warranty_business_hours():
+            _transfer(ctx, "missing_node")
         return
 
     if node.get("type") == "question_text":
@@ -274,6 +335,13 @@ def handle_command_update(payload: dict[str, Any]) -> None:
     ctx.party_id = party_id
 
     if command == "Play":
+        if ctx.phase == IvrPhase.CONNECTING:
+            _forward_to_warranty_queue(ctx)
+            pop_call_context(session_id)
+            return
+        if ctx.phase == IvrPhase.SALES_TRANSFER:
+            _transfer(ctx, "sales_handoff")
+            return
         if ctx.phase == IvrPhase.MENU:
             node = _lazy_engine().get_current_node(ctx.ticket_id) or {}
             if node.get("type") == "question_text":
@@ -303,7 +371,7 @@ def handle_command_update(payload: dict[str, Any]) -> None:
 def handle_call_exit(payload: dict[str, Any]) -> None:
     session_id = _session_id(payload)
     ctx = pop_call_context(session_id)
-    if ctx:
+    if ctx and ctx.ticket_id:
         logger.info("RC IVR call exit session=%s ticket=%s", session_id, ctx.ticket_id)
         send_phone_call_followups(
             caller_phone=ctx.caller_phone,

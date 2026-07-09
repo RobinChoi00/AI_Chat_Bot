@@ -35,3 +35,17 @@ def test_business_hours_weekday_at_close():
 
 def test_business_hours_weekend_closed():
     assert is_warranty_business_hours(_dt(2026, 7, 4, 12, 0)) is False  # Saturday
+
+
+def test_next_warranty_open_phrase_friday_evening():
+    from ringcentral_hours import next_warranty_open_phrase  # noqa: WPS433
+
+    phrase = next_warranty_open_phrase(_dt(2026, 7, 3, 19, 0))  # Friday 7 PM
+    assert "monday" in phrase.lower()
+
+
+def test_next_warranty_open_phrase_monday_morning_before_open():
+    from ringcentral_hours import next_warranty_open_phrase  # noqa: WPS433
+
+    phrase = next_warranty_open_phrase(_dt(2026, 7, 6, 8, 0))  # Monday 8 AM
+    assert "today" in phrase.lower()

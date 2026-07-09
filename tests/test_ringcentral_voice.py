@@ -13,7 +13,10 @@ sys.path.insert(0, str(APP_DIR))
 from ringcentral_voice import (  # noqa: E402
     REPEAT_DTMF,
     build_after_hours_closure_script,
+    build_after_hours_welcome_script,
+    build_business_hours_connect_script,
     build_menu_script,
+    build_sales_transfer_script,
     build_terminal_script,
     menu_dtmf_patterns,
     post_diy_dtmf_patterns,
@@ -53,8 +56,28 @@ def test_build_after_hours_closure_script_mentions_business_hours():
     script = build_after_hours_closure_script()
     assert "Press 1 to end this call" in script
     assert f"Press {REPEAT_DTMF} to hear this message again" in script
-    assert "specialist" not in script.lower()
-    assert "connecting you" not in script.lower()
+    assert "call back" in script.lower()
+    assert "text" in script.lower()
+
+
+def test_build_after_hours_welcome_mentions_closed_and_docs():
+    script = build_after_hours_welcome_script()
+    assert "closed" in script.lower()
+    assert "warranty" in script.lower()
+    assert "invoice" in script.lower() or "order number" in script.lower()
+    assert "text message" in script.lower()
+
+
+def test_build_business_hours_connect_script_mentions_connecting():
+    script = build_business_hours_connect_script()
+    assert "connecting" in script.lower()
+    assert "invoice" in script.lower() or "order number" in script.lower()
+
+
+def test_build_sales_transfer_script_announces_sales():
+    script = build_sales_transfer_script()
+    assert "sales" in script.lower()
+    assert "transfer" in script.lower()
 
 
 def test_post_diy_patterns_are_repeat_or_hangup_only():
