@@ -4,13 +4,12 @@
 #
 # Used by Dockerfile.backend — NOT the full dev freeze in requirements.txt.
 #
-# Excluded (dev / legacy / ingest scripts only):
+# Excluded (dev / legacy only):
 #   torch, transformers, sentence-transformers, scipy, scikit-learn
-#   streamlit, extra-streamlit-components, playwright
-#   pandas, openpyxl, python-docx, pyarrow, pillow, altair, …
+#   streamlit, extra-streamlit-components
+#   python-docx, pyarrow, pillow, altair, …
 #
-# For local dev with Streamlit + full tooling: pip install -r requirements.txt
-# For server-side FAISS ingest (master_ingester): pip install -r requirements-ingest.txt
+# pandas + openpyxl: Fonz xlsx → JSON ingest on server (script/ingest_fonz_warranty.py)
 
 # --- Web API ---
 fastapi==0.135.1
@@ -40,6 +39,10 @@ tiktoken==0.12.0
 faiss-cpu==1.13.2
 numpy==2.4.3
 rank-bm25==0.2.2
+
+# --- Fonz / Excel ingest (ingest_fonz_warranty.py on EC2) ---
+pandas==2.3.3
+openpyxl==3.1.5
 
 # --- Rate limiting, retries, cache ---
 slowapi==0.1.9
