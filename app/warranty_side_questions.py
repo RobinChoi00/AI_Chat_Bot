@@ -134,6 +134,13 @@ def _looks_like_valid_workflow_answer(node: dict, text: str) -> bool:
         return False
 
     if node.get("type") == "question":
+        from warranty_error_code_gate import is_gate_node, map_gate_free_text  # noqa: WPS433
+
+        node_id = str(node.get("node_id") or "")
+        if is_gate_node(node_id):
+            mapped = map_gate_free_text(node_id, raw)
+            if mapped:
+                return True
         options = list(node.get("options") or [])
         keys = {_normalize(str(o.get("answer_key") or "")) for o in options}
         if _normalize(raw) in keys:

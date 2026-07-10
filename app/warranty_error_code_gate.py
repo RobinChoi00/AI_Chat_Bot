@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+import re
+
 GATE_VISIBLE_ID = "defect_error_code_visible_q"
 GATE_PICK_ID = "defect_error_code_pick"
 GATE_ENTER_ID = "defect_error_code_enter"
@@ -25,6 +27,17 @@ COL_FONZ_CATEGORY_ALIGNED = "fonz_category_aligned"
 
 _SKIP_DEFECT_TYPES = frozenset({"voice", "cosmetic"})
 _PICK_CODE_LIMIT = 8
+
+_GATE_YES_RE = re.compile(
+    r"\b(yes|yeah|yep|y|see|showing|displayed|there is|i see|code is|shows)\b|"
+    r"^(네|예|응|있어|보여|나와)",
+    re.I,
+)
+_GATE_NO_RE = re.compile(
+    r"\b(no|none|not|nope|nothing|no code|doesn'?t show|isn'?t showing)\b|"
+    r"^(아니|없어|없음|안\s*보|없습니다)",
+    re.I,
+)
 
 
 def is_gate_node(node_id: str) -> bool:
@@ -70,7 +83,8 @@ def should_intercept_terminal(ticket, terminal_node_id: str) -> bool:
         return False
 
     model_name = str(getattr(ticket, "model_name", "") or "").strip()
-    if not model_name or not model_supports_error_codes(model_name):
+    if model_name and not model_supports_error_codes(model_name):
+        # Known model without on-screen error codes — skip gate.
         return False
 
     return True
@@ -437,6 +451,84 @@ def append_fonz_to_terminal_enrichment(
             ticket,
         )
     return out
+
+
+def map_gate_free_text(node_id: str, text: str) -> Optional[str]:
+    """
+    Map typed customer text on virtual gate nodes to workflow answer_keys.
+
+    Returns an answer_key suitable for ``submit_answer``, or ``None`` if the
+    caller should fall through to normal NLP / side-question handling.
+    """
+    from error_code_lookup import extract_error_codes_from_text, parse_pick_answer_key  # noqa: WPS433
+
+    raw = (text or "").strip()
+    if not raw or not is_gate_node(node_id):
+        return None
+
+    if node_id == GATE_ENTER_ID:
+        codes = extract_error_codes_from_text(raw)
+        return codes[0] if codes else raw
+
+    if node_id == GATE_PICK_ID:
+        codes = extract_error_codes_from_text(raw)
+        if codes:
+            return f"pick_{codes[0]}"
+        key = parse_pick_answer_key(raw)
+        if key:
+            return f"pick_{key}"
+        if _GATE_NO_RE.search(raw):
+            return "error_code_other"
+        return None
+
+    if node_id == GATE_VISIBLE_ID:
+        codes = extract_error_codes_from_text(raw)
+        if codes:
+            return "error_code_yes"
+        if _GATE_YES_RE.search(raw) and not _GATE_NO_RE.search(raw):
+            return "error_code_yes"
+        if _GATE_NO_RE.search(raw):
+            return "error_code_no"
+        return None
+
+    return None
+
+
+def format_midflow_error_code_help(ticket, text: str, *, reprompt: str) -> Optional[str]:
+    """
+    When a customer mentions an error code during defect workflow (not on a
+    gate node), store it and return a short Fonz-backed reply + re-prompt.
+    """
+    if str(getattr(ticket, "issue_type", "") or "").lower() != "defect":
+        return None
+
+    from error_code_lookup import extract_error_codes_from_text, lookup_error_code  # noqa: WPS433
+
+    codes = extract_error_codes_from_text(text)
+    if not codes:
+        return None
+
+    code = codes[0]
+    model_name = str(getattr(ticket, "model_name", "") or "")
+    finalize_error_code_submission(ticket, code, model_name=model_name or None)
+    hit = lookup_error_code(model_name, code) if model_name else lookup_error_code(None, code)
+
+    parts: list[str] = []
+    if hit:
+        meaning = str(hit.get("meaning") or "").strip()
+        parts.append(f"**Error code {hit.get('error_code', code)}:** {meaning}" if meaning else f"Recorded error code **{code}**.")
+        troubleshooting = str(hit.get("troubleshooting") or "").strip()
+        if troubleshooting:
+            parts.append(troubleshooting[:220])
+    else:
+        parts.append(
+            f"I noted error code **{code}**. Our team can verify it against your model during review."
+        )
+    parts.append(
+        "We'll keep going with the warranty questions — please answer the current step below."
+    )
+    parts.append(reprompt)
+    return "\n\n".join(p for p in parts if p)
 
 
 def build_admin_fonz_payload(ticket) -> dict[str, Any]:

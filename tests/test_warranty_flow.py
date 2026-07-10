@@ -97,7 +97,21 @@ def walk(ticket_id: str, answers: list[str]) -> dict:
     """Submit a sequence of answers and return the last SubmitResult."""
     result: dict = {}
     for ans in answers:
-        result = WarrantyEngine.submit_answer(ticket_id, ans)
+        result = submit(ticket_id, ans)
+    return result
+
+
+def submit(ticket_id: str, answer: str) -> dict:
+    """Submit one answer; auto-dismiss error-code gate when tests expect the terminal."""
+    import warranty_error_code_gate as gate
+
+    result = WarrantyEngine.submit_answer(ticket_id, answer)
+    while result.get("next_node_id") in (
+        gate.GATE_VISIBLE_ID,
+        gate.GATE_PICK_ID,
+        gate.GATE_ENTER_ID,
+    ):
+        result = WarrantyEngine.submit_answer(ticket_id, "error_code_no")
     return result
 
 
@@ -377,7 +391,7 @@ def test_defect_power_recline_actuator():
     assert "video_of_issue" in result["evidence_required"]
 
     turns = WarrantyEngine.get_turns(ticket_id)
-    assert len(turns) == 6
+    assert len(turns) == 7
 
 
 # ---------------------------------------------------------------------------
@@ -542,8 +556,8 @@ def test_yes_no_branch_air_feet_never_worked_pump_terminal():
         "feet_calves", # → defect_air_feet_worked_q
     ])
 
-    # Choose NO branch
-    result = WarrantyEngine.submit_answer(ticket_id, "never_worked")
+    # Choose NO branch (gate auto-dismissed in submit helper)
+    result = submit(ticket_id, "never_worked")
     assert result["next_node_id"] == "defect_air_pump_terminal"
     assert result["is_terminal"] is True
     assert result["terminal_class"] == "awaiting_admin_review"

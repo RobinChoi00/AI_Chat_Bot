@@ -667,8 +667,48 @@ _DELIVERY_TEXT_NODES = frozenset(
 )
 
 
+def _persist_ticket_row(ticket_id: str, ticket) -> None:
+    """Flush in-memory ticket field changes (e.g. collected_data) to SQLite."""
+    if ticket is None:
+        return
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    with warranty_db_session() as db:
+        row = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        if row is None:
+            return
+        row.collected_data = ticket.collected_data
+        if getattr(ticket, "model_name", None):
+            row.model_name = ticket.model_name
+
+
 def _maybe_side_question_message(engine, ticket_id: str, answer: str) -> Optional[str]:
+    from warranty_error_code_gate import (  # noqa: WPS433
+        format_midflow_error_code_help,
+        is_gate_node,
+    )
     from warranty_intake_context import try_side_question_for_ticket  # noqa: WPS433
+
+    node = engine.get_current_node(ticket_id)
+    node_id = str(node.get("node_id") or "") if node else ""
+    if node and not is_gate_node(node_id):
+        from warranty_side_questions import _looks_like_valid_workflow_answer  # noqa: WPS433
+
+        ticket = engine.get_ticket(ticket_id)
+        if ticket is not None and not _looks_like_valid_workflow_answer(node, answer):
+            prompt = str(node.get("prompt") or "").strip()
+            mid = format_midflow_error_code_help(
+                ticket,
+                answer,
+                reprompt=prompt or "Please choose one of the options above to continue.",
+            )
+            if mid:
+                _persist_ticket_row(ticket_id, ticket)
+                return mid
 
     return try_side_question_for_ticket(engine, ticket_id, answer)
 
@@ -694,6 +734,32 @@ def _submit_answer_with_nlp(engine, ticket_id: str, answer: str) -> tuple[dict, 
     Returns (submit_result, nlp_interpreted).
     """
     _validate_text_before_submit(engine, ticket_id, answer)
+
+    node = engine.get_current_node(ticket_id)
+    node_id = str(node.get("node_id") or "") if node else ""
+
+    from warranty_error_code_gate import is_gate_node, map_gate_free_text  # noqa: WPS433
+
+    if node and is_gate_node(node_id):
+        mapped = map_gate_free_text(node_id, answer)
+        if mapped:
+            return (
+                engine.submit_answer(
+                    ticket_id,
+                    mapped,
+                    customer_display=answer,
+                ),
+                True,
+            )
+        try:
+            return engine.submit_answer(ticket_id, answer), False
+        except ValueError as exc:
+            if "did not match any option" not in str(exc):
+                raise
+            raise ValueError(
+                "Please tap one of the buttons above, type **yes** or **no**, "
+                "or enter the error code exactly as shown (for example: C6, E5)."
+            ) from exc
 
     try:
         return engine.submit_answer(ticket_id, answer), False

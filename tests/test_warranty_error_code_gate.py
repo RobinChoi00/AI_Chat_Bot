@@ -178,7 +178,43 @@ def test_intake_error_code_skips_gate():
     assert t2.get_collected().get(gate.COL_ERROR_CODE) == "C6"
 
 
-def test_soft_hints_when_no_code():
+def test_gate_intercept_without_model_name():
+    ticket_id, _ = WarrantyEngine.start_session("gate-nomodel", "osakiusa.com")
+
+    result = _walk(ticket_id, [
+        "warranty",
+        "defect",
+        "air",
+        "feet_calves",
+        "never_worked",
+    ])
+
+    assert result["next_node_id"] == gate.GATE_VISIBLE_ID
+    assert result["is_terminal"] is False
+
+
+def test_map_gate_free_text_pick_and_visible():
+    assert gate.map_gate_free_text(gate.GATE_PICK_ID, "C6") == "pick_C6"
+    assert gate.map_gate_free_text(gate.GATE_VISIBLE_ID, "yes I see code C6") == "error_code_yes"
+    assert gate.map_gate_free_text(gate.GATE_VISIBLE_ID, "no code showing") == "error_code_no"
+
+
+def test_typed_c6_on_pick_reaches_terminal():
+    ticket_id, _ = WarrantyEngine.start_session("gate-type-pick", "osakiusa.com")
+    WarrantyEngine.set_model_name(ticket_id, "3D LTX")
+
+    _walk(ticket_id, [
+        "warranty",
+        "defect",
+        "air",
+        "feet_calves",
+        "never_worked",
+        "error_code_yes",
+    ])
+    result = WarrantyEngine.submit_answer(ticket_id, "C6")
+
+    assert result["next_node_id"] == "defect_air_pump_terminal"
+    assert result["is_terminal"] is True
     from types import SimpleNamespace
 
     ticket = SimpleNamespace(

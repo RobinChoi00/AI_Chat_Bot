@@ -533,8 +533,21 @@ class WarrantyEngine:
                     )
 
                 if node_id == GATE_VISIBLE_ID:
+                    from error_code_lookup import extract_error_codes_from_text  # noqa: WPS433
+                    from warranty_error_code_gate import map_gate_free_text  # noqa: WPS433
+
+                    display = (
+                        customer_display if customer_display is not None else raw_answer
+                    )
+                    mapped_key = map_gate_free_text(node_id, display)
                     options = node.get("options", [])
-                    matched = _match_option(options, raw_answer)
+                    if mapped_key:
+                        matched = next(
+                            (o for o in options if o.get("answer_key") == mapped_key),
+                            None,
+                        )
+                    else:
+                        matched = _match_option(options, raw_answer)
                     if matched is None:
                         valid_keys = [
                             o.get("answer_key", o.get("label")) for o in options
@@ -557,6 +570,24 @@ class WarrantyEngine:
                     db.add(turn)
 
                     if answer_key == "error_code_yes":
+                        from error_code_lookup import extract_error_codes_from_text  # noqa: WPS433
+
+                        display = (
+                            customer_display if customer_display is not None else raw_answer
+                        )
+                        codes = extract_error_codes_from_text(display)
+                        if codes:
+                            finalize_error_code_submission(ticket, codes[0])
+                            ticket.set_collected(COL_GATE_COMPLETED, "entered")
+                            pending_node = _apply_pending_terminal(ticket, pending_id)
+                            ticket.set_collected(COL_PENDING_TERMINAL, "")
+                            return _build_submit_result(
+                                next_node_id=pending_id,
+                                previous_node_id=node_id,
+                                next_node=pending_node,
+                                answer_key=answer_key,
+                            )
+
                         ticket.current_node_id = GATE_PICK_ID
                         next_node = resolve_gate_node(GATE_PICK_ID, ticket) or {}
                         return _build_submit_result(
@@ -578,6 +609,57 @@ class WarrantyEngine:
 
                 if node_id == GATE_PICK_ID:
                     from error_code_lookup import parse_pick_answer_key  # noqa: WPS433
+                    from warranty_error_code_gate import map_gate_free_text  # noqa: WPS433
+
+                    display = (
+                        customer_display if customer_display is not None else raw_answer
+                    )
+                    mapped_key = map_gate_free_text(node_id, display)
+                    if mapped_key == "error_code_other":
+                        ticket.current_node_id = GATE_ENTER_ID
+                        next_node = resolve_gate_node(GATE_ENTER_ID, ticket) or {}
+                        turn = WarrantyTurn(
+                            ticket_id=ticket_id,
+                            node_id=node_id,
+                            node_type=node_type,
+                            node_prompt=node.get("prompt", ""),
+                            customer_answer=display,
+                            answer_key="error_code_other",
+                        )
+                        db.add(turn)
+                        return _build_submit_result(
+                            next_node_id=GATE_ENTER_ID,
+                            previous_node_id=node_id,
+                            next_node=next_node,
+                            answer_key="error_code_other",
+                        )
+
+                    if mapped_key and mapped_key.startswith("pick_"):
+                        answer_key = mapped_key
+                        turn = WarrantyTurn(
+                            ticket_id=ticket_id,
+                            node_id=node_id,
+                            node_type=node_type,
+                            node_prompt=node.get("prompt", ""),
+                            customer_answer=display,
+                            answer_key=answer_key,
+                        )
+                        db.add(turn)
+                        picked_code = parse_pick_answer_key(answer_key)
+                        if not picked_code:
+                            raise ValueError(
+                                f"Could not parse error code from answer_key {answer_key!r}."
+                            )
+                        finalize_error_code_submission(ticket, picked_code)
+                        ticket.set_collected(COL_GATE_COMPLETED, "picked")
+                        pending_node = _apply_pending_terminal(ticket, pending_id)
+                        ticket.set_collected(COL_PENDING_TERMINAL, "")
+                        return _build_submit_result(
+                            next_node_id=pending_id,
+                            previous_node_id=node_id,
+                            next_node=pending_node,
+                            answer_key=answer_key,
+                        )
 
                     options = node.get("options", [])
                     matched = _match_option(options, raw_answer)

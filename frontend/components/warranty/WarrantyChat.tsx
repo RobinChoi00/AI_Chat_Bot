@@ -234,6 +234,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
 
   const workflowOptionCount = warrantyState?.current_node?.options?.length ?? 0;
   const workflowNodeId = warrantyState?.current_node?.node_id ?? "";
+  const isErrorCodeGateNode = workflowNodeId.startsWith("defect_error_code");
 
   useEffect(() => {
     if (workflowOptionCount >= 6) {
@@ -602,7 +603,9 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       : inEmailStep
         ? "Anything else our team should know? Type here…"
         : warrantyState?.ticket_id
-          ? "Type your answer…"
+          ? isErrorCodeGateNode
+            ? "Type yes/no, or enter the error code (e.g. C6)…"
+            : "Type your answer…"
           : "Enter your chair model…";
 
   return (

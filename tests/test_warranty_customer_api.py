@@ -592,3 +592,87 @@ def test_smart_start_routing_confirmation_when_issue_inferred(client, monkeypatc
     confirm = data["smart_start"]["routing_confirmation"]
     assert confirm["inferred_issue_type"] == "delivery"
     assert "delivery" in confirm["message"].lower()
+
+
+def _start_defect_air_feet(client, session_id: str, model: str = "3D LTX") -> str:
+    _register_model(client, session_id, model=model)
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "defect", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200
+    ticket_id = resp.json()["ticket"]["ticket_id"]
+    for answer in ("air", "feet_calves", "never_worked"):
+        resp = client.post(
+            f"/api/v1/warranty/{ticket_id}/answer",
+            json={"answer": answer},
+        )
+        assert resp.status_code == 200, resp.text
+    return ticket_id
+
+
+def test_midflow_does_not_hijack_workflow_answer_keys(client):
+    session_id = "cust-api-gate-no-hijack"
+    _register_model(client, session_id, model="3D LTX")
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "defect", "domain": "osaki.com"},
+    )
+    ticket_id = resp.json()["ticket"]["ticket_id"]
+
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "air"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data.get("side_question") is not True
+    assert data["ticket"]["current_node"]["node_id"] == "defect_air_location"
+
+
+def test_error_code_gate_intercepts_before_terminal(client):
+    session_id = "cust-api-gate-intercept"
+    ticket_id = _start_defect_air_feet(client, session_id)
+
+    data = client.get(f"/api/v1/warranty/session/{session_id}").json()
+    node = data["ticket"]["current_node"]
+    assert node["node_id"] == "defect_error_code_visible_q"
+    assert node["is_terminal"] is False
+    assert "error code" in (data.get("assistant_message") or node["prompt"]).lower()
+
+
+def test_error_code_gate_accepts_typed_c6(client):
+    session_id = "cust-api-gate-type-c6"
+    ticket_id = _start_defect_air_feet(client, session_id)
+
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "C6"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["ticket"]["current_node"]["node_id"] == "defect_air_pump_terminal"
+    assert data["ticket"]["current_node"]["is_terminal"] is True
+    assert data.get("nlp_interpreted") is True
+    assert "C6" in (data.get("assistant_message") or "")
+
+
+def test_error_code_gate_midflow_side_question(client):
+    session_id = "cust-api-gate-midflow"
+    _register_model(client, session_id, model="3D LTX")
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "defect", "domain": "osaki.com"},
+    )
+    ticket_id = resp.json()["ticket"]["ticket_id"]
+
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "My display shows error code C6"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data.get("side_question") is True
+    assert "C6" in data["assistant_message"]
+    assert data["ticket"]["current_node"]["node_id"] == "defect_problem_type"
+
