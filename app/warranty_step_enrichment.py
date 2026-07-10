@@ -40,6 +40,38 @@ logger = logging.getLogger(__name__)
 _SKIP_NODE_IDS = frozenset({"root"})
 
 
+def _turn_text(turn: Any, field: str) -> str:
+    if isinstance(turn, dict):
+        return str(turn.get(field) or "")
+    return str(getattr(turn, field, "") or "")
+
+
+def _fonz_match_from_turns(model_name: str, turns: list) -> Optional[KnowledgeEntry]:
+    from error_code_lookup import extract_error_codes_from_text, lookup_error_code  # noqa: WPS433
+    from warranty_knowledge import KnowledgeEntry, _extract_customer_steps, _infer_category  # noqa: WPS433
+
+    for turn in reversed(turns):
+        for field in ("answer_label", "answer", "user_message", "label", "customer_answer"):
+            text = _turn_text(turn, field)
+            for code in extract_error_codes_from_text(text):
+                hit = lookup_error_code(model_name, code)
+                if not hit:
+                    continue
+                meaning = str(hit.get("meaning") or "").strip()
+                troubleshooting = str(hit.get("troubleshooting") or "").strip()
+                steps = _extract_customer_steps(troubleshooting, meaning)
+                if not steps and troubleshooting:
+                    steps = (troubleshooting[:220],)
+                return KnowledgeEntry(
+                    source="fonz_error_code",
+                    category=_infer_category(f"{meaning} {troubleshooting}"),
+                    title=f"{hit.get('model')} — error {hit.get('error_code')}",
+                    diagnostic=meaning[:300] or f"Error code {code}.",
+                    customer_steps=steps,
+                )
+    return None
+
+
 def _pick_step_tips(
     matches: list[KnowledgeEntry],
     fallback: tuple[str, ...],
@@ -57,7 +89,7 @@ def _pick_step_tips(
         tips.append(text.strip())
 
     for entry in matches:
-        if entry.source in ("freshdesk", "freshdesk_kb"):
+        if entry.source in ("freshdesk", "freshdesk_kb", "fonz_error_code"):
             for step in entry.customer_steps[:max_tips]:
                 _add(step)
             if tips:
@@ -65,7 +97,7 @@ def _pick_step_tips(
 
     if len(tips) < max_tips:
         for entry in matches:
-            if entry.source in ("freshdesk", "freshdesk_kb"):
+            if entry.source in ("freshdesk", "freshdesk_kb", "fonz_error_code"):
                 continue
             for step in entry.customer_steps[:1]:
                 _add(step)
@@ -137,6 +169,8 @@ def build_step_enrichment(
     path_text = enrich_path_text(build_path_text(turns), ticket)
     defect_category = infer_defect_category_from_turns(turns)
 
+    fonz_entry = _fonz_match_from_turns(model_name, turns)
+
     matches = contextual_search_knowledge(
         path_text=path_text,
         issue_type=issue_type,
@@ -144,6 +178,10 @@ def build_step_enrichment(
         model_name=model_name,
         limit=2,
     )
+    if fonz_entry:
+        matches = [fonz_entry] + [m for m in matches if m.title != fonz_entry.title]
+        matches = matches[:2]
+
     fallback = _collect_fallback_hints(turns, node_id)
     tips = _pick_step_tips(matches, fallback)
 

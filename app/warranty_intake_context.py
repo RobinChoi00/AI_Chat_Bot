@@ -30,6 +30,13 @@ def persist_intake_summary(
     if raw_text and raw_text != primary:
         ticket.set_collected("intake_raw_message", raw_text[:800])
 
+    try:
+        from warranty_error_code_gate import capture_error_code_from_intake  # noqa: WPS433
+
+        capture_error_code_from_intake(ticket, raw_text or primary)
+    except Exception:
+        pass
+
 
 def get_intake_summary(ticket) -> str:
     if ticket is None:

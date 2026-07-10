@@ -51,8 +51,17 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
         "channel",
         "caller_phone",
         "followup_sent_at",
+        "error_code",
+        "fonz_meaning",
+        "fonz_parts_internal",
+        "fonz_severity",
+        "fonz_lookup_failed",
+        "fonz_category_aligned",
+        "error_code_gate_completed",
+        "pending_terminal",
       ].includes(key)
   );
+  const fonz = ticket.fonz_diagnostics;
   const customerEmail = ticket.customer_email;
   const isPhone = (ticket.channel || "").toLowerCase() === "phone";
 
@@ -162,6 +171,50 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
           <Field label="Updated" value={formatDate(ticket.updated_at)} />
         </dl>
       </section>
+
+      {/* ── Fonz error-code diagnostics (internal) ───────────────── */}
+      {fonz?.error_code && (
+        <section className="rounded-xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-amber-800">
+            Fonz Error Code (Internal)
+          </h2>
+          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <Field label="Error Code" value={<span className="font-mono font-semibold">{fonz.error_code}</span>} />
+            <Field label="Severity" value={fonz.severity} />
+            <Field label="Gate" value={fonz.gate_completed} />
+            <Field
+              label="Category Aligned"
+              value={fonz.category_aligned ? "Yes — matches defect path" : "No / unknown"}
+            />
+            <Field
+              label="Lookup"
+              value={
+                fonz.lookup_failed
+                  ? "Not found in Fonz list for this model"
+                  : fonz.match_model
+                    ? `Matched ${fonz.match_model}`
+                    : "—"
+              }
+            />
+            {fonz.meaning && (
+              <div className="col-span-full">
+                <Field
+                  label="Meaning"
+                  value={<p className="whitespace-pre-wrap text-sm">{fonz.meaning}</p>}
+                />
+              </div>
+            )}
+            {fonz.parts_internal && (
+              <div className="col-span-full">
+                <Field
+                  label="Parts (internal)"
+                  value={<p className="whitespace-pre-wrap text-sm">{fonz.parts_internal}</p>}
+                />
+              </div>
+            )}
+          </dl>
+        </section>
+      )}
 
       {/* ── Admin review ─────────────────────────────────────────── */}
       {(ticket.admin_decision || ticket.admin_note || ticket.decided_by) && (

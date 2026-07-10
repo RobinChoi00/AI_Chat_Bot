@@ -28,6 +28,18 @@ export type AdminDecision =
 // Core models
 // ------------------------------------------------------------
 
+export interface AdminFonzDiagnostics {
+  error_code: string | null;
+  meaning: string | null;
+  parts_internal: string | null;
+  severity: string | null;
+  lookup_failed: boolean;
+  category_aligned: boolean;
+  gate_completed: string | null;
+  match_model: string | null;
+  match_code: string | null;
+}
+
 export interface AdminWarrantyTicket {
   ticket_id: string;
   case_reference?: string | null;
@@ -48,6 +60,7 @@ export interface AdminWarrantyTicket {
   customer_message: string | null;
   freshdesk_ticket_id?: string | null;
   freshdesk_url?: string | null;
+  fonz_diagnostics?: AdminFonzDiagnostics | null;
   created_at: string | null;
   updated_at: string | null;
 }

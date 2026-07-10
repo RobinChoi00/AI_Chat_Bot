@@ -41,7 +41,15 @@ def build_assistant_message_bundle(
             assistant_message = (
                 str(terminal_enrichment.get("message") or "").strip() or None
             )
-    else:
+    elif node.get("node_id"):
+        from warranty_error_code_gate import (  # noqa: WPS433
+            build_gate_assistant_message,
+            is_gate_node,
+        )
+
+        if is_gate_node(str(node.get("node_id") or "")):
+            assistant_message = build_gate_assistant_message(ticket, node)
+    if assistant_message is None and node.get("type") != "terminal":
         from warranty_step_enrichment import build_step_enrichment  # noqa: WPS433
 
         step_enrichment = build_step_enrichment(engine, ticket, node)

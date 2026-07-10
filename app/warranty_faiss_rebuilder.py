@@ -64,6 +64,7 @@ class RebuildStatus:
     ticket_docs: int = 0
     kb_docs: int = 0
     csv_docs: int = 0
+    fonz_docs: int = 0
     total_docs: int = 0
     error: str = ""
     output_path: str = ""
@@ -199,6 +200,20 @@ def _collect_documents() -> list:
     except Exception as exc:  # noqa: BLE001
         logger.warning("Skipping CSV knowledge in rebuild: %s", exc)
 
+    try:
+        import sys as _sys
+
+        app_dir = str(_PROJECT_ROOT / "app")
+        if app_dir not in _sys.path:
+            _sys.path.insert(0, app_dir)
+        from fonz_warranty_data import fonz_faiss_documents  # noqa: WPS433
+
+        fonz_path = _PROJECT_ROOT / "data" / "fonz_error_codes.json"
+        if fonz_path.is_file():
+            docs.extend(fonz_faiss_documents(error_codes_path=fonz_path))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Skipping Fonz error codes in rebuild: %s", exc)
+
     return docs
 
 
@@ -265,7 +280,15 @@ def rebuild_freshdesk_qa_index() -> dict[str, Any]:
         status.kb_docs = sum(
             1 for d in docs if d.metadata.get("source") == "freshdesk_kb"
         )
-        status.csv_docs = status.total_docs - status.ticket_docs - status.kb_docs
+        status.fonz_docs = sum(
+            1 for d in docs if d.metadata.get("source") == "fonz"
+        )
+        status.csv_docs = (
+            status.total_docs
+            - status.ticket_docs
+            - status.kb_docs
+            - status.fonz_docs
+        )
 
         if not docs:
             status.ok = False

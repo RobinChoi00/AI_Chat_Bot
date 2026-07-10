@@ -431,48 +431,39 @@ def build_terminal_enrichment(
     action = str(node.get("action") or "")
 
     if node_id == "install_air_hose_terminal":
-        return _install_air_hose_message(engine, ticket_id, ticket)
-
-    if node_id == "defect_voice_not_working_terminal":
-        return _voice_self_help_message(engine, ticket_id, ticket, false_triggers=False)
-
-    if node_id == "defect_voice_false_triggers_terminal":
-        return _voice_self_help_message(engine, ticket_id, ticket, false_triggers=True)
-
-    if node_id in _ROLLING_NOISE_TERMINALS:
-        return _rolling_noise_message(engine, ticket_id, ticket)
-
-    if node_id in _REMOTE_TERMINALS:
-        return _remote_self_help_message(engine, ticket_id, ticket, node_id)
-
-    if node_id in _POWER_TERMINALS:
-        return _power_self_help_message(engine, ticket_id, ticket, node_id)
-
-    if node_id in _AIR_TERMINALS:
-        return _air_self_help_message(engine, ticket_id, ticket, node_id)
-
-    if node_id in _FOOTREST_TERMINALS:
-        return _footrest_self_help_message(engine, ticket_id, ticket, node_id)
-
-    if node_id in _COSMETIC_TERMINALS:
-        return _cosmetic_self_help_message(engine, ticket_id, ticket, node_id)
-
-    if node_id in _RECLINE_TERMINALS:
-        return _recline_self_help_message(engine, ticket_id, ticket, node_id)
-
-    if node_id in _HEATING_TERMINALS:
-        return _heating_self_help_message(engine, ticket_id, ticket, node_id)
-
-    if node_id in _DELIVERY_TERMINALS:
-        return _delivery_self_help_message(engine, ticket_id, ticket, node_id)
-
-    if node_id == "install_send_video" or (
+        result = _install_air_hose_message(engine, ticket_id, ticket)
+    elif node_id == "defect_voice_not_working_terminal":
+        result = _voice_self_help_message(engine, ticket_id, ticket, false_triggers=False)
+    elif node_id == "defect_voice_false_triggers_terminal":
+        result = _voice_self_help_message(engine, ticket_id, ticket, false_triggers=True)
+    elif node_id in _ROLLING_NOISE_TERMINALS:
+        result = _rolling_noise_message(engine, ticket_id, ticket)
+    elif node_id in _REMOTE_TERMINALS:
+        result = _remote_self_help_message(engine, ticket_id, ticket, node_id)
+    elif node_id in _POWER_TERMINALS:
+        result = _power_self_help_message(engine, ticket_id, ticket, node_id)
+    elif node_id in _AIR_TERMINALS:
+        result = _air_self_help_message(engine, ticket_id, ticket, node_id)
+    elif node_id in _FOOTREST_TERMINALS:
+        result = _footrest_self_help_message(engine, ticket_id, ticket, node_id)
+    elif node_id in _COSMETIC_TERMINALS:
+        result = _cosmetic_self_help_message(engine, ticket_id, ticket, node_id)
+    elif node_id in _RECLINE_TERMINALS:
+        result = _recline_self_help_message(engine, ticket_id, ticket, node_id)
+    elif node_id in _HEATING_TERMINALS:
+        result = _heating_self_help_message(engine, ticket_id, ticket, node_id)
+    elif node_id in _DELIVERY_TERMINALS:
+        result = _delivery_self_help_message(engine, ticket_id, ticket, node_id)
+    elif node_id == "install_send_video" or (
         issue_type == "installation" and action == "send_info"
     ):
         model_name = str(getattr(ticket, "model_name", "") or "")
-        return _install_message(model_name, base_prompt)
+        result = _install_message(model_name, base_prompt)
+    elif action == "awaiting_admin":
+        result = _admin_review_terminal_message(engine, ticket_id, ticket, node)
+    else:
+        result = _workflow_end_message(engine, ticket_id, ticket, node)
 
-    if action == "awaiting_admin":
-        return _admin_review_terminal_message(engine, ticket_id, ticket, node)
+    from warranty_error_code_gate import append_fonz_to_terminal_enrichment  # noqa: WPS433
 
-    return _workflow_end_message(engine, ticket_id, ticket, node)
+    return append_fonz_to_terminal_enrichment(result, ticket)

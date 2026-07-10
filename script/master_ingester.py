@@ -90,6 +90,21 @@ class MasterIngester:
                 content = f"Customer Question:\n{t['question']}\n\nOfficial Answer / Resolution:\n{t['answer']}"
                 self.domain_docs["freshdesk_qa"].append(Document(page_content=content, metadata={"source": "freshdesk", "ticket_id": t.get("ticket_id")}))
 
+    def process_fonz_error_codes(self):
+        print("🔍 [3.5/7] Fonz error-code JSON 파싱 중... -> [freshdesk_qa] 할당")
+        try:
+            sys.path.insert(0, os.path.join(BASE_DIR, "app"))
+            from fonz_warranty_data import fonz_faiss_documents  # noqa: WPS433
+        except ImportError:
+            print("   ⚠️  fonz_warranty_data not available — skipping.")
+            return
+        docs = fonz_faiss_documents()
+        if not docs:
+            print("   ⚠️  data/fonz_error_codes.json missing — run script/ingest_fonz_warranty.py")
+            return
+        self.domain_docs["freshdesk_qa"].extend(docs)
+        print(f"   ✅ Fonz error codes {len(docs)}건 로드 완료")
+
     # ==========================================
     # 🧠 2번 뇌: web_data (정책 & 정보 전용)
     # ==========================================
@@ -566,6 +581,7 @@ if __name__ == "__main__":
     ingester.process_error_manuals()    # Auto-Check, fault_judgment
     ingester.process_qa_reports()       # Warranty Daily Report - Q&A
     ingester.process_freshdesk_tickets()# freshdesk_tickets.json
+    ingester.process_fonz_error_codes() # fonz_error_codes.json
     
     # [Policy/Web 뇌세포]
     ingester.process_word_policies()    # Warranty.docx, Sales Policy.docx (glob으로 한 번에 2개 섭취)

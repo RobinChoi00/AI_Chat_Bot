@@ -82,6 +82,18 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from warranty_error_code_gate import (
+    COL_ERROR_CODE,
+    COL_GATE_COMPLETED,
+    COL_PENDING_TERMINAL,
+    GATE_ENTER_ID,
+    GATE_PICK_ID,
+    GATE_VISIBLE_ID,
+    finalize_error_code_submission,
+    intercept_terminal_node_id,
+    is_gate_node,
+    resolve_gate_node,
+)
 from warranty_models import (
     _SessionFactory,
     WarrantyTicket,
@@ -169,6 +181,52 @@ def _match_option(options: list[dict], raw_answer: str) -> Optional[dict]:
         pass
 
     return None
+
+
+def _resolve_node(node_id: str, ticket: Optional[WarrantyTicket] = None) -> Optional[dict]:
+    if is_gate_node(node_id):
+        if ticket is None:
+            return None
+        return resolve_gate_node(node_id, ticket)
+    node = _NODES.get(node_id)
+    if node is None:
+        return None
+    return {"node_id": node_id, **node}
+
+
+def _apply_pending_terminal(ticket: WarrantyTicket, pending_id: str) -> dict:
+    pending_node = _NODES[pending_id]
+    ticket.current_node_id = pending_id
+    ticket.status = _terminal_status(pending_node.get("action", "awaiting_admin"))
+    return pending_node
+
+
+def _build_submit_result(
+    *,
+    next_node_id: str,
+    previous_node_id: str,
+    next_node: dict,
+    answer_key: str,
+) -> dict:
+    is_terminal = next_node.get("type") == "terminal"
+    evidence_required: list[str] = []
+    evidence_email: Optional[str] = None
+    terminal_class: Optional[str] = None
+    if is_terminal:
+        action = next_node.get("action", "awaiting_admin")
+        terminal_class = _terminal_status(action)
+        evidence_required = next_node.get("evidence_required", [])
+        evidence_email = next_node.get("evidence_email")
+    return {
+        "next_node_id":      next_node_id,
+        "previous_node_id":  previous_node_id,
+        "next_node":         {"node_id": next_node_id, **next_node},
+        "answer_key":        answer_key,
+        "is_terminal":       is_terminal,
+        "terminal_class":    terminal_class,
+        "evidence_required": evidence_required,
+        "evidence_email":    evidence_email,
+    }
 
 
 def _terminal_status(action: str) -> str:
@@ -264,10 +322,7 @@ class WarrantyEngine:
             if not ticket:
                 return None
             node_id = ticket.current_node_id
-        node = _NODES.get(node_id)
-        if node is None:
-            return None
-        return {"node_id": node_id, **node}
+        return _resolve_node(node_id, ticket)
 
     @staticmethod
     def get_ticket(ticket_id: str) -> Optional[WarrantyTicket]:
@@ -453,7 +508,7 @@ class WarrantyEngine:
                 )
 
             node_id = ticket.current_node_id
-            node = _NODES.get(node_id)
+            node = _resolve_node(node_id, ticket)
             if node is None:
                 raise ValueError(
                     f"Flowchart node {node_id!r} not found. "
@@ -466,6 +521,137 @@ class WarrantyEngine:
                 raise ValueError(
                     f"Node {node_id!r} is a terminal — no answer expected."
                 )
+
+            # -----------------------------------------------------------
+            # Virtual error-code gate (engine intercept)
+            # -----------------------------------------------------------
+            if is_gate_node(node_id):
+                pending_id = str(ticket.get_collected().get(COL_PENDING_TERMINAL) or "")
+                if not pending_id or pending_id not in _NODES:
+                    raise ValueError(
+                        "Error-code gate state is invalid — please contact support."
+                    )
+
+                if node_id == GATE_VISIBLE_ID:
+                    options = node.get("options", [])
+                    matched = _match_option(options, raw_answer)
+                    if matched is None:
+                        valid_keys = [
+                            o.get("answer_key", o.get("label")) for o in options
+                        ]
+                        raise ValueError(
+                            f"Answer {raw_answer!r} did not match any option at node "
+                            f"{node_id!r}. Valid answer_keys: {valid_keys}"
+                        )
+                    answer_key = str(matched.get("answer_key") or raw_answer)
+                    turn = WarrantyTurn(
+                        ticket_id=ticket_id,
+                        node_id=node_id,
+                        node_type=node_type,
+                        node_prompt=node.get("prompt", ""),
+                        customer_answer=(
+                            customer_display if customer_display is not None else raw_answer
+                        ),
+                        answer_key=answer_key,
+                    )
+                    db.add(turn)
+
+                    if answer_key == "error_code_yes":
+                        ticket.current_node_id = GATE_PICK_ID
+                        next_node = resolve_gate_node(GATE_PICK_ID, ticket) or {}
+                        return _build_submit_result(
+                            next_node_id=GATE_PICK_ID,
+                            previous_node_id=node_id,
+                            next_node=next_node,
+                            answer_key=answer_key,
+                        )
+
+                    ticket.set_collected(COL_GATE_COMPLETED, "skipped")
+                    pending_node = _apply_pending_terminal(ticket, pending_id)
+                    ticket.set_collected(COL_PENDING_TERMINAL, "")
+                    return _build_submit_result(
+                        next_node_id=pending_id,
+                        previous_node_id=node_id,
+                        next_node=pending_node,
+                        answer_key=answer_key,
+                    )
+
+                if node_id == GATE_PICK_ID:
+                    from error_code_lookup import parse_pick_answer_key  # noqa: WPS433
+
+                    options = node.get("options", [])
+                    matched = _match_option(options, raw_answer)
+                    if matched is None:
+                        valid_keys = [
+                            o.get("answer_key", o.get("label")) for o in options
+                        ]
+                        raise ValueError(
+                            f"Answer {raw_answer!r} did not match any option at node "
+                            f"{node_id!r}. Valid answer_keys: {valid_keys}"
+                        )
+                    answer_key = str(matched.get("answer_key") or raw_answer)
+                    turn = WarrantyTurn(
+                        ticket_id=ticket_id,
+                        node_id=node_id,
+                        node_type=node_type,
+                        node_prompt=node.get("prompt", ""),
+                        customer_answer=(
+                            customer_display if customer_display is not None else raw_answer
+                        ),
+                        answer_key=answer_key,
+                    )
+                    db.add(turn)
+
+                    if answer_key == "error_code_other":
+                        ticket.current_node_id = GATE_ENTER_ID
+                        next_node = resolve_gate_node(GATE_ENTER_ID, ticket) or {}
+                        return _build_submit_result(
+                            next_node_id=GATE_ENTER_ID,
+                            previous_node_id=node_id,
+                            next_node=next_node,
+                            answer_key=answer_key,
+                        )
+
+                    picked_code = parse_pick_answer_key(answer_key)
+                    if not picked_code:
+                        raise ValueError(
+                            f"Could not parse error code from answer_key {answer_key!r}."
+                        )
+                    finalize_error_code_submission(ticket, picked_code)
+                    ticket.set_collected(COL_GATE_COMPLETED, "picked")
+                    pending_node = _apply_pending_terminal(ticket, pending_id)
+                    ticket.set_collected(COL_PENDING_TERMINAL, "")
+                    return _build_submit_result(
+                        next_node_id=pending_id,
+                        previous_node_id=node_id,
+                        next_node=pending_node,
+                        answer_key=answer_key,
+                    )
+
+                if node_id == GATE_ENTER_ID:
+                    text = (
+                        customer_display if customer_display is not None else raw_answer
+                    ).strip()
+                    finalize_error_code_submission(ticket, text)
+
+                    turn = WarrantyTurn(
+                        ticket_id=ticket_id,
+                        node_id=node_id,
+                        node_type=node_type,
+                        node_prompt=node.get("prompt", ""),
+                        customer_answer=text,
+                        answer_key=COL_ERROR_CODE,
+                    )
+                    db.add(turn)
+                    ticket.set_collected(COL_GATE_COMPLETED, "entered")
+                    pending_node = _apply_pending_terminal(ticket, pending_id)
+                    ticket.set_collected(COL_PENDING_TERMINAL, "")
+                    return _build_submit_result(
+                        next_node_id=pending_id,
+                        previous_node_id=node_id,
+                        next_node=pending_node,
+                        answer_key=COL_ERROR_CODE,
+                    )
 
             # -----------------------------------------------------------
             # Determine the next node
@@ -520,35 +706,36 @@ class WarrantyEngine:
                 ticket.model_name = resolve_model_name(display) or display
 
             # -----------------------------------------------------------
-            # Transition to next node
+            # Transition to next node (optional error-code gate intercept)
             # -----------------------------------------------------------
             next_node = _NODES[next_node_id]
-            is_terminal = next_node.get("type") == "terminal"
-
-            ticket.current_node_id = next_node_id
-            if is_terminal:
-                ticket.status = _terminal_status(next_node.get("action", "awaiting_admin"))
+            gate_id = intercept_terminal_node_id(ticket, next_node_id)
+            if gate_id and next_node.get("type") == "terminal":
+                ticket.set_collected(COL_PENDING_TERMINAL, next_node_id)
+                next_node_id = gate_id
+                next_node = resolve_gate_node(gate_id, ticket) or {}
+                is_terminal = False
+                ticket.current_node_id = next_node_id
+            else:
+                is_terminal = next_node.get("type") == "terminal"
+                ticket.current_node_id = next_node_id
+                if is_terminal:
+                    ticket.status = _terminal_status(next_node.get("action", "awaiting_admin"))
 
         # Build result (outside session — ticket is detached but expire_on_commit=False)
-        evidence_required: list[str] = []
-        evidence_email: Optional[str] = None
-        terminal_class: Optional[str] = None
         if is_terminal:
-            action = next_node.get("action", "awaiting_admin")
-            terminal_class = _terminal_status(action)
-            evidence_required = next_node.get("evidence_required", [])
-            evidence_email = next_node.get("evidence_email")
-
-        return {
-            "next_node_id":      next_node_id,
-            "previous_node_id":  node_id,
-            "next_node":         {"node_id": next_node_id, **next_node},
-            "answer_key":        answer_key,
-            "is_terminal":       is_terminal,
-            "terminal_class":    terminal_class,
-            "evidence_required": evidence_required,
-            "evidence_email":    evidence_email,
-        }
+            return _build_submit_result(
+                next_node_id=next_node_id,
+                previous_node_id=node_id,
+                next_node=next_node,
+                answer_key=answer_key,
+            )
+        return _build_submit_result(
+            next_node_id=next_node_id,
+            previous_node_id=node_id,
+            next_node=next_node,
+            answer_key=answer_key,
+        )
 
     # ------------------------------------------------------------------
     # Admin decision (Phase D/E)

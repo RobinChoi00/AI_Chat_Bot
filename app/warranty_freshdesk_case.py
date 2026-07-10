@@ -77,6 +77,17 @@ def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
     email = resolve_customer_email(ticket, turns=turns)
     if email:
         lines.append(f"Customer email: {email}")
+
+    error_code = str(collected.get("error_code") or "").strip()
+    if error_code:
+        lines.append(f"Customer error code: {error_code}")
+        fonz_meaning = str(collected.get("fonz_meaning") or "").strip()
+        fonz_parts = str(collected.get("fonz_parts_internal") or "").strip()
+        if fonz_meaning:
+            lines.append(f"Fonz meaning: {fonz_meaning[:400]}")
+        if fonz_parts:
+            lines.append(f"Fonz parts (internal): {fonz_parts[:300]}")
+
     tracking_raw = collected.get("tracking_snapshot")
     if tracking_raw:
         lines.append("")

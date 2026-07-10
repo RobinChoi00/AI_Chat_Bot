@@ -5,6 +5,7 @@ Sources (merged at load time):
   - raw_data/Warranty Daily Report - Q&A.csv
   - data/freshdesk_tickets.json  (Freshdesk API ETL output)
   - raw_data/Auto-Check.csv      (error-code troubleshooting steps)
+  - data/fonz_error_codes.json   (Fonz All-in-one Warranty List)
 
 Used by the warranty workflow to suggest customer-safe steps BEFORE asking for email.
 """
@@ -24,6 +25,7 @@ _QA_PATH = _PROJECT_ROOT / "raw_data" / "Warranty Daily Report - Q&A.csv"
 _FRESHDESK_PATH = _PROJECT_ROOT / "data" / "freshdesk_tickets.json"
 _FRESHDESK_KB_PATH = _PROJECT_ROOT / "data" / "freshdesk_solutions.json"
 _AUTOCHECK_PATH = _PROJECT_ROOT / "raw_data" / "Auto-Check.csv"
+_FONZ_ERROR_PATH = _PROJECT_ROOT / "data" / "fonz_error_codes.json"
 
 _DEFECT_CATEGORY_MAP: dict[str, str] = {
     "power": "power",
@@ -432,9 +434,52 @@ def _load_freshdesk_kb_entries() -> list[KnowledgeEntry]:
     return entries
 
 
+def _load_fonz_error_entries() -> list[KnowledgeEntry]:
+    if not _FONZ_ERROR_PATH.is_file():
+        return []
+
+    try:
+        with _FONZ_ERROR_PATH.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    records = payload.get("entries") if isinstance(payload, dict) else payload
+    if not isinstance(records, list):
+        return []
+
+    entries: list[KnowledgeEntry] = []
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        model = str(row.get("model") or "").strip()
+        code = str(row.get("error_code") or "").strip()
+        meaning = str(row.get("meaning") or "").strip()
+        troubleshooting = str(row.get("troubleshooting") or "").strip()
+        if not model or not code:
+            continue
+        steps = _extract_customer_steps(troubleshooting, meaning)
+        if not steps and troubleshooting:
+            trimmed = troubleshooting.strip()
+            if len(trimmed) >= 12 and not _is_internal(trimmed):
+                steps = (trimmed[:_MAX_CUSTOMER_STEP_LEN],)
+        blob = f"{meaning} {troubleshooting} error {code}"
+        entries.append(
+            KnowledgeEntry(
+                source="fonz_error_code",
+                category=_infer_category(blob),
+                title=f"{model} — error {code}",
+                diagnostic=meaning[:300] or f"Error code {code} on {model}.",
+                customer_steps=steps,
+            )
+        )
+    return entries
+
+
 @lru_cache(maxsize=1)
 def load_knowledge_entries() -> tuple[KnowledgeEntry, ...]:
     combined: list[KnowledgeEntry] = []
+    combined.extend(_load_fonz_error_entries())
     combined.extend(_load_qa_entries())
     combined.extend(_load_freshdesk_entries())
     combined.extend(_load_freshdesk_kb_entries())
@@ -445,6 +490,18 @@ def load_knowledge_entries() -> tuple[KnowledgeEntry, ...]:
 def clear_knowledge_cache() -> None:
     """Invalidate cached knowledge after freshdesk_tickets.json is updated."""
     load_knowledge_entries.cache_clear()
+    try:
+        from error_code_lookup import clear_error_code_cache  # noqa: WPS433
+
+        clear_error_code_cache()
+    except ImportError:
+        pass
+    try:
+        from warranty_embeddings import clear_embedding_cache  # noqa: WPS433
+
+        clear_embedding_cache()
+    except ImportError:
+        pass
 
 
 def _score_entry(
@@ -466,6 +523,8 @@ def _score_entry(
         score += 1.5
     elif entry.source == "auto_check":
         score += 1.0
+    elif entry.source == "fonz_error_code":
+        score += 2.5
     elif entry.source == "freshdesk_kb":
         # KB articles are curated help content and usually more precise
         # than raw ticket threads — give them a small bump.

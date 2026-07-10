@@ -453,9 +453,33 @@ def tool_get_repair_help(
     error_code: Optional[str] = None,
 ) -> str:
     """Look up repair / error code information."""
+    suppress = "\nFOOTER_HINT: SUPPRESS_LEAD_FOOTER (this is a service issue, do not pitch sales)."
+
+    try:
+        from error_code_lookup import (  # noqa: WPS433
+            extract_error_codes_from_text,
+            format_repair_help,
+            lookup_error_code,
+        )
+
+        codes: list[str] = []
+        if error_code and str(error_code).strip():
+            codes.append(str(error_code).strip())
+        codes.extend(extract_error_codes_from_text(issue_description))
+        seen: set[str] = set()
+        for code in codes:
+            norm = code.upper().replace(" ", "")
+            if not norm or norm in seen:
+                continue
+            seen.add(norm)
+            hit = lookup_error_code(None, norm)
+            if hit:
+                return format_repair_help(hit) + suppress
+    except ImportError:
+        pass
+
     query = f"error code {error_code} {issue_description}" if error_code else issue_description
     docs = qa_retriever.search(query, k=5)
-    suppress = "\nFOOTER_HINT: SUPPRESS_LEAD_FOOTER (this is a service issue, do not pitch sales)."
     if not docs:
         return "NO_RESULTS: No specific repair guide found." + suppress
     lines = ["Relevant repair / error info:"]

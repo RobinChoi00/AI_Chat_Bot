@@ -1313,6 +1313,7 @@ _ADMIN_ALLOWED_STATUSES = {
 
 def _serialize_admin_ticket(ticket, turns=None, evidences=None) -> dict:
     from warranty_email import resolve_customer_email  # noqa: WPS433
+    from warranty_error_code_gate import build_admin_fonz_payload  # noqa: WPS433
 
     payload = ticket.to_dict()
     payload["case_reference"] = _case_reference_for(ticket)
@@ -1322,6 +1323,7 @@ def _serialize_admin_ticket(ticket, turns=None, evidences=None) -> dict:
     payload["channel"] = collected.get("channel")
     payload["caller_phone"] = collected.get("caller_phone")
     payload["customer_email"] = resolve_customer_email(ticket, turns=turns, evidences=evidences)
+    payload["fonz_diagnostics"] = build_admin_fonz_payload(ticket)
     return payload
 
 
