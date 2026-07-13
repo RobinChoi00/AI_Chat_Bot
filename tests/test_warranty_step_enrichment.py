@@ -127,8 +127,12 @@ def test_build_step_enrichment_uses_intake_summary_in_search(monkeypatch):
     }
 
     result = step_enrich.build_step_enrichment(engine, ticket, node)
-    assert result is None
+    assert result is not None
+    assert result["phase"] == "workflow_step"
+    assert result.get("top_match") is None
+    assert result.get("tips")
     assert "Footrest air not inflating" in captured.get("path_text", "")
+    assert "You mentioned" in result["message"]
 
 
 def test_build_step_enrichment_skips_delivery_path(monkeypatch):
@@ -259,3 +263,65 @@ def test_serialize_ticket_state_includes_step_enrichment(monkeypatch):
     get_body = get_resp.json()
     assert get_body.get("assistant_message") == "Freshdesk tip\n\nNext question?"
     assert get_body.get("step_enrichment", {}).get("phase") == "workflow_step"
+
+
+def test_pick_step_tips_skips_logistics_and_uses_fallback():
+    bad = KnowledgeEntry(
+        source="freshdesk",
+        category="mech",
+        title="#2885577 You received a message from Angelica via Warranty Inquiry form",
+        diagnostic="Warranty inquiry",
+        customer_steps=(
+            "Our technician will reach out to arrange a return visit.",
+            "We have asked the technician to prioritize your repair.",
+        ),
+    )
+    tips = step_enrich._pick_step_tips(
+        [bad],
+        (
+            "Note which recline function fails and whether the stuck part moves when the chair powers off.",
+            "Try the same function from the side panel buttons if your model has them.",
+        ),
+    )
+    assert tips
+    assert all("technician" not in t.lower() for t in tips)
+    assert any("recline function" in t.lower() for t in tips)
+
+
+def test_build_step_enrichment_hides_unhelpful_top_match(monkeypatch):
+    fake_matches = [
+        KnowledgeEntry(
+            source="freshdesk",
+            category="mech",
+            title="#2885577 You received a message from Angelica via Warranty Inquiry form",
+            diagnostic="Repair follow-up",
+            customer_steps=(
+                "Our technician will reach out to arrange a return visit.",
+            ),
+        )
+    ]
+    monkeypatch.setattr(step_enrich, "contextual_search_knowledge", lambda **kwargs: fake_matches)
+
+    engine = _FakeEngine(
+        [
+            _turn("warranty", node_id="root"),
+            _turn("defect", node_id="issue_type"),
+            _turn("recline", node_id="defect_problem_type"),
+        ]
+    )
+    ticket = SimpleNamespace(
+        ticket_id="t1",
+        issue_type="defect",
+        model_name="Osaki 4D Achilles",
+    )
+    node = {
+        "node_id": "defect_recline_which",
+        "type": "question",
+        "prompt": "Which recline function is not working?",
+    }
+
+    result = step_enrich.build_step_enrichment(engine, ticket, node)
+    assert result is not None
+    assert result.get("top_match") is None
+    assert result.get("tips")
+    assert all("technician" not in t.lower() for t in result["tips"])

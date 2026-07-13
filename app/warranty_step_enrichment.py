@@ -25,11 +25,12 @@ import logging
 from typing import Any, Optional
 
 from warranty_intake_context import enrich_path_text, intake_aware_step_summary
-from warranty_knowledge import KnowledgeEntry, contextual_search_knowledge
+from warranty_knowledge import KnowledgeEntry, contextual_search_knowledge, is_presentable_match_title
 from warranty_self_help import (
     _collect_fallback_hints,
     _friendly_match_summary,
     build_path_text,
+    category_fallback_hints,
     infer_defect_category_from_turns,
 )
 from warranty_step_paraphrase import paraphrase_step_message
@@ -108,6 +109,27 @@ def _fonz_match_from_turns(model_name: str, turns: list) -> Optional[KnowledgeEn
     return None
 
 
+# Prefer curated sources over raw Freshdesk ticket threads in mid-flow tips.
+_STEP_SOURCE_PRIORITY: dict[str, int] = {
+    "fonz_error_code": 0,
+    "qa_csv": 1,
+    "auto_check": 2,
+    "freshdesk_kb": 3,
+    "freshdesk_qa": 3,
+    "freshdesk": 5,
+}
+
+
+def _step_source_rank(entry: KnowledgeEntry) -> int:
+    return _STEP_SOURCE_PRIORITY.get(entry.source, 10)
+
+
+def _usable_step_text(text: str) -> bool:
+    from warranty_knowledge import _is_customer_safe_step  # noqa: WPS433
+
+    return _is_customer_safe_step(text)
+
+
 def _pick_step_tips(
     matches: list[KnowledgeEntry],
     fallback: tuple[str, ...],
@@ -118,30 +140,38 @@ def _pick_step_tips(
     seen: set[str] = set()
 
     def _add(text: str) -> None:
+        if not _usable_step_text(text):
+            return
         key = text.lower().strip()
         if not key or key in seen:
             return
         seen.add(key)
         tips.append(text.strip())
 
-    for entry in matches:
-        if entry.source in ("freshdesk", "freshdesk_kb", "fonz_error_code"):
+    ordered = sorted(matches, key=_step_source_rank)
+    curated_sources = frozenset({"fonz_error_code", "qa_csv", "auto_check", "freshdesk_kb", "freshdesk_qa"})
+
+    for entry in ordered:
+        if entry.source in curated_sources:
             for step in entry.customer_steps[:max_tips]:
                 _add(step)
             if tips:
                 break
 
     if len(tips) < max_tips:
-        for entry in matches:
-            if entry.source in ("freshdesk", "freshdesk_kb", "fonz_error_code"):
-                continue
-            for step in entry.customer_steps[:1]:
-                _add(step)
-            if len(tips) >= max_tips:
-                break
+        for entry in ordered:
+            if entry.source == "freshdesk":
+                for step in entry.customer_steps[:max_tips]:
+                    _add(step)
+                if tips:
+                    break
 
     for hint in fallback:
-        _add(hint)
+        key = hint.lower().strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        tips.append(hint.strip())
         if len(tips) >= max_tips:
             break
 
@@ -222,14 +252,19 @@ def build_step_enrichment(
         matches = matches[:2]
 
     fallback = _collect_fallback_hints(turns, node_id)
+    if not fallback and defect_category:
+        fallback = category_fallback_hints(defect_category)
     tips = _pick_step_tips(matches, fallback)
 
-    if not matches and not tips:
+    presentable_matches = [
+        m for m in matches if is_presentable_match_title(m.title)
+    ]
+    if not tips and not presentable_matches:
         return None
 
-    if matches:
+    if presentable_matches:
         summary = _friendly_match_summary(
-            matches,
+            presentable_matches,
             defect_category=defect_category,
             model_name=model_name,
             issue_type=issue_type,
@@ -266,8 +301,12 @@ def build_step_enrichment(
     return {
         "message": message,
         "phase": "workflow_step",
-        "sources": [entry.source for entry in matches[:2]],
-        "top_match": matches[0].title if matches else None,
+        "sources": [entry.source for entry in (presentable_matches or matches)[:2]],
+        "top_match": (
+            presentable_matches[0].title
+            if presentable_matches
+            else None
+        ),
         "tips": tips,
         "paraphrased": paraphrased,
     }

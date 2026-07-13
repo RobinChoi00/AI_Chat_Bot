@@ -113,6 +113,44 @@ _BOILERPLATE_MARKERS = (
     "courtesy email to inform",
 )
 
+# Agent follow-up / logistics — not actionable DIY for mid-flow enrichment.
+_LOGISTICS_OR_FOLLOWUP_MARKERS = (
+    "technician will",
+    "technician to",
+    "tech will",
+    "in-house tech",
+    "our technician",
+    "we've asked the technician",
+    "we have asked the technician",
+    "we will dispatch",
+    "we'll dispatch",
+    "reach out",
+    "contact you to",
+    "contact you within",
+    "return visit",
+    "set up a visit",
+    "schedule a visit",
+    "arrange a visit",
+    "prioritize your repair",
+    "prioritize the repair",
+    "follow up with you",
+    "follow-up with you",
+    "within 24 hours",
+    "within 48 hours",
+    "business days",
+    "warranty inquiry form",
+    "received a message from",
+    "via warranty inquiry",
+)
+
+_UNHELPFUL_MATCH_TITLE_MARKERS = (
+    "warranty inquiry form",
+    "received a message from",
+    "via warranty inquiry",
+    "contact form",
+    "web form",
+)
+
 _MAX_CUSTOMER_STEP_LEN = 220
 _PHONE_RE = re.compile(r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b")
 _ZIP_RE = re.compile(r"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b")
@@ -190,11 +228,21 @@ def _is_customer_safe_step(text: str) -> bool:
         return False
     if any(marker in lower for marker in _BOILERPLATE_MARKERS):
         return False
+    if any(marker in lower for marker in _LOGISTICS_OR_FOLLOWUP_MARKERS):
+        return False
     if _PHONE_RE.search(chunk) or _ZIP_RE.search(chunk) or _EMAIL_RE.search(chunk):
         return False
     if not any(word in lower for word in _CUSTOMER_ACTION_WORDS):
         return False
     return True
+
+
+def is_presentable_match_title(title: str) -> bool:
+    """Hide generic web-form / intake ticket subjects from customer UI."""
+    lower = (title or "").lower().strip()
+    if not lower:
+        return False
+    return not any(marker in lower for marker in _UNHELPFUL_MATCH_TITLE_MARKERS)
 
 
 def _clean_freshdesk_title(subject: str, question: str = "") -> str:
@@ -334,10 +382,16 @@ def _load_freshdesk_entries() -> list[KnowledgeEntry]:
             key = content_hash(subject, question, answer)
             cached = summaries.get(key)
             if cached and cached.steps:
-                steps = tuple(cached.steps)
+                steps = tuple(
+                    s for s in cached.steps if _is_customer_safe_step(str(s))
+                )
                 category_hint = (cached.category or "").strip().lower() or None
                 summary_diagnostic = cached.summary
 
+        if not steps:
+            continue
+
+        steps = tuple(s for s in steps if _is_customer_safe_step(s))
         if not steps:
             continue
 
@@ -529,6 +583,9 @@ def _score_entry(
         # KB articles are curated help content and usually more precise
         # than raw ticket threads — give them a small bump.
         score += 1.2
+    elif entry.source == "freshdesk":
+        # Raw ticket threads often contain logistics follow-ups, not DIY steps.
+        score -= 0.8
     if entry.customer_steps:
         score += 1.0
     return score

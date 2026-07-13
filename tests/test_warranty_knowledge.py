@@ -94,6 +94,21 @@ def test_extract_customer_steps_filters_pii_and_templates():
     assert steps == ()
 
 
+def test_extract_customer_steps_filters_logistics_followups():
+    steps = wk._extract_customer_steps(
+        "I confirmed with our in-house tech that he will contact you to set up a return visit.",
+        "Hello, I have contacted our technician to ensure they prioritize your repair.",
+    )
+    assert steps == ()
+
+
+def test_is_presentable_match_title_rejects_intake_form_subjects():
+    assert wk.is_presentable_match_title("Power issue") is True
+    assert wk.is_presentable_match_title(
+        "#2885577 You received a message from Angelica via Warranty Inquiry form"
+    ) is False
+
+
 def test_freshdesk_loader_skips_merged_tickets(tmp_path, monkeypatch):
     freshdesk = tmp_path / "freshdesk_tickets.json"
     freshdesk.write_text(
