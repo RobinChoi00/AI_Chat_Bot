@@ -28,6 +28,12 @@ Public API
   WarrantyEngine.submit_answer(ticket_id, raw_answer)
       → SubmitResult dict
 
+  WarrantyEngine.go_back(ticket_id)
+      → dict with restored_node_id, turn_count, can_go_back
+
+  WarrantyEngine.can_go_back(ticket_id)
+      → bool
+
   WarrantyEngine.get_ticket(ticket_id)
       → WarrantyTicket | None
 
@@ -199,6 +205,36 @@ def _apply_pending_terminal(ticket: WarrantyTicket, pending_id: str) -> dict:
     ticket.current_node_id = pending_id
     ticket.status = _terminal_status(pending_node.get("action", "awaiting_admin"))
     return pending_node
+
+
+# Keys preserved when rewinding workflow turns (model / intake context).
+_REWIND_PRESERVE_COLLECTED = (
+    "model_confirmed",
+    "model_name",
+    "intake_summary",
+    "intake_raw_message",
+)
+
+
+def _replay_turn_answer(turn: WarrantyTurn) -> tuple[str, Optional[str]]:
+    """Return (raw_answer, customer_display) for replaying a stored turn."""
+    customer = str(turn.customer_answer or "").strip()
+    answer_key = str(turn.answer_key or "").strip()
+    node_type = str(turn.node_type or "")
+    node_id = str(turn.node_id or "")
+
+    if node_type == "question_text":
+        raw = customer or answer_key
+        return raw, customer or None
+
+    if is_gate_node(node_id):
+        raw = customer or answer_key
+        display = customer if customer and customer != answer_key else None
+        return raw, display
+
+    raw = answer_key or customer
+    display = customer if customer and customer != raw else None
+    return raw, display
 
 
 def _build_submit_result(
@@ -818,6 +854,95 @@ class WarrantyEngine:
             next_node=next_node,
             answer_key=answer_key,
         )
+
+    @staticmethod
+    def can_go_back(ticket_id: str) -> bool:
+        """True when the ticket is in progress and at least one turn can be undone."""
+        ticket = WarrantyEngine.get_ticket(ticket_id)
+        if ticket is None or str(ticket.status) != "in_progress":
+            return False
+        return len(WarrantyEngine.get_turns(ticket_id)) >= 1
+
+    @staticmethod
+    def go_back(ticket_id: str) -> dict:
+        """
+        Undo the last customer answer by dropping the most recent turn and
+        replaying the remaining turns so ``current_node_id`` and
+        ``collected_data`` stay aligned with the flowchart.
+        """
+        ticket = WarrantyEngine.get_ticket(ticket_id)
+        if ticket is None:
+            raise ValueError(f"Ticket {ticket_id!r} not found.")
+        if str(ticket.status) != "in_progress":
+            raise ValueError(
+                f"Cannot go back — ticket status is {ticket.status!r}."
+            )
+
+        with warranty_db_session() as db:
+            ticket = (
+                db.query(WarrantyTicket)
+                .filter(WarrantyTicket.ticket_id == ticket_id)
+                .first()
+            )
+            if ticket is None:
+                raise ValueError(f"Ticket {ticket_id!r} not found.")
+
+            turns = (
+                db.query(WarrantyTurn)
+                .filter(WarrantyTurn.ticket_id == ticket_id)
+                .order_by(WarrantyTurn.id.asc())
+                .all()
+            )
+            if not turns:
+                raise ValueError("Nothing to go back to.")
+
+            model_name = str(ticket.model_name or "")
+            preserved: dict[str, str] = {}
+            collected = ticket.get_collected()
+            for key in _REWIND_PRESERVE_COLLECTED:
+                val = collected.get(key)
+                if val:
+                    preserved[key] = str(val)
+
+            replay = list(turns[:-1])
+            for turn in turns:
+                db.delete(turn)
+
+            ticket.status = "in_progress"
+            ticket.current_node_id = _ROOT
+            ticket.issue_type = None
+            ticket.defect_type = None
+            ticket.collected_data = "{}"
+            for key, val in preserved.items():
+                ticket.set_collected(key, val)
+            if model_name:
+                ticket.model_name = model_name
+                ticket.set_collected("model_name", model_name)
+
+        for turn in replay:
+            raw, display = _replay_turn_answer(turn)
+            WarrantyEngine.submit_answer(
+                ticket_id,
+                raw,
+                customer_display=display,
+            )
+
+        ticket = WarrantyEngine.get_ticket(ticket_id)
+        if (
+            ticket is not None
+            and str(ticket.current_node_id) == _ROOT
+            and model_name.strip()
+        ):
+            WarrantyEngine.submit_answer(ticket_id, "warranty")
+
+        node = WarrantyEngine.get_current_node(ticket_id)
+        restored_id = str(node.get("node_id", "")) if node else ""
+        turn_count = len(WarrantyEngine.get_turns(ticket_id))
+        return {
+            "restored_node_id": restored_id,
+            "turn_count": turn_count,
+            "can_go_back": turn_count >= 1,
+        }
 
     # ------------------------------------------------------------------
     # Admin decision (Phase D/E)

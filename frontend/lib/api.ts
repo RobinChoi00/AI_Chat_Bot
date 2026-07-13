@@ -326,6 +326,32 @@ export async function submitWarrantyAnswer(
 }
 
 /**
+ * Undo the last warranty workflow answer (one step back).
+ *
+ * CONTRACT: POST /api/v1/warranty/{ticket_id}/back
+ */
+export async function goBackWarranty(
+  ticketId: string
+): Promise<WarrantySessionResponse> {
+  const url = `${getApiBase()}/api/v1/warranty/${encodeURIComponent(ticketId)}/back`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<WarrantySessionResponse>;
+}
+
+/**
  * Notify the warranty team when the customer leaves their email in chat.
  *
  * CONTRACT: POST /api/v1/warranty/session/{session_id}/notify-email

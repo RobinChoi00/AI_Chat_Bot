@@ -1025,6 +1025,7 @@ def _serialize_ticket_state(
                 node_id == "issue_type" and bool(str(ticket.model_name or "").strip())
             ),
             "needs_customer_reply": str(ticket.status) == "need_more_information",
+            "can_go_back": engine.can_go_back(ticket_id),
             "customer_message": (
                 str(ticket.customer_message or "").strip() or None
             ),
@@ -1428,6 +1429,31 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
         result,
         nlp_interpreted=nlp_interpreted,
     )
+
+
+@router.post("/api/v1/warranty/{ticket_id}/back", tags=["warranty"])
+async def go_back_warranty(ticket_id: str):
+    """
+    Undo the last workflow answer and restore the previous question.
+
+    Only available while the ticket is ``in_progress`` and at least one turn
+    exists. Returns the same session payload shape as ``/answer``.
+    """
+    engine = _lazy_engine()
+    try:
+        rewind = engine.go_back(ticket_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Ticket not found.")
+
+    node = engine.get_current_node(ticket_id)
+    payload = _serialize_ticket_state(str(ticket.session_id), ticket, node, engine=engine)
+    payload["went_back"] = True
+    payload["rewind"] = rewind
+    return payload
 
 
 @router.post("/api/v1/warranty/session/{session_id}/notify-email", tags=["warranty"])

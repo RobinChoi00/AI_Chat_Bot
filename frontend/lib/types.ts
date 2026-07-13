@@ -69,6 +69,7 @@ export interface WarrantyTicketState {
   needs_model_confirmation?: boolean;
   ready_for_issue_type?: boolean;
   needs_customer_reply?: boolean;
+  can_go_back?: boolean;
   customer_message?: string | null;
   admin_decision?: string | null;
   current_node: WarrantyNode | null;
@@ -144,6 +145,8 @@ export interface WarrantySessionResponse {
   smart_start?: SmartStartMetadata | null;
   model_confirmation?: ModelConfirmationMetadata | null;
   side_question?: boolean;
+  went_back?: boolean;
+  rewind?: { restored_node_id: string; turn_count: number; can_go_back: boolean };
 }
 
 export interface WarrantyContactResponse {

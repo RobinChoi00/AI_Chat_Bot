@@ -1003,3 +1003,65 @@ class TestAdminDecision:
                 ticket_id="ghost-ticket-999",
                 note="This should fail.",
             )
+
+
+# ---------------------------------------------------------------------------
+# Go back (rewind one turn)
+# ---------------------------------------------------------------------------
+
+def test_go_back_restores_previous_question():
+    ticket_id, _ = start()
+    walk(ticket_id, ["warranty", "defect", "voice"])
+
+    t = ticket(ticket_id)
+    assert str(t.defect_type) == "voice"
+    assert len(WarrantyEngine.get_turns(ticket_id)) == 3
+
+    result = WarrantyEngine.go_back(ticket_id)
+    assert result["restored_node_id"] == "defect_problem_type"
+    assert result["turn_count"] == 2
+
+    t = ticket(ticket_id)
+    assert str(t.issue_type) == "defect"
+    assert t.defect_type is None
+    assert str(t.current_node_id) == "defect_problem_type"
+    assert str(t.status) == "in_progress"
+    assert WarrantyEngine.can_go_back(ticket_id) is True
+
+
+def test_go_back_from_issue_type_keeps_registered_model():
+    ticket_id, _ = start()
+    submit(ticket_id, "warranty")
+    WarrantyEngine.set_model_name(ticket_id, "OS-4000T")
+    submit(ticket_id, "defect")
+
+    assert str(ticket(ticket_id).current_node_id) == "defect_problem_type"
+
+    WarrantyEngine.go_back(ticket_id)
+
+    t = ticket(ticket_id)
+    assert str(t.model_name) == "OS-4000T"
+    assert str(t.current_node_id) == "issue_type"
+    assert t.issue_type is None
+    assert len(WarrantyEngine.get_turns(ticket_id)) == 1
+
+
+def test_go_back_blocked_at_root_without_turns():
+    ticket_id, _ = start()
+    assert WarrantyEngine.can_go_back(ticket_id) is False
+    with pytest.raises(ValueError, match="Nothing to go back"):
+        WarrantyEngine.go_back(ticket_id)
+
+
+def test_go_back_blocked_after_terminal():
+    ticket_id, _ = start()
+    walk(ticket_id, [
+        "warranty",
+        "installation",
+        "OS-4000T",
+        "general_setup",
+    ])
+    t = ticket(ticket_id)
+    assert str(t.status) == "send_info"
+    with pytest.raises(ValueError, match="Cannot go back"):
+        WarrantyEngine.go_back(ticket_id)

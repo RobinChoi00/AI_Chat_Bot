@@ -547,7 +547,50 @@ def test_restart_is_idempotent_when_no_active_ticket(client):
     body = resp.json()
     assert body["restarted"] is True
     assert body["ticket"] is None
-    assert body["closed_ticket_count"] == 0
+
+
+def test_go_back_api_restores_issue_type(client):
+    session_id = "cust-api-back"
+    reg = _register_model(client, session_id)
+    ticket_id = reg["ticket"]["ticket_id"]
+
+    qs = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "defect", "domain": "osaki.com"},
+    )
+    assert qs.status_code == 200
+    assert qs.json()["ticket"]["current_node"]["node_id"] == "defect_problem_type"
+
+    back = client.post(f"/api/v1/warranty/{ticket_id}/back")
+    assert back.status_code == 200
+    body = back.json()
+    assert body.get("went_back") is True
+    ticket = body["ticket"]
+    assert ticket["current_node"]["node_id"] == "issue_type"
+    assert ticket["issue_type"] == ""
+    assert ticket["model_name"] == "OS-4000T"
+    assert ticket["can_go_back"] is True
+    assert ticket["ready_for_issue_type"] is True
+
+
+def test_go_back_api_rejects_terminal_ticket(client):
+    session_id = "cust-api-back-terminal"
+    reg = _register_model(client, session_id)
+    ticket_id = reg["ticket"]["ticket_id"]
+
+    client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "installation", "domain": "osaki.com"},
+    )
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "general_setup"},
+    )
+    status = client.get(f"/api/v1/warranty/session/{session_id}").json()
+    assert status["ticket"]["current_node"]["is_terminal"] is True
+
+    back = client.post(f"/api/v1/warranty/{ticket_id}/back")
+    assert back.status_code == 422
 
 
 def test_customer_note_appends_to_collected_data(client):

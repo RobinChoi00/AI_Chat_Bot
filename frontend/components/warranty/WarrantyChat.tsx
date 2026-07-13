@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import {
   confirmWarrantyModel,
   getWarrantySession,
+  goBackWarranty,
   quickStartWarranty,
   naturalStartWarranty,
   registerWarrantyModel,
@@ -67,6 +68,16 @@ const INITIAL_ISSUE_OPTIONS: AnswerOption[] = [
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Drop the last user message and any assistant replies after it. */
+function trimMessagesBeforeLastUser(messages: ChatMessage[]): ChatMessage[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      return messages.slice(0, i);
+    }
+  }
+  return messages;
 }
 
 export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
@@ -158,6 +169,53 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       inputRef.current?.focus();
     }
   }, [loading, sessionId, storeDomain]);
+
+  const goBackOneStep = useCallback(async () => {
+    const ticketId = warrantyState?.ticket_id;
+    if (!ticketId || loading || !warrantyState?.can_go_back) return;
+
+    setError(null);
+    setLoading(true);
+    setPendingDefectStart(null);
+    setHelpConsent(null);
+
+    try {
+      const resp = await goBackWarranty(ticketId);
+      applySessionResponse(resp);
+      setOptionsUsed(false);
+      setContactSubmitted(false);
+      setEmailPanelCollapsed(false);
+
+      const trimmed = trimMessagesBeforeLastUser(messages);
+      setMessages(trimmed);
+
+      await sleep(THINKING_DELAY_MS);
+      const ticket = resp.ticket;
+      let content: string | null = null;
+      if (ticket?.ready_for_issue_type && ticket.model_name) {
+        content =
+          `Great — I have **${ticket.model_name}** on file.\n\n` +
+          "What type of issue can we help you with? Choose below or describe it in your own words.";
+      } else {
+        content = hydrationAssistantContent(ticket, resp);
+      }
+      if (content) {
+        setMessages((prev) => [...prev, assistantMessage(content)]);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Could not go back.";
+      setError(msg);
+    } finally {
+      setLoading(false);
+      inputRef.current?.focus();
+    }
+  }, [
+    warrantyState?.ticket_id,
+    warrantyState?.can_go_back,
+    loading,
+    applySessionResponse,
+    messages,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -745,6 +803,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       : null;
   const caseReference = warrantyState?.case_reference ?? null;
   const isTerminal = warrantyState?.current_node?.is_terminal ?? false;
+  const canGoBack = Boolean(warrantyState?.can_go_back && !isTerminal && !loading);
 
   const atIssueTypeNode =
     !warrantyState?.issue_type &&
@@ -844,6 +903,17 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
             {warrantyState.ticket_id && !isTerminal && (
               <SaveProgressButton sessionId={sessionId} disabled={loading} />
             )}
+            {canGoBack && (
+              <button
+                type="button"
+                onClick={goBackOneStep}
+                disabled={loading}
+                className="rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 disabled:opacity-50"
+                title="Go back to the previous question"
+              >
+                ← Back
+              </button>
+            )}
             <button
               type="button"
               onClick={restartSession}
@@ -861,6 +931,17 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-b border-gray-100 bg-white px-3 py-1.5">
           {!isTerminal && (
             <SaveProgressButton sessionId={sessionId} disabled={loading} />
+          )}
+          {canGoBack && (
+            <button
+              type="button"
+              onClick={goBackOneStep}
+              disabled={loading}
+              className="rounded-full border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 disabled:opacity-50"
+              title="Go back to the previous question"
+            >
+              ← Back
+            </button>
           )}
           <button
             type="button"
