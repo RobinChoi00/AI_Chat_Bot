@@ -217,6 +217,70 @@ def _accept_llm_choice(
     return None
 
 
+def _format_option_bullets(options: list[dict], *, limit: int = 8) -> str:
+    lines: list[str] = []
+    for opt in options[:limit]:
+        label = str(opt.get("label") or opt.get("answer_key") or "").strip()
+        if label:
+            lines.append(f"• **{label}**")
+    return "\n".join(lines)
+
+
+def build_clarifying_workflow_message(node: dict, user_text: str) -> str:
+    """Customer-facing re-prompt when free text did not map to a menu option."""
+    prompt = str(node.get("prompt") or "").strip()
+    options = list(node.get("options") or [])
+    trimmed = (user_text or "").strip()
+
+    if trimmed:
+        lead = (
+            f'I wasn\'t fully sure how **"{trimmed[:120]}"** maps to the choices below.'
+        )
+    else:
+        lead = "I want to make sure I pick the right next step for you."
+
+    parts = [lead]
+    bullets = _format_option_bullets(options)
+    if bullets:
+        parts.append("Please tap one of these, or rephrase to match one of them:")
+        parts.append(bullets)
+    elif prompt:
+        parts.append("Please answer the question below.")
+    if prompt:
+        parts.append(prompt)
+    return "\n\n".join(p for p in parts if p)
+
+
+_ISSUE_TYPE_LABELS: tuple[tuple[str, str], ...] = (
+    ("installation", "Setup & installation"),
+    ("delivery", "Delivery & tracking"),
+    ("defect", "Warranty / defect"),
+)
+
+
+def build_clarifying_issue_type_message(
+    user_text: str,
+    *,
+    model_name: str = "",
+) -> str:
+    """Re-prompt when issue type could not be inferred from free text."""
+    trimmed = (user_text or "").strip()
+    parts: list[str] = []
+    if trimmed:
+        parts.append(
+            f'I couldn\'t tell whether **"{trimmed[:120]}"** is installation, '
+            "delivery, or a product defect."
+        )
+    if model_name:
+        parts.append(f"For your **{model_name}**, what type of issue can we help with?")
+    else:
+        parts.append("What type of issue can we help with?")
+    parts.append("Choose one of these, or describe your issue a bit more specifically:")
+    for _key, label in _ISSUE_TYPE_LABELS:
+        parts.append(f"• **{label}**")
+    return "\n\n".join(parts)
+
+
 def interpret_issue_type(user_text: str) -> Optional[str]:
     """
     Map natural language to installation | delivery | defect.

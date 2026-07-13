@@ -727,11 +727,16 @@ def _build_side_question_response(
     return payload
 
 
-def _submit_answer_with_nlp(engine, ticket_id: str, answer: str) -> tuple[dict, bool]:
+def _submit_answer_with_nlp(
+    engine,
+    ticket_id: str,
+    answer: str,
+) -> tuple[Optional[dict], bool, Optional[str]]:
     """
     Submit a workflow answer; on option mismatch, map natural language via NLP.
 
-    Returns (submit_result, nlp_interpreted).
+    Returns (submit_result, nlp_interpreted, clarifying_message).
+    When clarifying_message is set, the workflow does not advance.
     """
     _validate_text_before_submit(engine, ticket_id, answer)
 
@@ -739,6 +744,7 @@ def _submit_answer_with_nlp(engine, ticket_id: str, answer: str) -> tuple[dict, 
     node_id = str(node.get("node_id") or "") if node else ""
 
     from warranty_error_code_gate import is_gate_node, map_gate_free_text  # noqa: WPS433
+    from warranty_nlp import build_clarifying_workflow_message, interpret_warranty_answer  # noqa: WPS433
 
     if node and is_gate_node(node_id):
         mapped = map_gate_free_text(node_id, answer)
@@ -750,19 +756,24 @@ def _submit_answer_with_nlp(engine, ticket_id: str, answer: str) -> tuple[dict, 
                     customer_display=answer,
                 ),
                 True,
+                None,
             )
         try:
-            return engine.submit_answer(ticket_id, answer), False
+            return engine.submit_answer(ticket_id, answer), False, None
         except ValueError as exc:
             if "did not match any option" not in str(exc):
                 raise
-            raise ValueError(
-                "Please tap one of the buttons above, type **yes** or **no**, "
-                "or enter the error code exactly as shown (for example: C6, E5)."
-            ) from exc
+            return (
+                None,
+                False,
+                (
+                    "Please tap one of the buttons above, type **yes** or **no**, "
+                    "or enter the error code exactly as shown (for example: C6, E5)."
+                ),
+            )
 
     try:
-        return engine.submit_answer(ticket_id, answer), False
+        return engine.submit_answer(ticket_id, answer), False, None
     except ValueError as exc:
         msg = str(exc)
         if "did not match any option" not in msg:
@@ -772,14 +783,9 @@ def _submit_answer_with_nlp(engine, ticket_id: str, answer: str) -> tuple[dict, 
         if not node:
             raise
 
-        from warranty_nlp import interpret_warranty_answer  # noqa: WPS433
-
         mapped = interpret_warranty_answer(node, answer)
-        if not mapped:
-            raise ValueError(
-                "I couldn't match your answer to the current question. "
-                "Please tap one of the options above, or rephrase more clearly."
-            ) from exc
+        if not mapped or mapped == answer:
+            return None, False, build_clarifying_workflow_message(node, answer)
 
         if node.get("type") == "question_text":
             return (
@@ -789,10 +795,8 @@ def _submit_answer_with_nlp(engine, ticket_id: str, answer: str) -> tuple[dict, 
                     customer_display=answer,
                 ),
                 True,
+                None,
             )
-
-        if mapped == answer:
-            raise
 
         return (
             engine.submit_answer(
@@ -801,6 +805,7 @@ def _submit_answer_with_nlp(engine, ticket_id: str, answer: str) -> tuple[dict, 
                 customer_display=answer,
             ),
             True,
+            None,
         )
 
 
@@ -1092,23 +1097,33 @@ async def natural_start_warranty(
     if not message:
         raise HTTPException(status_code=422, detail="message must not be empty")
 
-    from warranty_nlp import interpret_issue_type  # noqa: WPS433
-
-    issue_type = interpret_issue_type(message)
-    if not issue_type:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "I couldn't tell whether this is an installation, delivery, or "
-                "defect issue. Please pick one of the options above or describe "
-                "your issue more specifically."
-            ),
-        )
+    from warranty_nlp import (  # noqa: WPS433
+        build_clarifying_issue_type_message,
+        interpret_issue_type,
+    )
 
     engine = _lazy_engine()
     ticket = engine.get_active_session_ticket(session_id)
     if ticket is not None:
         _require_registered_model(ticket)
+
+    issue_type = interpret_issue_type(message)
+    if not issue_type:
+        if ticket is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Please tell us your chair model first (for example OS-4000T), "
+                    "then describe the type of issue."
+                ),
+            )
+        model_name = str(getattr(ticket, "model_name", "") or "")
+        clarify = build_clarifying_issue_type_message(message, model_name=model_name)
+        return _build_side_question_response(
+            engine,
+            str(ticket.ticket_id),
+            clarify,
+        )
     payload = _quick_start_ticket(engine, session_id, issue_type, body.domain)
     from warranty_intake_context import persist_intake_summary  # noqa: WPS433
 
@@ -1266,9 +1281,19 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
         return _build_side_question_response(engine, ticket_id, side_message)
 
     try:
-        result, nlp_interpreted = _submit_answer_with_nlp(engine, ticket_id, answer)
+        result, nlp_interpreted, clarify = _submit_answer_with_nlp(
+            engine,
+            ticket_id,
+            answer,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if clarify:
+        return _build_side_question_response(engine, ticket_id, clarify)
+
+    if result is None:
+        raise HTTPException(status_code=422, detail="Could not process answer.")
 
     return _finalize_answer_response(
         engine,

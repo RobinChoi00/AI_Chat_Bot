@@ -325,6 +325,59 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     [warrantyState?.ticket_id, loading, applySessionResponse, appendAssistantFromResponse]
   );
 
+  const startViaNaturalIssueType = useCallback(
+    async (text: string) => {
+      if (loading) return;
+      setError(null);
+      setLoading(true);
+      setOptionsUsed(true);
+      setHelpConsent(null);
+      setMessages((prev) => [...prev, { role: "user", content: text }]);
+      setInput("");
+
+      try {
+        const resp = await naturalStartWarranty(sessionId, text, storeDomain);
+        applySessionResponse(resp);
+
+        if (resp.side_question && resp.assistant_message) {
+          await sleep(THINKING_DELAY_MS);
+          setMessages((prev) => [
+            ...prev,
+            assistantMessage(resp.assistant_message!),
+          ]);
+          setOptionsUsed(false);
+          return;
+        }
+
+        if (resp.interpreted_issue_type && resp.ticket?.issue_type) {
+          await sleep(THINKING_DELAY_MS);
+          const label =
+            resp.interpreted_issue_type === "installation"
+              ? "setup & installation"
+              : resp.interpreted_issue_type === "delivery"
+                ? "delivery & tracking"
+                : "warranty / defect";
+          setMessages((prev) => [
+            ...prev,
+            assistantMessage(
+              `Got it — we'll treat this as a **${label}** issue and continue with the next questions.`
+            ),
+          ]);
+        }
+
+        await appendAssistantFromResponse(resp.ticket, resp);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Something went wrong.";
+        setError(msg);
+        setOptionsUsed(false);
+      } finally {
+        setLoading(false);
+        inputRef.current?.focus();
+      }
+    },
+    [loading, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse]
+  );
+
   const startViaSmartIntake = useCallback(
     async (text: string) => {
       if (loading) return;
@@ -433,14 +486,14 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       if (!text.trim() || loading) return;
 
       const trimmed = text.trim();
+      const atIssueTypeNode =
+        !warrantyState?.issue_type &&
+        warrantyState?.current_node?.node_id === "issue_type";
       const atFirstIntake =
         !warrantyState?.issue_type &&
+        !atIssueTypeNode &&
         (!warrantyState?.ticket_id ||
-          warrantyState?.current_node?.node_id === "root" ||
-          warrantyState?.current_node?.node_id === "issue_type");
-      const atIssueType =
-        warrantyState?.ready_for_issue_type ||
-        warrantyState?.current_node?.node_id === "issue_type";
+          warrantyState?.current_node?.node_id === "root");
 
       const atTerminal =
         !!warrantyState?.current_node?.is_terminal ||
@@ -463,8 +516,8 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         return;
       }
 
-      if (atIssueType && !warrantyState?.issue_type) {
-        await startViaSmartIntake(trimmed);
+      if (atIssueTypeNode && warrantyState?.model_name) {
+        await startViaNaturalIssueType(trimmed);
         return;
       }
 
@@ -489,6 +542,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       helpConsent,
       contactSubmitted,
       startViaSmartIntake,
+      startViaNaturalIssueType,
       advanceWarranty,
       submitFollowUpNote,
       refreshWarrantyState,
@@ -542,23 +596,25 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const caseReference = warrantyState?.case_reference ?? null;
   const isTerminal = warrantyState?.current_node?.is_terminal ?? false;
 
+  const atIssueTypeNode =
+    !warrantyState?.issue_type &&
+    warrantyState?.current_node?.node_id === "issue_type";
+
   const needsFirstIntake =
     sessionChecked &&
     !isTerminal &&
     !warrantyState?.issue_type &&
+    !atIssueTypeNode &&
     (!warrantyState?.ticket_id ||
-      warrantyState?.current_node?.node_id === "root" ||
-      warrantyState?.current_node?.node_id === "issue_type");
+      warrantyState?.current_node?.node_id === "root");
 
   const showIssueTypeOptions =
     sessionChecked &&
     !loading &&
     !isTerminal &&
-    !needsFirstIntake &&
+    !warrantyState?.issue_type &&
     (warrantyState?.ready_for_issue_type ||
-      (!!warrantyState?.model_name &&
-        warrantyState?.current_node?.node_id === "issue_type" &&
-        !warrantyState?.issue_type));
+      (!!warrantyState?.model_name && atIssueTypeNode));
 
   const hasWorkflowOptions =
     !optionsUsed &&

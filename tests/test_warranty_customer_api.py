@@ -334,6 +334,69 @@ def test_submit_answer_notifies_on_email_in_text(client, monkeypatch):
     assert resp.json().get("email_notified") is True
 
 
+def test_natural_start_clarifying_when_unclear(client, monkeypatch):
+    monkeypatch.setattr(
+        "warranty_nlp.interpret_issue_type",
+        lambda _text: None,
+    )
+
+    session_id = "cust-api-natural-clarify"
+    _register_model(client, session_id, model="3D LTX")
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/natural-start",
+        json={"message": "hello there", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data.get("side_question") is True
+    assert "installation" in data["assistant_message"].lower()
+    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
+    assert data["ticket"]["issue_type"] == ""
+
+
+def test_model_then_issue_via_natural_start(client, monkeypatch):
+    monkeypatch.setattr(
+        "warranty_nlp.interpret_issue_type",
+        lambda text: "delivery" if "tracking" in text.lower() else None,
+    )
+
+    session_id = "cust-api-model-then-issue"
+    _register_model(client, session_id, model="3D LTX")
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/natural-start",
+        json={"message": "Where is my tracking number?", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["ticket"]["issue_type"] == "delivery"
+    assert data["ticket"]["current_node"]["node_id"] == "delivery_tracking_q"
+
+
+def test_submit_answer_clarifying_on_ambiguous(client, monkeypatch):
+    monkeypatch.setattr(
+        "warranty_nlp.interpret_warranty_answer",
+        lambda _node, _text: None,
+    )
+
+    session_id = "cust-api-clarify-answer"
+    _register_model(client, session_id)
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "delivery", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "maybe something vague xyz"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data.get("side_question") is True
+    assert "choices" in data["assistant_message"].lower() or "tap one" in data["assistant_message"].lower()
+    assert data["ticket"]["current_node"]["node_id"] == "delivery_tracking_q"
+
+
 def test_natural_start_maps_issue_type(client, monkeypatch):
     monkeypatch.setattr(
         "warranty_nlp.interpret_issue_type",
