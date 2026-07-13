@@ -16,11 +16,22 @@ export function assistantContentFromResponse(
 ): string | null {
   const node = ticket?.current_node;
   if (!node?.prompt && !resp.assistant_message) return null;
+
+  if (resp.assistant_message?.trim()) {
+    return resp.assistant_message.trim();
+  }
+
+  const prompt = node?.prompt?.trim() ?? "";
+  if (!prompt) return null;
+
+  if (!node?.is_terminal) {
+    return prompt;
+  }
+
   return formatTerminalPrompt(
-    node?.prompt ?? "",
+    prompt,
     node?.evidence_required,
-    node?.evidence_email,
-    resp.assistant_message ?? resp.terminal_enrichment?.message
+    node?.evidence_email
   );
 }
 
