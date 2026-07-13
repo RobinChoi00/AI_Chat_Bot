@@ -65,30 +65,6 @@ describe("hydrationAssistantContent", () => {
   });
 });
 
-describe("assistantContentFromResponse", () => {
-  it("does not append terminal footer on mid-flow nodes", async () => {
-    const { assistantContentFromResponse } = await import("./warrantyHydration");
-    const ticket: WarrantyTicketState = {
-      ticket_id: "t-2",
-      session_id: "s-2",
-      status: "in_progress",
-      issue_type: "",
-      model_name: "Hypnos",
-      current_node: {
-        node_id: "issue_type",
-        node_type: "question",
-        prompt: "What type of warranty issue are you experiencing?",
-        is_terminal: false,
-        options: [],
-      },
-    };
-    const text = assistantContentFromResponse(ticket, {});
-    expect(text).toBe("What type of warranty issue are you experiencing?");
-    expect(text).not.toContain("888-848-2630");
-    expect(text).not.toContain("final step");
-  });
-});
-
 describe("hasStepEnrichmentPanel", () => {
   it("returns true when tips or sources exist", () => {
     expect(

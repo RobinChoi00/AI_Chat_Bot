@@ -59,17 +59,6 @@ const SELF_HELP_CLOSING =
 const DEFECT_MODEL_PROMPT =
   "To troubleshoot warranty defects accurately, please **enter your chair model** in the box below (for example OS-4000T or 3D LTX). I'll continue with the defect questions right after.";
 
-const ISSUE_TYPE_PROMPT =
-  "What type of issue can we help you with? Choose below or describe it in your own words.";
-
-function looksLikeModelOnlyIntake(text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed || trimmed.split(/\s+/).length > 5) return false;
-  return !/\b(not|won't|wont|broken|defect|delivery|install|installation|tracking|air|power|remote|issue|help|damaged|missing)\b/i.test(
-    trimmed
-  );
-}
-
 const INITIAL_ISSUE_OPTIONS: AnswerOption[] = [
   { answer_key: "installation", label: "Setup & installation" },
   { answer_key: "delivery", label: "Delivery & tracking" },
@@ -475,7 +464,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
           setMessages((prev) => [
             ...prev,
             assistantMessage(
-              `Thanks — I have **${resp.ticket!.model_name}** on file.\n\n${ISSUE_TYPE_PROMPT}`
+              `Thanks — I have **${resp.ticket!.model_name}** on file.\n\nWhat type of issue can we help you with? Choose below or describe it in your own words.`
             ),
           ]);
         } else {
@@ -519,11 +508,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
               : `Great — we'll continue with **${resp.ticket?.model_name ?? "your model"}**.`
           ),
         ]);
-        if (resp.ticket?.current_node?.node_id === "issue_type") {
-          setMessages((prev) => [...prev, assistantMessage(ISSUE_TYPE_PROMPT)]);
-        } else {
-          await appendAssistantFromResponse(resp.ticket, resp);
-        }
+        await appendAssistantFromResponse(resp.ticket, resp);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Something went wrong.";
         setError(msg);
@@ -600,30 +585,6 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       }
 
       if (atFirstIntake) {
-        if (looksLikeModelOnlyIntake(trimmed)) {
-          setError(null);
-          setLoading(true);
-          setInput("");
-          setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
-          try {
-            const resp = await registerWarrantyModel(sessionId, trimmed, storeDomain);
-            applySessionResponse(resp);
-            await sleep(THINKING_DELAY_MS);
-            setMessages((prev) => [
-              ...prev,
-              assistantMessage(
-                `Thanks — I have **${resp.ticket?.model_name ?? trimmed}** on file.\n\n${ISSUE_TYPE_PROMPT}`
-              ),
-            ]);
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : "Something went wrong.";
-            setError(msg);
-          } finally {
-            setLoading(false);
-            inputRef.current?.focus();
-          }
-          return;
-        }
         await startViaSmartIntake(trimmed);
         return;
       }
@@ -723,7 +684,6 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       sessionId,
       storeDomain,
       applySessionResponse,
-      registerWarrantyModel,
     ]
   );
 
