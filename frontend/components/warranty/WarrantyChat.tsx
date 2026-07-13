@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { v4 as uuidv4 } from "uuid";
 import {
+  confirmWarrantyModel,
   getWarrantySession,
   quickStartWarranty,
   naturalStartWarranty,
@@ -414,7 +415,14 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
 
         applySessionResponse(resp);
 
-        if (routingConfirm?.message) {
+        if (resp.model_confirmation?.message) {
+          await sleep(THINKING_DELAY_MS);
+          setMessages((prev) => [
+            ...prev,
+            assistantMessage(resp.model_confirmation!.message),
+          ]);
+          setOptionsUsed(false);
+        } else if (routingConfirm?.message) {
           await sleep(THINKING_DELAY_MS);
           setMessages((prev) => [
             ...prev,
@@ -453,6 +461,51 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       }
     },
     [loading, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse]
+  );
+
+  const confirmInferredModel = useCallback(
+    async (correctedModel?: string) => {
+      if (loading) return;
+      setError(null);
+      setLoading(true);
+      const label =
+        correctedModel?.trim() ||
+        `Yes, ${warrantyState?.model_name ?? "that's my model"}`;
+      setMessages((prev) => [...prev, { role: "user", content: label }]);
+
+      try {
+        const resp = await confirmWarrantyModel(sessionId, {
+          confirmed: !correctedModel?.trim(),
+          model: correctedModel?.trim() || undefined,
+          domain: storeDomain,
+        });
+        applySessionResponse(resp);
+        await sleep(THINKING_DELAY_MS);
+        setMessages((prev) => [
+          ...prev,
+          assistantMessage(
+            correctedModel?.trim()
+              ? `Updated — we'll use **${resp.ticket?.model_name ?? correctedModel}** for this case.`
+              : `Great — we'll continue with **${resp.ticket?.model_name ?? "your model"}**.`
+          ),
+        ]);
+        await appendAssistantFromResponse(resp.ticket, resp);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Something went wrong.";
+        setError(msg);
+      } finally {
+        setLoading(false);
+        inputRef.current?.focus();
+      }
+    },
+    [
+      loading,
+      sessionId,
+      storeDomain,
+      warrantyState?.model_name,
+      applySessionResponse,
+      appendAssistantFromResponse,
+    ]
   );
 
   const submitFollowUpNote = useCallback(
@@ -494,6 +547,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         !atIssueTypeNode &&
         (!warrantyState?.ticket_id ||
           warrantyState?.current_node?.node_id === "root");
+      const needsModelConfirmation = Boolean(warrantyState?.needs_model_confirmation);
 
       const atTerminal =
         !!warrantyState?.current_node?.is_terminal ||
@@ -521,6 +575,12 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         return;
       }
 
+      if (needsModelConfirmation && trimmed.split(/\s+/).length <= 4) {
+        await confirmInferredModel(trimmed);
+        setInput("");
+        return;
+      }
+
       if (warrantyState?.ticket_id && !warrantyState.current_node?.is_terminal) {
         await advanceWarranty(trimmed, trimmed);
         setInput("");
@@ -541,6 +601,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       warrantyState,
       helpConsent,
       contactSubmitted,
+      confirmInferredModel,
       startViaSmartIntake,
       startViaNaturalIssueType,
       advanceWarranty,
@@ -615,6 +676,8 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     !warrantyState?.issue_type &&
     (warrantyState?.ready_for_issue_type ||
       (!!warrantyState?.model_name && atIssueTypeNode));
+
+  const needsModelConfirmation = Boolean(warrantyState?.needs_model_confirmation);
 
   const hasWorkflowOptions =
     !optionsUsed &&
@@ -775,6 +838,26 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
             </div>
           )}
         </div>
+
+        {needsModelConfirmation && warrantyState?.model_name && (
+          <div className="mt-3 sm:mt-4 rounded-xl border border-violet-200 bg-violet-50/90 px-4 py-3">
+            <p className="text-sm font-medium text-violet-950">Confirm your chair model</p>
+            <p className="mt-1 text-sm text-violet-900">
+              We have <strong>{warrantyState.model_name}</strong> on file. Is that correct?
+            </p>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => confirmInferredModel()}
+              className="mt-3 rounded-full bg-violet-700 px-4 py-2 text-sm font-medium text-white hover:bg-violet-800 disabled:opacity-50"
+            >
+              Yes, that&apos;s my model
+            </button>
+            <p className="mt-2 text-xs text-violet-800">
+              Or type the correct model name in the box below.
+            </p>
+          </div>
+        )}
 
         {showIssueTypeOptions && (
           <div className="mt-3 sm:mt-4">

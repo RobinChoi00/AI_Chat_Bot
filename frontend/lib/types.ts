@@ -66,6 +66,7 @@ export interface WarrantyTicketState {
   issue_type: string;
   model_name: string;
   model_confirmed?: boolean;
+  needs_model_confirmation?: boolean;
   ready_for_issue_type?: boolean;
   needs_customer_reply?: boolean;
   customer_message?: string | null;
@@ -123,6 +124,11 @@ export interface SmartStartMetadata {
   routing_confirmation?: SmartStartRoutingConfirmation | null;
 }
 
+export interface ModelConfirmationMetadata {
+  model_name: string;
+  message: string;
+}
+
 export interface WarrantySessionResponse {
   session_id: string;
   ticket: WarrantyTicketState | null;
@@ -136,6 +142,7 @@ export interface WarrantySessionResponse {
   model_registered?: boolean;
   resolved_model?: string;
   smart_start?: SmartStartMetadata | null;
+  model_confirmation?: ModelConfirmationMetadata | null;
   side_question?: boolean;
 }
 

@@ -73,8 +73,40 @@ def test_register_model_then_ready_for_issue_type(client):
     ticket = data["ticket"]
     assert ticket["model_name"] == "OS-4000T"
     assert ticket["model_confirmed"] is True
+    assert ticket.get("needs_model_confirmation") is not True
     assert ticket["ready_for_issue_type"] is True
     assert ticket["current_node"]["node_id"] == "issue_type"
+
+
+def test_confirm_model_after_smart_start(client, monkeypatch):
+    monkeypatch.setattr(
+        "warranty_intake.extract_workflow_prefill",
+        lambda **kwargs: {
+            "answer_keys": ["warranty"],
+            "model_name": "3D LTX",
+            "summary": "3D LTX chair",
+            "source": "llm",
+        },
+    )
+
+    session_id = "cust-api-confirm-model"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/smart-start",
+        json={"message": "3D LTX footrest air issue", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["ticket"]["model_name"] == "3D LTX"
+    assert data["ticket"]["needs_model_confirmation"] is True
+    assert data.get("model_confirmation", {}).get("message")
+
+    confirm = client.post(
+        f"/api/v1/warranty/session/{session_id}/confirm-model",
+        json={"confirmed": True, "domain": "osaki.com"},
+    )
+    assert confirm.status_code == 200
+    assert confirm.json()["ticket"]["model_confirmed"] is True
+    assert confirm.json()["ticket"]["needs_model_confirmation"] is False
 
 
 def test_quick_start_requires_model_first(client):

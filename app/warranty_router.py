@@ -482,6 +482,13 @@ class WarrantyRegisterModelRequest(BaseModel):
     domain: str = "osaki.com"
 
 
+class WarrantyConfirmModelRequest(BaseModel):
+    """Confirm or correct inferred chair model after smart-start."""
+    confirmed: bool = True
+    model: Optional[str] = None
+    domain: str = "osaki.com"
+
+
 class WarrantyNaturalStartRequest(BaseModel):
     """Start warranty intake from free-text (LLM maps to issue type)."""
     message: str
@@ -638,6 +645,11 @@ def _register_model_ticket(
 
     engine.set_model_name(ticket_id, resolved)
     ticket = engine.get_ticket(ticket_id)
+    from warranty_intake_context import mark_model_confirmed  # noqa: WPS433
+
+    if ticket is not None:
+        mark_model_confirmed(ticket)
+        _persist_ticket_row(ticket_id, ticket)
     node = engine.get_current_node(ticket_id)
     payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
     payload["model_registered"] = True
@@ -951,6 +963,10 @@ def _serialize_ticket_state(
         engine = _lazy_engine()
 
     from warranty_assistant_message import build_assistant_message_bundle  # noqa: WPS433
+    from warranty_intake_context import (  # noqa: WPS433
+        is_model_confirmed,
+        needs_model_confirmation,
+    )
 
     enrichment = build_assistant_message_bundle(
         engine=engine,
@@ -969,7 +985,8 @@ def _serialize_ticket_state(
             "status":       str(ticket.status),
             "issue_type":   str(ticket.issue_type or ""),
             "model_name":   str(ticket.model_name or ""),
-            "model_confirmed": bool(str(ticket.model_name or "").strip()),
+            "model_confirmed": is_model_confirmed(ticket),
+            "needs_model_confirmation": needs_model_confirmation(ticket),
             "ready_for_issue_type": (
                 node_id == "issue_type" and bool(str(ticket.model_name or "").strip())
             ),
@@ -1070,6 +1087,40 @@ async def register_warranty_model(session_id: str, body: WarrantyRegisterModelRe
     """
     engine = _lazy_engine()
     return _register_model_ticket(engine, session_id, body.model, body.domain)
+
+
+@router.post("/api/v1/warranty/session/{session_id}/confirm-model", tags=["warranty"])
+async def confirm_warranty_model(session_id: str, body: WarrantyConfirmModelRequest):
+    """
+    Confirm or correct the chair model after smart-start inferred it from free text.
+    """
+    from product_catalog import resolve_model_name  # noqa: WPS433
+    from warranty_intake_context import mark_model_confirmed  # noqa: WPS433
+
+    engine = _lazy_engine()
+    ticket = engine.get_active_session_ticket(session_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="No active warranty session found.")
+
+    ticket_id = str(ticket.ticket_id)
+    corrected = str(body.model or "").strip()
+    if corrected:
+        resolved = resolve_model_name(corrected) or corrected
+        engine.set_model_name(ticket_id, resolved)
+    elif not body.confirmed:
+        raise HTTPException(
+            status_code=422,
+            detail="Set confirmed=true or provide a corrected model name.",
+        )
+
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is not None:
+        mark_model_confirmed(ticket)
+        _persist_ticket_row(ticket_id, ticket)
+
+    ticket = engine.get_ticket(ticket_id)
+    node = engine.get_current_node(ticket_id)
+    return _serialize_ticket_state(session_id, ticket, node, engine=engine)
 
 
 @router.post("/api/v1/warranty/session/{session_id}/quick-start", tags=["warranty"])
@@ -1229,6 +1280,11 @@ async def smart_start_warranty(
     node = engine.get_current_node(ticket_id)
     payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
 
+    from warranty_intake_context import (  # noqa: WPS433
+        build_model_confirmation_message,
+        needs_model_confirmation,
+    )
+
     inferred_issue_type: Optional[str] = None
     if len(applied_keys_list) >= 2 and applied_keys_list[1] in (
         "installation",
@@ -1260,6 +1316,12 @@ async def smart_start_warranty(
         "model_name_hint": extraction.get("model_name", ""),
         "routing_confirmation": routing_confirmation,
     }
+    if ticket and needs_model_confirmation(ticket):
+        model_display = str(ticket.model_name or model_hint or "").strip()
+        payload["model_confirmation"] = {
+            "model_name": model_display,
+            "message": build_model_confirmation_message(model_display),
+        }
     return payload
 
 

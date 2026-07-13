@@ -9,6 +9,36 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+COL_MODEL_CONFIRMED = "model_confirmed"
+
+
+def mark_model_confirmed(ticket) -> None:
+    if ticket is None or not hasattr(ticket, "set_collected"):
+        return
+    ticket.set_collected(COL_MODEL_CONFIRMED, "1")
+
+
+def is_model_confirmed(ticket) -> bool:
+    if ticket is None:
+        return False
+    collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
+    return str(collected.get(COL_MODEL_CONFIRMED) or "") == "1"
+
+
+def needs_model_confirmation(ticket) -> bool:
+    model = str(getattr(ticket, "model_name", "") or "").strip()
+    if not model:
+        return False
+    return not is_model_confirmed(ticket)
+
+
+def build_model_confirmation_message(model_name: str) -> str:
+    display = (model_name or "your chair").strip()
+    return (
+        f"I have **{display}** as your chair model.\n\n"
+        "Is that correct? Tap **Yes, that's my model** below, or type the correct model name."
+    )
+
 
 def persist_intake_summary(
     ticket,

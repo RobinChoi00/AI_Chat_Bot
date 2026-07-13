@@ -226,6 +226,34 @@ def _format_option_bullets(options: list[dict], *, limit: int = 8) -> str:
     return "\n".join(lines)
 
 
+def suggest_closest_option(options: list[dict], text: str) -> Optional[dict]:
+    """Heuristic best-guess option for did-you-mean clarifying (does not auto-submit)."""
+    norm = _normalize(text)
+    if not norm or not options:
+        return None
+
+    best: Optional[dict] = None
+    best_score = 0
+    for opt in options:
+        label = _normalize(str(opt.get("label") or ""))
+        key = _normalize(str(opt.get("answer_key") or ""))
+        score = 0
+        if key and len(key) >= 3 and key in norm:
+            score += 4
+        if label and len(label) >= 8 and label in norm:
+            score += 5
+        for word in norm.split():
+            if len(word) >= 4 and word in label:
+                score += 2
+        if score > best_score:
+            best_score = score
+            best = opt
+
+    if best_score >= 3:
+        return best
+    return None
+
+
 def build_clarifying_workflow_message(node: dict, user_text: str) -> str:
     """Customer-facing re-prompt when free text did not map to a menu option."""
     prompt = str(node.get("prompt") or "").strip()
@@ -240,6 +268,12 @@ def build_clarifying_workflow_message(node: dict, user_text: str) -> str:
         lead = "I want to make sure I pick the right next step for you."
 
     parts = [lead]
+    closest = suggest_closest_option(options, trimmed)
+    if closest:
+        label = str(closest.get("label") or closest.get("answer_key") or "").strip()
+        if label:
+            parts.append(f'Did you mean **{label}**? Tap that option below, or rephrase.')
+
     bullets = _format_option_bullets(options)
     if bullets:
         parts.append("Please tap one of these, or rephrase to match one of them:")

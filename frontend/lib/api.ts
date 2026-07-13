@@ -145,6 +145,38 @@ export async function registerWarrantyModel(
 }
 
 /**
+ * Confirm or correct inferred model after smart-start.
+ *
+ * CONTRACT: POST /api/v1/warranty/session/{session_id}/confirm-model
+ */
+export async function confirmWarrantyModel(
+  sessionId: string,
+  payload: { confirmed?: boolean; model?: string; domain?: string }
+): Promise<WarrantySessionResponse> {
+  const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/confirm-model`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      confirmed: payload.confirmed ?? true,
+      model: payload.model,
+      domain: payload.domain ?? "osaki.com",
+    }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<WarrantySessionResponse>;
+}
+
+/**
  * Start warranty intake at Installation / Delivery / Defect — no LLM call.
  *
  * CONTRACT: POST /api/v1/warranty/session/{session_id}/quick-start

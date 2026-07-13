@@ -46,6 +46,53 @@ def _turn_text(turn: Any, field: str) -> str:
     return str(getattr(turn, field, "") or "")
 
 
+def _fonz_entry_from_hit(hit: dict[str, Any]) -> KnowledgeEntry:
+    from warranty_knowledge import KnowledgeEntry, _extract_customer_steps, _infer_category  # noqa: WPS433
+
+    code = str(hit.get("error_code") or "")
+    meaning = str(hit.get("meaning") or "").strip()
+    troubleshooting = str(hit.get("troubleshooting") or "").strip()
+    steps = _extract_customer_steps(troubleshooting, meaning)
+    if not steps and troubleshooting:
+        steps = (troubleshooting[:220],)
+    return KnowledgeEntry(
+        source="fonz_error_code",
+        category=_infer_category(f"{meaning} {troubleshooting}"),
+        title=f"{hit.get('model')} — error {code}",
+        diagnostic=meaning[:300] or f"Error code {code}.",
+        customer_steps=steps,
+    )
+
+
+def _fonz_match_from_ticket(ticket, model_name: str) -> Optional[KnowledgeEntry]:
+    """Use collected error code or intake text on the ticket."""
+    from error_code_lookup import (  # noqa: WPS433
+        extract_error_codes_from_text,
+        lookup_error_code,
+    )
+    from warranty_intake_context import get_intake_summary  # noqa: WPS433
+
+    if ticket is None:
+        return None
+
+    collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
+    code_raw = str(collected.get("error_code") or "").strip()
+    if code_raw:
+        hit = lookup_error_code(model_name, code_raw)
+        if hit:
+            return _fonz_entry_from_hit(hit)
+
+    intake = get_intake_summary(ticket)
+    for text in (intake, code_raw):
+        if not text:
+            continue
+        for code in extract_error_codes_from_text(text):
+            hit = lookup_error_code(model_name, code)
+            if hit:
+                return _fonz_entry_from_hit(hit)
+    return None
+
+
 def _fonz_match_from_turns(model_name: str, turns: list) -> Optional[KnowledgeEntry]:
     from error_code_lookup import extract_error_codes_from_text, lookup_error_code  # noqa: WPS433
     from warranty_knowledge import KnowledgeEntry, _extract_customer_steps, _infer_category  # noqa: WPS433
@@ -57,18 +104,7 @@ def _fonz_match_from_turns(model_name: str, turns: list) -> Optional[KnowledgeEn
                 hit = lookup_error_code(model_name, code)
                 if not hit:
                     continue
-                meaning = str(hit.get("meaning") or "").strip()
-                troubleshooting = str(hit.get("troubleshooting") or "").strip()
-                steps = _extract_customer_steps(troubleshooting, meaning)
-                if not steps and troubleshooting:
-                    steps = (troubleshooting[:220],)
-                return KnowledgeEntry(
-                    source="fonz_error_code",
-                    category=_infer_category(f"{meaning} {troubleshooting}"),
-                    title=f"{hit.get('model')} — error {hit.get('error_code')}",
-                    diagnostic=meaning[:300] or f"Error code {code}.",
-                    customer_steps=steps,
-                )
+                return _fonz_entry_from_hit(hit)
     return None
 
 
@@ -169,7 +205,10 @@ def build_step_enrichment(
     path_text = enrich_path_text(build_path_text(turns), ticket)
     defect_category = infer_defect_category_from_turns(turns)
 
-    fonz_entry = _fonz_match_from_turns(model_name, turns)
+    fonz_entry = _fonz_match_from_ticket(ticket, model_name) or _fonz_match_from_turns(
+        model_name,
+        turns,
+    )
 
     matches = contextual_search_knowledge(
         path_text=path_text,
