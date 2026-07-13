@@ -109,6 +109,38 @@ def test_confirm_model_after_smart_start(client, monkeypatch):
     assert confirm.json()["ticket"]["needs_model_confirmation"] is False
 
 
+def test_natural_start_corrects_model_while_confirmation_pending(client, monkeypatch):
+    monkeypatch.setattr(
+        "warranty_intake.extract_workflow_prefill",
+        lambda **kwargs: {
+            "answer_keys": ["warranty"],
+            "model_name": "3D LTX",
+            "summary": "3D LTX chair",
+            "source": "llm",
+        },
+    )
+
+    session_id = "cust-api-natural-model-fix"
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/smart-start",
+        json={"message": "3D LTX footrest air issue", "domain": "osaki.com"},
+    )
+    assert start.status_code == 200, start.text
+    assert start.json()["ticket"]["needs_model_confirmation"] is True
+
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/natural-start",
+        json={"message": "Hypnos", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data.get("model_corrected") is True
+    assert data["ticket"]["model_confirmed"] is True
+    assert data["ticket"]["needs_model_confirmation"] is False
+    model_name = data["ticket"]["model_name"].lower()
+    assert "hypnos" in model_name
+
+
 def test_quick_start_requires_model_first(client):
     session_id = "cust-api-no-model"
     resp = client.post(

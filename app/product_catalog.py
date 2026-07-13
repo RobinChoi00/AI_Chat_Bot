@@ -204,9 +204,16 @@ def _key_is_le_variant(key: str) -> bool:
 
 
 def format_model_display_name(title: str) -> str:
-    """Strip KakaoTalk bundle marketing from Shopify titles for customer-facing UI."""
+    """Strip bundle/warranty marketing from Shopify titles for customer-facing UI."""
     s = (title or "").strip()
     s = re.sub(r"\s*\([^)]*kakao[^)]*\)\s*", " ", s, flags=re.I)
+    s = re.sub(
+        r"\s*\([^)]*(?:warranty|warr|ext\s*\d|free\s*\d|gift|🎁)[^)]*\)\s*",
+        " ",
+        s,
+        flags=re.I,
+    )
+    s = re.sub(r"🎁", "", s)
     s = re.sub(r"\s*with\s+free\s+.+$", "", s, flags=re.I)
     return re.sub(r"\s+", " ", s).strip()
 

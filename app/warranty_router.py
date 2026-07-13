@@ -1186,11 +1186,37 @@ async def natural_start_warranty(
         build_clarifying_issue_type_message,
         interpret_issue_type,
     )
+    from warranty_intake_context import (  # noqa: WPS433
+        mark_model_confirmed,
+        needs_model_confirmation,
+    )
 
     engine = _lazy_engine()
     ticket = engine.get_active_session_ticket(session_id)
     if ticket is not None:
         _require_registered_model(ticket)
+
+    if ticket is not None and needs_model_confirmation(ticket):
+        from product_catalog import looks_like_model_only, resolve_model_name  # noqa: WPS433
+
+        issue_type = interpret_issue_type(message)
+        model_candidate = looks_like_model_only(message)
+        if not model_candidate and not issue_type:
+            model_candidate = resolve_model_name(message)
+
+        if model_candidate or (not issue_type and len(message.split()) <= 6):
+            ticket_id = str(ticket.ticket_id)
+            resolved = model_candidate or resolve_model_name(message) or message
+            engine.set_model_name(ticket_id, resolved)
+            ticket = engine.get_ticket(ticket_id)
+            if ticket is not None:
+                mark_model_confirmed(ticket)
+                _persist_ticket_row(ticket_id, ticket)
+            node = engine.get_current_node(ticket_id)
+            payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+            payload["model_corrected"] = True
+            payload["resolved_model"] = resolved
+            return payload
 
     issue_type = interpret_issue_type(message)
     if not issue_type:

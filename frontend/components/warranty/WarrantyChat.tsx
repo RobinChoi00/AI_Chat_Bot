@@ -445,6 +445,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
             ...prev,
             assistantMessage(routingConfirm.message),
           ]);
+          await appendAssistantFromResponse(resp.ticket, resp);
         } else if (jumped && smart?.summary) {
           await sleep(THINKING_DELAY_MS);
           setMessages((prev) => [
@@ -453,6 +454,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
               `Got it — ${smart.summary} I'll skip the extra menu questions and take you straight to the next step.`
             ),
           ]);
+          await appendAssistantFromResponse(resp.ticket, resp);
         } else if (
           resp.ticket?.ready_for_issue_type &&
           resp.ticket?.model_name &&
@@ -465,9 +467,9 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
               `Thanks — I have **${resp.ticket!.model_name}** on file.\n\nWhat type of issue can we help you with? Choose below or describe it in your own words.`
             ),
           ]);
+        } else {
+          await appendAssistantFromResponse(resp.ticket, resp);
         }
-
-        await appendAssistantFromResponse(resp.ticket, resp);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Something went wrong.";
         setError(msg);
@@ -590,6 +592,21 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       const atIssueTypeWithoutModel =
         atIssueTypeNode && !warrantyState?.model_name?.trim();
 
+      if (needsModelConfirmation) {
+        const lower = trimmed.toLowerCase();
+        const confirmsModel =
+          /^(yes|yeah|yep|y|correct|right|that(?:'s| is) (?:my )?model)\b/.test(
+            lower
+          );
+        if (confirmsModel) {
+          await confirmInferredModel();
+        } else {
+          await confirmInferredModel(trimmed);
+        }
+        setInput("");
+        return;
+      }
+
       if (atIssueTypeWithoutModel || pendingDefectStart) {
         setError(null);
         setLoading(true);
@@ -633,12 +650,6 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
 
       if (atIssueTypeNode && warrantyState?.model_name) {
         await startViaNaturalIssueType(trimmed);
-        return;
-      }
-
-      if (needsModelConfirmation && trimmed.split(/\s+/).length <= 4) {
-        await confirmInferredModel(trimmed);
-        setInput("");
         return;
       }
 
@@ -747,20 +758,22 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     (!warrantyState?.ticket_id ||
       warrantyState?.current_node?.node_id === "root");
 
+  const needsModelConfirmation = Boolean(warrantyState?.needs_model_confirmation);
+
   const showIssueTypeOptions =
     sessionChecked &&
     !loading &&
     !isTerminal &&
+    !needsModelConfirmation &&
     !warrantyState?.issue_type &&
     (warrantyState?.ready_for_issue_type ||
       (!!warrantyState?.model_name && atIssueTypeNode));
-
-  const needsModelConfirmation = Boolean(warrantyState?.needs_model_confirmation);
 
   const hasWorkflowOptions =
     !optionsUsed &&
     !loading &&
     !showIssueTypeOptions &&
+    !needsModelConfirmation &&
     (warrantyState?.current_node?.options?.length ?? 0) > 0;
 
   useEffect(() => {
@@ -793,6 +806,8 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
 
   const inputPlaceholder = needsCustomerReply
     ? "Type your reply to our team here…"
+    : needsModelConfirmation
+      ? "Type the correct model name (e.g. Hypnos, OS-4000T)…"
     : pendingDefectStart
       ? "Enter your chair model (e.g. OS-4000T, 3D LTX)…"
     : needsFirstIntake

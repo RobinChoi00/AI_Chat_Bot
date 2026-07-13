@@ -38,6 +38,11 @@ def test_format_model_display_name_strips_kakaotalk_bundle():
     assert pc.format_model_display_name(raw) == "Osaki OS-Pro Maestro"
 
 
+def test_format_model_display_name_strips_warranty_promo():
+    raw = "Osaki Trion Flex Duo 4D+3D (Free 2Yrs Ext Warranty 🎁)"
+    assert pc.format_model_display_name(raw) == "Osaki Trion Flex Duo 4D+3D"
+
+
 def test_resolve_maestro_prefers_clean_title_over_kakaotalk_bundle():
     pc.load_catalog_titles.cache_clear()
     if not pc._CSV_PATH.is_file():
