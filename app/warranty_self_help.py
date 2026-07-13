@@ -135,6 +135,13 @@ HELP_OFFER_OPTIONS: tuple[dict[str, str], ...] = (
     {"answer_key": "no_self_help", "label": "I'll try these steps on my own"},
 )
 
+
+def category_fallback_hints(defect_category: str, *, limit: int = 2) -> tuple[str, ...]:
+    """Short category-only tips when the chair model is not yet known."""
+    hints = _CATEGORY_ADMIN_PREP_HINTS.get((defect_category or "").strip().lower(), ())
+    return hints[: max(0, limit)]
+
+
 _INSTALL_AIR_HOSE_STEPS: tuple[str, ...] = (
     "With the chair powered off, find the air hose that connects the footrest to the base of the chair.",
     "Disconnect and firmly reconnect both ends of that hose — this fixes many cases where air does not work anywhere on the chair.",

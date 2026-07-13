@@ -657,6 +657,40 @@ def _register_model_ticket(
     return payload
 
 
+_DEFECT_MODEL_REQUIRED_MSG = (
+    "Please tell us your chair model first (for example OS-4000T or 3D LTX), "
+    "then continue with warranty / defect."
+)
+
+
+def _answer_selects_defect(node: Optional[dict], answer: str) -> bool:
+    if not node or str(node.get("node_id") or "") != "issue_type":
+        return False
+    key = str(answer or "").strip().lower()
+    if key in {"defect", "warranty / defect", "warranty/defect"}:
+        return True
+    for opt in node.get("options") or []:
+        opt_key = str(opt.get("answer_key") or "").strip().lower()
+        label = str(opt.get("label") or "").strip().lower()
+        if opt_key != "defect":
+            continue
+        if key in {opt_key, label}:
+            return True
+        if key and (key in label or label in key):
+            return True
+    return False
+
+
+def _guard_defect_requires_model(engine, ticket_id: str, answer: str) -> Optional[str]:
+    node = engine.get_current_node(ticket_id)
+    if not _answer_selects_defect(node, answer):
+        return None
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is not None and str(getattr(ticket, "model_name", "") or "").strip():
+        return None
+    return _DEFECT_MODEL_REQUIRED_MSG
+
+
 def _validate_text_before_submit(engine, ticket_id: str, answer: str) -> None:
     node = engine.get_current_node(ticket_id)
     if not node or node.get("type") != "question_text":
@@ -1341,6 +1375,10 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
     side_message = _maybe_side_question_message(engine, ticket_id, answer)
     if side_message:
         return _build_side_question_response(engine, ticket_id, side_message)
+
+    defect_guard = _guard_defect_requires_model(engine, ticket_id, answer)
+    if defect_guard:
+        return _build_side_question_response(engine, ticket_id, defect_guard)
 
     try:
         result, nlp_interpreted, clarify = _submit_answer_with_nlp(

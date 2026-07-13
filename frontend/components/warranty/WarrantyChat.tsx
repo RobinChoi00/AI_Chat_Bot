@@ -7,6 +7,7 @@ import {
   getWarrantySession,
   quickStartWarranty,
   naturalStartWarranty,
+  registerWarrantyModel,
   restartWarrantySession,
   resumeWarrantyFromToken,
   smartStartWarranty,
@@ -55,6 +56,9 @@ const SELF_HELP_CLOSING =
   "Sounds good — try those steps first. If you still need us, you can start a new case anytime. " +
   "Our warranty team is also available by phone during business hours.";
 
+const DEFECT_MODEL_PROMPT =
+  "To troubleshoot warranty defects accurately, please **enter your chair model** in the box below (for example OS-4000T or 3D LTX). I'll continue with the defect questions right after.";
+
 const INITIAL_ISSUE_OPTIONS: AnswerOption[] = [
   { answer_key: "installation", label: "Setup & installation" },
   { answer_key: "delivery", label: "Delivery & tracking" },
@@ -93,6 +97,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const [optionsPanelExpanded, setOptionsPanelExpanded] = useState(true);
   const [issueTypePanelExpanded, setIssueTypePanelExpanded] = useState(true);
   const [emailPanelCollapsed, setEmailPanelCollapsed] = useState(false);
+  const [pendingDefectStart, setPendingDefectStart] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -258,9 +263,21 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     []
   );
 
+  const promptModelForDefect = useCallback((label: string) => {
+    setPendingDefectStart(label);
+    setOptionsUsed(false);
+    setMessages((prev) => [...prev, assistantMessage(DEFECT_MODEL_PROMPT)]);
+  }, []);
+
   const handleQuickStart = useCallback(
     async (issueType: "installation" | "delivery" | "defect", label: string) => {
       if (loading) return;
+      if (issueType === "defect" && !warrantyState?.model_name?.trim()) {
+        setError(null);
+        setMessages((prev) => [...prev, { role: "user", content: label }]);
+        promptModelForDefect(label);
+        return;
+      }
       setError(null);
       setLoading(true);
       setOptionsUsed(true);
@@ -280,7 +297,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         inputRef.current?.focus();
       }
     },
-    [loading, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse]
+    [loading, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse, warrantyState?.model_name, promptModelForDefect]
   );
 
   const advanceWarranty = useCallback(
@@ -570,6 +587,50 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         return;
       }
 
+      const atIssueTypeWithoutModel =
+        atIssueTypeNode && !warrantyState?.model_name?.trim();
+
+      if (atIssueTypeWithoutModel || pendingDefectStart) {
+        setError(null);
+        setLoading(true);
+        setInput("");
+        try {
+          const resp = await registerWarrantyModel(sessionId, trimmed, storeDomain);
+          applySessionResponse(resp);
+          const defectLabel = pendingDefectStart;
+          setPendingDefectStart(null);
+          await sleep(THINKING_DELAY_MS);
+          setMessages((prev) => [
+            ...prev,
+            assistantMessage(
+              `Thanks — I have **${resp.ticket?.model_name ?? trimmed}** on file.`
+            ),
+          ]);
+          if (defectLabel && resp.ticket?.ticket_id) {
+            const defectResp = await submitWarrantyAnswer(resp.ticket.ticket_id, "defect");
+            applySessionResponse(defectResp);
+            setMessages((prev) => [...prev, { role: "user", content: defectLabel }]);
+            if (defectResp.side_question && defectResp.assistant_message) {
+              await sleep(THINKING_DELAY_MS);
+              setMessages((prev) => [
+                ...prev,
+                assistantMessage(defectResp.assistant_message!),
+              ]);
+              setOptionsUsed(false);
+            } else {
+              await appendAssistantFromResponse(defectResp.ticket, defectResp);
+            }
+          }
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : "Something went wrong.";
+          setError(msg);
+        } finally {
+          setLoading(false);
+          inputRef.current?.focus();
+        }
+        return;
+      }
+
       if (atIssueTypeNode && warrantyState?.model_name) {
         await startViaNaturalIssueType(trimmed);
         return;
@@ -605,8 +666,13 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       startViaSmartIntake,
       startViaNaturalIssueType,
       advanceWarranty,
+      appendAssistantFromResponse,
       submitFollowUpNote,
       refreshWarrantyState,
+      pendingDefectStart,
+      sessionId,
+      storeDomain,
+      applySessionResponse,
     ]
   );
 
@@ -623,6 +689,18 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   }
 
   function handleOptionSelect(answerKey: string, label: string) {
+    const atIssueTypeNode =
+      !warrantyState?.issue_type &&
+      warrantyState?.current_node?.node_id === "issue_type";
+    if (
+      atIssueTypeNode &&
+      answerKey === "defect" &&
+      !warrantyState?.model_name?.trim()
+    ) {
+      setMessages((prev) => [...prev, { role: "user", content: label }]);
+      promptModelForDefect(label);
+      return;
+    }
     advanceWarranty(answerKey, label);
   }
 
@@ -715,6 +793,8 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
 
   const inputPlaceholder = needsCustomerReply
     ? "Type your reply to our team here…"
+    : pendingDefectStart
+      ? "Enter your chair model (e.g. OS-4000T, 3D LTX)…"
     : needsFirstIntake
     ? "Model + issue (e.g. OS-4000T footrest air not inflating)…"
     : showIssueTypeOptions
@@ -838,6 +918,15 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
             </div>
           )}
         </div>
+
+        {pendingDefectStart && (
+          <div className="mt-3 sm:mt-4 rounded-xl border border-sky-200 bg-sky-50/90 px-4 py-3">
+            <p className="text-sm font-medium text-sky-950">Chair model needed</p>
+            <p className="mt-1 text-sm text-sky-900">
+              Enter your model below to continue with warranty / defect.
+            </p>
+          </div>
+        )}
 
         {needsModelConfirmation && warrantyState?.model_name && (
           <div className="mt-3 sm:mt-4 rounded-xl border border-violet-200 bg-violet-50/90 px-4 py-3">

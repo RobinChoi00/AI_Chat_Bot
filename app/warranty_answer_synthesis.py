@@ -40,6 +40,64 @@ def format_fonz_suggestion_entries(
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
+def _symptom_block_header(
+    *,
+    model_name: str,
+    defect_type: str,
+    suggestions: list[dict[str, Any]],
+) -> str:
+    area = (defect_type or "this issue").replace("_", " ")
+    if not model_name:
+        return (
+            f"**Common manufacturer error codes for {area} issues** "
+            "(confirm your model for an exact match):"
+        )
+    if suggestions and suggestions[0].get("family_fallback"):
+        canonical = str(suggestions[0].get("family_canonical") or "").strip()
+        if canonical:
+            return (
+                f"**Related error codes for {area}** "
+                f"(from the **{canonical}** platform — similar to your **{model_name.strip()}**):"
+            )
+    return (
+        f"**Related manufacturer error codes for {area} on your model** "
+        f"(confirm on your display if one appears):"
+    )
+
+
+def build_category_fallback_block(ticket) -> str:
+    """Tier-5 hints when model is unknown — category tips + optional KB."""
+    defect_type = str(getattr(ticket, "defect_type", "") or "").strip()
+    if not defect_type:
+        return ""
+
+    from error_code_lookup import suggest_category_error_codes  # noqa: WPS433
+    from warranty_self_help import category_fallback_hints  # noqa: WPS433
+
+    lines: list[str] = []
+    fonz = suggest_category_error_codes(defect_type, limit=2)
+    if fonz:
+        area = defect_type.replace("_", " ")
+        block = format_fonz_suggestion_entries(
+            fonz,
+            header=(
+                f"**Common manufacturer error codes for {area} issues** "
+                "(confirm your chair model for an exact match):"
+            ),
+        )
+        if block:
+            lines.append(block)
+
+    hints = category_fallback_hints(defect_type, limit=2)
+    if hints:
+        label = defect_type.replace("_", " ")
+        lines.append(f"**While we confirm your model — quick checks for {label}:**")
+        for hint in hints:
+            lines.append(f"• {hint}")
+
+    return "\n\n".join(part for part in lines if part).strip()
+
+
 def build_symptom_fonz_block(ticket) -> str:
     """
     Symptom-based Fonz insight when no exact error code is on the ticket.
@@ -47,19 +105,16 @@ def build_symptom_fonz_block(ticket) -> str:
     """
     from error_code_lookup import suggest_error_codes_for_ticket  # noqa: WPS433
 
-    model_name = str(getattr(ticket, "model_name", "") or "")
-    if not model_name:
-        return ""
-
+    model_name = str(getattr(ticket, "model_name", "") or "").strip()
     defect_type = str(getattr(ticket, "defect_type", "") or "")
     suggestions = suggest_error_codes_for_ticket(model_name, defect_type, limit=2)
     if not suggestions:
-        return ""
+        return build_category_fallback_block(ticket) if not model_name else ""
 
-    area = (defect_type or "this issue").replace("_", " ")
-    header = (
-        f"**Related manufacturer error codes for {area} on your model** "
-        f"(confirm on your display if one appears):"
+    header = _symptom_block_header(
+        model_name=model_name,
+        defect_type=defect_type,
+        suggestions=suggestions,
     )
     return format_fonz_suggestion_entries(suggestions, header=header)
 
@@ -70,6 +125,10 @@ def append_symptom_insights_to_message(message: str, ticket) -> str:
     if not base:
         return base
     if "**Error code" in base or "**Related manufacturer error codes" in base:
+        return base
+    if "**Common manufacturer error codes" in base:
+        return base
+    if "**While we confirm your model" in base:
         return base
 
     block = build_symptom_fonz_block(ticket)
@@ -87,7 +146,13 @@ def enrich_diagnosis_with_symptom_fonz(
         return diagnosis
 
     summary = str(diagnosis.get("summary") or "").strip()
-    if "**Error code" in summary or "**Related manufacturer error codes" in summary:
+    skip_markers = (
+        "**Error code",
+        "**Related manufacturer error codes",
+        "**Common manufacturer error codes",
+        "**While we confirm your model",
+    )
+    if any(marker in summary for marker in skip_markers):
         return diagnosis
 
     block = build_symptom_fonz_block(ticket)

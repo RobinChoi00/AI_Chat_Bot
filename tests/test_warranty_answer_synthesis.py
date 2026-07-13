@@ -43,3 +43,10 @@ def test_append_symptom_skips_when_code_present():
     ticket = SimpleNamespace(model_name="3D LTX", defect_type="air")
     msg = "Done.\n\n**Error code C6:** meaning here."
     assert append_symptom_insights_to_message(msg, ticket) == msg
+
+
+def test_category_fallback_without_model():
+    ticket = SimpleNamespace(model_name="", defect_type="air")
+    block = build_symptom_fonz_block(ticket)
+    assert block
+    assert "Common manufacturer error codes" in block or "confirm your model" in block.lower()

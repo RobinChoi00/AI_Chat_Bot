@@ -114,6 +114,18 @@ def lookup_error_code(
                 continue
             if mk in model_key or model_key in mk:
                 return dict(entry)
+        from model_families import resolve_family_canonical  # noqa: WPS433
+
+        family_model = resolve_family_canonical(model_name or "")
+        if family_model:
+            family_key = _resolve_model_key(family_model)
+            if family_key:
+                hit = by_model_code.get((family_key, code))
+                if hit:
+                    out = dict(hit)
+                    out["family_fallback"] = True
+                    out["family_canonical"] = family_model
+                    return out
 
     matches = by_code.get(code) or []
     if len(matches) == 1:
@@ -188,6 +200,33 @@ def _model_key_matches(model_key: str, entry: dict[str, Any]) -> bool:
     return mk == model_key or mk in model_key or model_key in mk
 
 
+def _collect_codes_for_model_key(
+    model_key: str,
+    *,
+    mapped: Optional[str],
+    workflow_category: Optional[str],
+    limit: int,
+) -> list[dict[str, Any]]:
+    by_model_code, _ = _load_index()
+    seen: set[str] = set()
+    matches: list[dict[str, Any]] = []
+    for (mk, _code), entry in by_model_code.items():
+        if not _model_key_matches(model_key, {**entry, "model_key": mk}):
+            continue
+        code = str(entry.get("error_code") or "")
+        if not code or code in seen:
+            continue
+        if mapped:
+            cat = entry_workflow_category(entry)
+            if cat != mapped and cat != (workflow_category or "").lower():
+                continue
+        seen.add(code)
+        matches.append(dict(entry))
+
+    matches.sort(key=lambda row: str(row.get("error_code") or ""))
+    return matches[: max(1, limit)]
+
+
 def list_model_error_codes(
     model_name: str,
     *,
@@ -210,24 +249,41 @@ def list_model_error_codes(
     except Exception:
         mapped = (workflow_category or "").lower() or None
 
-    by_model_code, _ = _load_index()
-    seen: set[str] = set()
-    matches: list[dict[str, Any]] = []
-    for (mk, _code), entry in by_model_code.items():
-        if not _model_key_matches(model_key, {**entry, "model_key": mk}):
-            continue
-        code = str(entry.get("error_code") or "")
-        if not code or code in seen:
-            continue
-        if mapped:
-            cat = entry_workflow_category(entry)
-            if cat != mapped and cat != (workflow_category or "").lower():
-                continue
-        seen.add(code)
-        matches.append(dict(entry))
+    matches = _collect_codes_for_model_key(
+        model_key,
+        mapped=mapped,
+        workflow_category=workflow_category,
+        limit=limit,
+    )
+    if matches:
+        return matches
 
-    matches.sort(key=lambda row: str(row.get("error_code") or ""))
-    return matches[: max(1, limit)]
+    from model_families import resolve_family_canonical  # noqa: WPS433
+
+    family_model = resolve_family_canonical(model_name)
+    if not family_model:
+        return []
+
+    family_key = _resolve_model_key(family_model)
+    if not family_key or family_key == model_key:
+        return []
+
+    family_matches = _collect_codes_for_model_key(
+        family_key,
+        mapped=mapped,
+        workflow_category=workflow_category,
+        limit=limit,
+    )
+    if not family_matches:
+        return []
+
+    out: list[dict[str, Any]] = []
+    for row in family_matches:
+        tagged = dict(row)
+        tagged["family_fallback"] = True
+        tagged["family_canonical"] = family_model
+        out.append(tagged)
+    return out
 
 
 def suggest_error_codes_for_ticket(
@@ -237,16 +293,50 @@ def suggest_error_codes_for_ticket(
     limit: int = 2,
 ) -> list[dict[str, Any]]:
     """Soft terminal hints when the customer did not enter a code."""
-    if not model_name:
+    if model_name:
+        matches = list_model_error_codes(
+            model_name,
+            workflow_category=defect_type or None,
+            limit=limit,
+        )
+        if not matches and defect_type:
+            matches = list_model_error_codes(model_name, limit=limit)
+        return matches
+
+    return suggest_category_error_codes(defect_type, limit=limit)
+
+
+def suggest_category_error_codes(
+    defect_type: str,
+    *,
+    limit: int = 2,
+) -> list[dict[str, Any]]:
+    """Category-only Fonz hints when chair model is not yet known."""
+    if not defect_type:
         return []
-    matches = list_model_error_codes(
-        model_name,
-        workflow_category=defect_type or None,
-        limit=limit,
-    )
-    if not matches and defect_type:
-        matches = list_model_error_codes(model_name, limit=limit)
-    return matches
+
+    try:
+        from warranty_knowledge import map_workflow_defect_category  # noqa: WPS433
+
+        mapped = map_workflow_defect_category(defect_type.lower())
+    except Exception:
+        mapped = defect_type.lower()
+
+    by_model_code, _ = _load_index()
+    seen: set[str] = set()
+    matches: list[dict[str, Any]] = []
+    for (_mk, _code), entry in by_model_code.items():
+        code = str(entry.get("error_code") or "")
+        if not code or code in seen:
+            continue
+        cat = entry_workflow_category(entry)
+        if cat != mapped and cat != defect_type.lower():
+            continue
+        seen.add(code)
+        matches.append(dict(entry))
+
+    matches.sort(key=lambda row: str(row.get("error_code") or ""))
+    return matches[: max(1, limit)]
 
 
 def parse_pick_answer_key(answer_key: str) -> Optional[str]:
