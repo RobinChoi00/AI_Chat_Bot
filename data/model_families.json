@@ -1,0 +1,81 @@
+{
+  "version": "1.0",
+  "description": "Maps chair models to a canonical Fonz platform for one-hop error-code fallback.",
+  "families": [
+    {
+      "id": "a601-2",
+      "canonical": "Allure",
+      "members": ["Allure", "Hamilton LE", "Signature"]
+    },
+    {
+      "id": "rk7602d",
+      "canonical": "Dynasty",
+      "members": ["Highpointe", "Dynasty", "Kairos"]
+    },
+    {
+      "id": "rt-8720p",
+      "canonical": "Ekon Plus",
+      "members": ["Theramed LT", "Ekon Plus", "Sedona LT"]
+    },
+    {
+      "id": "rt-5865",
+      "canonical": "Encore",
+      "members": ["Atlas LE", "Encore", "Ultima"]
+    },
+    {
+      "id": "glc231",
+      "canonical": "Summit Flex",
+      "members": ["Summit LE", "Summit Flex", "Theramed Flex"]
+    },
+    {
+      "id": "a202-2",
+      "canonical": "3D LTX",
+      "members": ["3D LTX", "Quantum"]
+    },
+    {
+      "id": "a661",
+      "canonical": "Avalon",
+      "members": ["Avalon", "Revive"]
+    },
+    {
+      "id": "a351-2",
+      "canonical": "Harmony II",
+      "members": ["Harmony II", "Renew"]
+    },
+    {
+      "id": "a335-5",
+      "canonical": "Luxe",
+      "members": ["Luxe", "Tao"]
+    },
+    {
+      "id": "a503-5",
+      "canonical": "Premier",
+      "members": ["Premier", "Cascade"]
+    },
+    {
+      "id": "a502-platform",
+      "canonical": "Acro",
+      "members": ["Acro", "Cosmo", "Integra"]
+    },
+    {
+      "id": "yh-8382l",
+      "canonical": "7200H Pinnacle",
+      "members": ["7200H Pinnacle", "Vesper"]
+    },
+    {
+      "id": "ec-8606b",
+      "canonical": "Emperor",
+      "members": ["Emperor", "Hilux"]
+    },
+    {
+      "id": "ei-8602a",
+      "canonical": "Hiro LT",
+      "members": ["Hiro LT", "Luca V"]
+    },
+    {
+      "id": "5300",
+      "canonical": "Horizon 4D",
+      "members": ["Horizon 4D", "Zion"]
+    }
+  ]
+}

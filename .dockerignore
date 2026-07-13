@@ -25,6 +25,7 @@ db_data/
 data/*
 !data/warranty_flowchart.json
 !data/warranty_evidence_specs.json
+!data/model_families.json
 raw_data/
 
 # 비밀·로컬 설정은 이미지에 포함 금지 (compose env_file로 주입)

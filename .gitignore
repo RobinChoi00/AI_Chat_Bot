@@ -24,6 +24,7 @@ pip-log.txt
 data/*
 !data/warranty_flowchart.json
 !data/warranty_evidence_specs.json
+!data/model_families.json
 faiss_index/
 *.jsonl
 *.faiss
