@@ -642,6 +642,100 @@ async def record_troubleshooting_outcome(
     }
 
 
+@router.post(
+    "/api/v1/warranty/{ticket_id}/troubleshooting-back",
+    tags=["warranty"],
+)
+async def go_back_from_warranty_contact(ticket_id: str):
+    """Return from the final contact form to the preceding resolution step.
+
+    This is deliberately separate from workflow ``/back``: the workflow is
+    already terminal here, so only the reversible troubleshooting outcome is
+    changed. Submitted/resolved cases remain immutable.
+    """
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    engine = _lazy_engine()
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+    node = engine.get_current_node(ticket_id)
+    if not node or str(node.get("type") or "") != "terminal":
+        raise HTTPException(
+            status_code=409,
+            detail="The contact step is only available after diagnosis.",
+        )
+    if str(ticket.status or "") == "resolved":
+        raise HTTPException(status_code=409, detail="This ticket is already resolved.")
+
+    now_iso = _now_cst_iso()
+    with warranty_db_session() as db:
+        ticket_row = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        if ticket_row is None:
+            raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+
+        collected = ticket_row.get_collected()
+        if str(collected.get("customer_contact_email") or "").strip():
+            raise HTTPException(
+                status_code=409,
+                detail="Contact information has already been submitted.",
+            )
+
+        previous_outcome = str(
+            collected.get("troubleshooting_outcome") or ""
+        ).strip().lower()
+        if previous_outcome == "unresolved":
+            restored_outcome: Optional[str] = "steps_completed"
+            restored_stage = "outcome"
+        elif previous_outcome == "unable_to_attempt":
+            restored_outcome = None
+            restored_stage = "review"
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail="There is no contact-form step to go back from.",
+            )
+
+        history_value = collected.get("troubleshooting_history")
+        history: List[Dict[str, str]] = (
+            list(history_value) if isinstance(history_value, list) else []
+        )
+        history.append(
+            {
+                "outcome": restored_outcome or "review",
+                "action": "back",
+                "created_at": now_iso,
+                "terminal_node_id": str(node.get("node_id") or ""),
+            }
+        )
+        if restored_outcome:
+            collected["troubleshooting_outcome"] = restored_outcome
+        else:
+            collected.pop("troubleshooting_outcome", None)
+        collected["troubleshooting_updated_at"] = now_iso
+        collected["troubleshooting_history"] = history[-20:]
+
+        import json as _json  # noqa: WPS433
+
+        ticket_row.collected_data = _json.dumps(collected)
+
+    logger.info(
+        "warranty contact back ticket=%s previous=%s restored=%s",
+        ticket_id,
+        previous_outcome,
+        restored_outcome or "review",
+    )
+    return {
+        "ticket_id": ticket_id,
+        "stage": restored_stage,
+        "outcome": restored_outcome,
+    }
+
+
 class WarrantyAnswerRequest(BaseModel):
     """Customer answer for the current workflow node (answer_key, label, or text)."""
     answer: str

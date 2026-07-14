@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import {
   confirmWarrantyModel,
   getWarrantySession,
+  goBackFromWarrantyContact,
   goBackWarranty,
   quickStartWarranty,
   naturalStartWarranty,
@@ -235,6 +236,34 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     applySessionResponse,
     messages,
   ]);
+
+  const goBackFromEmailStep = useCallback(async () => {
+    const ticketId = warrantyState?.ticket_id;
+    if (!ticketId || loading) return;
+
+    setError(null);
+    setLoading(true);
+    try {
+      const restored = await goBackFromWarrantyContact(ticketId);
+      setHelpConsent(null);
+      setResolutionStage(restored.stage);
+      setEmailPanelCollapsed(false);
+      setWarrantyState((previous) =>
+        previous
+          ? {
+              ...previous,
+              troubleshooting_outcome: restored.outcome,
+            }
+          : previous
+      );
+      setMessages((previous) => trimMessagesBeforeLastUser(previous));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not go back.");
+    } finally {
+      setLoading(false);
+      inputRef.current?.focus();
+    }
+  }, [loading, warrantyState?.ticket_id]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1200,6 +1229,8 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
             evidenceRequired={warrantyState!.current_node?.evidence_required}
             collapsed={emailPanelCollapsed}
             onToggleCollapsed={setEmailPanelCollapsed}
+            onBack={goBackFromEmailStep}
+            backDisabled={loading}
             onContactSuccess={() => {
               setContactSubmitted(true);
               setMessages((prev) => [

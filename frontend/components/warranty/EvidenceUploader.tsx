@@ -13,6 +13,8 @@ interface Props {
   onUploadSuccess?: (filename: string) => void;
   collapsed?: boolean;
   onToggleCollapsed?: (next: boolean) => void;
+  onBack?: () => void;
+  backDisabled?: boolean;
 }
 
 const ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".pdf", ".mp4", ".mov"];
@@ -44,6 +46,8 @@ export default function EvidenceUploader({
   onUploadSuccess,
   collapsed = false,
   onToggleCollapsed,
+  onBack,
+  backDisabled = false,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -160,13 +164,26 @@ export default function EvidenceUploader({
         <p className="text-xs text-gray-600">
           Contact form is hidden — you can keep chatting below.
         </p>
-        <button
-          type="button"
-          onClick={() => onToggleCollapsed?.(false)}
-          className="shrink-0 rounded-full border border-brand-200 bg-white px-3 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
-        >
-          Show contact form
-        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              disabled={backDisabled || submitting}
+              className="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Go back to the previous troubleshooting step"
+            >
+              ← Back
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => onToggleCollapsed?.(false)}
+            className="rounded-full border border-brand-200 bg-white px-3 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
+          >
+            Show contact form
+          </button>
+        </div>
       </div>
     );
   }
@@ -177,16 +194,29 @@ export default function EvidenceUploader({
         <p className="text-sm font-medium text-gray-800">
           Final step — how can we reach you?
         </p>
-        {onToggleCollapsed && (
-          <button
-            type="button"
-            onClick={() => onToggleCollapsed(true)}
-            className="shrink-0 rounded-full border border-gray-200 bg-white px-2.5 py-0.5 text-[11px] font-medium text-gray-600 hover:bg-gray-100"
-            title="Hide the contact form so you can keep chatting"
-          >
-            Hide
-          </button>
-        )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              disabled={backDisabled || submitting}
+              className="rounded-full border border-gray-300 bg-white px-2.5 py-0.5 text-[11px] font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Go back to the previous troubleshooting step"
+            >
+              ← Back
+            </button>
+          )}
+          {onToggleCollapsed && (
+            <button
+              type="button"
+              onClick={() => onToggleCollapsed(true)}
+              className="rounded-full border border-gray-200 bg-white px-2.5 py-0.5 text-[11px] font-medium text-gray-600 hover:bg-gray-100"
+              title="Hide the contact form so you can keep chatting"
+            >
+              Hide
+            </button>
+          )}
+        </div>
       </div>
       <p className="mb-3 text-xs text-gray-500">
         Enter your email so our warranty team can follow up within 24 hours.{" "}

@@ -599,6 +599,32 @@ export async function submitTroubleshootingOutcome(
   return res.json();
 }
 
+/** Return from the final email form to the preceding troubleshooting step. */
+export async function goBackFromWarrantyContact(
+  ticketId: string
+): Promise<{
+  ticket_id: string;
+  stage: "review" | "outcome";
+  outcome: "steps_completed" | null;
+}> {
+  const url = `${getApiBase()}/api/v1/warranty/${encodeURIComponent(ticketId)}/troubleshooting-back`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 // ---------------------------------------------------------------------------
 // Serial-label OCR
 // ---------------------------------------------------------------------------

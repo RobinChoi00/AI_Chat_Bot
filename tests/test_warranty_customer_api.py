@@ -649,6 +649,64 @@ def test_troubleshooting_progress_persists_before_team_review(client):
         ]
 
 
+def test_contact_step_back_restores_outcome_choice(client):
+    session_id = "cust-api-contact-back-outcome"
+    ticket_id = _start_installation_terminal(client, session_id)
+
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "steps_completed"},
+    )
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "unresolved"},
+    )
+
+    back = client.post(f"/api/v1/warranty/{ticket_id}/troubleshooting-back")
+    assert back.status_code == 200
+    assert back.json()["stage"] == "outcome"
+    assert back.json()["outcome"] == "steps_completed"
+
+    hydrated = client.get(f"/api/v1/warranty/session/{session_id}").json()
+    assert hydrated["ticket"]["troubleshooting_outcome"] == "steps_completed"
+
+    changed_choice = client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "resolved"},
+    )
+    assert changed_choice.status_code == 200
+    assert changed_choice.json()["self_service_resolved"] is True
+
+
+def test_contact_step_back_restores_review_after_unable_to_attempt(client):
+    session_id = "cust-api-contact-back-review"
+    ticket_id = _start_installation_terminal(client, session_id)
+
+    unable = client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "unable_to_attempt"},
+    )
+    assert unable.status_code == 200
+
+    back = client.post(f"/api/v1/warranty/{ticket_id}/troubleshooting-back")
+    assert back.status_code == 200
+    assert back.json()["stage"] == "review"
+    assert back.json()["outcome"] is None
+
+    hydrated = client.get(f"/api/v1/warranty/session/{session_id}").json()
+    assert hydrated["ticket"]["troubleshooting_outcome"] is None
+
+
+def test_contact_step_back_requires_contact_stage(client):
+    ticket_id = _start_installation_terminal(
+        client,
+        "cust-api-contact-back-too-early",
+    )
+
+    back = client.post(f"/api/v1/warranty/{ticket_id}/troubleshooting-back")
+    assert back.status_code == 409
+
+
 def test_resolved_troubleshooting_closes_shipping_review_ticket(client):
     session_id = "cust-api-troubleshooting-resolved"
     ticket_id = _start_installation_terminal(client, session_id)
