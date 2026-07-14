@@ -95,7 +95,8 @@ def test_build_step_enrichment_uses_freshdesk_tips(monkeypatch):
     assert result is not None
     assert result["phase"] == "workflow_step"
     assert result["sources"] == ["freshdesk"]
-    assert "From similar support cases" in result["message"]
+    assert "What you can try" in result["message"]
+    assert "support cases" not in result["message"].lower()
     assert "Toggle the back power switch" in result["message"]
     assert result["message"].rstrip().endswith("do you hear a click?")
 
@@ -201,7 +202,7 @@ def test_format_step_message_keeps_prompt_at_end():
     assert msg.index("air inflation") < msg.index("Which part is affected?")
 
 
-def test_serialize_ticket_state_includes_step_enrichment(monkeypatch):
+def test_serialize_ticket_state_hides_internal_step_enrichment(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from sqlalchemy import create_engine
@@ -256,13 +257,59 @@ def test_serialize_ticket_state_includes_step_enrichment(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("assistant_message") == "Freshdesk tip\n\nNext question?"
-    assert body.get("step_enrichment", {}).get("phase") == "workflow_step"
+    assert "step_enrichment" not in body
 
     get_resp = client.get(f"/api/v1/warranty/session/{session_id}")
     assert get_resp.status_code == 200
     get_body = get_resp.json()
     assert get_body.get("assistant_message") == "Freshdesk tip\n\nNext question?"
-    assert get_body.get("step_enrichment", {}).get("phase") == "workflow_step"
+    assert "step_enrichment" not in get_body
+
+
+def test_serialize_ticket_state_hides_terminal_source_metadata(monkeypatch):
+    from warranty_router import _serialize_ticket_state
+
+    ticket = SimpleNamespace(
+        ticket_id="public-terminal",
+        status="in_progress",
+        issue_type="defect",
+        model_name="OS-4000XT",
+        customer_message="",
+        admin_decision="",
+        created_at=None,
+    )
+    ticket.get_collected = lambda: {}
+    engine = SimpleNamespace(can_go_back=lambda ticket_id: False)
+    node = {
+        "node_id": "terminal-test",
+        "type": "terminal",
+        "prompt": "Try these checks.",
+        "options": [],
+    }
+    monkeypatch.setattr(
+        "warranty_assistant_message.build_assistant_message_bundle",
+        lambda **kwargs: {
+            "assistant_message": "Try these checks.",
+            "step_enrichment": None,
+            "terminal_enrichment": {
+                "message": "Try these checks.",
+                "diagnosis": {
+                    "summary": "Remote check.",
+                    "steps": ["Reconnect the cable."],
+                    "sources": ["freshdesk"],
+                    "top_match": "Past ticket subject",
+                    "fonz_match": {"error_code": "01"},
+                },
+            },
+        },
+    )
+
+    payload = _serialize_ticket_state("session-public", ticket, node, engine=engine)
+    public_diagnosis = payload["terminal_enrichment"]["diagnosis"]
+    assert public_diagnosis == {
+        "summary": "Remote check.",
+        "steps": ["Reconnect the cable."],
+    }
 
 
 def test_pick_step_tips_skips_logistics_and_uses_fallback():

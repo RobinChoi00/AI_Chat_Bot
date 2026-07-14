@@ -54,8 +54,6 @@ def _fonz_entry_from_hit(hit: dict[str, Any]) -> KnowledgeEntry:
     meaning = str(hit.get("meaning") or "").strip()
     troubleshooting = str(hit.get("troubleshooting") or "").strip()
     steps = _extract_customer_steps(troubleshooting, meaning)
-    if not steps and troubleshooting:
-        steps = (troubleshooting[:220],)
     return KnowledgeEntry(
         source="fonz_error_code",
         category=_infer_category(f"{meaning} {troubleshooting}"),
@@ -188,7 +186,7 @@ def format_step_message(
     if summary.strip():
         parts.append(summary.strip())
     if tips:
-        parts.append("\n\n**From similar support cases:**")
+        parts.append("\n\n**What you can try:**")
         for idx, tip in enumerate(tips, start=1):
             parts.append(f"{idx}. {tip}")
     parts.append(f"\n\n{base_prompt.strip()}")

@@ -100,6 +100,9 @@ _PII_OR_ADMIN_MARKERS = (
     "note: please",
     "ticket #",
     "fedex (tracking",
+    "refer to:",
+    "refer to page",
+    "the customer",
 )
 
 _BOILERPLATE_MARKERS = (

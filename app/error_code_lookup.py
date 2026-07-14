@@ -186,18 +186,25 @@ def get_model_diagnostic(model_name: str) -> Optional[dict[str, Any]]:
 
 
 def format_repair_help(entry: dict[str, Any]) -> str:
+    """Format only customer-safe information for a confirmed error code."""
     model = entry.get("model") or "your chair"
     code = entry.get("error_code") or "?"
     lines = [
-        f"FONZ_ERROR_LOOKUP match for **{model}** error code **{code}**:",
-        f"\n**Meaning:** {entry.get('meaning', '').strip()}",
+        f"**Error code {code} on {model}:**",
     ]
+    meaning = str(entry.get("meaning") or "").strip()
+    if meaning:
+        lines.append(f"\n**Meaning:** {meaning}")
     steps = (entry.get("troubleshooting") or "").strip()
     if steps:
-        lines.append(f"\n**Suggested steps:** {steps}")
-    parts = (entry.get("parts_required") or "").strip()
-    if parts:
-        lines.append(f"\n**Parts (internal reference):** {parts}")
+        from warranty_knowledge import _extract_customer_steps  # noqa: WPS433
+
+        safe_steps = _extract_customer_steps(steps, meaning)
+        if safe_steps:
+            lines.append("\n**What you can try:**")
+            lines.extend(
+                f"{idx}. {step}" for idx, step in enumerate(safe_steps, start=1)
+            )
     return "\n".join(lines)
 
 

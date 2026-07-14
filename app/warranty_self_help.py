@@ -36,7 +36,7 @@ _NODE_HINTS: dict[str, tuple[str, ...]] = {
     "defect_power_main_pcb_terminal": (
         "Confirm the power cord is firmly plugged into the chair and wall outlet.",
         "Try a different wall outlet or test the outlet with another device.",
-        "Check whether the chair's fuse is intact (refer to your manual for fuse location).",
+        "Check whether the chair's fuse is intact (use your manual to locate the fuse).",
         "Toggle the back power switch OFF, wait 10 seconds, then ON — note any clicking sound.",
     ),
     "defect_power_clicking_terminal": (
@@ -273,7 +273,7 @@ _FRESHDESK_PRIORITY_CATEGORIES = frozenset({"power", "remote", "mech"})
 
 _REMOTE_STEPS: dict[str, tuple[str, ...]] = {
     "no_power": (
-        "Check whether the remote fuse is intact (refer to your manual for fuse location).",
+        "Check whether the remote fuse is intact (use your manual to locate the fuse).",
         "Unplug the cable between the chair and remote, then reconnect both ends firmly.",
         "Press and hold the remote power button for a few seconds, then try turning it on again.",
         "Try the side panel buttons on the chair to see if the chair responds without the remote.",
@@ -638,14 +638,9 @@ def _friendly_match_summary(
                 f"with your {model_display}."
             )
         if issue_type == "delivery":
-            return (
-                "Based on your delivery answers, here is what we typically see "
-                "in similar warranty cases."
-            )
+            return "Based on your delivery answers, here are the recommended next checks."
         if issue_type == "installation":
-            return (
-                f"For your {model_display}, here are setup tips from similar installation cases."
-            )
+            return f"For your {model_display}, here are the recommended setup checks."
         return (
             f"Based on your answers, here are troubleshooting steps that often help "
             f"with your {model_display}."
@@ -653,7 +648,7 @@ def _friendly_match_summary(
 
     if top and top.title:
         return (
-            f"Based on your answers and similar support cases, this looks related to "
+            f"Based on your answers, this looks related to "
             f"**{top.title}** on your {model_display}."
         )
     if defect_category:
@@ -663,17 +658,10 @@ def _friendly_match_summary(
             f"with your {model_display}."
         )
     if issue_type == "delivery":
-        return (
-            "Based on your delivery answers, here is what we typically see "
-            "in similar warranty cases."
-        )
+        return "Based on your delivery answers, here are the recommended next checks."
     if issue_type == "installation":
-        return (
-            f"For your {model_display}, here are setup tips from similar installation cases."
-        )
-    return (
-        "Based on what you told us and similar support history, here is our assessment."
-    )
+        return f"For your {model_display}, here are the recommended setup checks."
+    return "Based on what you told us, here is our assessment."
 
 
 def _dedupe_steps(steps: list[str]) -> list[str]:
@@ -717,11 +705,6 @@ def build_install_air_hose_diagnosis(
         f"For your **{model_display}**, footrest or whole-chair air problems after installation "
         "are often caused by the **footrest-to-base air hose** not being fully connected."
     )
-    if matches:
-        summary = (
-            f"{summary} Similar cases in our support history suggest trying the steps below first."
-        )
-
     return {
         "summary": summary,
         "steps": steps,
@@ -796,9 +779,6 @@ def build_voice_diagnosis(
             f"For your **{model_display}**, voice control issues are often fixed by using the "
             "**correct commands**, speaking clearly to the mic, and checking connections."
         )
-    if matches:
-        summary = f"{summary} Similar support cases suggest starting with the steps below."
-
     return {
         "summary": summary,
         "steps": steps,
@@ -881,9 +861,6 @@ def build_rolling_noise_diagnosis(
         f"For your **{model_display}**, noise **{when}** is often related to the "
         "**strap, back pad, or track area**. Try the steps below first."
     )
-    if matches:
-        summary = f"{summary} Similar support cases suggest these checks before service."
-
     return {
         "summary": summary,
         "steps": steps,
@@ -936,9 +913,6 @@ def build_remote_diagnosis(
         f"For your **{model_display}**, **{label}** can often be improved by checking "
         "the **cable, fuse, and connections** below."
     )
-    if matches:
-        summary = f"{summary} Similar support cases suggest trying these steps first."
-
     return {
         "summary": summary,
         "steps": steps,
@@ -991,9 +965,6 @@ def build_power_diagnosis(
         f"For your **{model_display}**, **{label}** is often related to the "
         "**power cord, outlet, fuse, or back switch**. Try the steps below first."
     )
-    if matches:
-        summary = f"{summary} Similar support cases suggest these checks before service."
-
     return {
         "summary": summary,
         "steps": steps,
@@ -1051,9 +1022,6 @@ def build_air_diagnosis(
         summary = (
             f"{summary} After White Glove delivery, a hose is sometimes pinched during assembly."
         )
-    if matches:
-        summary = f"{summary} Similar support cases suggest these checks before service."
-
     return {
         "summary": summary,
         "steps": steps,
@@ -1107,9 +1075,6 @@ def build_footrest_diagnosis(
         f"For your **{model_display}**, **{label}** can often be checked with "
         "**power cycling, side panel buttons, and visible obstructions** below."
     )
-    if matches:
-        summary = f"{summary} Similar support cases suggest trying these steps first."
-
     return {
         "summary": summary,
         "steps": steps,
@@ -1408,9 +1373,6 @@ def build_recline_diagnosis(
         f"For your **{model_display}**, **{label}** is often related to a stuck "
         "**actuator**, the **Main PCB**, or **blockage / power**. Try the steps below first."
     )
-    if matches:
-        summary = f"{summary} Similar support cases suggest these checks before service."
-
     return {
         "summary": summary,
         "steps": steps,
@@ -1510,9 +1472,6 @@ def build_heating_diagnosis(
         "element, setting, or warm-up time**. Heat in massage chairs is intentionally mild "
         "and builds up gradually — give it at least 10 minutes before deciding it's broken."
     )
-    if matches:
-        summary = f"{summary} Similar support cases suggest these checks before service."
-
     return {
         "summary": summary,
         "steps": steps,
@@ -1702,18 +1661,11 @@ def build_workflow_diagnosis(
                 f"with your {model_display}."
             )
         elif issue_type == "delivery":
-            summary = (
-                "Based on your delivery answers, here is what we typically see "
-                "in similar warranty cases."
-            )
+            summary = "Based on your delivery answers, here are the recommended next checks."
         elif issue_type == "installation":
-            summary = (
-                f"For your {model_display}, here are setup tips from similar installation cases."
-            )
+            summary = f"For your {model_display}, here are the recommended setup checks."
         else:
-            summary = (
-                "Based on what you told us and similar support history, here is our assessment."
-            )
+            summary = "Based on what you told us, here is our assessment."
 
     return {
         "summary": summary,

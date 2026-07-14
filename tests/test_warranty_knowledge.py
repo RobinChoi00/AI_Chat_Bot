@@ -78,11 +78,12 @@ def test_contextual_search_filters_repair_entries_on_delivery():
 
 def test_extract_customer_steps_filters_internal():
     steps = wk._extract_customer_steps(
-        "Replace main PCB immediately.",
+        "Replace main PCB immediately. Refer to: Page 19.",
         "Check the fuse and reconnect the power cord.",
     )
     assert steps
     assert all("pcb" not in s.lower() for s in steps)
+    assert all("refer to" not in s.lower() for s in steps)
 
 
 def test_extract_customer_steps_filters_pii_and_templates():

@@ -1185,7 +1185,6 @@ def _serialize_ticket_state(
         node=node,
     )
     terminal_enrichment = enrichment.get("terminal_enrichment")
-    step_enrichment = enrichment.get("step_enrichment")
     assistant_message = enrichment.get("assistant_message")
     collected = ticket.get_collected()
     troubleshooting_outcome = str(
@@ -1224,9 +1223,17 @@ def _serialize_ticket_state(
         },
     }
     if terminal_enrichment:
-        payload["terminal_enrichment"] = terminal_enrichment
-    if step_enrichment:
-        payload["step_enrichment"] = step_enrichment
+        # Public responses need the customer message and step count, not the
+        # internal source names, ticket titles, or match metadata.
+        public_terminal_enrichment = dict(terminal_enrichment)
+        diagnosis = public_terminal_enrichment.get("diagnosis")
+        if isinstance(diagnosis, dict):
+            public_terminal_enrichment["diagnosis"] = {
+                key: diagnosis[key]
+                for key in ("summary", "steps")
+                if key in diagnosis
+            }
+        payload["terminal_enrichment"] = public_terminal_enrichment
     if assistant_message:
         payload["assistant_message"] = assistant_message
     return payload

@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+APP_DIR = Path(__file__).resolve().parent.parent / "app"
+sys.path.insert(0, str(APP_DIR))
+
 from warranty_terminal_enrichment import build_terminal_enrichment
 
 
@@ -161,6 +167,45 @@ def test_remote_connection_terminal_includes_diy_steps():
     assert "cable" in result["message"].lower()
     assert result["diagnosis"]["steps"]
     assert result["phase"] == "awaiting_help_consent"
+
+
+def test_4000xt_blank_remote_message_hides_internal_sources_and_repair_rows():
+    node = {
+        "node_id": "defect_remote_blank_screen_terminal",
+        "type": "terminal",
+        "action": "send_info",
+        "prompt": "Remote screen is blank but commands still work.",
+        "evidence_required": [],
+    }
+
+    class _Ticket:
+        ticket_id = "t-4000xt"
+        issue_type = "defect"
+        model_name = "Osaki OS-4000XT"
+
+        @staticmethod
+        def get_collected():
+            return {}
+
+    class _Engine:
+        def get_turns(self, ticket_id: str):
+            return [
+                _Turn("defect"),
+                _Turn("remote"),
+                _Turn("blank_screen_commands_ok"),
+            ]
+
+    result = build_terminal_enrichment(_Engine(), _Ticket(), node)
+    assert result is not None
+    message = result["message"]
+    assert "What you can try" in message
+    assert "remote cable" in message.lower()
+    assert "4000CS" not in message
+    assert "error code" not in message.lower()
+    assert "past support" not in message.lower()
+    assert "support cases" not in message.lower()
+    assert "Refer to" not in message
+    assert "Replace main PCB" not in message
 
 
 def test_power_no_click_terminal_includes_diy_steps():

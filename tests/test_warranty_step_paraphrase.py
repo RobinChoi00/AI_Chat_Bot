@@ -65,7 +65,7 @@ def test_paraphrase_accepts_valid_rewrite(monkeypatch):
 
     base = "When you toggle the back switch, do you hear a click?"
     rewritten = (
-        "Thanks for sticking with us — here is a quick tip from similar cases.\n\n"
+        "Thanks for sticking with us — here is a quick check to try.\n\n"
         "1. Toggle the back switch OFF for 10 seconds, then ON.\n\n"
         f"{base}"
     )
@@ -80,6 +80,24 @@ def test_paraphrase_accepts_valid_rewrite(monkeypatch):
     assert ok is True
     assert out == rewritten
     assert base in out
+
+
+def test_paraphrase_rejects_internal_source_language(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(paraphrase, "_ENABLED", True)
+
+    base = "Do you hear a click?"
+    draft = f"Try toggling the switch.\n\n{base}"
+    rewritten = f"From past cases, try toggling the switch.\n\n{base}"
+    monkeypatch.setattr(
+        paraphrase,
+        "_openai_client",
+        lambda: _FakeOpenAI(rewritten),
+    )
+
+    out, ok = paraphrase.paraphrase_step_message(draft, base_prompt=base)
+    assert ok is False
+    assert out == draft
 
 
 def test_paraphrase_rejects_missing_question(monkeypatch):

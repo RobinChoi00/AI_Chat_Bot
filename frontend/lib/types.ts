@@ -95,25 +95,12 @@ export interface TerminalEnrichment {
   diagnosis?: {
     summary?: string;
     steps?: string[];
-    sources?: string[];
-    top_match?: string | null;
   } | null;
   phase?: "awaiting_help_consent" | "contact";
   interaction_mode?: "troubleshooting" | "preparation";
   help_offer_options?: AnswerOption[];
   show_contact_form?: boolean;
   defer_email?: boolean;
-}
-
-/** Freshdesk-backed context on non-terminal workflow steps (button path). */
-export interface StepEnrichment {
-  message?: string;
-  phase?: "workflow_step";
-  sources?: string[];
-  top_match?: string | null;
-  tips?: string[];
-  /** True when a small LLM rewrote the draft (question kept verbatim). */
-  paraphrased?: boolean;
 }
 
 export interface SmartStartRoutingConfirmation {
@@ -147,7 +134,6 @@ export interface WarrantySessionResponse {
   interpreted_issue_type?: string;
   assistant_message?: string | null;
   terminal_enrichment?: TerminalEnrichment | null;
-  step_enrichment?: StepEnrichment | null;
   model_registered?: boolean;
   resolved_model?: string;
   smart_start?: SmartStartMetadata | null;

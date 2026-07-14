@@ -33,6 +33,17 @@ _ENABLED = os.getenv("WARRANTY_STEP_PARAPHRASE", "1").strip().lower() not in {
 _MODEL = os.getenv("WARRANTY_STEP_PARAPHRASE_MODEL", "").strip()
 _MAX_TOKENS = int(os.getenv("WARRANTY_STEP_PARAPHRASE_MAX_TOKENS", "450"))
 
+_CUSTOMER_FORBIDDEN_REFERENCE_MARKERS = (
+    "from past cases",
+    "past support ticket",
+    "similar support cases",
+    "similar support history",
+    "from the knowledge base",
+    "related topic:",
+    "refer to:",
+    "refer to page",
+)
+
 
 def _paraphrase_enabled() -> bool:
     return _ENABLED and bool(os.environ.get("OPENAI_API_KEY"))
@@ -86,6 +97,12 @@ def _introduced_error_code_claim(output: str, draft: str) -> bool:
     return "error code" in _normalize(output) and "error code" not in _normalize(draft)
 
 
+def _contains_internal_reference(output: str) -> bool:
+    """Reject customer copy that exposes internal provenance or manual row labels."""
+    normalized = _normalize(output)
+    return any(marker in normalized for marker in _CUSTOMER_FORBIDDEN_REFERENCE_MARKERS)
+
+
 def _format_options_hint(options: list[dict[str, Any]]) -> str:
     labels = [
         str(opt.get("label") or "").strip()
@@ -107,6 +124,7 @@ def build_paraphrase_system_prompt(*, base_prompt: str) -> str:
         "Rules:\n"
         "- Keep every troubleshooting tip and fact from the draft — do not invent steps.\n"
         "- Do NOT promise replacement, refund, technician dispatch, compensation, or approval.\n"
+        "- Do NOT mention support tickets, past cases, knowledge-base sources, internal references, or manual page references.\n"
         "- Do NOT add new questions beyond the one provided.\n"
         "- The message MUST end with this exact workflow question copied verbatim "
         f"(same punctuation):\n{base_prompt.strip()}\n"
@@ -169,6 +187,7 @@ def paraphrase_step_message(
         not text
         or not _question_preserved(text, base_prompt)
         or _introduced_error_code_claim(text, draft)
+        or _contains_internal_reference(text)
     ):
         logger.info(
             "Step paraphrase rejected — invariant failed (node=%s)",

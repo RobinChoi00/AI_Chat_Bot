@@ -247,8 +247,7 @@ def test_typed_c6_on_pick_reaches_terminal():
 
     diagnosis = {"summary": "Air pump review needed.", "steps": [], "sources": []}
     merged = gate.merge_fonz_into_diagnosis(diagnosis, ticket)
-    summary = str(merged.get("summary") or "")
-    assert "error code" in summary.lower() or merged.get("fonz_suggestions")
+    assert merged == diagnosis
 
 
 def test_no_intercept_for_voice_defect():

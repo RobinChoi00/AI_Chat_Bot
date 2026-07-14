@@ -32,11 +32,29 @@ def test_format_fonz_suggestion_includes_meaning():
     assert "hose" in block.lower()
 
 
-def test_symptom_block_for_3d_ltx_air():
+def test_format_fonz_suggestion_filters_internal_manual_instructions():
+    block = format_fonz_suggestion_entries(
+        [
+            {
+                "error_code": "01",
+                "meaning": "No function when starting.",
+                "troubleshooting": (
+                    "Replace the main PCB. Refer to: Page 19. "
+                    "Check that the remote cable is firmly connected."
+                ),
+            }
+        ],
+        header="**Confirmed code:**",
+    )
+    assert "PCB" not in block
+    assert "Refer to" not in block
+    assert "remote cable" in block
+
+
+def test_symptom_block_for_3d_ltx_air_stays_internal_without_confirmed_code():
     ticket = SimpleNamespace(model_name="3D LTX", defect_type="air")
     block = build_symptom_fonz_block(ticket)
-    assert block
-    assert "Related manufacturer error codes" in block
+    assert block == ""
 
 
 def test_append_symptom_skips_when_code_present():
@@ -48,5 +66,4 @@ def test_append_symptom_skips_when_code_present():
 def test_category_fallback_without_model():
     ticket = SimpleNamespace(model_name="", defect_type="air")
     block = build_symptom_fonz_block(ticket)
-    assert block
-    assert "Common manufacturer error codes" in block or "confirm your model" in block.lower()
+    assert block == ""

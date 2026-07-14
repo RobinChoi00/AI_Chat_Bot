@@ -19,7 +19,6 @@ import {
 import type {
   AnswerOption,
   ChatMessage,
-  StepEnrichment,
   TerminalEnrichment,
   TroubleshootingOutcome,
   WarrantySessionResponse,
@@ -30,7 +29,6 @@ import {
   hydrationAssistantContent,
 } from "@/lib/warrantyHydration";
 import ChatMessageBubble from "./ChatMessageBubble";
-import StepEnrichmentPanel from "./StepEnrichmentPanel";
 import AnswerOptions from "./AnswerOptions";
 import CollapsibleOptionPanel from "./CollapsibleOptionPanel";
 import EvidenceUploader from "./EvidenceUploader";
@@ -108,7 +106,6 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [warrantyState, setWarrantyState] = useState<WarrantyTicketState | null>(null);
   const [terminalEnrichment, setTerminalEnrichment] = useState<TerminalEnrichment | null>(null);
-  const [stepEnrichment, setStepEnrichment] = useState<StepEnrichment | null>(null);
   const [optionsUsed, setOptionsUsed] = useState(false);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [contactSubmitted, setContactSubmitted] = useState(false);
@@ -124,12 +121,11 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading, helpConsent, resolutionStage, stepEnrichment]);
+  }, [messages, loading, helpConsent, resolutionStage]);
 
   const applySessionResponse = useCallback((resp: WarrantySessionResponse) => {
     setWarrantyState(resp.ticket);
     setTerminalEnrichment(resp.terminal_enrichment ?? null);
-    setStepEnrichment(resp.step_enrichment ?? null);
     if (resp.terminal_enrichment?.phase === "awaiting_help_consent") {
       const outcome = resp.ticket?.troubleshooting_outcome;
       if (outcome === "steps_completed") {
@@ -180,7 +176,6 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       setMessages([{ role: "assistant", content: WARRANTY_WELCOME_MESSAGE }]);
       setWarrantyState(null);
       setTerminalEnrichment(null);
-      setStepEnrichment(null);
       setHelpConsent(null);
       setResolutionStage("review");
       setContactSubmitted(false);
@@ -1066,13 +1061,6 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
             />
           ))}
 
-          {!isTerminal && stepEnrichment && (
-            <div className="flex justify-start">
-              <div className="max-w-[92%] sm:max-w-[85%]">
-                <StepEnrichmentPanel enrichment={stepEnrichment} />
-              </div>
-            </div>
-          )}
         </div>
 
         {pendingDefectStart && (

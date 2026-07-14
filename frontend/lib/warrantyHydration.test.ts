@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   assistantContentFromResponse,
-  formatEnrichmentSource,
-  hasStepEnrichmentPanel,
   hydrationAssistantContent,
 } from "./warrantyHydration";
 import type { WarrantySessionResponse, WarrantyTicketState } from "./types";
@@ -37,7 +35,6 @@ describe("hydrationAssistantContent", () => {
       session_id: "s-1",
       ticket: midFlowTicket,
       assistant_message: "Freshdesk tip\n\nWhich part is affected?",
-      step_enrichment: { phase: "workflow_step", tips: ["Check power"] },
     };
     expect(hydrationAssistantContent(midFlowTicket, resp)).toBe(
       "Freshdesk tip\n\nWhich part is affected?"
@@ -94,29 +91,5 @@ describe("hydrationAssistantContent", () => {
     expect(content).toBe("How can I help you today?");
     expect(content).not.toContain("888-848-2630");
     expect(content).not.toContain("final step");
-  });
-});
-
-describe("hasStepEnrichmentPanel", () => {
-  it("returns true when tips or sources exist", () => {
-    expect(
-      hasStepEnrichmentPanel({
-        phase: "workflow_step",
-        tips: ["Unplug for 30 seconds"],
-        sources: ["freshdesk"],
-      })
-    ).toBe(true);
-  });
-
-  it("returns false for empty enrichment", () => {
-    expect(hasStepEnrichmentPanel(null)).toBe(false);
-    expect(hasStepEnrichmentPanel({ phase: "workflow_step" })).toBe(false);
-  });
-});
-
-describe("formatEnrichmentSource", () => {
-  it("maps known sources to friendly labels", () => {
-    expect(formatEnrichmentSource("freshdesk")).toBe("Past support ticket");
-    expect(formatEnrichmentSource("freshdesk_kb")).toBe("Knowledge base");
   });
 });

@@ -345,9 +345,12 @@ def merge_fonz_into_diagnosis(diagnosis: dict[str, Any], ticket) -> dict[str, An
 
         steps = list(out.get("steps") or [])
         if troubleshooting and len(troubleshooting) >= 12:
-            tip = troubleshooting[:240].strip()
-            if tip and tip.lower() not in {s.lower() for s in steps}:
-                steps.insert(0, tip)
+            from warranty_knowledge import _extract_customer_steps  # noqa: WPS433
+
+            safe_steps = _extract_customer_steps(troubleshooting, meaning)
+            for tip in reversed(safe_steps[:2]):
+                if tip.lower() not in {s.lower() for s in steps}:
+                    steps.insert(0, tip)
         out["steps"] = steps
 
         sources = list(out.get("sources") or [])
@@ -368,37 +371,12 @@ def merge_fonz_into_diagnosis(diagnosis: dict[str, Any], ticket) -> dict[str, An
         out["summary"] = f"{summary}\n\n{note}".strip() if summary else note
         return out
 
-    return append_soft_hints_to_diagnosis(out, ticket)
+    return out
 
 
 def append_soft_hints_to_diagnosis(diagnosis: dict[str, Any], ticket) -> dict[str, Any]:
-    from error_code_lookup import suggest_error_codes_for_ticket  # noqa: WPS433
-    from warranty_answer_synthesis import enrich_diagnosis_with_symptom_fonz  # noqa: WPS433
-
-    model_name = str(getattr(ticket, "model_name", "") or "")
-    defect_type = str(getattr(ticket, "defect_type", "") or "")
-    suggestions = suggest_error_codes_for_ticket(model_name, defect_type, limit=2)
-    if not suggestions:
-        return enrich_diagnosis_with_symptom_fonz(diagnosis, ticket)
-
-    out = dict(diagnosis)
-    area = (defect_type or "this issue").replace("_", " ")
-    from warranty_answer_synthesis import format_fonz_suggestion_entries  # noqa: WPS433
-
-    block = format_fonz_suggestion_entries(
-        suggestions,
-        header=(
-            f"**Related manufacturer error codes for {area} on your model** "
-            f"(confirm on your display if one appears):"
-        ),
-    )
-    summary = str(out.get("summary") or "").strip()
-    out["summary"] = f"{summary}\n\n{block}".strip() if summary else block
-    out["fonz_suggestions"] = [
-        {"error_code": row.get("error_code"), "meaning": (row.get("meaning") or "")[:120]}
-        for row in suggestions
-    ]
-    return enrich_diagnosis_with_symptom_fonz(out, ticket)
+    """Keep model-similar error-code suggestions internal until a code is confirmed."""
+    return dict(diagnosis)
 
 
 def append_fonz_to_message(message: str, ticket) -> str:
@@ -410,16 +388,12 @@ def append_fonz_to_message(message: str, ticket) -> str:
         persist_fonz_internal_fields(ticket, hit)
         code = str(hit.get("error_code") or "?")
         meaning = str(hit.get("meaning") or "").strip()
-        troubleshooting = str(hit.get("troubleshooting") or "").strip()
-
         parts = [message.strip()]
         if meaning:
             line = f"**Error code {code}:** {meaning}"
             if _category_aligned(ticket):
                 line += " This aligns with the issue path you selected."
             parts.append(f"\n\n{line}")
-        if troubleshooting and len(troubleshooting) >= 12:
-            parts.append(f"\n\n**From the manufacturer error list:** {troubleshooting[:260]}")
         return "".join(parts).strip()
 
     if _lookup_failed(ticket):
@@ -430,28 +404,7 @@ def append_fonz_to_message(message: str, ticket) -> str:
             "reference sheet. Our team will verify it during review."
         ).strip()
 
-    from error_code_lookup import suggest_error_codes_for_ticket  # noqa: WPS433
-    from warranty_answer_synthesis import append_symptom_insights_to_message  # noqa: WPS433
-
-    model_name = str(getattr(ticket, "model_name", "") or "")
-    defect_type = str(getattr(ticket, "defect_type", "") or "")
-    suggestions = suggest_error_codes_for_ticket(model_name, defect_type, limit=2)
-    if not suggestions:
-        return append_symptom_insights_to_message(message, ticket)
-
-    from warranty_answer_synthesis import format_fonz_suggestion_entries  # noqa: WPS433
-
-    area = (defect_type or "this issue").replace("_", " ")
-    block = format_fonz_suggestion_entries(
-        suggestions,
-        header=(
-            f"**Related manufacturer error codes for {area} on your model** "
-            f"(confirm on your display if one appears):"
-        ),
-    )
-    if not block:
-        return message
-    return f"{message.strip()}\n\n{block}".strip()
+    return message
 
 
 def append_fonz_to_terminal_enrichment(
@@ -548,7 +501,10 @@ def format_midflow_error_code_help(ticket, text: str, *, reprompt: str) -> Optio
         parts.append(f"**Error code {hit.get('error_code', code)}:** {meaning}" if meaning else f"Recorded error code **{code}**.")
         troubleshooting = str(hit.get("troubleshooting") or "").strip()
         if troubleshooting:
-            parts.append(troubleshooting[:220])
+            from warranty_knowledge import _extract_customer_steps  # noqa: WPS433
+
+            safe_steps = _extract_customer_steps(troubleshooting, meaning)
+            parts.extend(safe_steps[:1])
     else:
         parts.append(
             f"I noted error code **{code}**. Our team can verify it against your model during review."
