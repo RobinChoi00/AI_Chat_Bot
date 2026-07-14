@@ -16,6 +16,19 @@ export function assistantContentFromResponse(
 ): string | null {
   const node = ticket?.current_node;
   if (!node?.prompt && !resp.assistant_message) return null;
+
+  // A sales handoff is terminal in the warranty state machine, but it must not
+  // receive warranty evidence, email, phone, or follow-up wording.
+  if (ticket?.status === "sales_handoff") {
+    return resp.assistant_message?.trim() || node?.prompt?.trim() || null;
+  }
+
+  // Contact/evidence formatting is terminal-only. Applying it to an ordinary
+  // question tells customers to submit email before troubleshooting begins.
+  if (!node?.is_terminal) {
+    return resp.assistant_message?.trim() || node?.prompt?.trim() || null;
+  }
+
   return formatTerminalPrompt(
     node?.prompt ?? "",
     node?.evidence_required,

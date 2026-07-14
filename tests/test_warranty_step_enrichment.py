@@ -325,3 +325,43 @@ def test_build_step_enrichment_hides_unhelpful_top_match(monkeypatch):
     assert result.get("top_match") is None
     assert result.get("tips")
     assert all("technician" not in t.lower() for t in result["tips"])
+
+
+def test_step_enrichment_hides_unconfirmed_error_code_rows(monkeypatch):
+    error_row = KnowledgeEntry(
+        source="fonz_error_code",
+        category="remote",
+        title="4000CS — error 1",
+        diagnostic="Remote error code 1",
+        customer_steps=("Press and hold a remote key for 40 seconds.",),
+    )
+    monkeypatch.setattr(
+        step_enrich,
+        "contextual_search_knowledge",
+        lambda **kwargs: [error_row],
+    )
+
+    engine = _FakeEngine(
+        [
+            _turn("warranty", node_id="root"),
+            _turn("defect", node_id="issue_type"),
+            _turn("remote", node_id="defect_problem_type"),
+        ]
+    )
+    ticket = SimpleNamespace(
+        ticket_id="t1",
+        issue_type="defect",
+        model_name="Osaki OS-4000XT",
+    )
+    node = {
+        "node_id": "defect_remote_power_q",
+        "type": "question",
+        "prompt": "Does the remote have power?",
+    }
+
+    result = step_enrich.build_step_enrichment(engine, ticket, node)
+
+    assert result is not None
+    assert result.get("top_match") is None
+    assert "fonz_error_code" not in result.get("sources", [])
+    assert "4000CS" not in result.get("message", "")

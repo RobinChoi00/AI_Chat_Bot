@@ -66,7 +66,7 @@ const DEFECT_MODEL_PROMPT =
 const INITIAL_ISSUE_OPTIONS: AnswerOption[] = [
   { answer_key: "installation", label: "Setup & installation" },
   { answer_key: "delivery", label: "Delivery & tracking" },
-  { answer_key: "defect", label: "Warranty / defect" },
+  { answer_key: "defect", label: "Chair malfunction" },
 ];
 
 function sleep(ms: number) {
@@ -458,7 +458,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
               ? "setup & installation"
               : resp.interpreted_issue_type === "delivery"
                 ? "delivery & tracking"
-                : "warranty / defect";
+                : "chair malfunction";
           setMessages((prev) => [
             ...prev,
             assistantMessage(

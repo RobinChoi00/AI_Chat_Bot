@@ -404,7 +404,7 @@ class WarrantyEngine:
 
     @staticmethod
     def set_model_name(ticket_id: str, model_name: str) -> None:
-        """Persist normalized chair model before or during workflow intake."""
+        """Persist a chair model and invalidate context from a superseded model."""
         display = (model_name or "").strip()
         if not display:
             raise ValueError("model_name must not be empty")
@@ -416,8 +416,26 @@ class WarrantyEngine:
             )
             if ticket is None:
                 raise ValueError(f"Ticket {ticket_id!r} not found.")
+            previous_model = str(ticket.model_name or "").strip()
+            if previous_model:
+                from warranty_intake_context import reconcile_model_change  # noqa: WPS433
+
+                reconcile_model_change(ticket, previous_model, display)
             ticket.model_name = display
             ticket.set_collected("model_name", display)
+
+    @staticmethod
+    def persist_collected_data(ticket_id: str, collected_data: str) -> None:
+        """Persist collected context from a detached ticket returned by get_ticket()."""
+        with warranty_db_session() as db:
+            ticket = (
+                db.query(WarrantyTicket)
+                .filter(WarrantyTicket.ticket_id == ticket_id)
+                .first()
+            )
+            if ticket is None:
+                raise ValueError(f"Ticket {ticket_id!r} not found.")
+            ticket.collected_data = str(collected_data or "{}")
 
     @staticmethod
     def get_active_session_ticket(session_id: str) -> Optional[WarrantyTicket]:

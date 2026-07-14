@@ -108,6 +108,16 @@ def capture_error_code_from_intake(ticket, text: str) -> bool:
     for code in extract_error_codes_from_text(text):
         if not code:
             continue
+        # Model identifiers such as A601 must never become error codes merely
+        # because the customer entered a model-only message.
+        from fonz_warranty_data import normalize_model_key  # noqa: WPS433
+
+        model_key = re.sub(r"[^a-z0-9]", "", normalize_model_key(model_name))
+        code_key = re.sub(r"[^a-z0-9]", "", str(code).lower())
+        if model_key and code_key and (
+            code_key == model_key or model_key.endswith(code_key)
+        ):
+            continue
         finalize_error_code_submission(ticket, code, model_name=model_name or None)
         ticket.set_collected(COL_GATE_COMPLETED, "intake")
         return True

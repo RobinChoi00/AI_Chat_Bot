@@ -7,9 +7,146 @@ steps can surface Freshdesk tips before the customer has clicked many buttons.
 
 from __future__ import annotations
 
+import re
+from functools import lru_cache
 from typing import Any, Optional
 
 COL_MODEL_CONFIRMED = "model_confirmed"
+
+_MODEL_NOISE = frozenset(
+    {"osaki", "titan", "os", "massage", "chair", "model", "the", "my", "is"}
+)
+_MODEL_DEPENDENT_COLLECTED_KEYS = (
+    "error_code",
+    "error_code_gate_completed",
+    "pending_terminal",
+    "fonz_meaning",
+    "fonz_parts_internal",
+    "fonz_severity",
+    "fonz_lookup_failed",
+    "fonz_category_aligned",
+)
+
+
+def _model_identity(value: str) -> str:
+    """Comparable model key that ignores brands and display punctuation."""
+    tokens = re.findall(r"[a-z0-9]+", str(value or "").lower())
+    return "".join(token for token in tokens if token not in _MODEL_NOISE)
+
+
+def _strip_previous_model(text: str, previous_model: str) -> str:
+    """Remove a superseded model name while retaining any symptom description."""
+    value = str(text or "").strip()
+    if not value:
+        return ""
+
+    previous_identity = _model_identity(previous_model)
+    if previous_identity and _model_identity(value) == previous_identity:
+        return ""
+
+    tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", str(previous_model or "").lower())
+        if token not in _MODEL_NOISE
+    ]
+    if tokens:
+        flexible = r"[\s_\-/]*".join(re.escape(token) for token in tokens)
+        value = re.sub(
+            rf"(?<![a-z0-9]){flexible}(?![a-z0-9])",
+            " ",
+            value,
+            flags=re.I,
+        )
+
+    value = re.sub(
+        r"\b(?:my|the)?\s*(?:chair\s*)?model\s*(?:is|was|:|-)?\s*",
+        " ",
+        value,
+        flags=re.I,
+    )
+    value = re.sub(r"\s+", " ", value).strip(" ,;:-.()[]")
+    meaningful = [
+        token
+        for token in re.findall(r"[a-z0-9]+", value.lower())
+        if token not in _MODEL_NOISE
+    ]
+    return value if meaningful else ""
+
+
+@lru_cache(maxsize=1)
+def _known_model_labels() -> tuple[str, ...]:
+    """Model labels used to clean stale context from sessions created pre-fix."""
+    try:
+        from fonz_warranty_data import load_model_diagnostic_records  # noqa: WPS433
+
+        labels = {
+            str(row.get("model") or "").strip()
+            for row in load_model_diagnostic_records()
+            if str(row.get("model") or "").strip()
+        }
+        return tuple(
+            sorted(
+                (label for label in labels if len(_model_identity(label)) >= 5),
+                key=len,
+                reverse=True,
+            )
+        )
+    except Exception:
+        return ()
+
+
+def _sanitize_intake_for_current_model(text: str, current_model: str) -> str:
+    value = str(text or "").strip()
+    current_identity = _model_identity(current_model)
+    if not value or not current_identity:
+        return value
+
+    allowed = {current_identity}
+    try:
+        from model_families import resolve_family_canonical  # noqa: WPS433
+
+        canonical = resolve_family_canonical(current_model)
+        if canonical:
+            allowed.add(_model_identity(canonical))
+    except Exception:
+        pass
+
+    for label in _known_model_labels():
+        identity = _model_identity(label)
+        if identity in allowed or identity not in _model_identity(value):
+            continue
+        value = _strip_previous_model(value, label)
+        if not value:
+            break
+    return value
+
+
+def reconcile_model_change(ticket, previous_model: str, current_model: str) -> bool:
+    """
+    Remove context that belongs to a superseded chair model.
+
+    Troubleshooting text is preserved when possible, but old model references,
+    captured error codes, and Fonz lookup results are cleared so a corrected
+    model can never inherit a diagnosis from the previous one.
+    """
+    previous = str(previous_model or "").strip()
+    current = str(current_model or "").strip()
+    if not previous or not current:
+        return False
+    if _model_identity(previous) == _model_identity(current):
+        return False
+    if ticket is None or not hasattr(ticket, "set_collected"):
+        return False
+
+    collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
+    for key in ("intake_summary", "intake_raw_message"):
+        cleaned = _strip_previous_model(str(collected.get(key) or ""), previous)
+        ticket.set_collected(key, cleaned)
+
+    for key in _MODEL_DEPENDENT_COLLECTED_KEYS:
+        ticket.set_collected(key, "")
+    ticket.set_collected(COL_MODEL_CONFIRMED, "")
+    return True
 
 
 def mark_model_confirmed(ticket) -> None:
@@ -76,9 +213,15 @@ def get_intake_summary(ticket) -> str:
         collected = ticket.get_collected() or {}
     elif isinstance(ticket, dict):
         collected = ticket.get("collected_data") or {}
-    return str(
-        collected.get("intake_summary") or collected.get("intake_raw_message") or ""
-    ).strip()
+    current_model = str(getattr(ticket, "model_name", "") or "").strip()
+    for key in ("intake_summary", "intake_raw_message"):
+        value = _sanitize_intake_for_current_model(
+            str(collected.get(key) or ""),
+            current_model,
+        )
+        if value:
+            return value
+    return ""
 
 
 def enrich_path_text(path_text: str, ticket) -> str:

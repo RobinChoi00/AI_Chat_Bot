@@ -1426,6 +1426,8 @@ async def natural_start_warranty(
         active = engine.get_active_session_ticket(session_id)
         ticket = active
     persist_intake_summary(ticket, raw_message=message)
+    if ticket is not None:
+        _persist_ticket_row(str(ticket.ticket_id), ticket)
     payload["nlp_interpreted"] = True
     payload["interpreted_issue_type"] = issue_type
     return payload
@@ -1518,6 +1520,8 @@ async def smart_start_warranty(
         summary=str(extraction.get("summary") or "").strip(),
         raw_message=message,
     )
+    if ticket is not None:
+        _persist_ticket_row(ticket_id, ticket)
 
     ticket = engine.get_ticket(ticket_id)
     node = engine.get_current_node(ticket_id)

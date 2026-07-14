@@ -25,22 +25,19 @@ export function useTypewriter({
   intervalMs = 75,
   maxDurationMs = 2500,
 }: Options): { visible: string; done: boolean } {
-  const [visible, setVisible] = useState<string>(enabled ? "" : text);
-  const [done, setDone] = useState<boolean>(!enabled);
+  const [animation, setAnimation] = useState<{
+    target: string;
+    visible: string;
+    done: boolean;
+  }>({ target: text, visible: enabled ? "" : text, done: !enabled });
 
   useEffect(() => {
     if (!enabled) {
-      setVisible(text);
-      setDone(true);
       return;
     }
 
-    setVisible("");
-    setDone(false);
-
     const total = text.length;
     if (total === 0) {
-      setDone(true);
       return;
     }
 
@@ -57,10 +54,14 @@ export function useTypewriter({
       const justRevealed = text.slice(currentIndex, nextIndex);
       
       currentIndex = nextIndex;
-      setVisible(text.slice(0, currentIndex));
+      const isDone = currentIndex >= total;
+      setAnimation({
+        target: text,
+        visible: text.slice(0, currentIndex),
+        done: isDone,
+      });
 
-      if (currentIndex >= total) {
-        setDone(true);
+      if (isDone) {
         return;
       }
 
@@ -94,5 +95,14 @@ export function useTypewriter({
     };
   }, [text, enabled, chunkSize, intervalMs, maxDurationMs]);
 
-  return { visible, done };
+  if (!enabled) {
+    return { visible: text, done: true };
+  }
+  if (!text) {
+    return { visible: "", done: true };
+  }
+  if (animation.target !== text) {
+    return { visible: "", done: false };
+  }
+  return { visible: animation.visible, done: animation.done };
 }

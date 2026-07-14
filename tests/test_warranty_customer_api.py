@@ -140,6 +140,15 @@ def test_natural_start_corrects_model_while_confirmation_pending(client, monkeyp
     model_name = data["ticket"]["model_name"].lower()
     assert "hypnos" in model_name
 
+    from warranty_workflow import WarrantyEngine  # noqa: WPS433
+
+    ticket = WarrantyEngine.get_active_session_ticket(session_id)
+    assert ticket is not None
+    collected = ticket.get_collected()
+    assert "3d ltx" not in str(collected.get("intake_summary") or "").lower()
+    assert "3d ltx" not in str(collected.get("intake_raw_message") or "").lower()
+    assert "footrest air issue" in str(collected.get("intake_raw_message") or "").lower()
+
 
 def test_quick_start_requires_model_first(client):
     session_id = "cust-api-no-model"

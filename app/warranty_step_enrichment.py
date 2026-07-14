@@ -247,6 +247,9 @@ def build_step_enrichment(
         model_name=model_name,
         limit=2,
     )
+    # Do not show a model/category-similar error-code row until the customer
+    # actually provides a code. Exact captured codes are re-added below.
+    matches = [entry for entry in matches if entry.source != "fonz_error_code"]
     if fonz_entry:
         matches = [fonz_entry] + [m for m in matches if m.title != fonz_entry.title]
         matches = matches[:2]
@@ -298,10 +301,14 @@ def build_step_enrichment(
         options=list(node.get("options") or []),
     )
 
+    sources = list(
+        dict.fromkeys(entry.source for entry in (presentable_matches or matches)[:2])
+    )
+
     return {
         "message": message,
         "phase": "workflow_step",
-        "sources": [entry.source for entry in (presentable_matches or matches)[:2]],
+        "sources": sources,
         "top_match": (
             presentable_matches[0].title
             if presentable_matches

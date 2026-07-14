@@ -16,7 +16,11 @@ export default function StepEnrichmentPanel({ enrichment }: Props) {
   }
 
   const tips = enrichment?.tips ?? [];
-  const sources = enrichment?.sources ?? [];
+  const sources = Array.from(
+    new Map(
+      (enrichment?.sources ?? []).map((source) => [formatEnrichmentSource(source), source])
+    ).values()
+  );
 
   return (
     <div className="mt-3 rounded-xl border border-sky-100 bg-sky-50/80 px-3 py-2 text-sm text-sky-950">

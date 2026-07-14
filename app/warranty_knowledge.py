@@ -185,6 +185,57 @@ class KnowledgeEntry:
     customer_steps: tuple[str, ...]
 
 
+def _model_signature(text: str) -> str:
+    tokens = re.findall(r"[a-z0-9]+", str(text or "").lower())
+    noise = {"osaki", "titan", "os", "massage", "chair", "model"}
+    return "".join(token for token in tokens if token not in noise)
+
+
+@lru_cache(maxsize=1)
+def _known_model_signatures() -> frozenset[str]:
+    """Known Fonz identifiers used to detect explicit cross-model matches."""
+    try:
+        from fonz_warranty_data import load_model_diagnostic_records  # noqa: WPS433
+
+        values = {
+            _model_signature(str(row.get("model") or ""))
+            for row in load_model_diagnostic_records()
+        }
+        return frozenset(value for value in values if len(value) >= 5)
+    except Exception:
+        return frozenset()
+
+
+def _entry_explicit_model_signatures(entry: KnowledgeEntry) -> set[str]:
+    flat = _model_signature(
+        f"{entry.title} {entry.diagnostic} {' '.join(entry.customer_steps)}"
+    )
+    if not flat:
+        return set()
+    return {signature for signature in _known_model_signatures() if signature in flat}
+
+
+def _entry_matches_requested_model(entry: KnowledgeEntry, model_name: str) -> bool:
+    """Reject knowledge that explicitly names a different chair model."""
+    if not str(model_name or "").strip():
+        return True
+    explicit = _entry_explicit_model_signatures(entry)
+    if not explicit:
+        return True
+
+    allowed = {_model_signature(model_name)}
+    try:
+        from model_families import resolve_family_canonical  # noqa: WPS433
+
+        canonical = resolve_family_canonical(model_name)
+        if canonical:
+            allowed.add(_model_signature(canonical))
+    except Exception:
+        pass
+    allowed.discard("")
+    return bool(explicit & allowed)
+
+
 def map_workflow_defect_category(defect_category: Optional[str]) -> Optional[str]:
     """Map workflow answer_key (e.g. rolling) to knowledge category (e.g. mech)."""
     if not defect_category:
@@ -544,6 +595,7 @@ def load_knowledge_entries() -> tuple[KnowledgeEntry, ...]:
 def clear_knowledge_cache() -> None:
     """Invalidate cached knowledge after freshdesk_tickets.json is updated."""
     load_knowledge_entries.cache_clear()
+    _known_model_signatures.cache_clear()
     try:
         from error_code_lookup import clear_error_code_cache  # noqa: WPS433
 
@@ -654,6 +706,8 @@ def search_knowledge(
     combined: list[tuple[float, KnowledgeEntry]] = []
     candidate_ids = set(keyword_scores.keys()) | set(semantic_scores.keys())
     for idx in candidate_ids:
+        if not _entry_matches_requested_model(entries[idx], model_name):
+            continue
         kw = keyword_scores.get(idx, 0.0)
         sem = semantic_scores.get(idx, 0.0)
         score = kw + sem * _HYBRID_SEMANTIC_WEIGHT

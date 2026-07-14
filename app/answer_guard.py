@@ -69,9 +69,9 @@ _MESSAGES = {
         "ko": "주문 번호(예: OSKMC1234)와 결제할 때 사용한 이메일을 알려주시면 배송 상태를 조회해 드릴 수 있습니다.",
     },
     "repair_unverified": {
-        "en": "I don't have verified repair or installation steps for that in our knowledge base yet. Please contact our support team at +1-888-848-2630 — business hours Mon-Fri, 9:30 AM - 6:30 PM / Sat, 10:00 AM - 4:00 PM CST — and they can walk you through it safely.",
-        "es": "Aún no tengo pasos verificados de reparación o instalación para ese caso. Llame a soporte al +1-888-848-2630 (lun-vie 9:30 AM-6:30 PM; sáb 10:00 AM-4:00 PM, hora central) para recibir ayuda segura.",
-        "ko": "해당 문제에 대해 확인된 수리·설치 절차가 아직 지식베이스에 없습니다. 안전한 안내를 위해 +1-888-848-2630으로 연락해 주세요. 운영 시간은 월-금 오전 9:30-오후 6:30, 토 오전 10:00-오후 4:00(미 중부 시간)입니다.",
+        "en": "I don't have verified repair or installation steps for that in our knowledge base yet. Please contact our warranty support team at +1-888-848-2630 ext. 3 — Mon-Fri, 10:00 AM - 6:00 PM CST — and they can walk you through it safely.",
+        "es": "Aún no tengo pasos verificados de reparación o instalación para ese caso. Llame al equipo de garantía al +1-888-848-2630 ext. 3 (lun-vie, 10:00 AM-6:00 PM CST) para recibir ayuda segura.",
+        "ko": "해당 문제에 대해 확인된 수리·설치 절차가 아직 지식베이스에 없습니다. 안전한 안내를 위해 보증팀 +1-888-848-2630 내선 3번으로 연락해 주세요. 보증팀 운영 시간은 월-금 오전 10시-오후 6시(미 중부 시간)입니다.",
     },
     "price_model": {
         "en": "I can quote a price after I look up the exact model in our catalog. Which chair model are you asking about?",

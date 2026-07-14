@@ -133,3 +133,37 @@ def test_freshdesk_loader_skips_merged_tickets(tmp_path, monkeypatch):
     entries = [e for e in wk.load_knowledge_entries() if e.source == "freshdesk"]
     assert len(entries) == 1
     assert "4000CS" not in entries[0].title or entries[0].title == "Power issue"
+
+
+def test_search_rejects_entry_that_explicitly_names_another_model(monkeypatch):
+    wrong_model = wk.KnowledgeEntry(
+        source="freshdesk_kb",
+        category="remote",
+        title="4000CS Error Codes",
+        diagnostic="4000CS remote diagnostic procedure",
+        customer_steps=("Press and hold a remote key for 40 seconds.",),
+    )
+    generic = wk.KnowledgeEntry(
+        source="freshdesk_kb",
+        category="remote",
+        title="Remote screen troubleshooting",
+        diagnostic="Controller screen is not responding",
+        customer_steps=("Check that the remote cable is firmly connected.",),
+    )
+    monkeypatch.setattr(wk, "load_knowledge_entries", lambda: (wrong_model, generic))
+    monkeypatch.setattr(wk, "_semantic_enabled", lambda: False)
+    monkeypatch.setattr(
+        wk,
+        "_known_model_signatures",
+        lambda: frozenset({"4000cs", "4000xt"}),
+    )
+
+    results = wk.search_knowledge(
+        path_text="remote controller screen 4000CS",
+        defect_category="remote",
+        model_name="Osaki OS-4000XT",
+        limit=3,
+    )
+
+    assert generic in results
+    assert wrong_model not in results

@@ -13,6 +13,7 @@ from warranty_intake_context import (  # noqa: E402
     get_intake_summary,
     intake_aware_step_summary,
     persist_intake_summary,
+    reconcile_model_change,
 )
 
 
@@ -61,6 +62,49 @@ def test_intake_aware_step_summary_only_on_early_turns():
         summary="This looks like a **remote** issue.",
     )
     assert "Remote screen is blank" not in late
+
+
+def test_model_change_removes_old_model_and_model_dependent_diagnosis():
+    ticket = _CollectedTicket()
+    ticket.model_name = "4000CS"
+    ticket.set_collected("intake_summary", "4000CS chair")
+    ticket.set_collected("intake_raw_message", "4000CS remote screen is blank")
+    ticket.set_collected("error_code", "1")
+    ticket.set_collected("fonz_meaning", "Old model diagnosis")
+    ticket.set_collected("model_confirmed", "1")
+
+    changed = reconcile_model_change(ticket, "4000CS", "Osaki OS-4000XT")
+
+    assert changed is True
+    collected = ticket.get_collected()
+    assert collected["intake_summary"] == ""
+    assert collected["intake_raw_message"] == "remote screen is blank"
+    assert collected["error_code"] == ""
+    assert collected["fonz_meaning"] == ""
+    assert collected["model_confirmed"] == ""
+
+
+def test_display_only_model_normalization_does_not_clear_context():
+    ticket = _CollectedTicket()
+    ticket.set_collected("intake_summary", "Remote screen is blank")
+
+    changed = reconcile_model_change(ticket, "4000XT", "Osaki OS-4000XT")
+
+    assert changed is False
+    assert ticket.get_collected()["intake_summary"] == "Remote screen is blank"
+
+
+def test_existing_session_filters_conflicting_model_on_read(monkeypatch):
+    ticket = _CollectedTicket()
+    ticket.model_name = "Osaki OS-4000XT"
+    ticket.set_collected("intake_summary", "4000CS chair")
+    ticket.set_collected("intake_raw_message", "4000CS remote screen is blank")
+    monkeypatch.setattr(
+        "warranty_intake_context._known_model_labels",
+        lambda: ("4000CS", "4000XT"),
+    )
+
+    assert get_intake_summary(ticket) == "remote screen is blank"
 
 
 def test_tool_answer_side_question_does_not_advance(monkeypatch):

@@ -178,6 +178,26 @@ def test_intake_error_code_skips_gate():
     assert t2.get_collected().get(gate.COL_ERROR_CODE) == "C6"
 
 
+def test_model_only_intake_is_not_captured_as_error_code():
+    ticket_id, _ = WarrantyEngine.start_session("gate-model-only", "osakiusa.com")
+    WarrantyEngine.set_model_name(ticket_id, "A601")
+
+    from warranty_intake_context import persist_intake_summary  # noqa: WPS433
+
+    with wm.warranty_db_session() as db:
+        row = (
+            db.query(wm.WarrantyTicket)
+            .filter(wm.WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        assert row is not None
+        persist_intake_summary(row, raw_message="A601")
+
+    ticket = WarrantyEngine.get_ticket(ticket_id)
+    assert ticket is not None
+    assert not ticket.get_collected().get(gate.COL_ERROR_CODE)
+
+
 def test_gate_intercept_without_model_name():
     ticket_id, _ = WarrantyEngine.start_session("gate-nomodel", "osakiusa.com")
 

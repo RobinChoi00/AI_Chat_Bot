@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assistantContentFromResponse,
   formatEnrichmentSource,
   hasStepEnrichmentPanel,
   hydrationAssistantContent,
@@ -21,6 +22,16 @@ const midFlowTicket: WarrantyTicketState = {
 };
 
 describe("hydrationAssistantContent", () => {
+  it("does not append terminal contact or email text to a live question", () => {
+    const content = assistantContentFromResponse(midFlowTicket, {
+      assistant_message: undefined,
+      terminal_enrichment: null,
+    });
+    expect(content).toBe("Which part is affected?");
+    expect(content).not.toContain("final step");
+    expect(content).not.toContain("888-848-2630");
+  });
+
   it("prefers assistant_message on non-terminal refresh", () => {
     const resp: WarrantySessionResponse = {
       session_id: "s-1",
@@ -62,6 +73,27 @@ describe("hydrationAssistantContent", () => {
     expect(hydrationAssistantContent(terminalTicket, resp)).toBe(
       "Try these steps first."
     );
+  });
+
+  it("does not append warranty contact text to a sales handoff", () => {
+    const salesTicket: WarrantyTicketState = {
+      ...midFlowTicket,
+      status: "sales_handoff",
+      current_node: {
+        node_id: "sales_routing",
+        node_type: "terminal",
+        prompt: "How can I help you today?",
+        is_terminal: true,
+        options: [],
+      },
+    };
+    const content = assistantContentFromResponse(salesTicket, {
+      assistant_message: undefined,
+      terminal_enrichment: null,
+    });
+    expect(content).toBe("How can I help you today?");
+    expect(content).not.toContain("888-848-2630");
+    expect(content).not.toContain("final step");
   });
 });
 

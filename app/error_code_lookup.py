@@ -18,9 +18,19 @@ from fonz_warranty_data import (
     normalize_model_key,
 )
 
-_ERROR_CODE_RE = re.compile(
-    r"\berror\s*code\s*([A-Za-z]{0,3}\s*\d+(?:\.\d+)?|[A-Za-z]{1,4})\b"
-    r"|\b([A-Za-z]{0,3}\d+(?:\.\d+)?)\b",
+_EXPLICIT_ERROR_CODE_RE = re.compile(
+    r"\b(?:error\s*)?code\s*(?:is|:|#|-)?\s*"
+    r"([A-Za-z]{0,3}\s*\d+(?:\.\d+)?|[A-Za-z]{1,4})\b",
+    re.I,
+)
+_STANDALONE_CODE_RE = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z]{1,3}\d{1,3}(?:\.\d+)?|\d{1,3})(?![A-Za-z0-9])",
+    re.I,
+)
+_NUMERIC_CODE_PREFIX_RE = re.compile(
+    r"(?:\b(?:error\s*)?code\b|"
+    r"\b(?:display|screen)\s+(?:shows?|reads?)|"
+    r"\b(?:shows?|reads?)\s*)\s*(?:is|:|#|-)?\s*$",
     re.I,
 )
 
@@ -68,22 +78,47 @@ def _resolve_model_key(model_name: str) -> str:
 
 
 def extract_error_codes_from_text(text: str) -> list[str]:
+    """Extract deliberate error-code mentions without treating every number as a code."""
     if not text or not text.strip():
         return []
     found: list[str] = []
     seen: set[str] = set()
 
-    for match in _ERROR_CODE_RE.finditer(text):
-        token = normalize_error_code(match.group(1) or match.group(2) or "")
+    def _add(raw: str) -> None:
+        token = normalize_error_code(raw)
         if not token or token in seen:
-            continue
+            return
         # Skip obvious non-codes.
         if token in {"THE", "AND", "FOR", "NOT", "YES", "NO"}:
-            continue
+            return
         if re.fullmatch(r"\d+", token) and len(token) > 3:
-            continue
+            return
         seen.add(token)
         found.append(token)
+
+    explicit_spans: list[tuple[int, int]] = []
+    for match in _EXPLICIT_ERROR_CODE_RE.finditer(text):
+        _add(match.group(1) or "")
+        explicit_spans.append(match.span())
+
+    stripped = text.strip()
+    code_only = bool(
+        re.fullmatch(
+            r"(?:error\s*)?(?:code\s*)?(?:is|:|#|-)?\s*"
+            r"(?:[A-Za-z]{1,3}\d{1,3}(?:\.\d+)?|\d{1,3})",
+            stripped,
+            flags=re.I,
+        )
+    )
+    for match in _STANDALONE_CODE_RE.finditer(text):
+        if any(start <= match.start() < end for start, end in explicit_spans):
+            continue
+        token = match.group(1) or ""
+        has_letters = bool(re.search(r"[A-Za-z]", token))
+        prefix = text[max(0, match.start() - 32) : match.start()]
+        if not has_letters and not code_only and not _NUMERIC_CODE_PREFIX_RE.search(prefix):
+            continue
+        _add(token)
 
     return found
 

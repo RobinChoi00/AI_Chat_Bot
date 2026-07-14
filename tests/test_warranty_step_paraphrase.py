@@ -98,6 +98,24 @@ def test_paraphrase_rejects_missing_question(monkeypatch):
     assert out == draft
 
 
+def test_paraphrase_rejects_new_error_code_claim(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(paraphrase, "_ENABLED", True)
+    base = "Does the remote have power?"
+    rewritten = f"Your chair is showing a 4000CS error code.\n\n{base}"
+    monkeypatch.setattr(
+        paraphrase,
+        "_openai_client",
+        lambda: _FakeOpenAI(rewritten),
+    )
+
+    draft = f"This looks like a remote issue.\n\n{base}"
+    out, ok = paraphrase.paraphrase_step_message(draft, base_prompt=base)
+
+    assert ok is False
+    assert out == draft
+
+
 def test_question_preserved_allows_whitespace_diff():
     base = "Do you hear a click?"
     output = "Intro\n\nDo   you hear a click?"

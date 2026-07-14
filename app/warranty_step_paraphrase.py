@@ -81,6 +81,11 @@ def _question_preserved(output: str, base_prompt: str) -> bool:
     return _normalize(base_prompt) in _normalize(output)
 
 
+def _introduced_error_code_claim(output: str, draft: str) -> bool:
+    """Block conversion of a model/number into an unconfirmed error code."""
+    return "error code" in _normalize(output) and "error code" not in _normalize(draft)
+
+
 def _format_options_hint(options: list[dict[str, Any]]) -> str:
     labels = [
         str(opt.get("label") or "").strip()
@@ -160,9 +165,13 @@ def paraphrase_step_message(
         logger.warning("Step paraphrase failed (%s): %s", node_id, exc)
         return draft, False
 
-    if not text or not _question_preserved(text, base_prompt):
+    if (
+        not text
+        or not _question_preserved(text, base_prompt)
+        or _introduced_error_code_claim(text, draft)
+    ):
         logger.info(
-            "Step paraphrase rejected — question not preserved (node=%s)",
+            "Step paraphrase rejected — invariant failed (node=%s)",
             node_id,
         )
         return draft, False

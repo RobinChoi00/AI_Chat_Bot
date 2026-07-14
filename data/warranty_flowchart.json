@@ -25,7 +25,7 @@
 
     "issue_type": {
       "type": "question",
-      "prompt": "What type of warranty issue are you experiencing?",
+      "prompt": "Which area do you need help with: setup, delivery, or a chair malfunction?",
       "options": [
         {"label": "Installation Issue",    "answer_key": "installation", "next": "install_model"},
         {"label": "Delivery Issue",        "answer_key": "delivery",     "next": "delivery_tracking_q"},
@@ -153,7 +153,7 @@
 
     "defect_problem_type": {
       "type": "question",
-      "prompt": "What type of problem are you experiencing with your chair?",
+      "prompt": "Which chair part or function is affected?",
       "options": [
         {"label": "Air / Inflation not working",                          "answer_key": "air",      "next": "defect_air_location"},
         {"label": "Cosmetic damage (physical damage to appearance)",      "answer_key": "cosmetic", "next": "defect_cosmetic_location"},

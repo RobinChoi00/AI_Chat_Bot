@@ -45,6 +45,14 @@ def test_extract_error_codes_from_text():
     assert "C6" in codes
 
 
+def test_error_code_extraction_ignores_durations_and_accepts_display_code():
+    assert lookup.extract_error_codes_from_text(
+        "The chair stopped after 10 minutes, and I waited 24 hours."
+    ) == []
+    assert lookup.extract_error_codes_from_text("The screen shows 63") == ["63"]
+    assert lookup.extract_error_codes_from_text("C6") == ["C6"]
+
+
 def test_warranty_knowledge_loads_fonz_entries():
     wk.clear_knowledge_cache()
     entries = wk.load_knowledge_entries()

@@ -873,6 +873,8 @@ def tool_start_warranty_workflow(*, session_id: str, domain: str, issue_hint: st
             from warranty_intake_context import persist_intake_summary  # noqa: WPS433
 
             persist_intake_summary(ticket, summary=hint, raw_message=hint)
+            WarrantyEngine.persist_collected_data(ticket_id, ticket.collected_data)
+            ticket = WarrantyEngine.get_ticket(ticket_id)
         logger.info(f"🎫 Warranty started — session={session_id} ticket={ticket_id} domain={domain}")
         return _format_warranty_node(
             ticket_id,
