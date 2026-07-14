@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import Column, DateTime, Integer, String, Text
 
 from warranty_models import Base, _engine, warranty_db_session
+from admin_auth import require_admin_key
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +91,7 @@ def _hash_content(text: str) -> str:
 
 
 def _require_admin(x_admin_key: Optional[str]) -> None:
-    if not _ADMIN_API_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Admin API is not configured. Set ADMIN_API_KEY first.",
-        )
-    if x_admin_key != _ADMIN_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-Admin-Key.")
+    require_admin_key(x_admin_key, _ADMIN_API_KEY)
 
 
 # ---------------------------------------------------------------------------

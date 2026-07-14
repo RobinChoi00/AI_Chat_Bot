@@ -19,6 +19,12 @@ GOLDEN_INTENTS = [
     ("What's the price of Solo Flex?", "search_chair_specs"),
     ("How much is the Hypnos 4D?", "search_chair_specs"),
     ("Tell me about the Maestro LE dimensions", "search_chair_specs"),
+    ("의자가 켜지지 않아요", "get_repair_help"),
+    ("Hypnos 4D 가격이 얼마인가요?", "search_chair_specs"),
+    ("보증 신청을 하고 싶어요", "start_warranty_workflow"),
+    ("Mi silla no enciende", "get_repair_help"),
+    ("¿Cuánto cuesta Solo Flex?", "search_chair_specs"),
+    ("Quiero presentar una reclamación", "start_warranty_workflow"),
     ("Hello there", None),
 ]
 

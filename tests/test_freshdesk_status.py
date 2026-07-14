@@ -68,6 +68,7 @@ def test_get_freshdesk_dashboard_without_credentials(monkeypatch, tmp_path):
 
     monkeypatch.setattr("freshdesk_status._TICKETS_PATH", tickets)
     monkeypatch.setattr("freshdesk_status._SOLUTIONS_PATH", kb)
+    monkeypatch.setattr("freshdesk_status._STATUS_PATH", tmp_path / "missing_status.json")
 
     from freshdesk_status import get_freshdesk_dashboard
 

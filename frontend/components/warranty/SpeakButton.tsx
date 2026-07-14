@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import {
   isSpeechSupported,
   messageContentToSpeech,
@@ -16,10 +16,13 @@ interface Props {
 
 export default function SpeakButton({ text, className = "" }: Props) {
   const [speaking, setSpeaking] = useState(false);
-  const [supported, setSupported] = useState(false);
+  const supported = useSyncExternalStore(
+    () => () => undefined,
+    isSpeechSupported,
+    () => false
+  );
 
   useEffect(() => {
-    setSupported(isSpeechSupported());
     warmSpeechVoices();
     return () => stopSpeech();
   }, []);

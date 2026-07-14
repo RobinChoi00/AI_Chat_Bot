@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import threading
 import time
 import uuid
@@ -45,6 +46,34 @@ RC_SMS_FROM_NUMBER = os.getenv("RC_SMS_FROM_NUMBER", "")
 _token_lock = threading.Lock()
 _cached_token: Optional[str] = None
 _token_expires_at: float = 0.0
+
+
+def _request_timeout() -> tuple[float, float]:
+    try:
+        connect = float(os.getenv("RC_CONNECT_TIMEOUT_SECONDS", "5"))
+        read = float(os.getenv("RC_READ_TIMEOUT_SECONDS", "25"))
+    except ValueError:
+        connect, read = 5.0, 25.0
+    return max(1.0, min(connect, 30.0)), max(1.0, min(read, 60.0))
+
+
+def _max_retries() -> int:
+    try:
+        return max(0, min(int(os.getenv("RC_API_MAX_RETRIES", "3")), 5))
+    except ValueError:
+        return 3
+
+
+def _retry_delay(resp: Optional[requests.Response], attempt: int) -> float:
+    if resp is not None:
+        raw = (resp.headers.get("Retry-After") or "").strip()
+        try:
+            if raw:
+                return max(0.0, min(float(raw), 30.0))
+        except ValueError:
+            pass
+    base = min(0.5 * (2 ** attempt), 8.0)
+    return base + random.uniform(0.0, min(base * 0.25, 1.0))
 
 
 def _load_private_key() -> str:
@@ -135,7 +164,7 @@ def get_access_token(*, force_refresh: bool = False) -> str:
                 "assertion": assertion,
             },
             auth=(client_id, client_secret),
-            timeout=30,
+            timeout=_request_timeout(),
         )
         if resp.status_code >= 400:
             logger.error(
@@ -172,25 +201,68 @@ def _request(
     *,
     json_body: Optional[dict[str, Any]] = None,
 ) -> requests.Response:
-    """Issue an authenticated RC request; retry once on HTTP 401."""
-    resp = requests.request(
-        method,
-        url,
-        headers=_auth_headers(),
-        json=json_body,
-        timeout=30,
-    )
-    if resp.status_code != 401:
-        return resp
-    logger.info("RingCentral 401 — refreshing access token and retrying once")
-    resp = requests.request(
-        method,
-        url,
-        headers=_auth_headers(force_refresh=True),
-        json=json_body,
-        timeout=30,
-    )
-    return resp
+    """Issue an authenticated RC request with bounded transient retries."""
+    transient_statuses = {429, 500, 502, 503, 504}
+    max_retries = _max_retries()
+    refreshed = False
+    force_refresh_next = False
+    last_exc: Optional[requests.RequestException] = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.request(
+                method,
+                url,
+                headers=_auth_headers(force_refresh=force_refresh_next),
+                json=json_body,
+                timeout=_request_timeout(),
+            )
+            force_refresh_next = False
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt >= max_retries:
+                raise
+            delay = _retry_delay(None, attempt)
+            logger.warning(
+                "RingCentral network error; retrying attempt=%s delay=%.2fs error=%s",
+                attempt + 1,
+                delay,
+                type(exc).__name__,
+            )
+            time.sleep(delay)
+            continue
+
+        if resp.status_code == 401 and not refreshed:
+            logger.info("RingCentral 401 — refreshing access token")
+            refreshed = True
+            force_refresh_next = True
+            if attempt >= max_retries:
+                # Always allow the single credential refresh, even when
+                # transient retries are configured to zero.
+                return requests.request(
+                    method,
+                    url,
+                    headers=_auth_headers(force_refresh=True),
+                    json=json_body,
+                    timeout=_request_timeout(),
+                )
+            continue
+
+        if resp.status_code not in transient_statuses or attempt >= max_retries:
+            return resp
+
+        delay = _retry_delay(resp, attempt)
+        logger.warning(
+            "RingCentral transient response; retrying status=%s attempt=%s delay=%.2fs",
+            resp.status_code,
+            attempt + 1,
+            delay,
+        )
+        time.sleep(delay)
+
+    if last_exc is not None:  # defensive; loop normally returns or raises
+        raise last_exc
+    raise RuntimeError("RingCentral request retry loop ended unexpectedly.")
 
 
 def play_prompt(

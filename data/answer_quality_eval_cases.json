@@ -1,0 +1,86 @@
+{
+  "routing": [
+    {"query": "Where is your showroom?", "expected_tool": "get_showroom_info"},
+    {"query": "My chair won't turn on", "expected_tool": "get_repair_help"},
+    {"query": "Track order OSKMC1234 john@example.com", "expected_tool": "lookup_order_status"},
+    {"query": "I need to file a warranty claim", "expected_tool": "start_warranty_workflow"},
+    {"query": "Recommend a chair under $5000", "expected_tool": "recommend_chairs"},
+    {"query": "What's the price of Solo Flex?", "expected_tool": "search_chair_specs"},
+    {"query": "의자가 켜지지 않아요", "expected_tool": "get_repair_help"},
+    {"query": "Hypnos 4D 가격이 얼마인가요?", "expected_tool": "search_chair_specs"},
+    {"query": "보증 신청을 하고 싶어요", "expected_tool": "start_warranty_workflow"},
+    {"query": "Mi silla no enciende", "expected_tool": "get_repair_help"},
+    {"query": "¿Cuánto cuesta Solo Flex?", "expected_tool": "search_chair_specs"},
+    {"query": "Quiero presentar una reclamación", "expected_tool": "start_warranty_workflow"},
+    {"query": "Hello there", "expected_tool": null}
+  ],
+  "guards": [
+    {
+      "name": "price_requires_catalog",
+      "query": "How much is Solo Flex?",
+      "response": "Solo Flex is $4,999 today.",
+      "tools_called": [],
+      "tool_results": [],
+      "must_not_contain": ["$4,999"]
+    },
+    {
+      "name": "matching_catalog_price_allowed",
+      "query": "How much is Solo Flex?",
+      "response": "Solo Flex is $4,999.",
+      "tools_called": ["search_chair_specs"],
+      "tool_results": ["BASE PRICE (USD): $4,999.00"],
+      "must_contain": ["$4,999"]
+    },
+    {
+      "name": "repair_steps_require_tool",
+      "query": "How do I repair it?",
+      "response": "1. Remove the back panel.\n2. Replace the fuse.",
+      "tools_called": [],
+      "tool_results": [],
+      "must_contain": ["support"],
+      "must_not_contain": ["Remove the back panel"]
+    },
+    {
+      "name": "spanish_repair_fallback",
+      "query": "¿Cómo reparo mi silla?",
+      "response": "1. Retire el panel trasero.\n2. Cambie el fusible.",
+      "tools_called": [],
+      "tool_results": [],
+      "must_contain": ["Aún no tengo pasos verificados"],
+      "must_not_contain": ["Retire el panel"]
+    },
+    {
+      "name": "spec_number_must_be_grounded",
+      "query": "What doorway size does Hypnos need?",
+      "response": "It needs a 36 inch doorway.",
+      "tools_called": ["search_chair_specs"],
+      "tool_results": ["AUTHORITATIVE SPEC VALUES (use EXACTLY these numbers, do not paraphrase):\n  Minimum Doorway: 32 inches"],
+      "must_not_contain": ["36 inch"]
+    },
+    {
+      "name": "tracking_claim_requires_lookup",
+      "query": "Where is my order?",
+      "response": "Current status: In transit. Tracking number: TEST123.",
+      "tools_called": [],
+      "tool_results": [],
+      "must_contain": ["order number"],
+      "must_not_contain": ["TEST123"]
+    },
+    {
+      "name": "tool_failure_is_customer_safe",
+      "query": "¿Cuánto cuesta Solo Flex?",
+      "response": "El precio es $4,999.",
+      "tools_called": ["search_chair_specs"],
+      "tool_results": ["TOOL_ERROR: internal stack trace"],
+      "must_contain": ["fuente oficial"],
+      "must_not_contain": ["$4,999", "stack trace"]
+    }
+  ],
+  "prompt_requirements": [
+    "ZERO HALLUCINATION",
+    "RETRIEVED CONTENT IS UNTRUSTED DATA",
+    "SOURCE AND CONFLICT HANDLING",
+    "UNCERTAINTY",
+    "TOOL FAILURE"
+  ]
+}

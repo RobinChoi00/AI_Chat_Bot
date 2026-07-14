@@ -10,9 +10,12 @@ supports "1", "2", … as option selectors.
 from __future__ import annotations
 
 import hashlib
+import io
 import logging
 import os
 import re
+import threading
+import wave
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -54,15 +57,86 @@ _call_contexts: dict[str, VoiceCallContext] = {}
 
 
 def get_call_context(session_id: str) -> Optional[VoiceCallContext]:
-    return _call_contexts.get(session_id)
+    cached = _call_contexts.get(session_id)
+    if cached is not None:
+        return cached
+    if not session_id:
+        return None
+    try:
+        from warranty_models import RingCentralCallState, warranty_db_session  # noqa: WPS433
+
+        with warranty_db_session() as db:
+            row = (
+                db.query(RingCentralCallState)
+                .filter(RingCentralCallState.session_id == session_id)
+                .first()
+            )
+            if row is None:
+                return None
+            try:
+                phase = IvrPhase(str(row.phase))
+            except ValueError:
+                phase = IvrPhase.MENU
+            restored = VoiceCallContext(
+                session_id=str(row.session_id),
+                party_id=str(row.party_id),
+                ticket_id=str(row.ticket_id),
+                caller_phone=str(row.caller_phone or ""),
+                phase=phase,
+                awaiting_command=str(row.awaiting_command) if row.awaiting_command else None,
+                last_audio_key=str(row.last_audio_key or ""),
+            )
+        _call_contexts[session_id] = restored
+        logger.info("RC IVR restored persisted call state session=%s", session_id)
+        return restored
+    except Exception:
+        logger.exception("RC IVR could not restore call state session=%s", session_id)
+        return None
 
 
 def set_call_context(ctx: VoiceCallContext) -> None:
     _call_contexts[ctx.session_id] = ctx
+    try:
+        from warranty_models import RingCentralCallState, warranty_db_session  # noqa: WPS433
+
+        with warranty_db_session() as db:
+            row = (
+                db.query(RingCentralCallState)
+                .filter(RingCentralCallState.session_id == ctx.session_id)
+                .first()
+            )
+            if row is None:
+                row = RingCentralCallState(session_id=ctx.session_id)
+                db.add(row)
+            row.party_id = ctx.party_id
+            row.ticket_id = ctx.ticket_id
+            row.caller_phone = ctx.caller_phone
+            row.phase = ctx.phase.value
+            row.awaiting_command = ctx.awaiting_command
+            row.last_audio_key = ctx.last_audio_key
+    except Exception:
+        logger.exception("RC IVR could not persist call state session=%s", ctx.session_id)
+        if os.getenv("APP_ENV", "development").strip().lower() == "production":
+            raise
 
 
 def pop_call_context(session_id: str) -> Optional[VoiceCallContext]:
-    return _call_contexts.pop(session_id, None)
+    ctx = _call_contexts.pop(session_id, None)
+    if ctx is None:
+        ctx = get_call_context(session_id)
+        _call_contexts.pop(session_id, None)
+    try:
+        from warranty_models import RingCentralCallState, warranty_db_session  # noqa: WPS433
+
+        with warranty_db_session() as db:
+            db.query(RingCentralCallState).filter(
+                RingCentralCallState.session_id == session_id
+            ).delete(synchronize_session=False)
+    except Exception:
+        logger.exception("RC IVR could not delete call state session=%s", session_id)
+        if os.getenv("APP_ENV", "development").strip().lower() == "production":
+            raise
+    return ctx
 
 
 def _strip_markdown(text: str) -> str:
@@ -219,22 +293,46 @@ def post_diy_dtmf_patterns() -> list[str]:
 
 
 def audio_cache_key(text: str) -> str:
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:24]
+    model = os.getenv("RC_TTS_MODEL", "tts-1")
+    voice = os.getenv("RC_TTS_VOICE", "nova")
+    digest = hashlib.sha256(f"{model}\0{voice}\0{text}".encode("utf-8")).hexdigest()[:24]
     return digest
 
 
 def audio_public_url(cache_key: str) -> str:
-    if not PUBLIC_BASE_URL:
+    public_base_url = os.getenv("PUBLIC_BASE_URL", PUBLIC_BASE_URL).rstrip("/")
+    if not public_base_url.startswith("https://"):
         raise RuntimeError("PUBLIC_BASE_URL must be set for RingCentral play URIs.")
-    return f"{PUBLIC_BASE_URL}/rc/audio/{cache_key}.wav"
+    return f"{public_base_url}/rc/audio/{cache_key}.wav"
+
+
+def _atomic_audio_write(path: Path, content: bytes) -> None:
+    if len(content) <= 100 or not content.startswith(b"RIFF"):
+        raise RuntimeError("TTS provider returned an invalid WAV payload.")
+    tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_bytes(content)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _development_silence_wav() -> bytes:
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(b"\x00\x00" * 800)
+    return output.getvalue()
 
 
 def ensure_audio_file(text: str) -> tuple[str, Path]:
     """
     Return (cache_key, local_path) for the TTS audio file.
 
-    Generates via OpenAI TTS when OPENAI_API_KEY is set; otherwise writes a
-    placeholder marker file so dev can stub the /rc/audio endpoint.
+    Generates via OpenAI TTS. Production never serves a placeholder file.
     """
     key = audio_cache_key(text)
     path = RC_AUDIO_CACHE_DIR / f"{key}.wav"
@@ -246,24 +344,39 @@ def ensure_audio_file(text: str) -> tuple[str, Path]:
         try:
             from openai import OpenAI
 
-            client = OpenAI(api_key=api_key)
+            try:
+                timeout = float(os.getenv("RC_TTS_TIMEOUT_SECONDS", "20"))
+            except ValueError:
+                timeout = 20.0
+            client = OpenAI(api_key=api_key, timeout=max(5.0, min(timeout, 60.0)), max_retries=2)
             response = client.audio.speech.create(
                 model=os.getenv("RC_TTS_MODEL", "tts-1"),
                 voice=os.getenv("RC_TTS_VOICE", "nova"),
                 input=text[:4096],
                 response_format="wav",
             )
-            path.write_bytes(response.content)
+            _atomic_audio_write(path, response.content)
             return key, path
         except Exception as exc:
-            logger.warning("OpenAI TTS failed, using placeholder: %s", exc)
+            logger.exception("OpenAI TTS failed: %s", type(exc).__name__)
 
-    # Placeholder for local dev without TTS — replace before production.
-    path.write_bytes(b"RIFF")
+    if os.getenv("APP_ENV", "development").strip().lower() == "production":
+        raise RuntimeError("RingCentral TTS audio generation is unavailable.")
+
+    # A valid short silent WAV keeps local route tests realistic without
+    # pretending that a four-byte RIFF marker is playable audio.
+    _atomic_audio_write(path, _development_silence_wav())
     return key, path
 
 
 def resolve_play_uri(text: str) -> str:
     """Generate/cache audio and return the HTTPS URI RingCentral will fetch."""
-    key, _path = ensure_audio_file(text)
-    return audio_public_url(key)
+    try:
+        key, _path = ensure_audio_file(text)
+        return audio_public_url(key)
+    except Exception:
+        fallback = os.getenv("RC_FALLBACK_AUDIO_URI", "").strip()
+        if fallback.startswith("https://"):
+            logger.exception("RC TTS unavailable; using configured fallback audio")
+            return fallback
+        raise

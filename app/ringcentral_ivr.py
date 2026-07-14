@@ -48,6 +48,10 @@ from ringcentral_voice import (
 logger = logging.getLogger(__name__)
 
 
+class RetryableRingCentralEvent(RuntimeError):
+    """The callback is valid but depends on an earlier event/state write."""
+
+
 def _lazy_engine():
     from warranty_workflow import WarrantyEngine  # noqa: WPS433
 
@@ -113,10 +117,9 @@ def _log_business_hours_connect(session_id: str, caller: str) -> str:
             ticket.set_collected("caller_phone", caller)
         ticket.set_collected("ivr_path", "business_hours_live_forward")
     logger.info(
-        "RC IVR logged live forward ticket=%s session=%s caller=%s",
+        "RC IVR logged live forward ticket=%s session=%s",
         ticket_id,
         session_id,
-        caller,
     )
     return ticket_id
 
@@ -126,11 +129,14 @@ def _play_script(ctx: VoiceCallContext, script: str, *, phase: IvrPhase) -> None
     play_prompt(session_id=ctx.session_id, party_id=ctx.party_id, audio_uri=uri)
     ctx.phase = phase
     ctx.awaiting_command = "Play"
+    ctx.last_audio_key = uri.rsplit("/", 1)[-1].removesuffix(".wav")
+    set_call_context(ctx)
 
 
 def _start_collect(ctx: VoiceCallContext, patterns: list[str]) -> None:
     collect_digits(session_id=ctx.session_id, party_id=ctx.party_id, patterns=patterns)
     ctx.awaiting_command = "Collect"
+    set_call_context(ctx)
 
 
 def _transfer(ctx: VoiceCallContext, reason: str) -> None:
@@ -147,17 +153,18 @@ def _transfer(ctx: VoiceCallContext, reason: str) -> None:
     )
     ctx.phase = IvrPhase.DONE
     ctx.awaiting_command = None
+    set_call_context(ctx)
 
 
 def _forward_to_warranty_queue(ctx: VoiceCallContext) -> None:
     logger.info(
-        "RC IVR connecting to warranty queue session=%s caller=%s",
+        "RC IVR connecting to warranty queue session=%s",
         ctx.session_id,
-        ctx.caller_phone,
     )
     forward_call(session_id=ctx.session_id, party_id=ctx.party_id)
     ctx.phase = IvrPhase.DONE
     ctx.awaiting_command = None
+    set_call_context(ctx)
 
 
 def _present_node(
@@ -215,16 +222,18 @@ def handle_call_enter(payload: dict[str, Any]) -> None:
     session_id = _session_id(payload)
     party_id = _party_id(payload)
     if not session_id or not party_id:
-        logger.error("RC on-call-enter missing sessionId/partyId: %s", payload)
+        raise ValueError("RC on-call-enter missing sessionId/partyId")
+
+    if get_call_context(session_id) is not None:
+        logger.info("RC IVR ignored duplicate call-enter session=%s", session_id)
         return
 
     caller = _caller_phone(payload)
     if is_warranty_business_hours():
         ticket_id = _log_business_hours_connect(session_id, caller)
         logger.info(
-            "RC IVR business hours — connect message then forward session=%s caller=%s ticket=%s",
+            "RC IVR business hours — connect message then forward session=%s ticket=%s",
             session_id,
-            caller,
             ticket_id,
         )
         ctx = VoiceCallContext(
@@ -255,10 +264,9 @@ def handle_call_enter(payload: dict[str, Any]) -> None:
     )
     set_call_context(ctx)
     logger.info(
-        "RC IVR started session=%s ticket=%s caller=%s node=%s",
+        "RC IVR started session=%s ticket=%s node=%s",
         session_id,
         ticket_id,
-        caller,
         entry_node.get("node_id"),
     )
     intro = f"{build_after_hours_welcome_script()} "
@@ -314,6 +322,7 @@ def _handle_post_diy_digit(ctx: VoiceCallContext, digit: str) -> None:
         hangup(session_id=ctx.session_id, party_id=ctx.party_id)
         ctx.phase = IvrPhase.DONE
         ctx.awaiting_command = None
+        set_call_context(ctx)
         return
     script = "Sorry, press 1 if the issue is fixed, or press 0 to hear the message again."
     _play_script(ctx, script, phase=IvrPhase.POST_DIY)
@@ -323,8 +332,9 @@ def handle_command_update(payload: dict[str, Any]) -> None:
     session_id = _session_id(payload)
     ctx = get_call_context(session_id)
     if ctx is None:
-        logger.warning("RC on-command-update with unknown session=%s", session_id)
-        return
+        raise RetryableRingCentralEvent(
+            f"RC command arrived before call state for session={session_id}"
+        )
 
     status = str(payload.get("status") or "")
     if status != "Completed":
@@ -333,6 +343,18 @@ def handle_command_update(payload: dict[str, Any]) -> None:
     command = str(payload.get("command") or "")
     party_id = str(payload.get("partyId") or ctx.party_id)
     ctx.party_id = party_id
+    set_call_context(ctx)
+
+    if ctx.phase == IvrPhase.DONE:
+        return
+    if ctx.awaiting_command and command != ctx.awaiting_command:
+        logger.info(
+            "RC IVR ignored stale command session=%s expected=%s received=%s",
+            session_id,
+            ctx.awaiting_command,
+            command,
+        )
+        return
 
     if command == "Play":
         if ctx.phase == IvrPhase.CONNECTING:
@@ -371,7 +393,31 @@ def handle_command_update(payload: dict[str, Any]) -> None:
 def handle_call_exit(payload: dict[str, Any]) -> None:
     session_id = _session_id(payload)
     ctx = pop_call_context(session_id)
-    if ctx and ctx.ticket_id:
+    if ctx is None:
+        from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+        with warranty_db_session() as db:
+            ticket = (
+                db.query(WarrantyTicket)
+                .filter(WarrantyTicket.session_id == session_id)
+                .order_by(WarrantyTicket.id.desc())
+                .first()
+            )
+            if ticket is None:
+                raise RetryableRingCentralEvent(
+                    f"RC exit arrived before call state for session={session_id}"
+                )
+            collected = ticket.get_collected()
+            if collected.get("ivr_path") == "business_hours_live_forward":
+                return
+            ctx = VoiceCallContext(
+                session_id=session_id,
+                party_id="",
+                ticket_id=str(ticket.ticket_id),
+                caller_phone=str(collected.get("caller_phone") or ""),
+                phase=IvrPhase.DONE,
+            )
+    if ctx.ticket_id:
         logger.info("RC IVR call exit session=%s ticket=%s", session_id, ctx.ticket_id)
         send_phone_call_followups(
             caller_phone=ctx.caller_phone,

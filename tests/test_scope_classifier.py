@@ -47,6 +47,18 @@ def test_refusal_message_mentions_specialization():
     assert "business hours" in msg.lower()
 
 
+def test_refusal_message_is_localized_for_korean():
+    msg = build_scope_refusal("파이썬 코드를 작성해 주세요")
+    assert "마사지 의자" in msg
+    assert "운영 시간" in msg
+
+
+def test_refusal_message_is_localized_for_spanish():
+    msg = build_scope_refusal("Escribe un poema, por favor")
+    assert "sillas de masaje" in msg
+    assert "Horario" in msg
+
+
 def test_skip_flag_bypasses_classifier():
     decision = evaluate_scope("Write me a poem about cats", skip=True)
     assert decision.in_scope

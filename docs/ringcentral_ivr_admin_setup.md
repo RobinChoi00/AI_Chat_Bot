@@ -74,7 +74,15 @@ Set in EC2 `.env`:
 ```bash
 RC_WEBHOOK_VERIFICATION_TOKEN=<same token as RingCentral Developer Console>
 PUBLIC_BASE_URL=https://api.osakichair.com
+RC_WARRANTY_TRANSFER_EXTENSION=3
+RC_SMS_FROM_NUMBER=<RingCentral SMS-capable E.164 number>
 ```
+
+The callback is acknowledged only after it has been saved to the durable inbox.
+Exact duplicate callbacks are processed once, transient RingCentral API failures
+use bounded backoff, and active call state is restored from SQLite after a
+backend restart. Monitor `GET /rc/health`; any `dead_letter` count requires an
+operator review before the affected call can be considered complete.
 
 ---
 
@@ -98,6 +106,8 @@ PUBLIC_BASE_URL=https://api.osakichair.com
 - [ ] Main greeting mentions **warranty hours** and **call back next open day**.
 - [ ] Keep “have invoice / order / ticket ready” prompt (team liked this).
 - [ ] Verify `RC_WEBHOOK_VERIFICATION_TOKEN` on server matches RC app.
+- [ ] Verify `/rc/health` is `ok` with zero dead-letter events.
+- [ ] Simulate one duplicate callback and one backend restart during a test call.
 - [ ] Test after close: Cong/Jose/Ryan scenario — should hear **closed + hours**, not 5‑minute hold → Sales.
 
 ---

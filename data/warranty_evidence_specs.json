@@ -84,6 +84,10 @@
     "defect_air_side_wg_tech_terminal":        { "required": [],                                                             "optional": ["video_of_issue"] },
     "defect_air_base_wg_tech_terminal":        { "required": [],                                                             "optional": ["video_of_issue"] },
 
+    "defect_heating_not_heating_terminal":     { "required": [],                                                             "optional": [] },
+    "defect_heating_intermittent_terminal":    { "required": [],                                                             "optional": [] },
+    "defect_heating_too_hot_terminal":         { "required": [],                                                             "optional": [] },
+
     "defect_cosmetic_photo_terminal":          { "required": ["damage_photos"],                                              "optional": [] },
     "defect_cosmetic_wg_terminal":             { "required": ["damage_photos"],                                              "optional": ["box_photos"] },
     "defect_cosmetic_signed_cleared_terminal": { "required": ["damage_photos"],                                              "optional": [] },

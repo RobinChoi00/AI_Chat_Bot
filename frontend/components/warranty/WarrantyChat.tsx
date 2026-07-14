@@ -13,6 +13,7 @@ import {
   resumeWarrantyFromToken,
   smartStartWarranty,
   submitCustomerNote,
+  submitTroubleshootingOutcome,
   submitWarrantyAnswer,
 } from "@/lib/api";
 import type {
@@ -20,6 +21,7 @@ import type {
   ChatMessage,
   StepEnrichment,
   TerminalEnrichment,
+  TroubleshootingOutcome,
   WarrantySessionResponse,
   WarrantyTicketState,
 } from "@/lib/types";
@@ -35,6 +37,7 @@ import EvidenceUploader from "./EvidenceUploader";
 import SaveProgressButton from "./SaveProgressButton";
 import SerialPhotoButton from "./SerialPhotoButton";
 import TicketStatusBadge from "./TicketStatusBadge";
+import TroubleshootingGate from "./TroubleshootingGate";
 import { WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
 import { WARRANTY_WELCOME_MESSAGE } from "@/lib/welcomeMessage";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
@@ -44,7 +47,7 @@ import { resolveWarrantyStoreDomain } from "@/lib/warrantyStoreDomain";
 // Short "reviewing your answer…" pause before the assistant bubble appears.
 // Kept small because ChatMessageBubble now types the response out on its own,
 // giving the actual streamed-response perception.
-const THINKING_DELAY_MS = 400;
+const THINKING_DELAY_MS = 1500;
 
 function assistantMessage(content: string): ChatMessage {
   return { role: "assistant", content, animate: true };
@@ -54,7 +57,7 @@ const EMAIL_THANK_YOU =
   `Thank you! Our warranty team at ${WARRANTY_CONTACT_EMAIL} will respond within 24 hours.`;
 
 const SELF_HELP_CLOSING =
-  "Sounds good — try those steps first. If you still need us, you can start a new case anytime. " +
+  "Great — this request is now closed as self-resolved. If you still need us, you can start a new case anytime. " +
   "Our warranty team is also available by phone during business hours.";
 
 const DEFECT_MODEL_PROMPT =
@@ -92,7 +95,12 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   });
   const [resumeStatus, setResumeStatus] = useState<
     "idle" | "resuming" | "resumed" | "failed"
-  >("idle");
+  >(() => {
+    if (typeof window === "undefined") return "idle";
+    return new URLSearchParams(window.location.search).has("resume")
+      ? "resuming"
+      : "idle";
+  });
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -105,6 +113,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [contactSubmitted, setContactSubmitted] = useState(false);
   const [helpConsent, setHelpConsent] = useState<"yes" | "no" | null>(null);
+  const [resolutionStage, setResolutionStage] = useState<"review" | "outcome">("review");
   const [optionsPanelExpanded, setOptionsPanelExpanded] = useState(true);
   const [issueTypePanelExpanded, setIssueTypePanelExpanded] = useState(true);
   const [emailPanelCollapsed, setEmailPanelCollapsed] = useState(false);
@@ -115,14 +124,27 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading, helpConsent, stepEnrichment]);
+  }, [messages, loading, helpConsent, resolutionStage, stepEnrichment]);
 
   const applySessionResponse = useCallback((resp: WarrantySessionResponse) => {
     setWarrantyState(resp.ticket);
     setTerminalEnrichment(resp.terminal_enrichment ?? null);
     setStepEnrichment(resp.step_enrichment ?? null);
     if (resp.terminal_enrichment?.phase === "awaiting_help_consent") {
-      setHelpConsent(null);
+      const outcome = resp.ticket?.troubleshooting_outcome;
+      if (outcome === "steps_completed") {
+        setResolutionStage("outcome");
+        setHelpConsent(null);
+      } else if (outcome === "unresolved" || outcome === "unable_to_attempt") {
+        setResolutionStage("outcome");
+        setHelpConsent("yes");
+      } else if (outcome === "resolved") {
+        setResolutionStage("outcome");
+        setHelpConsent("no");
+      } else {
+        setResolutionStage("review");
+        setHelpConsent(null);
+      }
     }
     setOptionsUsed(false);
     return resp;
@@ -160,6 +182,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       setTerminalEnrichment(null);
       setStepEnrichment(null);
       setHelpConsent(null);
+      setResolutionStage("review");
       setContactSubmitted(false);
       setOptionsUsed(false);
       setEmailPanelCollapsed(false);
@@ -178,6 +201,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     setLoading(true);
     setPendingDefectStart(null);
     setHelpConsent(null);
+    setResolutionStage("review");
 
     try {
       const resp = await goBackWarranty(ticketId);
@@ -224,7 +248,6 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     if (!token) return;
 
     let cancelled = false;
-    setResumeStatus("resuming");
     (async () => {
       try {
         const data = await resumeWarrantyFromToken(token);
@@ -301,11 +324,14 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const isErrorCodeGateNode = workflowNodeId.startsWith("defect_error_code");
 
   useEffect(() => {
-    if (workflowOptionCount >= 6) {
-      setOptionsPanelExpanded(false);
-    } else if (workflowOptionCount > 0) {
-      setOptionsPanelExpanded(true);
-    }
+    const handle = window.setTimeout(() => {
+      if (workflowOptionCount >= 6) {
+        setOptionsPanelExpanded(false);
+      } else if (workflowOptionCount > 0) {
+        setOptionsPanelExpanded(true);
+      }
+    }, 0);
+    return () => window.clearTimeout(handle);
   }, [workflowNodeId, workflowOptionCount]);
 
   const appendAssistantFromResponse = useCallback(
@@ -773,22 +799,60 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     advanceWarranty(answerKey, label);
   }
 
-  function handleHelpOffer(key: string, label: string) {
-    setMessages((prev) => [...prev, { role: "user", content: label }]);
-    if (key === "yes_team_help") {
-      setHelpConsent("yes");
-      setMessages((prev) => [
-        ...prev,
-        assistantMessage(
-          "No problem — please share your email below so our warranty team can follow up. " +
-            "Photos or videos are optional."
-        ),
-      ]);
-    } else {
-      setHelpConsent("no");
-      setMessages((prev) => [...prev, assistantMessage(SELF_HELP_CLOSING)]);
-    }
-  }
+  const handleResolutionOutcome = useCallback(
+    async (outcome: TroubleshootingOutcome, label?: string) => {
+      const ticketId = warrantyState?.ticket_id;
+      if (!ticketId || loading) return;
+
+      setError(null);
+      setLoading(true);
+      try {
+        await submitTroubleshootingOutcome(ticketId, outcome);
+        setWarrantyState((previous) => {
+          if (!previous) return previous;
+          return {
+            ...previous,
+            status: outcome === "resolved" ? "resolved" : previous.status,
+            admin_decision:
+              outcome === "resolved" ? "self_resolved" : previous.admin_decision,
+            troubleshooting_outcome: outcome,
+          };
+        });
+
+        if (outcome === "steps_completed") {
+          setResolutionStage("outcome");
+          return;
+        }
+
+        if (label) {
+          setMessages((previous) => [...previous, { role: "user", content: label }]);
+        }
+        if (outcome === "resolved") {
+          setHelpConsent("no");
+          setMessages((previous) => [
+            ...previous,
+            assistantMessage(SELF_HELP_CLOSING),
+          ]);
+          return;
+        }
+
+        setHelpConsent("yes");
+        setMessages((previous) => [
+          ...previous,
+          assistantMessage(
+            outcome === "unable_to_attempt"
+              ? "Understood — please don’t attempt anything that feels unsafe. Share your email below and our warranty team will review the next step. Photos or videos are optional."
+              : "Thanks for trying those steps. Since the issue is still there, share your email below and our warranty team will review the next step. Photos or videos are optional."
+          ),
+        ]);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Could not save your progress.");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [loading, warrantyState?.ticket_id]
+  );
 
   const isAwaitingAdmin =
     warrantyState?.status === "awaiting_admin_review" ||
@@ -836,20 +900,16 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     (warrantyState?.current_node?.options?.length ?? 0) > 0;
 
   useEffect(() => {
-    if (showIssueTypeOptions) {
-      setIssueTypePanelExpanded(true);
-    }
+    if (!showIssueTypeOptions) return;
+    const handle = window.setTimeout(() => setIssueTypePanelExpanded(true), 0);
+    return () => window.clearTimeout(handle);
   }, [showIssueTypeOptions]);
 
-  const helpOfferOptions =
-    terminalEnrichment?.help_offer_options ?? [];
-
-  const showHelpOffer =
+  const showResolutionGate =
     isTerminal &&
     terminalEnrichment?.phase === "awaiting_help_consent" &&
     helpConsent === null &&
-    !contactSubmitted &&
-    helpOfferOptions.length > 0;
+    !contactSubmitted;
 
   const inEmailStep = Boolean(
     isTerminal && helpConsent === "yes" && !contactSubmitted && warrantyState?.ticket_id
@@ -861,7 +921,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     needsCustomerReply ||
     !isTerminal ||
     inEmailStep ||
-    (isTerminal && helpConsent === null && !contactSubmitted && !showHelpOffer);
+    (isTerminal && helpConsent === null && !contactSubmitted && !showResolutionGate);
 
   const inputPlaceholder = needsCustomerReply
     ? "Type your reply to our team here…"
@@ -1109,13 +1169,38 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         </div>
       )}
 
-      {showHelpOffer && (
-        <div className="shrink-0 border-t border-gray-100 bg-white px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-3 sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-          <AnswerOptions
-            options={helpOfferOptions}
-            onSelect={handleHelpOffer}
+      {showResolutionGate && (
+        <div className="shrink-0 border-t border-gray-100 bg-white px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-4 sm:pb-[max(1rem,env(safe-area-inset-bottom))]">
+          <TroubleshootingGate
+            mode={terminalEnrichment?.interaction_mode ?? "troubleshooting"}
+            stage={resolutionStage}
+            stepCount={terminalEnrichment?.diagnosis?.steps?.length ?? 0}
             disabled={loading}
-            variant="stack"
+            onStepsCompleted={() =>
+              handleResolutionOutcome("steps_completed")
+            }
+            onResolved={() =>
+              handleResolutionOutcome(
+                "resolved",
+                terminalEnrichment?.interaction_mode === "preparation"
+                  ? "No — I’m all set"
+                  : "Yes — it’s working now"
+              )
+            }
+            onUnresolved={() =>
+              handleResolutionOutcome(
+                "unresolved",
+                terminalEnrichment?.interaction_mode === "preparation"
+                  ? "Yes — continue to team review"
+                  : "No — the issue is still there"
+              )
+            }
+            onUnableToAttempt={() =>
+              handleResolutionOutcome(
+                "unable_to_attempt",
+                "I can’t safely complete these steps"
+              )
+            }
           />
         </div>
       )}

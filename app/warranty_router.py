@@ -17,11 +17,8 @@ Phase E-lite  — Admin management
 Authentication
 --------------
 Admin endpoints check the `X-Admin-Key` request header against the
-`ADMIN_API_KEY` environment variable.
-
-TODO: Replace the static API-key check with a proper JWT / OAuth2 flow
-      once the authentication service is ready. The current design is a
-      temporary secret-in-header approach suitable only for internal use.
+`ADMIN_API_KEY` environment variable. The public Next.js admin application
+adds this server-side only after validating its signed, HTTP-only session.
 """
 
 from __future__ import annotations
@@ -49,6 +46,11 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+try:
+    from app.admin_auth import require_admin_key
+except ImportError:  # pragma: no cover - direct module execution in tests
+    from admin_auth import require_admin_key  # type: ignore
 
 
 def _now_cst_iso() -> str:
@@ -81,15 +83,18 @@ _WARRANTY_LLM_RATE = os.getenv("WARRANTY_LLM_RATE_LIMIT", "20/minute")
 _UPLOAD_ROOT = Path(__file__).resolve().parent.parent / "uploaded_evidence"
 _UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
-_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".pdf", ".mp4", ".mov"}
+_ALLOWED_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".webp", ".pdf", ".mp4", ".mov", ".avi", ".webm"
+}
 _ALLOWED_MIME_PREFIXES = {
     "image/jpeg", "image/png", "image/webp", "application/pdf",
-    "video/mp4", "video/quicktime",
+    "video/mp4", "video/quicktime", "video/x-msvideo", "video/avi", "video/webm",
 }
 _MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+_UPLOAD_RATE = os.getenv("WARRANTY_UPLOAD_RATE_LIMIT", "10/hour")
 
-# Admin API key — set ADMIN_API_KEY in your .env (or server environment).
-# TODO: Replace with proper JWT / session-based auth.
+# Backend-to-backend admin credential. Browser clients never receive this key.
 _ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
 
 
@@ -120,17 +125,7 @@ def _require_admin(x_admin_key: Optional[str]) -> None:
     If ADMIN_API_KEY is not set in the environment, the endpoint is still
     protected — a missing key always fails, preventing accidental exposure.
     """
-    if not _ADMIN_API_KEY:
-        # Key not configured → refuse all access with a clear message.
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Admin API is not configured. "
-                "Set ADMIN_API_KEY in the server environment first."
-            ),
-        )
-    if x_admin_key != _ADMIN_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-Admin-Key.")
+    require_admin_key(x_admin_key, _ADMIN_API_KEY)
 
 
 def _safe_filename(original: str) -> str:
@@ -141,12 +136,33 @@ def _safe_filename(original: str) -> str:
     return name or "upload"
 
 
+def _matches_file_signature(suffix: str, header: bytes) -> bool:
+    """Validate actual file bytes instead of trusting extension/MIME headers."""
+    if suffix in {".jpg", ".jpeg"}:
+        return header.startswith(b"\xff\xd8\xff")
+    if suffix == ".png":
+        return header.startswith(b"\x89PNG\r\n\x1a\n")
+    if suffix == ".webp":
+        return len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WEBP"
+    if suffix == ".pdf":
+        return header.startswith(b"%PDF-")
+    if suffix in {".mp4", ".mov"}:
+        return len(header) >= 12 and header[4:8] == b"ftyp"
+    if suffix == ".avi":
+        return len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"AVI "
+    if suffix == ".webm":
+        return header.startswith(b"\x1aE\xdf\xa3")
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Phase D-lite — Evidence endpoints
 # ---------------------------------------------------------------------------
 
 @router.post("/api/v1/warranty/{ticket_id}/evidence", tags=["warranty"])
+@limiter.limit(_UPLOAD_RATE)
 async def upload_evidence(
+    request: Request,
     ticket_id: str,
     evidence_type: str = Form(...),
     customer_email: str = Form(...),
@@ -155,7 +171,7 @@ async def upload_evidence(
     """
     Upload an evidence file for a warranty ticket.
 
-    Accepts: jpg, jpeg, png, webp, pdf, mp4, mov (max 20 MB).
+    Accepts: jpg, jpeg, png, webp, pdf, mp4, mov, avi, webm (max 20 MB).
     Saves to:  uploaded_evidence/warranty/{ticket_id}/{uuid}_{filename}
     Stores metadata in WarrantyEvidence table.
     Requires customer_email and notifies the warranty evidence distribution list.
@@ -188,38 +204,62 @@ async def upload_evidence(
             ),
         )
 
-    # Validate MIME type reported by the browser (best-effort)
+    # Reject obviously incompatible browser-reported types. Actual bytes are
+    # validated below as the authoritative gate.
     content_type = file.content_type or ""
     if content_type and not any(
         content_type.startswith(p) for p in _ALLOWED_MIME_PREFIXES
     ):
-        logger.warning(
-            f"Evidence upload: suspicious MIME {content_type!r} for ticket {ticket_id}"
-        )
-        # We warn but don't block — the extension check is the hard gate.
-
-    # --- Read and size-check ---
-    data = await file.read()
-    if len(data) > _MAX_FILE_BYTES:
         raise HTTPException(
-            status_code=413,
-            detail=f"File too large ({len(data):,} bytes). Max is {_MAX_FILE_BYTES:,} bytes (20 MB).",
+            status_code=422,
+            detail=f"File MIME type {content_type!r} is not allowed.",
         )
 
-    # --- Save to disk (path-traversal safe) ---
+    # --- Stream to disk with bounded memory and path-traversal protection ---
     safe_name = _safe_filename(original_filename)
     dest_dir = _UPLOAD_ROOT / "warranty" / ticket_id
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     # Resolve the destination and verify it is still inside _UPLOAD_ROOT
     dest_path = (dest_dir / f"{uuid.uuid4().hex}_{safe_name}").resolve()
-    if not str(dest_path).startswith(str(_UPLOAD_ROOT.resolve())):
+    if not dest_path.is_relative_to(_UPLOAD_ROOT.resolve()):
         raise HTTPException(status_code=400, detail="Path traversal detected — request rejected.")
 
-    dest_path.write_bytes(data)
+    file_size = 0
+    header = b""
+    try:
+        with dest_path.open("xb") as output:
+            os.chmod(dest_path, 0o600)
+            while True:
+                chunk = await file.read(_UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                if file_size > _MAX_FILE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Max is {_MAX_FILE_BYTES:,} bytes (20 MB).",
+                    )
+                if len(header) < 32:
+                    header += chunk[: 32 - len(header)]
+                output.write(chunk)
+
+        if file_size == 0 or not _matches_file_signature(suffix, header):
+            raise HTTPException(
+                status_code=422,
+                detail="File contents do not match the declared file type.",
+            )
+    except Exception:
+        dest_path.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
+
     logger.info(
-        f"📎 Evidence saved — ticket={ticket_id} type={evidence_type} "
-        f"file={safe_name} size={len(data):,}B path={dest_path}"
+        "evidence_saved ticket=%s type=%s size_bytes=%s",
+        ticket_id,
+        evidence_type,
+        file_size,
     )
 
     # --- Persist metadata ---
@@ -230,7 +270,7 @@ async def upload_evidence(
         file_path=str(dest_path),
         original_filename=original_filename,
         mime_type=mime,
-        file_size_bytes=len(data),
+        file_size_bytes=file_size,
         customer_email=normalized_email,
     )
 
@@ -246,7 +286,7 @@ async def upload_evidence(
         original_filename=original_filename,
         file_path=str(dest_path),
         mime_type=mime,
-        file_size_bytes=len(data),
+        file_size_bytes=file_size,
         issue_type=str(ticket.issue_type or ""),
         model_name=str(ticket.model_name or ""),
         turns=turns,
@@ -261,7 +301,7 @@ async def upload_evidence(
         "original_filename": original_filename,
         "customer_email":    normalized_email,
         "mime_type":         mime,
-        "file_size_bytes":   len(data),
+        "file_size_bytes":   file_size,
     }
 
 
@@ -462,6 +502,143 @@ async def append_customer_note(ticket_id: str, body: WarrantyCustomerNoteRequest
         "ticket_id": ticket_id,
         "customer_notes": stored,
         "team_notified": team_notified,
+    }
+
+
+class WarrantyTroubleshootingOutcomeRequest(BaseModel):
+    """Customer progress through the resolution-first terminal experience."""
+
+    outcome: str
+
+
+_TROUBLESHOOTING_OUTCOMES = frozenset(
+    {"steps_completed", "resolved", "unresolved", "unable_to_attempt"}
+)
+
+
+@router.post(
+    "/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+    tags=["warranty"],
+)
+async def record_troubleshooting_outcome(
+    ticket_id: str,
+    body: WarrantyTroubleshootingOutcomeRequest,
+):
+    """Persist self-service progress before exposing team-review options.
+
+    A confirmed resolution closes the ticket as ``self_resolved`` so it cannot
+    remain in an admin replacement/shipping queue. Other outcomes preserve the
+    workflow status and allow the customer to continue to team review.
+    """
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    outcome = (body.outcome or "").strip().lower()
+    if outcome not in _TROUBLESHOOTING_OUTCOMES:
+        raise HTTPException(
+            status_code=422,
+            detail="Unsupported troubleshooting outcome.",
+        )
+
+    engine = _lazy_engine()
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+    node = engine.get_current_node(ticket_id)
+    if not node or str(node.get("type") or "") != "terminal":
+        raise HTTPException(
+            status_code=409,
+            detail="Troubleshooting outcome is only available after diagnosis.",
+        )
+
+    previous_outcome = str(
+        ticket.get_collected().get("troubleshooting_outcome") or ""
+    ).strip().lower()
+    ticket_status = str(ticket.status or "")
+    decision = str(ticket.admin_decision or "")
+    if ticket_status == "resolved":
+        if decision == "self_resolved" and outcome == "resolved":
+            return {
+                "ticket_id": ticket_id,
+                "outcome": "resolved",
+                "status": "resolved",
+                "self_service_resolved": True,
+            }
+        raise HTTPException(status_code=409, detail="This ticket is already resolved.")
+    if outcome in {"resolved", "unresolved"} and previous_outcome not in {
+        "steps_completed",
+        outcome,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="Complete the recommended steps before recording the result.",
+        )
+    if previous_outcome in {"unresolved", "unable_to_attempt"} and outcome == "steps_completed":
+        raise HTTPException(
+            status_code=409,
+            detail="This ticket has already continued to team review.",
+        )
+    if previous_outcome == outcome:
+        return {
+            "ticket_id": ticket_id,
+            "outcome": outcome,
+            "status": ticket_status,
+            "self_service_resolved": outcome == "resolved",
+        }
+
+    now_iso = _now_cst_iso()
+    terminal_node_id = str(node.get("node_id") or "")
+    with warranty_db_session() as db:
+        ticket_row = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        if ticket_row is None:
+            raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+
+        collected = ticket_row.get_collected()
+        history_value = collected.get("troubleshooting_history")
+        history: List[Dict[str, str]] = (
+            list(history_value) if isinstance(history_value, list) else []
+        )
+        history.append(
+            {
+                "outcome": outcome,
+                "created_at": now_iso,
+                "terminal_node_id": terminal_node_id,
+            }
+        )
+        collected["troubleshooting_outcome"] = outcome
+        collected["troubleshooting_updated_at"] = now_iso
+        collected["troubleshooting_history"] = history[-20:]
+
+        import json as _json  # noqa: WPS433
+
+        ticket_row.collected_data = _json.dumps(collected)
+        if outcome == "resolved":
+            ticket_row.status = "resolved"
+            ticket_row.admin_decision = "self_resolved"
+            resolution_note = (
+                f"[system] Customer confirmed the issue was resolved after "
+                f"self-service steps at {now_iso}."
+            )
+            existing_note = str(ticket_row.admin_note or "").strip()
+            ticket_row.admin_note = (
+                f"{existing_note}\n{resolution_note}".strip()
+            )
+        status = str(ticket_row.status)
+
+    logger.info(
+        "warranty troubleshooting outcome ticket=%s outcome=%s terminal=%s",
+        ticket_id,
+        outcome,
+        terminal_node_id,
+    )
+    return {
+        "ticket_id": ticket_id,
+        "outcome": outcome,
+        "status": status,
+        "self_service_resolved": outcome == "resolved",
     }
 
 
@@ -1010,6 +1187,10 @@ def _serialize_ticket_state(
     terminal_enrichment = enrichment.get("terminal_enrichment")
     step_enrichment = enrichment.get("step_enrichment")
     assistant_message = enrichment.get("assistant_message")
+    collected = ticket.get_collected()
+    troubleshooting_outcome = str(
+        collected.get("troubleshooting_outcome") or ""
+    ).strip() or None
 
     payload: Dict[str, Any] = {
         "session_id": session_id,
@@ -1030,6 +1211,7 @@ def _serialize_ticket_state(
                 str(ticket.customer_message or "").strip() or None
             ),
             "admin_decision": str(ticket.admin_decision or "").strip() or None,
+            "troubleshooting_outcome": troubleshooting_outcome,
             "current_node": {
                 "node_id":            node_id,
                 "node_type":          node_type,

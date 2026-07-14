@@ -25,6 +25,7 @@ data/*
 !data/warranty_flowchart.json
 !data/warranty_evidence_specs.json
 !data/model_families.json
+!data/answer_quality_eval_cases.json
 faiss_index/
 *.jsonl
 *.faiss
@@ -58,3 +59,6 @@ frontend/out/
 .idea/faiss_index/
 db_data/
 rc_audio_cache/
+uploaded_evidence/
+backups/
+logs/

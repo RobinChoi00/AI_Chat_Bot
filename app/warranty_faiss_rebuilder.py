@@ -188,12 +188,18 @@ def _collect_documents() -> list:
         if base_dir not in _sys.path:
             _sys.path.insert(0, base_dir)
 
+        import master_ingester as master_module  # type: ignore
         from master_ingester import MasterIngester  # type: ignore
 
         stub = MasterIngester.__new__(MasterIngester)
         stub.domain_docs = {"freshdesk_qa": []}
-        MasterIngester.process_error_manuals(stub)  # type: ignore[arg-type]
-        MasterIngester.process_qa_reports(stub)  # type: ignore[arg-type]
+        original_raw_dir = master_module.RAW_DIR
+        master_module.RAW_DIR = str(_PROJECT_ROOT / "raw_data")
+        try:
+            MasterIngester.process_error_manuals(stub)  # type: ignore[arg-type]
+            MasterIngester.process_qa_reports(stub)  # type: ignore[arg-type]
+        finally:
+            master_module.RAW_DIR = original_raw_dir
         for doc in stub.domain_docs["freshdesk_qa"]:
             docs.append(doc)
             csv_docs_added += 1

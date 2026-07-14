@@ -11,6 +11,7 @@ import type {
   ChatRequest,
   EvidenceType,
   EvidenceUploadResponse,
+  TroubleshootingOutcome,
   WarrantySessionResponse,
   WarrantyContactResponse,
 } from "./types";
@@ -567,6 +568,35 @@ export async function submitCustomerNote(
     ticket_id: string;
     customer_notes: CustomerNoteEntry[];
   }>;
+}
+
+/** Persist progress through the resolution-first troubleshooting gate. */
+export async function submitTroubleshootingOutcome(
+  ticketId: string,
+  outcome: TroubleshootingOutcome
+): Promise<{
+  ticket_id: string;
+  outcome: TroubleshootingOutcome;
+  status: string;
+  self_service_resolved: boolean;
+}> {
+  const url = `${getApiBase()}/api/v1/warranty/${encodeURIComponent(ticketId)}/troubleshooting-outcome`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ outcome }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json();
 }
 
 // ---------------------------------------------------------------------------

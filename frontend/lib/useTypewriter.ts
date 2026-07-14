@@ -7,27 +7,22 @@ interface Options {
   text: string;
   /** When false, the hook immediately returns the full text (no animation). */
   enabled: boolean;
-  /** Characters revealed per tick. Defaults to 3. */
+  /** Characters revealed per tick. Defaults to 1. */
   chunkSize?: number;
-  /** Milliseconds between ticks. Defaults to 22. */
+  /** Milliseconds between ticks. Defaults to 75. */
   intervalMs?: number;
   /** Absolute cap so a very long response never drags on. Defaults to 2500ms. */
   maxDurationMs?: number;
 }
 
 /**
- * Reveal ``text`` character-by-character on the client — no backend required.
- *
- * The chunk size auto-scales when the full text is much longer than the max
- * duration so we never exceed roughly ``maxDurationMs`` even for a long
- * diagnosis message. Falls back to instant reveal when ``enabled`` is false
- * (used for hydrated / historical messages).
+ * Reveal ``text`` character-by-character on the client — with human-like punctuation pauses.
  */
 export function useTypewriter({
   text,
   enabled,
-  chunkSize = 3,
-  intervalMs = 22,
+  chunkSize = 1,
+  intervalMs = 75,
   maxDurationMs = 2500,
 }: Options): { visible: string; done: boolean } {
   const [visible, setVisible] = useState<string>(enabled ? "" : text);
@@ -39,6 +34,7 @@ export function useTypewriter({
       setDone(true);
       return;
     }
+
     setVisible("");
     setDone(false);
 
@@ -48,20 +44,54 @@ export function useTypewriter({
       return;
     }
 
+    // 기존의 자동 속도 조절(맥스 제한) 로직 유지
     const budgetChunks = Math.ceil(maxDurationMs / intervalMs);
     const dynamicChunkSize = Math.max(chunkSize, Math.ceil(total / budgetChunks));
 
-    let i = 0;
-    const handle = window.setInterval(() => {
-      i = Math.min(total, i + dynamicChunkSize);
-      setVisible(text.slice(0, i));
-      if (i >= total) {
-        window.clearInterval(handle);
-        setDone(true);
-      }
-    }, intervalMs);
+    let currentIndex = 0;
+    let timeoutId: number | undefined;
 
-    return () => window.clearInterval(handle);
+    function tick() {
+      // 다음 글자 범위 계산
+      const nextIndex = Math.min(total, currentIndex + dynamicChunkSize);
+      const justRevealed = text.slice(currentIndex, nextIndex);
+      
+      currentIndex = nextIndex;
+      setVisible(text.slice(0, currentIndex));
+
+      if (currentIndex >= total) {
+        setDone(true);
+        return;
+      }
+
+      // --- 사람 같은 타이핑 리듬감 계산 (Human-like Typing Logic) ---
+      let nextDelay = intervalMs;
+
+      // 1. 미세한 랜덤 속도 부여 (기계적인 일정함 방지)
+      // 기준 속도의 ±15ms 범위 내에서 무작위 변화를 줍니다.
+      const randomVariance = Math.floor(Math.random() * 31) - 15;
+      nextDelay = Math.max(10, nextDelay + randomVariance);
+
+      // 2. 문장 부호가 포함되어 있다면 사람이 숨을 고르거나 말문이 막힌 것처럼 지연 추가
+      // 이번에 출력된 글자의 마지막 부분에 마침표나 쉼표가 있는지 확인합니다.
+      const lastChar = justRevealed.trim().slice(-1);
+      
+      if (/[.?!]/.test(lastChar)) {
+        nextDelay += 450; // 마침표, 물음표, 느낌표 뒤에는 0.45초 추가 휴식
+      } else if (/[,-]/.test(lastChar)) {
+        nextDelay += 250; // 쉼표 뒤에는 0.25초 짧은 휴식
+      }
+
+      // 다음 글자 출력을 위해 재귀 호출
+      timeoutId = window.setTimeout(tick, nextDelay);
+    }
+
+    // 타이핑 애니메이션 시작
+    timeoutId = window.setTimeout(tick, intervalMs);
+
+    return () => {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
   }, [text, enabled, chunkSize, intervalMs, maxDurationMs]);
 
   return { visible, done };

@@ -593,6 +593,116 @@ def test_go_back_api_rejects_terminal_ticket(client):
     assert back.status_code == 422
 
 
+def _start_installation_terminal(client, session_id: str) -> str:
+    reg = _register_model(client, session_id)
+    ticket_id = reg["ticket"]["ticket_id"]
+    client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "installation", "domain": "osaki.com"},
+    )
+    terminal = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "general_setup"},
+    )
+    assert terminal.status_code == 200
+    assert terminal.json()["ticket"]["current_node"]["is_terminal"] is True
+    return ticket_id
+
+
+def test_troubleshooting_progress_persists_before_team_review(client):
+    session_id = "cust-api-troubleshooting-unresolved"
+    ticket_id = _start_installation_terminal(client, session_id)
+
+    completed = client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "steps_completed"},
+    )
+    assert completed.status_code == 200
+    assert completed.json()["self_service_resolved"] is False
+
+    hydrated = client.get(f"/api/v1/warranty/session/{session_id}").json()
+    assert hydrated["ticket"]["troubleshooting_outcome"] == "steps_completed"
+
+    unresolved = client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "unresolved"},
+    )
+    assert unresolved.status_code == 200
+
+    hydrated = client.get(f"/api/v1/warranty/session/{session_id}").json()
+    assert hydrated["ticket"]["troubleshooting_outcome"] == "unresolved"
+    with wm.warranty_db_session() as db:
+        ticket = db.query(wm.WarrantyTicket).filter_by(ticket_id=ticket_id).one()
+        history = ticket.get_collected()["troubleshooting_history"]
+        assert [entry["outcome"] for entry in history] == [
+            "steps_completed",
+            "unresolved",
+        ]
+
+
+def test_resolved_troubleshooting_closes_shipping_review_ticket(client):
+    session_id = "cust-api-troubleshooting-resolved"
+    ticket_id = _start_installation_terminal(client, session_id)
+
+    with wm.warranty_db_session() as db:
+        ticket = db.query(wm.WarrantyTicket).filter_by(ticket_id=ticket_id).one()
+        ticket.admin_note = "Existing admin context must be preserved."
+
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "steps_completed"},
+    )
+    resolved = client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "resolved"},
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["status"] == "resolved"
+    assert resolved.json()["self_service_resolved"] is True
+    duplicate = client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "resolved"},
+    )
+    assert duplicate.status_code == 200
+
+    hydrated = client.get(f"/api/v1/warranty/session/{session_id}").json()
+    assert hydrated["ticket"] is None
+    with wm.warranty_db_session() as db:
+        ticket = db.query(wm.WarrantyTicket).filter_by(ticket_id=ticket_id).one()
+        assert ticket.status == "resolved"
+        assert ticket.admin_decision == "self_resolved"
+        assert "Existing admin context" in ticket.admin_note
+        assert "[system] Customer confirmed" in ticket.admin_note
+
+
+def test_troubleshooting_outcome_requires_terminal_and_valid_value(client):
+    session_id = "cust-api-troubleshooting-invalid"
+    reg = _register_model(client, session_id)
+    ticket_id = reg["ticket"]["ticket_id"]
+
+    too_early = client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "resolved"},
+    )
+    assert too_early.status_code == 409
+
+    invalid = client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "ship_replacement"},
+    )
+    assert invalid.status_code == 422
+
+    terminal_ticket_id = _start_installation_terminal(
+        client,
+        "cust-api-troubleshooting-sequence",
+    )
+    skipped_steps = client.post(
+        f"/api/v1/warranty/{terminal_ticket_id}/troubleshooting-outcome",
+        json={"outcome": "resolved"},
+    )
+    assert skipped_steps.status_code == 409
+
+
 def test_customer_note_appends_to_collected_data(client):
     """Customer follow-up notes should append to collected_data.customer_notes."""
     session_id = "cust-api-note"
@@ -845,4 +955,3 @@ def test_error_code_gate_midflow_side_question(client):
     assert data.get("side_question") is True
     assert "C6" in data["assistant_message"]
     assert data["ticket"]["current_node"]["node_id"] == "defect_problem_type"
-

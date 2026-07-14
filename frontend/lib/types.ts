@@ -49,6 +49,12 @@ export interface AnswerOption {
   label: string;
 }
 
+export type TroubleshootingOutcome =
+  | "steps_completed"
+  | "resolved"
+  | "unresolved"
+  | "unable_to_attempt";
+
 export interface WarrantyNode {
   node_id: string | null;
   node_type: string | null;
@@ -72,6 +78,7 @@ export interface WarrantyTicketState {
   can_go_back?: boolean;
   customer_message?: string | null;
   admin_decision?: string | null;
+  troubleshooting_outcome?: TroubleshootingOutcome | null;
   current_node: WarrantyNode | null;
 }
 
@@ -92,6 +99,7 @@ export interface TerminalEnrichment {
     top_match?: string | null;
   } | null;
   phase?: "awaiting_help_consent" | "contact";
+  interaction_mode?: "troubleshooting" | "preparation";
   help_offer_options?: AnswerOption[];
   show_contact_form?: boolean;
   defer_email?: boolean;

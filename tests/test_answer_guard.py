@@ -81,3 +81,12 @@ def test_allows_matching_spec_numbers_from_tool():
     )
     assert "32 inches" in out
 
+
+def test_spanish_repair_guard_stays_in_customer_language():
+    out = sanitize_agent_response(
+        "1. Retire el panel trasero.\n2. Cambie el fusible.",
+        tools_called=[],
+        user_query="¿Cómo reparo mi silla?",
+    )
+    assert "Aún no tengo pasos verificados" in out
+    assert "Retire el panel" not in out

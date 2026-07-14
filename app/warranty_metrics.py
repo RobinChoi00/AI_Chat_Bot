@@ -29,6 +29,8 @@ Definitions
 - **Contact captured**   – ticket.collected_data has a ``customer_email``.
 - **Admin decided**      – ticket.admin_decision is set.
 - **Resolved**           – ticket.status == "resolved" (admin finalised).
+- **Self-service started** – customer recorded a troubleshooting/preparation outcome.
+- **Self-service resolved** – customer confirmed the issue was fixed without team review.
 - **Abandoned**          – status == "in_progress" AND updated_at older than
                            ``ABANDON_THRESHOLD_HOURS`` (default 6 h).
 
@@ -47,6 +49,7 @@ from typing import Any, Optional
 
 import pytz
 from fastapi import APIRouter, Header, HTTPException, Query
+from admin_auth import require_admin_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["admin-warranty-metrics"])
@@ -58,13 +61,7 @@ _MAX_DAYS = 180
 
 
 def _require_admin(x_admin_key: Optional[str]) -> None:
-    if not _ADMIN_API_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Admin API is not configured. Set ADMIN_API_KEY.",
-        )
-    if x_admin_key != _ADMIN_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-Admin-Key.")
+    require_admin_key(x_admin_key, _ADMIN_API_KEY)
 
 
 def _now_cst() -> datetime:
@@ -168,6 +165,9 @@ async def warranty_metrics(
     admin_decided = 0
     resolved = 0
     abandoned = 0
+    self_service_started = 0
+    self_service_resolved = 0
+    escalated_after_self_service = 0
 
     status_counts: Counter[str] = Counter()
     issue_totals: defaultdict[str, dict[str, int]] = defaultdict(
@@ -189,6 +189,9 @@ async def warranty_metrics(
         updated_local = _to_cst(t.updated_at) or created_local
         day = _iso_day(created_local)
         collected = t.get_collected() if hasattr(t, "get_collected") else {}
+        troubleshooting_outcome = str(
+            collected.get("troubleshooting_outcome") or ""
+        ).strip().lower()
         has_email = bool(str(collected.get("customer_email") or "").strip())
         is_completed = status != "in_progress"
 
@@ -213,10 +216,19 @@ async def warranty_metrics(
 
         if has_email:
             contact_captured += 1
-        if t.admin_decision:
+        if t.admin_decision and str(t.admin_decision) != "self_resolved":
             admin_decided += 1
         if status == "resolved":
             resolved += 1
+        if troubleshooting_outcome:
+            self_service_started += 1
+        if (
+            troubleshooting_outcome == "resolved"
+            or str(t.admin_decision or "") == "self_resolved"
+        ):
+            self_service_resolved += 1
+        if troubleshooting_outcome in {"unresolved", "unable_to_attempt"}:
+            escalated_after_self_service += 1
 
     # Ensure every day in the window shows up (even zero-days) for a smooth chart.
     trend: list[dict[str, Any]] = []
@@ -257,6 +269,13 @@ async def warranty_metrics(
             "admin_decided": admin_decided,
             "resolved": resolved,
             "resolved_rate_pct": _percent(resolved, reached_terminal),
+            "self_service_started": self_service_started,
+            "self_service_resolved": self_service_resolved,
+            "self_service_resolution_rate_pct": _percent(
+                self_service_resolved,
+                self_service_started,
+            ),
+            "escalated_after_self_service": escalated_after_self_service,
             "abandoned": abandoned,
             "abandoned_rate_pct": _percent(abandoned, started),
             "median_turns_to_terminal": median_turns,

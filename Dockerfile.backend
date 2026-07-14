@@ -1,25 +1,32 @@
-# 파이썬 3.11 슬림 버전(가벼운 Linux)을 기초 OS로 사용
-FROM python:3.11-slim
+FROM python:3.11-slim AS builder
 
-# 작업 폴더 지정
+WORKDIR /build
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential gcc \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements-prod.txt .
+RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements-prod.txt
+
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/app/app
 WORKDIR /app
 
-# 💡 [핵심] 리눅스 필수 빌드 도구(gcc, g++)를 설치하여 컴파일 에러 원천 차단
-RUN apt-get update && apt-get install -y build-essential gcc
-
-# 라이브러리 목록을 복사하고 설치 (production slim set — no PyTorch/Streamlit)
+RUN groupadd --gid 1000 app \
+    && useradd --uid 1000 --gid app --create-home --shell /usr/sbin/nologin app
+COPY --from=builder /wheels /wheels
 COPY requirements-prod.txt .
-RUN pip install --no-cache-dir -r requirements-prod.txt
+RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements-prod.txt \
+    && rm -rf /wheels
 
-# 소스코드 전체를 컨테이너 안으로 복사
-COPY . .
+COPY --chown=app:app . .
+RUN mkdir -p db_data faiss_index uploaded_evidence data rc_audio_cache \
+    && chown -R app:app db_data faiss_index uploaded_evidence data rc_audio_cache
 
-# app/ 및 프로젝트 루트 모두 import 경로에 포함
-# - from app.agent_tools  → /app
-# - from agent_tools      → /app/app
-# - from config           → /app
-ENV PYTHONPATH=/app:/app/app
-
-# 8000번 포트 개방 및 FastAPI 서버 기동
+USER app
 EXPOSE 8000
-CMD ["sh", "-c", "PYTHONPATH=/app:/app/app uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]

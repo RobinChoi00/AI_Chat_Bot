@@ -156,7 +156,7 @@ def test_extract_model_only_skips_llm_and_defect_branch(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_apply_prefill_walks_workflow_until_terminal():
+def test_apply_prefill_stops_at_error_code_safety_gate():
     ticket_id, _root = WarrantyEngine.start_session("s-1", "osakiusa.com")
     result = apply_prefill_to_engine(
         engine=WarrantyEngine,
@@ -165,10 +165,14 @@ def test_apply_prefill_walks_workflow_until_terminal():
         answer_keys=["warranty", "defect", "heat", "too_hot"],
     )
     assert result["applied"] == ["warranty", "defect", "heat", "too_hot"]
-    assert result["stopped_reason"] == "terminal"
+    assert result["stopped_reason"] == "done"
     final = result["final_node"]
     assert final is not None
-    assert final["node_id"] == "defect_heating_too_hot_terminal"
+    assert final["node_id"] == "defect_error_code_visible_q"
+
+    completed = WarrantyEngine.submit_answer(ticket_id, "error_code_no")
+    assert completed["is_terminal"] is True
+    assert completed["next_node_id"] == "defect_heating_too_hot_terminal"
 
 
 def test_apply_prefill_stops_at_question_text_node():

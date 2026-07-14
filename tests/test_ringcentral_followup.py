@@ -5,6 +5,8 @@ Unit tests for post-call SMS follow-up.
 """
 
 import sys
+import json
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,6 +24,24 @@ from ringcentral_followup import (  # noqa: E402
 )
 from ringcentral_ivr import handle_call_enter, handle_call_exit  # noqa: E402
 from ringcentral_voice import get_call_context  # noqa: E402
+
+
+def _create_followup_ticket() -> str:
+    from warranty_models import WarrantyTicket, warranty_db_session
+
+    ticket_id = f"followup-{uuid.uuid4().hex}"
+    with warranty_db_session() as db:
+        db.add(
+            WarrantyTicket(
+                ticket_id=ticket_id,
+                session_id=f"session-{uuid.uuid4().hex}",
+                domain="phone",
+                current_node_id="test",
+                status="in_progress",
+                collected_data=json.dumps({"channel": "phone"}),
+            )
+        )
+    return ticket_id
 
 
 def test_build_followup_sms_message_default():
@@ -171,10 +191,15 @@ def test_send_phone_call_followups_skips_after_first_claim():
 @pytest.fixture(autouse=True)
 def _clear_call_contexts():
     from ringcentral_voice import _call_contexts  # noqa: WPS433
+    from warranty_models import RingCentralCallState, warranty_db_session  # noqa: WPS433
 
     _call_contexts.clear()
+    with warranty_db_session() as db:
+        db.query(RingCentralCallState).delete(synchronize_session=False)
     yield
     _call_contexts.clear()
+    with warranty_db_session() as db:
+        db.query(RingCentralCallState).delete(synchronize_session=False)
 
 
 def test_handle_call_exit_sends_followup_sms():
@@ -204,3 +229,48 @@ def test_handle_call_exit_sends_followup_sms():
     assert mock_followups.call_args.kwargs["ticket_id"]
     assert mock_followups.call_args.kwargs["session_id"] == "rc-session-exit"
     assert get_call_context("rc-session-exit") is None
+
+
+def test_failed_followups_remain_retryable():
+    ticket_id = _create_followup_ticket()
+    with (
+        patch("ringcentral_followup._followup_enabled", return_value=True),
+        patch("ringcentral_followup._team_email_enabled", return_value=True),
+        patch("ringcentral_followup.send_call_followup_sms", return_value=False) as mock_sms,
+        patch("ringcentral_followup.send_call_followup_team_email", return_value=False) as mock_email,
+    ):
+        first = send_phone_call_followups(
+            caller_phone="+15551234567", ticket_id=ticket_id, session_id="s-retry"
+        )
+        second = send_phone_call_followups(
+            caller_phone="+15551234567", ticket_id=ticket_id, session_id="s-retry"
+        )
+
+    assert first["sms_sent"] is False
+    assert second["skipped"] is False
+    assert mock_sms.call_count == 2
+    assert mock_email.call_count == 2
+
+
+def test_successful_channel_is_not_resent_when_other_channel_retries():
+    ticket_id = _create_followup_ticket()
+    with (
+        patch("ringcentral_followup._followup_enabled", return_value=True),
+        patch("ringcentral_followup._team_email_enabled", return_value=True),
+        patch("ringcentral_followup.send_call_followup_sms", return_value=True) as mock_sms,
+        patch(
+            "ringcentral_followup.send_call_followup_team_email",
+            side_effect=[False, True],
+        ) as mock_email,
+    ):
+        send_phone_call_followups(
+            caller_phone="+15551234567", ticket_id=ticket_id, session_id="s-partial"
+        )
+        result = send_phone_call_followups(
+            caller_phone="+15551234567", ticket_id=ticket_id, session_id="s-partial"
+        )
+
+    assert mock_sms.call_count == 1
+    assert mock_email.call_count == 2
+    assert result["sms_sent"] is True
+    assert result["email_sent"] is True

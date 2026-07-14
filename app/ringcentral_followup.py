@@ -10,8 +10,8 @@ RC_SMS_FOLLOWUP_ENABLED     true/false (default true when FROM is set)
 RC_SMS_FOLLOWUP_MESSAGE     Optional override for the SMS body
 RC_IVR_TEAM_EMAIL_ENABLED   true/false (default true when EMAIL_SENDER is set)
 
-Idempotency: ``followup_sent_at`` in ticket collected_data prevents duplicate
-SMS/email when RingCentral sends multiple on-call-exit events.
+Idempotency: per-channel delivery timestamps prevent duplicate SMS/email.
+Failed channels remain retryable and a crashed delivery claim expires.
 """
 
 from __future__ import annotations
@@ -19,12 +19,16 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+import threading
+from datetime import datetime, timedelta
 from typing import Any
+
+from sqlalchemy import text
 
 from ringcentral_client import RC_SMS_FROM_NUMBER, send_sms
 
 logger = logging.getLogger(__name__)
+_followup_lock = threading.Lock()
 
 DEFAULT_FOLLOWUP_SMS = (
     "Thank you for calling Osaki and Titan warranty support. "
@@ -104,9 +108,8 @@ def send_call_followup_sms(
     phone = (caller_phone or "").strip()
     if not phone.startswith("+"):
         logger.warning(
-            "RC follow-up SMS skipped — invalid caller phone ticket=%s phone=%r",
+            "RC follow-up SMS skipped — invalid caller phone ticket=%s",
             ticket_id,
-            phone,
         )
         return False
 
@@ -121,13 +124,12 @@ def send_call_followup_sms(
         )
     except Exception:
         logger.exception(
-            "RC follow-up SMS failed ticket=%s session_caller=%s",
+            "RC follow-up SMS failed ticket=%s",
             ticket_id,
-            phone,
         )
         return False
 
-    logger.info("RC follow-up SMS sent ticket=%s to=%s", ticket_id, phone)
+    logger.info("RC follow-up SMS sent ticket=%s", ticket_id)
     return True
 
 
@@ -196,14 +198,51 @@ def send_call_followup_team_email(
 
 def try_claim_phone_followup(ticket_id: str) -> bool:
     """
-    Atomically mark phone follow-up as sent for *ticket_id*.
+    Atomically claim follow-up delivery for *ticket_id*.
 
-    Returns True only the first time — prevents duplicate SMS/email on
-    repeated RingCentral on-call-exit callbacks.
+    The claim expires after ten minutes so a crashed worker can be retried.
+    Final delivery timestamps are written only after each channel succeeds.
     """
     if not ticket_id:
         return False
 
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    with _followup_lock:
+        with warranty_db_session() as db:
+            # SQLite serializes competing workers here, preventing two exit
+            # callbacks from both sending the same SMS.
+            db.execute(text("BEGIN IMMEDIATE"))
+            row = (
+                db.query(WarrantyTicket)
+                .filter(WarrantyTicket.ticket_id == ticket_id)
+                .first()
+            )
+            if row is None:
+                logger.warning("RC follow-up claim skipped — ticket not found ticket=%s", ticket_id)
+                return False
+            collected = row.get_collected()
+            if collected.get("followup_sent_at"):
+                logger.info("RC follow-up already completed ticket=%s", ticket_id)
+                return False
+
+            now = datetime.utcnow().replace(microsecond=0)
+            claimed_at_raw = str(collected.get("followup_claimed_at") or "")
+            if claimed_at_raw:
+                try:
+                    claimed_at = datetime.fromisoformat(claimed_at_raw)
+                    if now - claimed_at < timedelta(minutes=10):
+                        return False
+                except ValueError:
+                    pass
+
+            collected["followup_claimed_at"] = now.isoformat()
+            collected["followup_attempts"] = int(collected.get("followup_attempts") or 0) + 1
+            row.collected_data = json.dumps(collected)
+    return True
+
+
+def _delivery_state(ticket_id: str) -> dict[str, bool]:
     from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
 
     with warranty_db_session() as db:
@@ -212,20 +251,49 @@ def try_claim_phone_followup(ticket_id: str) -> bool:
             .filter(WarrantyTicket.ticket_id == ticket_id)
             .first()
         )
-        if row is None:
-            logger.warning("RC follow-up claim skipped — ticket not found ticket=%s", ticket_id)
-            return False
-        collected = row.get_collected()
-        if collected.get("followup_sent_at"):
-            logger.info(
-                "RC follow-up already sent ticket=%s at %s",
-                ticket_id,
-                collected.get("followup_sent_at"),
+        collected = row.get_collected() if row is not None else {}
+    return {
+        "sms_sent": bool(collected.get("followup_sms_sent_at")),
+        "email_sent": bool(collected.get("followup_email_sent_at")),
+    }
+
+
+def _finish_phone_followup(
+    ticket_id: str,
+    *,
+    sms_sent: bool,
+    email_sent: bool,
+    sms_required: bool,
+    email_required: bool,
+) -> None:
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    with _followup_lock:
+        with warranty_db_session() as db:
+            db.execute(text("BEGIN IMMEDIATE"))
+            row = (
+                db.query(WarrantyTicket)
+                .filter(WarrantyTicket.ticket_id == ticket_id)
+                .first()
             )
-            return False
-        collected["followup_sent_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
-        row.collected_data = json.dumps(collected)
-    return True
+            if row is None:
+                return
+            collected = row.get_collected()
+            now = datetime.utcnow().replace(microsecond=0).isoformat()
+            if sms_sent:
+                collected["followup_sms_sent_at"] = now
+            if email_sent:
+                collected["followup_email_sent_at"] = now
+            collected.pop("followup_claimed_at", None)
+
+            sms_done = (not sms_required) or bool(collected.get("followup_sms_sent_at"))
+            email_done = (not email_required) or bool(collected.get("followup_email_sent_at"))
+            if sms_done and email_done:
+                collected["followup_sent_at"] = now
+                collected.pop("followup_last_error_at", None)
+            else:
+                collected["followup_last_error_at"] = now
+            row.collected_data = json.dumps(collected)
 
 
 def send_phone_call_followups(
@@ -238,15 +306,30 @@ def send_phone_call_followups(
     if not try_claim_phone_followup(ticket_id):
         return {"skipped": True, "sms_sent": False, "email_sent": False}
 
-    sms_sent = send_call_followup_sms(
-        caller_phone,
-        ticket_id=ticket_id,
-        session_id=session_id,
-    )
-    email_sent = send_call_followup_team_email(
-        caller_phone=caller_phone,
-        ticket_id=ticket_id,
-        session_id=session_id,
+    state = _delivery_state(ticket_id)
+    sms_required = _followup_enabled()
+    email_required = _team_email_enabled()
+    sms_sent = state["sms_sent"]
+    email_sent = state["email_sent"]
+
+    if sms_required and not sms_sent:
+        sms_sent = send_call_followup_sms(
+            caller_phone,
+            ticket_id=ticket_id,
+            session_id=session_id,
+        )
+    if email_required and not email_sent:
+        email_sent = send_call_followup_team_email(
+            caller_phone=caller_phone,
+            ticket_id=ticket_id,
+            session_id=session_id,
+            sms_sent=sms_sent,
+        )
+    _finish_phone_followup(
+        ticket_id,
         sms_sent=sms_sent,
+        email_sent=email_sent,
+        sms_required=sms_required,
+        email_required=email_required,
     )
     return {"skipped": False, "sms_sent": sms_sent, "email_sent": email_sent}

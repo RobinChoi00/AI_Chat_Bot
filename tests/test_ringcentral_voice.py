@@ -5,13 +5,16 @@ Unit tests for RingCentral voice adapter (no live RC API).
 """
 
 import sys
+import uuid
 from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(APP_DIR))
 
 from ringcentral_voice import (  # noqa: E402
+    IvrPhase,
     REPEAT_DTMF,
+    VoiceCallContext,
     build_after_hours_closure_script,
     build_after_hours_welcome_script,
     build_business_hours_connect_script,
@@ -20,6 +23,11 @@ from ringcentral_voice import (  # noqa: E402
     build_terminal_script,
     menu_dtmf_patterns,
     post_diy_dtmf_patterns,
+    ensure_audio_file,
+    get_call_context,
+    pop_call_context,
+    resolve_play_uri,
+    set_call_context,
 )
 
 
@@ -82,3 +90,51 @@ def test_build_sales_transfer_script_announces_sales():
 
 def test_post_diy_patterns_are_repeat_or_hangup_only():
     assert post_diy_dtmf_patterns() == ["1", REPEAT_DTMF]
+
+
+def test_call_context_is_restored_after_in_memory_state_is_lost():
+    from ringcentral_voice import _call_contexts  # noqa: WPS433
+
+    session_id = f"persist-{uuid.uuid4().hex}"
+    ctx = VoiceCallContext(
+        session_id=session_id,
+        party_id="party-1",
+        ticket_id="ticket-1",
+        caller_phone="+15551234567",
+        phase=IvrPhase.POST_DIY,
+        awaiting_command="Collect",
+        last_audio_key="abc123",
+    )
+    set_call_context(ctx)
+    _call_contexts.clear()
+
+    restored = get_call_context(session_id)
+    assert restored is not None
+    assert restored.ticket_id == "ticket-1"
+    assert restored.phase == IvrPhase.POST_DIY
+    assert restored.awaiting_command == "Collect"
+    pop_call_context(session_id)
+
+
+def test_production_never_writes_placeholder_audio(tmp_path, monkeypatch):
+    import ringcentral_voice as voice
+
+    monkeypatch.setattr(voice, "RC_AUDIO_CACHE_DIR", tmp_path)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    try:
+        ensure_audio_file(f"unique-{uuid.uuid4().hex}")
+    except RuntimeError as exc:
+        assert "unavailable" in str(exc).lower()
+    else:
+        raise AssertionError("production TTS unexpectedly created placeholder audio")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_configured_fallback_audio_is_used_when_tts_fails(monkeypatch):
+    import ringcentral_voice as voice
+
+    fallback = "https://cdn.example.com/temporary-message.wav"
+    monkeypatch.setenv("RC_FALLBACK_AUDIO_URI", fallback)
+    monkeypatch.setattr(voice, "ensure_audio_file", lambda _text: (_ for _ in ()).throw(RuntimeError("tts down")))
+    assert resolve_play_uri("hello") == fallback

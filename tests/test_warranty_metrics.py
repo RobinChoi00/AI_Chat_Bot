@@ -78,6 +78,7 @@ def _seed_ticket(
     updated_hours_ago: int = 0,
     admin_decision: str | None = None,
     customer_email: str | None = None,
+    troubleshooting_outcome: str | None = None,
     turns_count: int = 0,
 ) -> None:
     now = datetime.now(_CST)
@@ -86,6 +87,8 @@ def _seed_ticket(
     collected = {}
     if customer_email:
         collected["customer_email"] = customer_email
+    if troubleshooting_outcome:
+        collected["troubleshooting_outcome"] = troubleshooting_outcome
 
     with wm.warranty_db_session() as db:
         ticket = wm.WarrantyTicket(
@@ -197,6 +200,10 @@ def test_metrics_funnel_math(client):
     assert totals["admin_decided"] == 1
     assert totals["resolved"] == 1
     assert totals["resolved_rate_pct"] == round(1 / 3 * 100.0, 1)
+    assert totals["self_service_started"] == 0
+    assert totals["self_service_resolved"] == 0
+    assert totals["self_service_resolution_rate_pct"] == 0.0
+    assert totals["escalated_after_self_service"] == 0
     # t2 is in_progress AND older than the abandon threshold (default 6h)
     assert totals["abandoned"] == 1
     # Median turns for t3/t4/t5 = 6
@@ -219,6 +226,40 @@ def test_metrics_funnel_math(client):
     assert top["install_send_video"] == 1
     # Only completed tickets contribute to top_terminals
     assert "root" not in top
+
+
+def test_metrics_tracks_self_service_resolution_and_escalation(client):
+    _seed_ticket(
+        "self-resolved",
+        status="resolved",
+        node_id="defect_power_terminal",
+        admin_decision="self_resolved",
+        troubleshooting_outcome="resolved",
+    )
+    _seed_ticket(
+        "still-broken",
+        status="awaiting_admin_review",
+        node_id="defect_power_terminal",
+        troubleshooting_outcome="unresolved",
+    )
+    _seed_ticket(
+        "unsafe",
+        status="awaiting_admin_review",
+        node_id="defect_power_terminal",
+        troubleshooting_outcome="unable_to_attempt",
+    )
+
+    resp = client.get(
+        "/admin/warranty/metrics?days=30",
+        headers={"X-Admin-Key": _ADMIN_KEY},
+    )
+    assert resp.status_code == 200
+    totals = resp.json()["totals"]
+    assert totals["self_service_started"] == 3
+    assert totals["self_service_resolved"] == 1
+    assert totals["self_service_resolution_rate_pct"] == 33.3
+    assert totals["escalated_after_self_service"] == 2
+    assert totals["admin_decided"] == 0
 
 
 def test_metrics_domain_filter(client):

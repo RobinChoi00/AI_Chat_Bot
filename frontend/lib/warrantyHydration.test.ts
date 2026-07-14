@@ -8,7 +8,6 @@ import type { WarrantySessionResponse, WarrantyTicketState } from "./types";
 
 const midFlowTicket: WarrantyTicketState = {
   ticket_id: "t-1",
-  session_id: "s-1",
   status: "in_progress",
   issue_type: "defect",
   model_name: "Maestro",
@@ -52,6 +51,7 @@ describe("hydrationAssistantContent", () => {
         node_type: "terminal",
         prompt: "Email us.",
         is_terminal: true,
+        options: [],
       },
     };
     const resp: WarrantySessionResponse = {

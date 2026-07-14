@@ -28,6 +28,7 @@ from typing import List, Tuple
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 APP_DIR = PROJECT_ROOT / "app"
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(APP_DIR))
 
 # Use an in-memory SQLite DB so smoke tests never touch the production DB.
@@ -66,13 +67,13 @@ FAIL = f"{RED}✗ FAIL{RESET}"
 SCENARIOS: List[Tuple[str, List[str], str, str]] = [
     (
         "Power issue — remote on, no response → replace remote (admin review)",
-        ["warranty", "defect", "power", "remote_on", "no_response"],
+        ["warranty", "defect", "power", "remote_on", "no_response", "error_code_no"],
         "awaiting_admin_review",
         "defect_power_remote_replace_terminal",
     ),
     (
         "Remote — blank screen, commands OK → admin review",
-        ["warranty", "defect", "remote", "has_power", "blank_screen_commands_ok"],
+        ["warranty", "defect", "remote", "has_power", "blank_screen_commands_ok", "error_code_no"],
         "awaiting_admin_review",
         "defect_remote_blank_screen_terminal",
     ),
@@ -84,7 +85,7 @@ SCENARIOS: List[Tuple[str, List[str], str, str]] = [
     ),
     (
         "Air issue — shoulders/hips, yes hissing → tech dispatch (admin review)",
-        ["warranty", "defect", "air", "shoulders_hips", "yes_hissing"],
+        ["warranty", "defect", "air", "shoulders_hips", "yes_hissing", "error_code_no"],
         "awaiting_admin_review",
         "defect_air_shoulders_tech_terminal",
     ),

@@ -136,11 +136,21 @@ def _contact_footer() -> str:
     )
 
 
-def _help_offer_enrichment(message: str, diagnosis: Optional[dict] = None) -> dict[str, Any]:
+def _help_offer_enrichment(
+    message: str,
+    diagnosis: Optional[dict] = None,
+    *,
+    interaction_mode: Optional[str] = None,
+) -> dict[str, Any]:
+    if interaction_mode not in {"troubleshooting", "preparation"}:
+        interaction_mode = (
+            "preparation" if "What to prepare" in message else "troubleshooting"
+        )
     return {
         "message": f"{message}\n\n{_contact_footer()}",
         "diagnosis": diagnosis,
         "phase": "awaiting_help_consent",
+        "interaction_mode": interaction_mode,
         "help_offer_options": list(HELP_OFFER_OPTIONS),
         "show_contact_form": False,
         "defer_email": True,
@@ -161,9 +171,9 @@ def _install_message(model_name: str, base_prompt: str) -> dict[str, Any]:
         f"If **air does not work anywhere on the chair** after setup, check that the "
         f"**air hose between the footrest and base** is firmly connected.\n\n"
         f"More guides: [{REPAIR_MANUAL_URL}]({REPAIR_MANUAL_URL}).\n\n"
-        f"**Would you like our warranty team to follow up if you still need help after watching?**"
+        f"**Please watch the guide and try the setup checks first. Then use the check below to tell us whether the issue is resolved.**"
     )
-    return _help_offer_enrichment(body)
+    return _help_offer_enrichment(body, interaction_mode="troubleshooting")
 
 
 def _install_air_hose_message(engine, ticket_id: str, ticket) -> dict[str, Any]:

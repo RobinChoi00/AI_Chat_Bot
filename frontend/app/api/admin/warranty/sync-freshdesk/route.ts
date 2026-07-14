@@ -5,6 +5,7 @@
  */
 import { NextResponse } from "next/server";
 import { getBackendUrl } from "@/lib/backendUrl";
+import { isAdminApiRequestAuthenticated } from "@/lib/adminSession";
 
 const BACKEND = getBackendUrl();
 
@@ -15,6 +16,9 @@ function requireAdminKey(): string {
 }
 
 export async function POST(request: Request) {
+  if (!isAdminApiRequestAuthenticated(request)) {
+    return NextResponse.json({ detail: "Admin authentication required." }, { status: 401 });
+  }
   try {
     const adminKey = requireAdminKey();
     const url = new URL(request.url);

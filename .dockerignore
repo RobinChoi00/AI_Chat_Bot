@@ -20,6 +20,10 @@ __pycache__/
 # 런타임에는 compose 볼륨으로 마운트됨 — 레이어에 복사 불필요(용량 폭발 방지)
 faiss_index/
 db_data/
+uploaded_evidence/
+rc_audio_cache/
+backups/
+logs/
 
 # 인덱서 전용 대용량 데이터 — 컨테이너 앱은 FAISS 볼륨 + warranty JSON만 사용
 data/*
@@ -31,6 +35,12 @@ raw_data/
 # 비밀·로컬 설정은 이미지에 포함 금지 (compose env_file로 주입)
 .env
 .env.*
+frontend/.env*
+
+# Frontend build output/dependencies are reproduced inside the image.
+frontend/node_modules/
+frontend/.next/
+frontend/coverage/
 
 # 문서·기타
 *.md

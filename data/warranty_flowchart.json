@@ -190,7 +190,7 @@
       "type": "terminal",
       "action": "send_info",
       "prompt": "Let's confirm heat is enabled and give the chair time to warm up before deciding it needs service.",
-      "internal_note": "Heat reported not working. Confirm 10+ min warm-up, heat icon on remote ON, no thick covers blocking element. If still cold after DIY, admin to check heating element.",
+      "internal_note": "Heat reported not working. Confirm 10+ min warm-up, heat icon on remote ON, no thick covers blocking element. If still cold after DIY, advise the customer to contact warranty support for a heating-element review.",
       "evidence_required": []
     },
 
@@ -198,7 +198,7 @@
       "type": "terminal",
       "action": "send_info",
       "prompt": "Heat turning on and off can be normal cycling, but if heat fails completely after a while, our team can review the element.",
-      "internal_note": "Intermittent heat. DIY: time how long heat stays on, power cycle, retest. Admin to review if pattern repeats.",
+      "internal_note": "Intermittent heat. DIY: time how long heat stays on, power cycle, retest. Recommend warranty support review if the pattern repeats.",
       "evidence_required": []
     },
 

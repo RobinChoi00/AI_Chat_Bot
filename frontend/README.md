@@ -64,6 +64,7 @@ frontend/
 |---|---|---|
 | `POST` | `/api/v1/chat` | Send customer message, receive streaming response |
 | `GET` | `/api/v1/warranty/session/{session_id}` | Get structured warranty ticket state (options, status) |
+| `POST` | `/api/v1/warranty/{ticket_id}/troubleshooting-outcome` | Record self-service progress and resolution outcome |
 | `POST` | `/api/v1/warranty/{ticket_id}/evidence` | Upload evidence file |
 | `GET` | `/api/v1/warranty/{ticket_id}/evidence` | List uploaded evidence |
 
@@ -74,6 +75,7 @@ All calls are proxied through Next.js rewrites (`next.config.mjs`) so the browse
 ## Safety Rules (enforced in UI)
 
 - The chat interface **never** shows warranty approval, replacement, or technician dispatch promises.
+- Team-review controls stay hidden until the customer confirms the troubleshooting or preparation steps were completed. The resolved outcome is visually primary; unresolved and safety-exception paths remain available without promising an approval.
 - When `status === awaiting_admin_review`, a banner reads:
   > "Your case has been prepared for support team review. Final warranty decisions are handled by our support team."
 - The backend `saved_path` field in evidence upload responses is stripped before display.

@@ -13,20 +13,22 @@ Tables
   warranty_turns      – one row per Q&A step within a session
   warranty_evidences  – uploaded evidence files (photos, videos, receipts)
   warranty_decisions  – admin decisions recorded against a ticket
+  ringcentral_webhook_events – durable, idempotent webhook inbox
+  ringcentral_call_states     – restart-safe IVR call state
 """
 
 from __future__ import annotations
 
 import json
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator, cast
 
 import pytz
 from sqlalchemy import (
     Column, DateTime, Integer, String, Text,
-    create_engine,
+    create_engine, event,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -40,8 +42,19 @@ _DATABASE_URL = f"sqlite:///{_DB_DIR}/chat_history.db"
 
 _engine = create_engine(
     _DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 30},
+    pool_pre_ping=True,
 )
+
+
+@event.listens_for(_engine, "connect")
+def _configure_sqlite(dbapi_connection, _connection_record) -> None:
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
 
 _SessionFactory = sessionmaker(
     autocommit=False,
@@ -69,6 +82,11 @@ def warranty_db_session() -> Generator:
 
 def _now_cst() -> datetime:
     return datetime.now(pytz.timezone("America/Chicago"))
+
+
+def _now_utc() -> datetime:
+    """Return naive UTC for internal retry/lease timestamps."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +237,42 @@ class WarrantyEvidence(Base):
         }
 
 
+class RingCentralWebhookEvent(Base):
+    """Durable inbox row for an inbound RingCentral callback."""
+
+    __tablename__ = "ringcentral_webhook_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_key = Column(String, unique=True, index=True, nullable=False)
+    route = Column(String, index=True, nullable=False)
+    session_id = Column(String, index=True, nullable=True)
+    payload_json = Column(Text, nullable=False)
+    status = Column(String, index=True, default="pending", nullable=False)
+    attempts = Column(Integer, default=0, nullable=False)
+    last_error = Column(String, nullable=True)
+    next_attempt_at = Column(DateTime, index=True, nullable=True)
+    created_at = Column(DateTime, default=_now_utc)
+    updated_at = Column(DateTime, default=_now_utc, onupdate=_now_utc)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class RingCentralCallState(Base):
+    """Persistent mirror of the active in-memory IVR call context."""
+
+    __tablename__ = "ringcentral_call_states"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, unique=True, index=True, nullable=False)
+    party_id = Column(String, nullable=False)
+    ticket_id = Column(String, index=True, nullable=False)
+    caller_phone = Column(String, nullable=True)
+    phase = Column(String, nullable=False)
+    awaiting_command = Column(String, nullable=True)
+    last_audio_key = Column(String, nullable=True)
+    created_at = Column(DateTime, default=_now_utc)
+    updated_at = Column(DateTime, default=_now_utc, onupdate=_now_utc)
+
+
 # ---------------------------------------------------------------------------
 # Create tables (idempotent — safe to call multiple times)
 # ---------------------------------------------------------------------------
@@ -229,7 +283,7 @@ Base.metadata.create_all(bind=_engine)
 def _migrate_warranty_schema() -> None:
     """Add columns introduced after initial deploy (SQLite ALTER TABLE)."""
     with _engine.connect() as conn:
-        raw = conn.connection.connection if hasattr(conn.connection, "connection") else conn.connection
+        raw = conn.connection.driver_connection
         cursor = raw.cursor()
         cursor.execute("PRAGMA table_info(warranty_evidences)")
         cols = {row[1] for row in cursor.fetchall()}

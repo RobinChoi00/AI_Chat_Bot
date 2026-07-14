@@ -56,6 +56,8 @@ def test_install_terminal_includes_video_and_help_offer():
     assert result["defer_email"] is True
     assert result["phase"] == "awaiting_help_consent"
     assert len(result["help_offer_options"]) == 2
+    assert result["help_offer_options"][0]["answer_key"] == "no_self_help"
+    assert result["interaction_mode"] == "troubleshooting"
 
 
 def test_install_air_hose_terminal_includes_diy_steps_and_video():
@@ -203,7 +205,7 @@ def test_defect_terminal_diagnosis_and_help_offer():
     assert result["phase"] == "awaiting_help_consent"
     assert result["defer_email"] is True
     assert "PCB repair or replacement" not in result["message"]
-    assert "Would you like our warranty team" in result["message"]
+    assert "Try the steps above first" in result["message"]
     assert "What you can try" in result["message"]
     assert result["diagnosis"]["steps"]
 
@@ -232,6 +234,7 @@ def test_air_pump_terminal_includes_diy_steps():
     assert any("hose" in step.lower() for step in result["diagnosis"]["steps"])
     assert "air pump" not in result["message"].lower()
     assert result["phase"] == "awaiting_help_consent"
+    assert result["interaction_mode"] == "troubleshooting"
 
 
 def test_footrest_extend_terminal_includes_diy_steps():
@@ -259,6 +262,7 @@ def test_footrest_extend_terminal_includes_diy_steps():
         for step in result["diagnosis"]["steps"]
     )
     assert result["phase"] == "awaiting_help_consent"
+    assert result["interaction_mode"] == "troubleshooting"
 
 
 def test_cosmetic_wg_terminal_includes_photo_guidance():
@@ -286,6 +290,7 @@ def test_cosmetic_wg_terminal_includes_photo_guidance():
     assert any("photo" in step.lower() for step in result["diagnosis"]["steps"])
     assert "white glove" in result["message"].lower()
     assert result["phase"] == "awaiting_help_consent"
+    assert result["interaction_mode"] == "preparation"
 
 
 def test_cosmetic_side_fixed_terminal_uses_self_help():
@@ -450,6 +455,7 @@ def test_delivery_replace_claim_terminal_includes_diy_prep():
         for step in result["diagnosis"]["steps"]
     )
     assert result["phase"] == "awaiting_help_consent"
+    assert result["interaction_mode"] == "preparation"
 
 
 def test_delivery_signed_cleared_terminal_warns_compensation_difficulty():

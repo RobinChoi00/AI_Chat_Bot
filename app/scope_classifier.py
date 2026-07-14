@@ -122,9 +122,25 @@ class ScopeDecision:
         return not self.in_scope
 
 
-def build_scope_refusal() -> str:
+def build_scope_refusal(user_query: str = "") -> str:
     from config import SUPPORT_BUSINESS_HOURS
 
+    if re.search(r"[가-힣]", user_query or ""):
+        return (
+            "저는 Osaki와 Titan 마사지 의자 고객지원 전용 상담원입니다. "
+            "해당 주제는 도와드릴 수 없지만, 제품·주문·서비스 관련 문의는 기꺼이 안내해 드리겠습니다.\n\n"
+            f"운영 시간: {SUPPORT_BUSINESS_HOURS}."
+        )
+    if re.search(
+        r"\b(hola|gracias|silla|precio|pedido|garant[ií]a|necesito|escribe|dame|quiero|puedes|por\s+favor)\b|[¿¡]",
+        user_query or "",
+        re.IGNORECASE,
+    ):
+        return (
+            "Estoy especializado en soporte para sillas de masaje Osaki y Titan. "
+            "No puedo ayudar con ese tema, pero con gusto le ayudo con nuestras sillas, pedidos o servicios.\n\n"
+            f"Horario: {SUPPORT_BUSINESS_HOURS}."
+        )
     return (
         "I'm specialized in Osaki and Titan massage chair support. "
         "I'm not able to help with that, but I'm happy to assist with anything "

@@ -70,7 +70,7 @@ WARRANTY_WELCOME_MESSAGE = (
 )
 
 
-def get_contact_msg(routing: str, target_domain: str) -> str:
+def get_contact_msg(routing: str, target_domain: str, language: str = "en") -> str:
     """Return the correct footer based on intent (Sales vs Warranty) and domain."""
     is_sales = "PRODUCTS" in routing.upper()
 
@@ -81,15 +81,17 @@ def get_contact_msg(routing: str, target_domain: str) -> str:
             if key in domain_lower:
                 phone = number
                 break
-        return (
-            f"For sales inquiries, please contact us at {phone}. "
-            f"Our business hours are {SUPPORT_BUSINESS_HOURS}."
-        )
+        if language == "es":
+            return f"Para consultas de ventas, llame al {phone}. Horario: {SUPPORT_BUSINESS_HOURS}."
+        if language == "ko":
+            return f"구매 상담은 {phone}으로 연락해 주세요. 운영 시간: {SUPPORT_BUSINESS_HOURS}."
+        return f"For sales inquiries, please contact us at {phone}. Our business hours are {SUPPORT_BUSINESS_HOURS}."
 
-    return (
-        f"If you need further assistance, please contact our warranty team at {WARRANTY_PHONE}. "
-        f"Our warranty hours are {WARRANTY_BUSINESS_HOURS}."
-    )
+    if language == "es":
+        return f"Si necesita más ayuda, llame al equipo de garantía al {WARRANTY_PHONE}. Horario de garantía: {WARRANTY_BUSINESS_HOURS}."
+    if language == "ko":
+        return f"추가 도움이 필요하면 보증팀 {WARRANTY_PHONE}으로 연락해 주세요. 보증팀 운영 시간: {WARRANTY_BUSINESS_HOURS}."
+    return f"If you need further assistance, please contact our warranty team at {WARRANTY_PHONE}. Our warranty hours are {WARRANTY_BUSINESS_HOURS}."
 
 # 프론트엔드에서 도메인을 넘겨주지 않았을 때 사용할 기본 폴백(Fallback) 도메인
 DEFAULT_TARGET_DOMAIN = "https://titanchair.com"
@@ -104,7 +106,7 @@ REPAIR_MANUAL_URL = "https://www.otasupport.com"
 MAX_RETRIES = 3
 
 # LLM model settings — override via env without code changes.
-AGENT_MODEL = os.environ.get("OPENAI_AGENT_MODEL", "gpt-4.1")
+AGENT_MODEL = os.environ.get("OPENAI_AGENT_MODEL", "gpt-5.6")
 ROUTER_MODEL = os.environ.get("OPENAI_ROUTER_MODEL", "gpt-4.1-mini")
 
 # 💰 [Cost Optimization] Embedding model:
@@ -135,6 +137,10 @@ FAISS_SEARCH_K = 5 # 사용자 질문 시 Vector DB에서 가져올 최대 문�
 # changes prices. Cached input is billed at 50% of the regular input rate
 # (OpenAI prompt caching).
 MODEL_PRICING_USD_PER_1M = {
+    "gpt-5.6":            {"input": 5.00, "cached_input": 0.50, "output": 30.00},
+    "gpt-5.6-sol":        {"input": 5.00, "cached_input": 0.50, "output": 30.00},
+    "gpt-5.6-terra":      {"input": 2.50, "cached_input": 0.25, "output": 15.00},
+    "gpt-5.6-luna":       {"input": 1.00, "cached_input": 0.10, "output": 6.00},
     "gpt-4o":              {"input": 2.50, "cached_input": 1.25, "output": 10.00},
     "gpt-4o-mini":         {"input": 0.15, "cached_input": 0.075, "output": 0.60},
     "gpt-4.1":             {"input": 2.00, "cached_input": 0.50, "output": 8.00},

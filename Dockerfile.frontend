@@ -31,18 +31,21 @@ RUN --mount=type=cache,target=/root/.npm \
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY frontend/ .
-# Bake in the API base URL (can be overridden at runtime via env)
-ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+# Public client configuration is compiled into the bundle and must be explicit.
+ARG NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
-RUN npm run build
+RUN test -n "$NEXT_PUBLIC_API_BASE_URL" && npm run build
 
 # Runtime
 FROM base AS runner
 ENV NODE_ENV=production
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/public ./public
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/public ./public
 
+USER node
 EXPOSE 3000
 ENV PORT=3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
 CMD ["node", "server.js"]

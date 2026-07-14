@@ -129,6 +129,10 @@ export interface MetricsTotals {
   admin_decided: number;
   resolved: number;
   resolved_rate_pct: number;
+  self_service_started: number;
+  self_service_resolved: number;
+  self_service_resolution_rate_pct: number;
+  escalated_after_self_service: number;
   abandoned: number;
   abandoned_rate_pct: number;
   median_turns_to_terminal: number;

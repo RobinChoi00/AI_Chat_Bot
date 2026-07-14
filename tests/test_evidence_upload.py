@@ -172,7 +172,7 @@ class TestEvidenceUploadEndpoint:
 
     def test_webp_upload_accepted(self, client):
         ticket_id = _make_ticket("webp-test")
-        webp_data = b"RIFF" + b"\x00" * 8 + b"WEBP"
+        webp_data = b"RIFF" + b"\x00" * 4 + b"WEBP"
 
         response = client.post(
             f"/api/v1/warranty/{ticket_id}/evidence",
@@ -183,6 +183,24 @@ class TestEvidenceUploadEndpoint:
         body = response.json()
         assert body["original_filename"] == "defect.webp"
         assert "saved_path" not in body
+
+    @pytest.mark.parametrize(
+        ("filename", "content_type", "payload"),
+        [
+            ("issue.avi", "video/x-msvideo", b"RIFF" + b"\x00" * 4 + b"AVI " + b"\x00" * 8),
+            ("issue.webm", "video/webm", b"\x1aE\xdf\xa3" + b"\x00" * 16),
+        ],
+    )
+    def test_advertised_video_formats_are_accepted(
+        self, client, filename, content_type, payload
+    ):
+        ticket_id = _make_ticket(f"video-{filename}")
+        response = client.post(
+            f"/api/v1/warranty/{ticket_id}/evidence",
+            data=_upload_form("video_of_issue"),
+            files={"file": (filename, io.BytesIO(payload), content_type)},
+        )
+        assert response.status_code == 200, response.text
 
     def test_invalid_extension_rejected(self, client):
         """Uploading a .exe file is rejected with HTTP 422."""
@@ -206,6 +224,16 @@ class TestEvidenceUploadEndpoint:
             files={"file": ("archive.zip", io.BytesIO(b"PK" + b"\x00" * 50), "application/zip")},
         )
         assert response.status_code == 422
+
+    def test_spoofed_file_contents_rejected_and_deleted(self, client, tmp_path):
+        ticket_id = _make_ticket("spoof-test")
+        response = client.post(
+            f"/api/v1/warranty/{ticket_id}/evidence",
+            data=_upload_form("damage_photos"),
+            files={"file": ("fake.jpg", io.BytesIO(b"not-a-jpeg"), "image/jpeg")},
+        )
+        assert response.status_code == 422
+        assert not [path for path in tmp_path.rglob("*") if path.is_file()]
 
     def test_unsafe_filename_path_traversal_sanitised(self, client, tmp_path):
         """
@@ -359,7 +387,7 @@ class TestEvidenceUploadEndpoint:
             client.post(
                 f"/api/v1/warranty/{ticket_id}/evidence",
                 data=_upload_form("damage_photos"),
-                files={"file": (f"img{i}.jpg", io.BytesIO(b"\xff\xd8" + b"\x00" * 10), "image/jpeg")},
+            files={"file": (f"img{i}.jpg", io.BytesIO(b"\xff\xd8\xff" + b"\x00" * 10), "image/jpeg")},
             )
 
         response = client.get(f"/api/v1/warranty/{ticket_id}/evidence")
@@ -373,8 +401,8 @@ class TestEvidenceUploadEndpoint:
         ticket_id = _make_ticket("multi-test")
 
         files = [
-            ("photo1.jpg", b"\xff\xd8" + b"\x00" * 10, "image/jpeg", "damage_photos"),
-            ("receipt.pdf", b"%PDF" + b"\x00" * 10, "application/pdf", "proof_of_purchase"),
+            ("photo1.jpg", b"\xff\xd8\xff" + b"\x00" * 10, "image/jpeg", "damage_photos"),
+            ("receipt.pdf", b"%PDF-" + b"\x00" * 10, "application/pdf", "proof_of_purchase"),
         ]
         ids = []
         for fname, data, mime, ev_type in files:

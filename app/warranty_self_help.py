@@ -131,8 +131,8 @@ _ANSWER_KEY_HINTS: dict[str, tuple[str, ...]] = {
 }
 
 HELP_OFFER_OPTIONS: tuple[dict[str, str], ...] = (
-    {"answer_key": "yes_team_help", "label": "Yes, please help me"},
-    {"answer_key": "no_self_help", "label": "I'll try these steps on my own"},
+    {"answer_key": "no_self_help", "label": "The steps fixed my issue"},
+    {"answer_key": "yes_team_help", "label": "I tried the steps — I still need help"},
 )
 
 
@@ -747,7 +747,7 @@ def format_install_air_hose_message(
         parts.append(video_link_lines.strip())
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
-        "\n\n**Would you like our warranty team to follow up if air still does not work after these steps?**"
+        "\n\n**Try the steps above first. When you're finished, use the check below to tell us whether the issue is resolved.**"
     )
     return "\n".join(parts)
 
@@ -816,7 +816,7 @@ def format_voice_self_help_message(*, diagnosis: dict[str, Any], repair_manual_u
             parts.append(f"{idx}. {step}")
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
-        "\n\n**Would you like our warranty team to follow up if voice control still does not work?**"
+        "\n\n**Try the steps above first. When you're finished, use the check below to tell us whether the issue is resolved.**"
     )
     return "\n".join(parts)
 
@@ -901,7 +901,7 @@ def format_rolling_noise_self_help_message(*, diagnosis: dict[str, Any], repair_
             parts.append(f"{idx}. {step}")
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
-        "\n\n**Would you like our warranty team to follow up if the noise continues after these steps?**"
+        "\n\n**Try the steps above first. When you're finished, use the check below to tell us whether the issue is resolved.**"
     )
     return "\n".join(parts)
 
@@ -956,7 +956,7 @@ def format_remote_self_help_message(*, diagnosis: dict[str, Any], repair_manual_
             parts.append(f"{idx}. {step}")
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
-        "\n\n**Would you like our warranty team to follow up if the remote still does not work?**"
+        "\n\n**Try the steps above first. When you're finished, use the check below to tell us whether the issue is resolved.**"
     )
     return "\n".join(parts)
 
@@ -1011,7 +1011,7 @@ def format_power_self_help_message(*, diagnosis: dict[str, Any], repair_manual_u
             parts.append(f"{idx}. {step}")
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
-        "\n\n**Would you like our warranty team to follow up if the chair still will not power on?**"
+        "\n\n**Try the steps above first. When you're finished, use the check below to tell us whether the issue is resolved.**"
     )
     return "\n".join(parts)
 
@@ -1071,7 +1071,7 @@ def format_air_self_help_message(*, diagnosis: dict[str, Any], repair_manual_url
             parts.append(f"{idx}. {step}")
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
-        "\n\n**Would you like our warranty team to follow up if air still does not work?**"
+        "\n\n**Try the steps above first. When you're finished, use the check below to tell us whether the issue is resolved.**"
     )
     return "\n".join(parts)
 
@@ -1127,7 +1127,7 @@ def format_footrest_self_help_message(*, diagnosis: dict[str, Any], repair_manua
             parts.append(f"{idx}. {step}")
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
-        "\n\n**Would you like our warranty team to follow up if the footrest still does not work?**"
+        "\n\n**Try the steps above first. When you're finished, use the check below to tell us whether the issue is resolved.**"
     )
     return "\n".join(parts)
 
@@ -1303,7 +1303,7 @@ def format_cosmetic_self_help_message(*, diagnosis: dict[str, Any], repair_manua
             parts.append(f"{idx}. {step}")
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
-        "\n\n**Would you like our warranty team to follow up on this cosmetic case?**"
+        "\n\n**Please complete the preparation above first. Then use the check below if you still need warranty team review.**"
     )
     return "\n".join(parts)
 
@@ -1428,7 +1428,7 @@ def format_recline_self_help_message(*, diagnosis: dict[str, Any], repair_manual
             parts.append(f"{idx}. {step}")
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
-        "\n\n**Would you like our warranty team to follow up if the recline still does not work?**"
+        "\n\n**Try the steps above first. When you're finished, use the check below to tell us whether the issue is resolved.**"
     )
     return "\n".join(parts)
 
@@ -1530,7 +1530,7 @@ def format_heating_self_help_message(*, diagnosis: dict[str, Any], repair_manual
             parts.append(f"{idx}. {step}")
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
-        "\n\n**Would you like our warranty team to follow up if heating still does not work as expected?**"
+        "\n\n**Try the steps above first. When you're finished, use the check below to tell us whether the issue is resolved.**"
     )
     return "\n".join(parts)
 
@@ -1649,7 +1649,7 @@ def format_delivery_self_help_message(*, diagnosis: dict[str, Any], repair_manua
             parts.append(f"{idx}. {step}")
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
-        "\n\n**Would you like our warranty team to follow up on this delivery case?**"
+        "\n\n**Please complete the preparation above first. Then use the check below if you still need warranty team review.**"
     )
     return "\n".join(parts)
 
@@ -1736,7 +1736,7 @@ def format_diagnosis_message(diagnosis: dict[str, Any]) -> str:
             "\n\nWe couldn't find a specific DIY fix in our records, but our team can still review your case."
         )
     parts.append(
-        "\n\n**Would you like our warranty team to follow up and help you resolve this?**"
+        "\n\n**Try the steps above first. When you're finished, use the check below to tell us whether the issue is resolved.**"
     )
     return "\n".join(parts)
 
@@ -1793,7 +1793,7 @@ def format_admin_review_message(*, diagnosis: dict[str, Any], repair_manual_url:
             parts.append(f"{idx}. {step}")
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
-        "\n\n**Would you like our warranty team to follow up on this case?**"
+        "\n\n**Please complete the preparation above first. Then use the check below if you still need warranty team review.**"
     )
     return "\n".join(parts)
 

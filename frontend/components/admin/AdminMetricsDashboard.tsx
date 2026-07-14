@@ -204,13 +204,24 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
           hint={`${totals.contact_captured} customers left an email`}
         />
         <KpiCard
-          label="Admin resolved"
+          label="All resolved"
           value={`${totals.resolved} / ${totals.reached_terminal}`}
           hint={
             totals.reached_terminal > 0
               ? `${totals.resolved_rate_pct}% of terminal-reached tickets closed`
               : "No terminal-reached tickets yet"
           }
+        />
+        <KpiCard
+          label="Self-service resolved"
+          value={`${totals.self_service_resolution_rate_pct}%`}
+          hint={`${totals.self_service_resolved} / ${totals.self_service_started} customers who reached the resolution check`}
+          tone={totals.self_service_resolved > 0 ? "good" : "default"}
+        />
+        <KpiCard
+          label="Escalated after steps"
+          value={`${totals.escalated_after_self_service}`}
+          hint="Issue remained or steps could not be completed safely"
         />
         <KpiCard
           label="Abandoned"

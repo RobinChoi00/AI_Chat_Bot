@@ -74,7 +74,7 @@ def test_build_workflow_diagnosis_power_back_switch():
     message = format_diagnosis_message(diagnosis)
     assert diagnosis["steps"]
     assert "What you can try" in message
-    assert "Would you like our warranty team" in message
+    assert "Try the steps above first" in message
     assert "2816860269" not in message
     assert "HOUSTON" not in message
     assert "REOPENED" not in message

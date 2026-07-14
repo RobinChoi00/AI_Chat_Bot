@@ -188,6 +188,20 @@ def _extract_title(doc: Document) -> str:
     return doc.metadata.get("title") or doc.page_content.split("\n", 1)[0][:80]
 
 
+def _source_record(doc: Document) -> str:
+    """Compact provenance marker for grounding and customer citations."""
+    source = str(doc.metadata.get("source") or "internal knowledge base").strip()
+    updated = str(
+        doc.metadata.get("updated_at")
+        or doc.metadata.get("last_updated")
+        or ""
+    ).strip()
+    parts = [f"source={source[:300]}"]
+    if updated:
+        parts.append(f"updated={updated[:40]}")
+    return "SOURCE_RECORD: " + "; ".join(parts)
+
+
 # Keywords that map a user's query topic to matching spec column patterns
 _SPEC_TOPIC_KEYWORDS: List[Tuple[List[str], List[str]]] = [
     # (user query keywords, spec column keywords)
@@ -338,6 +352,7 @@ def tool_search_chair_specs(
         auth_lines = _find_authoritative_lines(doc.page_content, query)
 
         lines.append(f"\n--- Result {i}: {title} ---")
+        lines.append(_source_record(doc))
         base_price = _extract_price(doc.page_content, title=title)
         if base_price is not None:
             lines.append(f"BASE PRICE (USD): ${base_price:,.2f}")
@@ -416,7 +431,7 @@ def tool_recommend_chairs(
             continue
         if eff_max is not None and price > eff_max:
             continue
-        candidates.append((title, price, doc.page_content[:500]))
+        candidates.append((title, price, doc.page_content[:500], _source_record(doc)))
 
     if not candidates:
         return (
@@ -438,8 +453,8 @@ def tool_recommend_chairs(
         header += f" (target budget ~${budget_max:,.0f})"
     header += ":"
     lines = [header]
-    for i, (title, price, body) in enumerate(picks, 1):
-        lines.append(f"\n--- Pick {i}: {title} (${price:,.0f}) ---\n{body}")
+    for i, (title, price, body, source) in enumerate(picks, 1):
+        lines.append(f"\n--- Pick {i}: {title} (${price:,.0f}) ---\n{source}\n{body}")
     lines.append(
         "\nIMPORTANT: Quote ONLY the prices shown above. Do NOT recall prices from training data."
     )
@@ -484,7 +499,7 @@ def tool_get_repair_help(
         return "NO_RESULTS: No specific repair guide found." + suppress
     lines = ["Relevant repair / error info:"]
     for i, doc in enumerate(docs, 1):
-        lines.append(f"\n[{i}] {doc.page_content[:800]}")
+        lines.append(f"\n[{i}] {_source_record(doc)}\n{doc.page_content[:800]}")
     lines.append(suppress)
     return "\n".join(lines)
 
@@ -513,7 +528,7 @@ def tool_get_warranty_or_policy(
         return "NO_RESULTS: No policy information found for this topic." + suppress
     lines = [f"Policy info for '{topic}':"]
     for i, doc in enumerate(docs, 1):
-        lines.append(f"\n[{i}] {doc.page_content[:800]}")
+        lines.append(f"\n[{i}] {_source_record(doc)}\n{doc.page_content[:800]}")
     if suppress:
         lines.append(suppress)
     return "\n".join(lines)
@@ -549,7 +564,7 @@ def tool_capture_sales_lead(
         args=(customer_email, interest_summary, "", target_domain),
         daemon=True,
     ).start()
-    logger.info(f"📧 [Tool] Sales lead captured: {customer_email} on {target_domain}")
+    logger.info("📧 [Tool] Sales lead captured for domain=%s", target_domain)
     return f"SUCCESS: Forwarded {customer_email} to sales team. They will respond within 24 hours."
 
 
@@ -1309,6 +1324,30 @@ TOOL_SCHEMAS: List[Any] = [
         },
     },
 ]
+
+
+def _enable_strict_tool_schemas(schemas: List[Any]) -> None:
+    """Make Chat Completions function calls conform to their JSON schemas."""
+    for schema in schemas:
+        function = schema["function"]
+        parameters = function["parameters"]
+        properties = parameters.get("properties", {})
+        originally_required = set(parameters.get("required", []))
+        for name, prop in properties.items():
+            if name in originally_required:
+                continue
+            prop_type = prop.get("type")
+            if isinstance(prop_type, str):
+                prop["type"] = [prop_type, "null"]
+            enum = prop.get("enum")
+            if isinstance(enum, list) and None not in enum:
+                enum.append(None)
+        parameters["required"] = list(properties.keys())
+        parameters["additionalProperties"] = False
+        function["strict"] = True
+
+
+_enable_strict_tool_schemas(TOOL_SCHEMAS)
 
 # ---------------------------------------------------------------------------
 # Warranty-mode tool subset

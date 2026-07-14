@@ -7,6 +7,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getBackendUrl } from "@/lib/backendUrl";
+import { isAdminApiRequestAuthenticated } from "@/lib/adminSession";
 
 const BACKEND = getBackendUrl();
 
@@ -32,9 +33,12 @@ function stripFilePath(data: unknown): unknown {
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ ticketId: string }> }
 ) {
+  if (!isAdminApiRequestAuthenticated(req)) {
+    return NextResponse.json({ detail: "Admin authentication required." }, { status: 401 });
+  }
   try {
     const { ticketId } = await params;
     const adminKey = requireAdminKey();

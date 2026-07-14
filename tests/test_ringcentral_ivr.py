@@ -26,10 +26,15 @@ from warranty_workflow import WarrantyEngine  # noqa: E402
 @pytest.fixture(autouse=True)
 def _clear_call_contexts():
     from ringcentral_voice import _call_contexts  # noqa: WPS433
+    from warranty_models import RingCentralCallState, warranty_db_session  # noqa: WPS433
 
     _call_contexts.clear()
+    with warranty_db_session() as db:
+        db.query(RingCentralCallState).delete(synchronize_session=False)
     yield
     _call_contexts.clear()
+    with warranty_db_session() as db:
+        db.query(RingCentralCallState).delete(synchronize_session=False)
 
 
 def test_handle_call_enter_starts_at_issue_type_menu():
@@ -108,6 +113,30 @@ def test_issue_type_digit_three_advances_to_defect_menu():
     ticket = WarrantyEngine.get_ticket(ctx.ticket_id)
     assert ticket is not None
     assert str(ticket.issue_type) == "defect"
+
+
+def test_stale_duplicate_play_completion_does_not_start_collect_twice():
+    payload = {
+        "sessionId": "rc-session-stale-play",
+        "inParty": {"id": "party-stale-play"},
+    }
+    completed = {
+        "sessionId": "rc-session-stale-play",
+        "status": "Completed",
+        "command": "Play",
+        "partyId": "party-stale-play",
+    }
+    with (
+        patch("ringcentral_ivr.is_warranty_business_hours", return_value=False),
+        patch("ringcentral_ivr.play_prompt"),
+        patch("ringcentral_ivr.collect_digits") as mock_collect,
+        patch("ringcentral_ivr.resolve_play_uri", return_value="https://example.com/menu.wav"),
+    ):
+        handle_call_enter(payload)
+        handle_command_update(completed)
+        handle_command_update(completed)
+
+    mock_collect.assert_called_once()
 
 
 def test_handle_call_enter_during_business_hours_plays_connect_then_forwards():

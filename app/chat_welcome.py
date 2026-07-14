@@ -28,10 +28,33 @@ def is_opening_greeting(user_query: str) -> bool:
         re.IGNORECASE,
     ):
         return True
+    if re.match(r"^(안녕(?:하세요)?|도와주세요|도움이\s*필요해요?)[!.?\s]*$", q):
+        return True
+    if re.match(
+        r"^[¿¡]?(hola|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|ayuda|necesito\s+ayuda)[!.?¿¡\s]*$",
+        q,
+        re.IGNORECASE,
+    ):
+        return True
     return False
 
 
-def build_chat_welcome_message() -> str:
+def build_chat_welcome_message(language: str = "en") -> str:
     from config import CHAT_WELCOME_MESSAGE
 
+    if language == "es":
+        return (
+            "¡Hola! Bienvenido al soporte de Osaki y Titan. 👋\n\n"
+            "¿Qué modelo de silla de masaje tiene? El modelo aparece en la etiqueta "
+            "del número de serie (por ejemplo, OS-4000T, Solo Flex o Hypnos 4D).\n\n"
+            "Comparta el modelo o pregunte sobre especificaciones, precios, pedidos, "
+            "entrega, garantía o solución de problemas."
+        )
+    if language == "ko":
+        return (
+            "안녕하세요! Osaki & Titan 고객지원입니다. 👋\n\n"
+            "사용 중인 마사지 의자 모델을 알려주시겠어요? 모델명은 의자의 "
+            "시리얼 번호 스티커에서 확인할 수 있습니다(예: OS-4000T, Solo Flex, Hypnos 4D).\n\n"
+            "모델명과 함께 제품 사양, 가격, 주문, 배송, 보증 또는 문제 해결 내용을 말씀해 주세요."
+        )
     return CHAT_WELCOME_MESSAGE
