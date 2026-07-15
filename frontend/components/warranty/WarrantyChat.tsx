@@ -38,7 +38,10 @@ import SerialPhotoButton from "./SerialPhotoButton";
 import TicketStatusBadge from "./TicketStatusBadge";
 import TroubleshootingGate from "./TroubleshootingGate";
 import { WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
-import { WARRANTY_WELCOME_MESSAGE } from "@/lib/welcomeMessage";
+import {
+  CHAT_RECORDING_NOTICE_SHORT,
+  WARRANTY_WELCOME_MESSAGE,
+} from "@/lib/welcomeMessage";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 
 import { resolveWarrantyStoreDomain } from "@/lib/warrantyStoreDomain";
@@ -1258,6 +1261,9 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
           onSubmit={handleSubmit}
           className="shrink-0 border-t border-gray-200 bg-white px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-4"
         >
+          <p className="mb-2 text-[11px] leading-snug text-gray-500 sm:text-xs">
+            {CHAT_RECORDING_NOTICE_SHORT}
+          </p>
           {needsFirstIntake && (
             <div className="mb-2">
               <SerialPhotoButton

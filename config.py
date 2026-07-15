@@ -52,13 +52,23 @@ SUPPORT_CONTACT_MSG = f"If you need further assistance, please contact our suppo
 COMPANY_ADDRESS = "1001 W Crosby Rd, Carrollton, TX 75006"
 SHOWROOM_LOCATION = COMPANY_ADDRESS
 
+# Prior notice for chat recording/storage (Florida FSCA-style disclosure).
+CHAT_RECORDING_NOTICE = (
+    "This conversation may be **recorded and stored** so we can assist you, "
+    "follow up on your case, and improve our support. "
+    "By continuing to chat, you consent to this recording and storage. "
+    "If you do not agree, please close this chat and contact us by phone instead."
+)
+
 CHAT_WELCOME_MESSAGE = (
     "Hello! Welcome to Osaki & Titan support. 👋\n\n"
     "Which massage chair model do you have? "
     "You can find it on the serial-number sticker on your chair "
     "(for example, OS-4000T, Solo Flex, or Hypnos 4D).\n\n"
     "Tell me your model, or ask about specs, pricing, orders, delivery, warranty, "
-    "or troubleshooting."
+    "or troubleshooting.\n\n"
+    "---\n\n"
+    f"{CHAT_RECORDING_NOTICE}"
 )
 
 WARRANTY_WELCOME_MESSAGE = (
@@ -66,7 +76,9 @@ WARRANTY_WELCOME_MESSAGE = (
     "First, which massage chair model do you have? "
     "You can find it on the serial-number sticker on your chair "
     "(for example, OS-4000T, Solo Flex, or Hypnos 4D).\n\n"
-    "Please type your model below. Once we confirm it, we'll guide you through your issue step by step."
+    "Please type your model below. Once we confirm it, we'll guide you through your issue step by step.\n\n"
+    "---\n\n"
+    f"{CHAT_RECORDING_NOTICE}"
 )
 
 

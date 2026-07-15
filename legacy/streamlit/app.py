@@ -300,7 +300,12 @@ CHAT_WELCOME_MESSAGE = (
     "You can find it on the serial-number sticker on your chair "
     "(for example, OS-4000T, Solo Flex, or Hypnos 4D).\n\n"
     "Tell me your model, or ask about specs, pricing, orders, delivery, warranty, "
-    "or troubleshooting."
+    "or troubleshooting.\n\n"
+    "---\n\n"
+    "This conversation may be **recorded and stored** so we can assist you, "
+    "follow up on your case, and improve our support. "
+    "By continuing to chat, you consent to this recording and storage. "
+    "If you do not agree, please close this chat and contact us by phone instead."
 )
 
 if not st.session_state.messages:

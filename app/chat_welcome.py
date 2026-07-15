@@ -48,13 +48,22 @@ def build_chat_welcome_message(language: str = "en") -> str:
             "¿Qué modelo de silla de masaje tiene? El modelo aparece en la etiqueta "
             "del número de serie (por ejemplo, OS-4000T, Solo Flex o Hypnos 4D).\n\n"
             "Comparta el modelo o pregunte sobre especificaciones, precios, pedidos, "
-            "entrega, garantía o solución de problemas."
+            "entrega, garantía o solución de problemas.\n\n"
+            "---\n\n"
+            "Esta conversación puede **grabarse y almacenarse** para ayudarle, dar "
+            "seguimiento a su caso y mejorar nuestro servicio. Al continuar, usted "
+            "acepta esta grabación y almacenamiento. Si no está de acuerdo, cierre "
+            "este chat y contáctenos por teléfono."
         )
     if language == "ko":
         return (
             "안녕하세요! Osaki & Titan 고객지원입니다. 👋\n\n"
             "사용 중인 마사지 의자 모델을 알려주시겠어요? 모델명은 의자의 "
             "시리얼 번호 스티커에서 확인할 수 있습니다(예: OS-4000T, Solo Flex, Hypnos 4D).\n\n"
-            "모델명과 함께 제품 사양, 가격, 주문, 배송, 보증 또는 문제 해결 내용을 말씀해 주세요."
+            "모델명과 함께 제품 사양, 가격, 주문, 배송, 보증 또는 문제 해결 내용을 말씀해 주세요.\n\n"
+            "---\n\n"
+            "이 대화는 고객 지원, 사후 연락 및 서비스 개선을 위해 **기록·저장**될 수 있습니다. "
+            "계속 채팅하시면 이에 동의한 것으로 간주됩니다. "
+            "동의하지 않으시면 이 채팅을 종료하고 전화로 문의해 주세요."
         )
     return CHAT_WELCOME_MESSAGE
