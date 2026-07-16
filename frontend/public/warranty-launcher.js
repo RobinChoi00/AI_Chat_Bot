@@ -348,6 +348,12 @@
 
   var TIDIO_OPEN_CLASS = "osaki-tidio-chat-open";
 
+  // Authoritative state from Tidio open/close events. Stays null until the
+  // first event arrives; after that the DOM-heuristic poller must not
+  // override it (the heuristic can misread Tidio's iframe and would flip
+  // the button back on ~1-2s after Tidio opens).
+  var tidioOpenByEvent = null;
+
   function setTidioOpen(isOpen) {
     if (isOpen) document.body.classList.add(TIDIO_OPEN_CLASS);
     else document.body.classList.remove(TIDIO_OPEN_CLASS);
@@ -374,6 +380,11 @@
   }
 
   function syncTidioVisibility() {
+    // Once events have told us the real state, trust them over the heuristic.
+    if (tidioOpenByEvent !== null) {
+      setTidioOpen(tidioOpenByEvent);
+      return;
+    }
     setTidioOpen(isTidioChatOpen());
   }
 
@@ -385,14 +396,17 @@
     } catch (_e) {
       /* ignore */
     }
+    tidioOpenByEvent = false;
     setTidioOpen(false);
   }
 
   function bindTidioEvents() {
     function onOpen() {
+      tidioOpenByEvent = true;
       setTidioOpen(true);
     }
     function onClose() {
+      tidioOpenByEvent = false;
       setTidioOpen(false);
     }
     document.addEventListener("tidioChat-open", onOpen);
