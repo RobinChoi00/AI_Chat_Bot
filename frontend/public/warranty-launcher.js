@@ -94,6 +94,11 @@
     "#osaki-warranty-btn .label{display:none}" +
     "#osaki-warranty-btn .icon-wrap{width:38px;height:38px}" +
     "#osaki-warranty-btn .icon-main{font-size:20px}}" +
+    /* Hide our launcher while Tidio (sales) chat is open — avoids overlap */
+    "body.osaki-tidio-chat-open #osaki-warranty-btn," +
+    "body.osaki-tidio-chat-open #osaki-warranty-teaser{" +
+    "display:none!important;visibility:hidden!important;pointer-events:none!important;" +
+    "opacity:0!important}" +
     "#osaki-warranty-panel{position:fixed;inset:0;background:rgba(15,20,25,.55);" +
     "backdrop-filter:blur(2px);z-index:" +
     (Z + 2) +
@@ -101,7 +106,12 @@
     "#osaki-warranty-panel.open{display:flex}" +
     "#osaki-warranty-sheet{width:100%;max-width:430px;height:min(92dvh,720px);" +
     "background:#f9fafb;border-radius:16px 16px 0 0;overflow:hidden;display:flex;" +
-    "flex-direction:column;box-shadow:0 -8px 40px rgba(0,0,0,.25);animation:osakiWarrantySlideUp .28s ease}" +
+    "flex-direction:column;box-shadow:0 -8px 40px rgba(0,0,0,.25);animation:osakiWarrantySlideUp .28s ease;" +
+    "position:relative;z-index:2}" +
+    /* Mobile: full-screen sheet so Google merchant cards can't sit over the input */
+    "@media(max-width:639px){#osaki-warranty-panel{align-items:stretch;justify-content:stretch;padding:0}" +
+    "#osaki-warranty-sheet{max-width:none;height:100dvh;max-height:100dvh;border-radius:0;" +
+    "box-shadow:none}}" +
     "@media(min-width:640px){#osaki-warranty-panel{align-items:flex-end;justify-content:flex-end;padding:16px;" +
     "padding-right:max(16px,env(safe-area-inset-right));padding-bottom:max(16px,env(safe-area-inset-bottom))}" +
     "#osaki-warranty-sheet{border-radius:16px;height:min(85dvh,680px)}}" +
@@ -124,8 +134,15 @@
     "body.osaki-warranty-panel-open shopify-shop-app," +
     "body.osaki-warranty-panel-open #shopify-shop-app," +
     "body.osaki-warranty-panel-open [id^='shopify-block-shopify-shop']," +
-    "body.osaki-warranty-panel-open iframe[src*='shop.app']{" +
-    "display:none!important;visibility:hidden!important;pointer-events:none!important}";
+    "body.osaki-warranty-panel-open iframe[src*='shop.app']," +
+    /* Google Shopping / “Top Quality Store” merchant overlays */
+    "body.osaki-warranty-panel-open iframe[src*='google.com/shopping']," +
+    "body.osaki-warranty-panel-open iframe[src*='shopping.google']," +
+    "body.osaki-warranty-panel-open [aria-label*='Top Quality Store' i]," +
+    "body.osaki-warranty-panel-open [aria-label*='Top quality store' i]," +
+    "body.osaki-warranty-panel-open [data-osaki-hidden-overlay='1']{" +
+    "display:none!important;visibility:hidden!important;pointer-events:none!important;" +
+    "opacity:0!important;max-height:0!important;overflow:hidden!important}";
   document.head.appendChild(styles);
 
   if (!document.body) {
@@ -197,18 +214,118 @@
   var closeBtn = panel.querySelector("#osaki-warranty-close");
   var open = false;
   var SHOP_PANEL_CLASS = "osaki-warranty-panel-open";
+  var overlayObserver = null;
+
+  function isWarrantyRoot(el) {
+    return !!(el && el.closest && el.closest("#osaki-warranty-root"));
+  }
+
+  function looksLikeGoogleMerchantOverlay(el) {
+    if (!el || isWarrantyRoot(el)) return false;
+    var label = (
+      (el.getAttribute &&
+        (el.getAttribute("aria-label") ||
+          el.getAttribute("title") ||
+          el.getAttribute("data-title") ||
+          "")) ||
+      ""
+    ).toLowerCase();
+    if (label.indexOf("top quality store") !== -1) return true;
+    if (el.tagName === "IFRAME") {
+      var src = (el.getAttribute("src") || "").toLowerCase();
+      if (
+        src.indexOf("google.com/shopping") !== -1 ||
+        src.indexOf("shopping.google") !== -1
+      ) {
+        return true;
+      }
+    }
+    // Prefer card/dialog roots — avoid hiding the whole page.
+    var text = ((el.innerText || el.textContent || "") + "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (text.length < 40 || text.length > 1800) return false;
+    if (text.toLowerCase().indexOf("top quality store on google") === -1) {
+      return false;
+    }
+    var role = ((el.getAttribute && el.getAttribute("role")) || "").toLowerCase();
+    var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    var pos = style ? style.position : "";
+    if (
+      pos === "fixed" ||
+      pos === "absolute" ||
+      pos === "sticky" ||
+      role === "dialog" ||
+      role === "complementary" ||
+      role === "alertdialog"
+    ) {
+      return true;
+    }
+    // Fallback: title-bearing leaf cards often lack fixed positioning on some themes.
+    return text.toLowerCase().indexOf("learn more about top quality store") !== -1;
+  }
+
+  function hideBlockingOverlays() {
+    var nodes = document.body.querySelectorAll(
+      "div, section, aside, article, iframe, [role='dialog'], [role='complementary']"
+    );
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (isWarrantyRoot(el)) continue;
+      if (!looksLikeGoogleMerchantOverlay(el)) continue;
+      el.setAttribute("data-osaki-hidden-overlay", "1");
+      el.style.setProperty("display", "none", "important");
+      el.style.setProperty("visibility", "hidden", "important");
+      el.style.setProperty("pointer-events", "none", "important");
+    }
+  }
+
+  function restoreBlockingOverlays() {
+    var hidden = document.querySelectorAll("[data-osaki-hidden-overlay='1']");
+    for (var i = 0; i < hidden.length; i++) {
+      var el = hidden[i];
+      el.removeAttribute("data-osaki-hidden-overlay");
+      el.style.removeProperty("display");
+      el.style.removeProperty("visibility");
+      el.style.removeProperty("pointer-events");
+    }
+  }
+
+  function startOverlayWatch() {
+    stopOverlayWatch();
+    hideBlockingOverlays();
+    if (!window.MutationObserver) return;
+    overlayObserver = new MutationObserver(function () {
+      if (open) hideBlockingOverlays();
+    });
+    overlayObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+  }
+
+  function stopOverlayWatch() {
+    if (overlayObserver) {
+      overlayObserver.disconnect();
+      overlayObserver = null;
+    }
+  }
 
   function hideShopWidgets() {
     document.body.classList.add(SHOP_PANEL_CLASS);
+    startOverlayWatch();
   }
 
   function showShopWidgets() {
+    stopOverlayWatch();
+    restoreBlockingOverlays();
     document.body.classList.remove(SHOP_PANEL_CLASS);
   }
 
   function openPanel() {
     if (open) return;
     open = true;
+    closeTidioChat();
     hideShopWidgets();
     if (teaser && teaser.parentNode) hideTeaser();
     frame.src =
@@ -228,6 +345,86 @@
     showShopWidgets();
     btn.focus();
   }
+
+  var TIDIO_OPEN_CLASS = "osaki-tidio-chat-open";
+
+  function setTidioOpen(isOpen) {
+    if (isOpen) document.body.classList.add(TIDIO_OPEN_CLASS);
+    else document.body.classList.remove(TIDIO_OPEN_CLASS);
+  }
+
+  function isTidioChatOpen() {
+    // Tidio marks the iframe/body when the messenger is expanded.
+    var iframe =
+      document.getElementById("tidio-chat-iframe") ||
+      document.querySelector('iframe[id*="tidio"], iframe[src*="tidio"]');
+    if (iframe) {
+      var style = window.getComputedStyle ? window.getComputedStyle(iframe) : null;
+      if (style && style.display !== "none" && style.visibility !== "hidden") {
+        var rect = iframe.getBoundingClientRect();
+        // Bubble-only is small; open messenger is a large panel.
+        if (rect.width > 280 && rect.height > 360) return true;
+      }
+    }
+    var chatRoot = document.getElementById("tidio-chat");
+    if (chatRoot && chatRoot.className && /open|opened|expanded/i.test(String(chatRoot.className))) {
+      return true;
+    }
+    return false;
+  }
+
+  function syncTidioVisibility() {
+    setTidioOpen(isTidioChatOpen());
+  }
+
+  function closeTidioChat() {
+    try {
+      if (window.tidioChatApi && typeof window.tidioChatApi.close === "function") {
+        window.tidioChatApi.close();
+      }
+    } catch (_e) {
+      /* ignore */
+    }
+    setTidioOpen(false);
+  }
+
+  function bindTidioEvents() {
+    function onOpen() {
+      setTidioOpen(true);
+    }
+    function onClose() {
+      setTidioOpen(false);
+    }
+    document.addEventListener("tidioChat-open", onOpen);
+    document.addEventListener("tidioChat-close", onClose);
+    try {
+      if (window.tidioChatApi && typeof window.tidioChatApi.on === "function") {
+        window.tidioChatApi.on("open", onOpen);
+        window.tidioChatApi.on("close", onClose);
+      }
+    } catch (_e2) {
+      /* ignore */
+    }
+  }
+
+  if (window.tidioChatApi) {
+    bindTidioEvents();
+  } else {
+    document.addEventListener("tidioChat-ready", bindTidioEvents, { once: true });
+    // Fallback if Tidio loads after us without firing ready.
+    var tidioTries = 0;
+    var tidioTimer = setInterval(function () {
+      tidioTries += 1;
+      if (window.tidioChatApi || tidioTries > 40) {
+        clearInterval(tidioTimer);
+        bindTidioEvents();
+        syncTidioVisibility();
+      }
+    }, 500);
+  }
+
+  syncTidioVisibility();
+  setInterval(syncTidioVisibility, 1200);
 
   btn.addEventListener("click", openPanel);
   closeBtn.addEventListener("click", closePanel);
