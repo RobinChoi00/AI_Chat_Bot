@@ -39,7 +39,7 @@ import TicketStatusBadge from "./TicketStatusBadge";
 import TroubleshootingGate from "./TroubleshootingGate";
 import { WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
 import {
-  CHAT_RECORDING_NOTICE_SHORT,
+  CHAT_RECORDING_NOTICE,
   WARRANTY_WELCOME_MESSAGE,
 } from "@/lib/welcomeMessage";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
@@ -974,6 +974,10 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         embed ? "max-w-none" : "max-w-2xl"
       }`}
     >
+      <div className="shrink-0 border-b border-amber-100 bg-amber-50 px-4 py-1.5 text-center text-[11px] leading-snug text-amber-800 sm:text-xs">
+        {CHAT_RECORDING_NOTICE}
+      </div>
+
       {warrantyState && !embed && (
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-white px-4 py-2">
           <TicketStatusBadge
@@ -1261,9 +1265,6 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
           onSubmit={handleSubmit}
           className="shrink-0 border-t border-gray-200 bg-white px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-4"
         >
-          <p className="mb-2 text-[11px] leading-snug text-gray-500 sm:text-xs">
-            {CHAT_RECORDING_NOTICE_SHORT}
-          </p>
           {needsFirstIntake && (
             <div className="mb-2">
               <SerialPhotoButton
