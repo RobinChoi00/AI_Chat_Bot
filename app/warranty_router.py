@@ -786,6 +786,12 @@ class WarrantyRestartRequest(BaseModel):
     domain: str = "osaki.com"
 
 
+class WarrantyConsentRequest(BaseModel):
+    """Record live-chat privacy / recording consent for a browser session."""
+    domain: str = "osaki.com"
+    policy_store: str = ""
+
+
 _QUICK_START_ISSUE_KEYS = frozenset({"installation", "delivery", "defect"})
 
 
@@ -1396,6 +1402,33 @@ async def restart_warranty_session(session_id: str, body: WarrantyRestartRequest
         "domain": body.domain,
     }
     return payload
+
+
+@router.post("/api/v1/warranty/session/{session_id}/consent", tags=["warranty"])
+async def record_warranty_chat_consent(session_id: str, body: WarrantyConsentRequest):
+    """
+    Persist customer acceptance of the live-chat privacy / recording notice.
+
+    Called when the customer taps **I Agree** in the widget, before any message
+    is stored. The timestamp is copied onto the ticket when the workflow starts.
+    """
+    from warranty_consent import record_chat_consent  # noqa: WPS433
+
+    try:
+        accepted_at = record_chat_consent(
+            session_id,
+            domain=body.domain,
+            policy_store=body.policy_store,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return {
+        "session_id": session_id,
+        "consent_recorded": True,
+        "accepted_at": accepted_at.isoformat(),
+        "policy_store": (body.policy_store or "").strip().lower() or None,
+    }
 
 
 @router.post("/api/v1/warranty/session/{session_id}/register-model", tags=["warranty"])

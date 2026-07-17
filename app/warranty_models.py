@@ -166,6 +166,19 @@ class WarrantyTicket(Base):
         }
 
 
+class WarrantyChatConsent(Base):
+    """Customer acceptance of live-chat privacy / recording notice (per browser session)."""
+
+    __tablename__ = "warranty_chat_consents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, unique=True, index=True, nullable=False)
+    domain = Column(String, index=True, default="unknown")
+    policy_store = Column(String, nullable=True)
+    accepted_at = Column(DateTime, default=_now_cst)
+    updated_at = Column(DateTime, default=_now_cst, onupdate=_now_cst)
+
+
 class WarrantyTurn(Base):
     """One Q&A exchange within a warranty ticket (node visited + answer given)."""
 

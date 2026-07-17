@@ -9,6 +9,7 @@ import {
   goBackWarranty,
   quickStartWarranty,
   naturalStartWarranty,
+  recordWarrantyChatConsent,
   registerWarrantyModel,
   restartWarrantySession,
   resumeWarrantyFromToken,
@@ -40,6 +41,7 @@ import TroubleshootingGate from "./TroubleshootingGate";
 import { WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
 import {
   CHAT_CONSENT_STORAGE_KEY,
+  resolveStorePolicyUrls,
   WARRANTY_WELCOME_MESSAGE,
 } from "@/lib/welcomeMessage";
 import ChatRecordingNoticeBanner from "./ChatRecordingNoticeBanner";
@@ -125,13 +127,19 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     return sessionStorage.getItem(CHAT_CONSENT_STORAGE_KEY) === "1";
   });
 
-  const acceptChatConsent = useCallback(() => {
+  const acceptChatConsent = useCallback(async () => {
     setChatConsentAccepted(true);
     if (typeof window !== "undefined") {
       sessionStorage.setItem(CHAT_CONSENT_STORAGE_KEY, "1");
     }
+    const { storeDomain } = resolveStorePolicyUrls();
+    try {
+      await recordWarrantyChatConsent(sessionId, storeDomain, storeDomain);
+    } catch (err) {
+      console.warn("warranty chat consent record failed", err);
+    }
     inputRef.current?.focus();
-  }, []);
+  }, [sessionId, storeDomain]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);

@@ -309,6 +309,10 @@ class WarrantyEngine:
                 collected_data="{}",
             )
             db.add(ticket)
+            db.flush()
+            from warranty_consent import attach_consent_to_ticket  # noqa: WPS433
+
+            attach_consent_to_ticket(db, session_id, ticket)
         return ticket_id, _node_view(_ROOT)
 
     _QUICK_START_ISSUES = frozenset({"installation", "delivery", "defect"})

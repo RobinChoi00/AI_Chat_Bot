@@ -117,6 +117,35 @@ export async function getWarrantySession(
 }
 
 /**
+ * Record live-chat privacy / recording consent (I Agree tap).
+ *
+ * CONTRACT: POST /api/v1/warranty/session/{session_id}/consent
+ */
+export async function recordWarrantyChatConsent(
+  sessionId: string,
+  domain: string,
+  policyStore: string
+): Promise<{ consent_recorded: boolean; accepted_at: string }> {
+  const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/consent`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain, policy_store: policyStore }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<{ consent_recorded: boolean; accepted_at: string }>;
+}
+
+/**
  * Register chair model — required before issue-type selection.
  *
  * CONTRACT: POST /api/v1/warranty/session/{session_id}/register-model
