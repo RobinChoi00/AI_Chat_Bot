@@ -138,9 +138,9 @@ export default function WarrantyChat({
     if (typeof window !== "undefined") {
       sessionStorage.setItem(CHAT_CONSENT_STORAGE_KEY, "1");
     }
-    const { storeDomain } = resolveStorePolicyUrls();
+    const { storeDomain: policyStore } = resolveStorePolicyUrls(storeDomain);
     try {
-      await recordWarrantyChatConsent(sessionId, storeDomain, storeDomain);
+      await recordWarrantyChatConsent(sessionId, storeDomain, policyStore);
     } catch (err) {
       console.warn("warranty chat consent record failed", err);
     }

@@ -440,6 +440,21 @@
   syncTidioVisibility();
   setInterval(syncTidioVisibility, 1200);
 
+  var chatOrigin = "";
+  try {
+    chatOrigin = baseUrl ? new URL(baseUrl).origin : "";
+  } catch (_originErr) {
+    chatOrigin = "";
+  }
+
+  window.addEventListener("message", function (e) {
+    if (!e.data || e.data.type !== "osaki-warranty-open-link") return;
+    if (chatOrigin && e.origin !== chatOrigin) return;
+    var url = String(e.data.url || "").trim();
+    if (!url || !/^https:\/\//i.test(url)) return;
+    window.open(url, "_blank", "noopener,noreferrer");
+  });
+
   btn.addEventListener("click", openPanel);
   closeBtn.addEventListener("click", closePanel);
   panel.addEventListener("click", function (e) {

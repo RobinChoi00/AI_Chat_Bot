@@ -56,4 +56,11 @@ describe("resolveStorePolicyUrls", () => {
       ...DEFAULT_POLICY_URLS,
     });
   });
+
+  it("uses osakiusa defaults for unmapped storefront hosts", () => {
+    expect(resolveStorePolicyUrls("clearancechair.com")).toEqual({
+      storeDomain: "clearancechair.com",
+      ...DEFAULT_POLICY_URLS,
+    });
+  });
 });

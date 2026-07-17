@@ -98,16 +98,9 @@ export function resolvePolicyStoreDomain(domain?: string): string {
   return host;
 }
 
-function defaultPolicyUrlsForHost(host: string): { privacy: string; terms: string } {
-  const mapped = STORE_POLICY_URLS[host];
-  if (mapped) return mapped;
-
-  // Generic Shopify /policies path for stores not yet mapped.
-  const base = `https://${host.replace(/^www\./, "")}`;
-  return {
-    privacy: `${base}/policies/privacy-policy`,
-    terms: `${base}/policies/terms-of-service`,
-  };
+function defaultPolicyUrlsForHost(_host: string): { privacy: string; terms: string } {
+  // Unmapped stores: use osakiusa policy pages rather than guessing /policies/.
+  return { ...DEFAULT_POLICY_URLS };
 }
 
 /** Policy page URLs for the store hosting the chat embed. */

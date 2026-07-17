@@ -20,6 +20,8 @@ import type {
 // Base URL
 // ---------------------------------------------------------------------------
 
+const DEFAULT_WARRANTY_DOMAIN = "osakiusa.com";
+
 /**
  * Resolve the backend base URL from the environment variable.
  *
@@ -153,7 +155,7 @@ export async function recordWarrantyChatConsent(
 export async function registerWarrantyModel(
   sessionId: string,
   model: string,
-  domain = "osaki.com"
+  domain = DEFAULT_WARRANTY_DOMAIN
 ): Promise<WarrantySessionResponse> {
   const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/register-model`;
   const res = await fetch(url, {
@@ -190,7 +192,7 @@ export async function confirmWarrantyModel(
     body: JSON.stringify({
       confirmed: payload.confirmed ?? true,
       model: payload.model,
-      domain: payload.domain ?? "osaki.com",
+      domain: payload.domain ?? DEFAULT_WARRANTY_DOMAIN,
     }),
   });
   if (!res.ok) {
@@ -214,7 +216,7 @@ export async function confirmWarrantyModel(
 export async function quickStartWarranty(
   sessionId: string,
   issueType: "installation" | "delivery" | "defect",
-  domain = "osaki.com"
+  domain = DEFAULT_WARRANTY_DOMAIN
 ): Promise<WarrantySessionResponse> {
   const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/quick-start`;
   const res = await fetch(url, {
@@ -243,7 +245,7 @@ export async function quickStartWarranty(
 export async function naturalStartWarranty(
   sessionId: string,
   message: string,
-  domain = "osaki.com"
+  domain = DEFAULT_WARRANTY_DOMAIN
 ): Promise<WarrantySessionResponse> {
   const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/natural-start`;
   const res = await fetch(url, {
@@ -274,7 +276,7 @@ export async function naturalStartWarranty(
 export async function smartStartWarranty(
   sessionId: string,
   message: string,
-  domain = "osaki.com"
+  domain = DEFAULT_WARRANTY_DOMAIN
 ): Promise<WarrantySessionResponse> {
   const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/smart-start`;
   const res = await fetch(url, {
@@ -306,7 +308,7 @@ export async function smartStartWarranty(
  */
 export async function restartWarrantySession(
   sessionId: string,
-  domain = "osaki.com"
+  domain = DEFAULT_WARRANTY_DOMAIN
 ): Promise<WarrantySessionResponse & { restarted?: boolean; closed_ticket_count?: number }> {
   const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/restart`;
   const res = await fetch(url, {

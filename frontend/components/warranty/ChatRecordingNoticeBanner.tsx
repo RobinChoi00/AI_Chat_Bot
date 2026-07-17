@@ -1,5 +1,6 @@
 "use client";
 
+import { openExternalLink } from "@/lib/openExternalLink";
 import { resolveStorePolicyUrls } from "@/lib/welcomeMessage";
 import {
   WARRANTY_SUPPORT_PHONE,
@@ -33,6 +34,7 @@ export default function ChatRecordingNoticeBanner({
           target="_blank"
           rel="noopener noreferrer"
           className="font-medium underline hover:text-amber-900"
+          onClick={(e) => openExternalLink(privacy, e)}
         >
           Privacy Policy
         </a>{" "}
@@ -42,6 +44,7 @@ export default function ChatRecordingNoticeBanner({
           target="_blank"
           rel="noopener noreferrer"
           className="font-medium underline hover:text-amber-900"
+          onClick={(e) => openExternalLink(terms, e)}
         >
           Terms of Service
         </a>
