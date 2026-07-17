@@ -1,40 +1,48 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_POLICY_STORE_DOMAIN,
+  DEFAULT_POLICY_URLS,
   resolvePolicyStoreDomain,
   resolveStorePolicyUrls,
 } from "./welcomeMessage";
 
 describe("resolvePolicyStoreDomain", () => {
   it("uses the parent Shopify store when provided", () => {
-    expect(resolvePolicyStoreDomain("www.osakiusa.com")).toBe("www.osakiusa.com");
+    expect(resolvePolicyStoreDomain("osakiusa.com")).toBe("osakiusa.com");
     expect(resolvePolicyStoreDomain("titanchair.com")).toBe("titanchair.com");
   });
 
   it("falls back for chat infrastructure hosts", () => {
-    expect(resolvePolicyStoreDomain("help.osakichair.com")).toBe(
-      DEFAULT_POLICY_STORE_DOMAIN
-    );
-    expect(resolvePolicyStoreDomain("api.osakichair.com")).toBe(
-      DEFAULT_POLICY_STORE_DOMAIN
-    );
+    expect(resolvePolicyStoreDomain("help.osakichair.com")).toBe("osakiusa.com");
+    expect(resolvePolicyStoreDomain("api.osakichair.com")).toBe("osakiusa.com");
   });
 });
 
 describe("resolveStorePolicyUrls", () => {
-  it("builds Shopify policy links from the resolved store", () => {
-    const urls = resolveStorePolicyUrls("www.osakiusa.com");
-    expect(urls.privacy).toBe("https://www.osakiusa.com/policies/privacy-policy");
-    expect(urls.terms).toBe("https://www.osakiusa.com/policies/terms-of-service");
+  it("uses /pages/ URLs for osakiusa and titanchair", () => {
+    expect(resolveStorePolicyUrls("osakiusa.com")).toEqual({
+      storeDomain: "osakiusa.com",
+      privacy: "https://osakiusa.com/pages/privacy-policy",
+      terms: "https://osakiusa.com/pages/terms-of-service",
+    });
+    expect(resolveStorePolicyUrls("titanchair.com")).toEqual({
+      storeDomain: "titanchair.com",
+      privacy: "https://titanchair.com/pages/privacy-policy",
+      terms: "https://titanchair.com/pages/terms-of-service",
+    });
   });
 
-  it("uses fallback store links for help.osakichair.com", () => {
-    const urls = resolveStorePolicyUrls("help.osakichair.com");
-    expect(urls.privacy).toBe(
-      `https://${DEFAULT_POLICY_STORE_DOMAIN}/policies/privacy-policy`
-    );
-    expect(urls.terms).toBe(
-      `https://${DEFAULT_POLICY_STORE_DOMAIN}/policies/terms-of-service`
-    );
+  it("falls back to osakiusa policies for osakimassagechair.com", () => {
+    expect(resolveStorePolicyUrls("osakimassagechair.com")).toEqual({
+      storeDomain: "osakimassagechair.com",
+      privacy: DEFAULT_POLICY_URLS.privacy,
+      terms: DEFAULT_POLICY_URLS.terms,
+    });
+  });
+
+  it("uses default policy links for help.osakichair.com", () => {
+    expect(resolveStorePolicyUrls("help.osakichair.com")).toEqual({
+      storeDomain: "osakiusa.com",
+      ...DEFAULT_POLICY_URLS,
+    });
   });
 });
