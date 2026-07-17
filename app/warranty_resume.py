@@ -211,7 +211,9 @@ def _resolve_resume_base_url(domain: str) -> str:
         return "https://osaki-titan.com"
     if d == "phone":
         return os.getenv("WARRANTY_PHONE_RESUME_BASE_URL", "https://titanchair.com").rstrip("/")
-    return "https://www.osaki.com"
+    from warranty_defaults import DEFAULT_STOREFRONT_BASE_URL
+
+    return DEFAULT_STOREFRONT_BASE_URL
 
 
 def build_warranty_resume_url(

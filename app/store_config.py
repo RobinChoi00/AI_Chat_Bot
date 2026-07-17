@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from typing import Dict
 
+from warranty_defaults import DEFAULT_STOREFRONT_BASE_URL
+
 
 def get_store_key_prefix(target_domain: str) -> str:
     lowered = (target_domain or "").lower()
@@ -25,12 +27,12 @@ def get_storefront_base_url(target_domain: str) -> str:
     if "titanchair" in lowered or "osakichair" in lowered:
         return "https://titanchair.com"
     if "osakimassage" in lowered:
-        return "https://osakimassage.com"
+        return "https://osakimassagechair.com"
     if "osaki-titan" in lowered or "osakititan" in lowered:
         return "https://osaki-titan.com"
     if "osakiusa" in lowered:
         return "https://osakiusa.com"
-    return "https://www.osaki.com"
+    return DEFAULT_STOREFRONT_BASE_URL
 
 
 def get_order_tracking_page_url(target_domain: str) -> str:

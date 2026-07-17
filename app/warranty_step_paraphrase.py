@@ -134,6 +134,20 @@ def build_paraphrase_system_prompt(*, base_prompt: str) -> str:
     )
 
 
+def _normalize_step_draft(draft: str, base_prompt: str) -> str:
+    """Light cleanup when LLM paraphrase is unavailable."""
+    text = (draft or "").strip()
+    prompt = (base_prompt or "").strip()
+    if not text:
+        return text
+    if prompt and text.count(prompt) > 1:
+        head = text[: text.rfind(prompt)].replace(prompt, "").strip()
+        text = f"{head}\n\n{prompt}".strip() if head else prompt
+    while "\n\n\n" in text:
+        text = text.replace("\n\n\n", "\n\n")
+    return text
+
+
 def paraphrase_step_message(
     draft: str,
     *,
@@ -150,11 +164,11 @@ def paraphrase_step_message(
     draft = (draft or "").strip()
     base_prompt = (base_prompt or "").strip()
     if not draft or not _paraphrase_enabled():
-        return draft, False
+        return _normalize_step_draft(draft, base_prompt), False
 
     client = _openai_client()
     if client is None:
-        return draft, False
+        return _normalize_step_draft(draft, base_prompt), False
 
     user_parts = [f"Draft message:\n{draft}"]
     if model_name:
@@ -181,7 +195,7 @@ def paraphrase_step_message(
         text = (completion.choices[0].message.content or "").strip()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Step paraphrase failed (%s): %s", node_id, exc)
-        return draft, False
+        return _normalize_step_draft(draft, base_prompt), False
 
     if (
         not text
@@ -193,6 +207,6 @@ def paraphrase_step_message(
             "Step paraphrase rejected — invariant failed (node=%s)",
             node_id,
         )
-        return draft, False
+        return _normalize_step_draft(draft, base_prompt), False
 
     return text, True

@@ -145,3 +145,12 @@ def test_build_paraphrase_system_prompt_includes_question():
     prompt = paraphrase.build_paraphrase_system_prompt(base_prompt=base)
     assert base in prompt
     assert "verbatim" in prompt.lower()
+
+
+def test_normalize_step_draft_dedupes_repeated_prompt():
+    base = "Which part is affected?"
+    draft = f"Summary\n\n{base}\n\n{base}"
+    out = paraphrase._normalize_step_draft(draft, base)
+    assert out.count(base) == 1
+    assert out.startswith("Summary")
+

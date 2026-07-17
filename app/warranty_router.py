@@ -47,6 +47,8 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from warranty_defaults import DEFAULT_WARRANTY_DOMAIN, normalize_warranty_domain
+
 try:
     from app.admin_auth import require_admin_key
 except ImportError:  # pragma: no cover - direct module execution in tests
@@ -744,26 +746,26 @@ class WarrantyAnswerRequest(BaseModel):
 class WarrantyQuickStartRequest(BaseModel):
     """Skip the root menu and jump straight to a top-level warranty issue type."""
     issue_type: str  # installation | delivery | defect
-    domain: str = "osaki.com"
+    domain: str = DEFAULT_WARRANTY_DOMAIN
 
 
 class WarrantyRegisterModelRequest(BaseModel):
     """Register chair model before issue-type selection."""
     model: str
-    domain: str = "osaki.com"
+    domain: str = DEFAULT_WARRANTY_DOMAIN
 
 
 class WarrantyConfirmModelRequest(BaseModel):
     """Confirm or correct inferred chair model after smart-start."""
     confirmed: bool = True
     model: Optional[str] = None
-    domain: str = "osaki.com"
+    domain: str = DEFAULT_WARRANTY_DOMAIN
 
 
 class WarrantyNaturalStartRequest(BaseModel):
     """Start warranty intake from free-text (LLM maps to issue type)."""
     message: str
-    domain: str = "osaki.com"
+    domain: str = DEFAULT_WARRANTY_DOMAIN
 
 
 class WarrantySmartStartRequest(BaseModel):
@@ -772,7 +774,7 @@ class WarrantySmartStartRequest(BaseModel):
     steps as the LLM can confidently extract.
     """
     message: str
-    domain: str = "osaki.com"
+    domain: str = DEFAULT_WARRANTY_DOMAIN
 
 
 class WarrantyEmailNotifyRequest(BaseModel):
@@ -783,12 +785,12 @@ class WarrantyEmailNotifyRequest(BaseModel):
 
 class WarrantyRestartRequest(BaseModel):
     """Abandon any in-progress ticket so the customer can start over."""
-    domain: str = "osaki.com"
+    domain: str = DEFAULT_WARRANTY_DOMAIN
 
 
 class WarrantyConsentRequest(BaseModel):
     """Record live-chat privacy / recording consent for a browser session."""
-    domain: str = "osaki.com"
+    domain: str = DEFAULT_WARRANTY_DOMAIN
     policy_store: str = ""
 
 
@@ -1153,7 +1155,9 @@ def _finalize_answer_response(
         )
 
         ticket_for_domain = engine.get_ticket(ticket_id)
-        domain = str(ticket_for_domain.domain if ticket_for_domain else "osaki.com")
+        domain = normalize_warranty_domain(
+            str(ticket_for_domain.domain if ticket_for_domain else "")
+        )
 
         lookup_text = answer
         if previous_node == "delivery_get_tracking_number":

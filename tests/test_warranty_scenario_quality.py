@@ -189,3 +189,49 @@ def test_clarifying_message_when_answer_is_ambiguous(warranty_client):
     )
     text = _customer_message(payload)
     assert "wasn't fully sure" in text.lower() or "please tap" in text.lower()
+
+
+def test_smart_start_footrest_air_advances_flow(warranty_client, monkeypatch):
+    import warranty_intake as wi
+
+    monkeypatch.setattr(
+        wi,
+        "extract_workflow_prefill",
+        lambda **kwargs: {
+            "answer_keys": ["warranty", "defect", "air", "footrest"],
+            "model_name": "OS-4000T",
+            "confidence": "high",
+            "summary": "Footrest air not inflating on OS-4000T.",
+            "source": "llm",
+        },
+    )
+    sid = str(uuid.uuid4())
+    payload = _post(
+        warranty_client,
+        f"/api/v1/warranty/session/{sid}/smart-start",
+        {"message": "OS-4000T footrest air not inflating", "domain": DOMAIN},
+    )
+    assert payload["ticket"]["model_name"] == "OS-4000T"
+    assert len(payload["smart_start"]["applied_keys"]) >= 3
+    assert "footrest" in payload["ticket"]["current_node"]["node_id"]
+    text = _customer_message(payload)
+    assert "Red blinking light" not in text
+
+
+def test_smart_start_vague_message_stays_on_issue_menu(warranty_client, monkeypatch):
+    import warranty_intake as wi
+
+    monkeypatch.setattr(
+        wi,
+        "extract_workflow_prefill",
+        lambda **kwargs: {"answer_keys": [], "confidence": "low", "source": "empty"},
+    )
+    sid = str(uuid.uuid4())
+    payload = _post(
+        warranty_client,
+        f"/api/v1/warranty/session/{sid}/smart-start",
+        {"message": "hello there", "domain": DOMAIN},
+    )
+    assert payload["smart_start"]["applied_keys"] == ["warranty"]
+    assert payload["ticket"]["current_node"]["node_id"] == "issue_type"
+    assert "defect" not in payload["smart_start"]["applied_keys"]
