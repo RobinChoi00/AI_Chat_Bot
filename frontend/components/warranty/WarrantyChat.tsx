@@ -38,10 +38,8 @@ import SerialPhotoButton from "./SerialPhotoButton";
 import TicketStatusBadge from "./TicketStatusBadge";
 import TroubleshootingGate from "./TroubleshootingGate";
 import { WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
-import {
-  CHAT_RECORDING_NOTICE,
-  WARRANTY_WELCOME_MESSAGE,
-} from "@/lib/welcomeMessage";
+import { WARRANTY_WELCOME_MESSAGE } from "@/lib/welcomeMessage";
+import ChatRecordingNoticeBanner from "./ChatRecordingNoticeBanner";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 
 import { resolveWarrantyStoreDomain } from "@/lib/warrantyStoreDomain";
@@ -974,9 +972,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         embed ? "max-w-none" : "max-w-2xl"
       }`}
     >
-      <div className="shrink-0 border-b border-amber-100 bg-amber-50 px-4 py-1.5 text-center text-[11px] leading-snug text-amber-800 sm:text-xs">
-        {CHAT_RECORDING_NOTICE}
-      </div>
+      <ChatRecordingNoticeBanner />
 
       {warrantyState && !embed && (
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-white px-4 py-2">

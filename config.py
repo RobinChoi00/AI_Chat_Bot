@@ -54,7 +54,9 @@ SHOWROOM_LOCATION = COMPANY_ADDRESS
 
 # Prior notice for chat recording/storage (Florida FSCA-style disclosure).
 CHAT_RECORDING_NOTICE = (
-    "This conversation may be recorded, stored, and reviewed to improve service."
+    "By continuing this chat, you agree to our Privacy Policy and Terms of Service. "
+    "This conversation may be recorded, stored, and reviewed to provide support "
+    "and improve our service."
 )
 
 CHAT_WELCOME_MESSAGE = (

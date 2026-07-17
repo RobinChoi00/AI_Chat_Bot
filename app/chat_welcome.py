@@ -50,7 +50,9 @@ def build_chat_welcome_message(language: str = "en") -> str:
             "Comparta el modelo o pregunte sobre especificaciones, precios, pedidos, "
             "entrega, garantía o solución de problemas.\n\n"
             "---\n\n"
-            "Esta conversación puede grabarse, almacenarse y revisarse para mejorar el servicio."
+            "Al continuar este chat, usted acepta nuestra Política de privacidad y "
+            "Términos de servicio. Esta conversación puede grabarse, almacenarse y "
+            "revisarse para brindar soporte y mejorar nuestro servicio."
         )
     if language == "ko":
         return (
@@ -59,6 +61,7 @@ def build_chat_welcome_message(language: str = "en") -> str:
             "시리얼 번호 스티커에서 확인할 수 있습니다(예: OS-4000T, Solo Flex, Hypnos 4D).\n\n"
             "모델명과 함께 제품 사양, 가격, 주문, 배송, 보증 또는 문제 해결 내용을 말씀해 주세요.\n\n"
             "---\n\n"
-            "이 대화는 서비스 개선을 위해 기록·저장 및 검토될 수 있습니다."
+            "채팅을 계속하시면 개인정보 처리방침 및 이용약관에 동의하는 것으로 간주됩니다. "
+            "이 대화는 지원 제공 및 서비스 개선을 위해 기록·저장 및 검토될 수 있습니다."
         )
     return CHAT_WELCOME_MESSAGE

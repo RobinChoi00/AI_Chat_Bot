@@ -1,11 +1,30 @@
 /** Opening assistant message shown when a customer starts a chat session. */
 
+import { resolveWarrantyStoreDomain } from "./warrantyStoreDomain";
+
 /** Prior notice shown at the very top of the chat before the user types. */
 export const CHAT_RECORDING_NOTICE =
-  "By using this chat, you agree to our Privacy Policy and Terms of Service. Your messages may be recorded for quality and training purposes.";
+  "By continuing this chat, you agree to our Privacy Policy and Terms of Service. " +
+  "This conversation may be recorded, stored, and reviewed to provide support and improve our service.";
 
 /** Short sticky line (kept for backward-compatible imports). */
 export const CHAT_RECORDING_NOTICE_SHORT = CHAT_RECORDING_NOTICE;
+
+/** Shopify policy URLs for the store hosting the chat embed. */
+export function resolveStorePolicyUrls(domain?: string): {
+  privacy: string;
+  terms: string;
+} {
+  const host = (domain ?? resolveWarrantyStoreDomain())
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/$/, "")
+    .toLowerCase();
+  const base = `https://${host}`;
+  return {
+    privacy: `${base}/policies/privacy-policy`,
+    terms: `${base}/policies/terms-of-service`,
+  };
+}
 
 export const CHAT_WELCOME_MESSAGE =
   "Hello! Welcome to Osaki & Titan support. 👋\n\n" +
