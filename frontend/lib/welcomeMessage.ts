@@ -52,14 +52,13 @@ const STORE_POLICY_URLS: Record<
     privacy: "https://osakiusa.com/pages/privacy-policy",
     terms: "https://osakiusa.com/pages/terms-of-service",
   },
-  /** No dedicated policy pages — use Osaki USA policies (same operator). */
   "osakimassagechair.com": {
-    privacy: DEFAULT_POLICY_URLS.privacy,
-    terms: DEFAULT_POLICY_URLS.terms,
+    privacy: "https://osakimassagechair.com/pages/privacy-policy",
+    terms: "https://osakimassagechair.com/pages/terms-of-service",
   },
   "www.osakimassagechair.com": {
-    privacy: DEFAULT_POLICY_URLS.privacy,
-    terms: DEFAULT_POLICY_URLS.terms,
+    privacy: "https://osakimassagechair.com/pages/privacy-policy",
+    terms: "https://osakimassagechair.com/pages/terms-of-service",
   },
 };
 

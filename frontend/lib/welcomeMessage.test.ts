@@ -31,11 +31,11 @@ describe("resolveStorePolicyUrls", () => {
     });
   });
 
-  it("falls back to osakiusa policies for osakimassagechair.com", () => {
+  it("uses osakimassagechair.com policy pages", () => {
     expect(resolveStorePolicyUrls("osakimassagechair.com")).toEqual({
       storeDomain: "osakimassagechair.com",
-      privacy: DEFAULT_POLICY_URLS.privacy,
-      terms: DEFAULT_POLICY_URLS.terms,
+      privacy: "https://osakimassagechair.com/pages/privacy-policy",
+      terms: "https://osakimassagechair.com/pages/terms-of-service",
     });
   });
 
