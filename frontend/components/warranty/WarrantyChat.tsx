@@ -38,7 +38,10 @@ import SerialPhotoButton from "./SerialPhotoButton";
 import TicketStatusBadge from "./TicketStatusBadge";
 import TroubleshootingGate from "./TroubleshootingGate";
 import { WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
-import { WARRANTY_WELCOME_MESSAGE } from "@/lib/welcomeMessage";
+import {
+  CHAT_CONSENT_STORAGE_KEY,
+  WARRANTY_WELCOME_MESSAGE,
+} from "@/lib/welcomeMessage";
 import ChatRecordingNoticeBanner from "./ChatRecordingNoticeBanner";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 
@@ -117,6 +120,18 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const [issueTypePanelExpanded, setIssueTypePanelExpanded] = useState(true);
   const [emailPanelCollapsed, setEmailPanelCollapsed] = useState(false);
   const [pendingDefectStart, setPendingDefectStart] = useState<string | null>(null);
+  const [chatConsentAccepted, setChatConsentAccepted] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return sessionStorage.getItem(CHAT_CONSENT_STORAGE_KEY) === "1";
+  });
+
+  const acceptChatConsent = useCallback(() => {
+    setChatConsentAccepted(true);
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem(CHAT_CONSENT_STORAGE_KEY, "1");
+    }
+    inputRef.current?.focus();
+  }, []);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -184,6 +199,10 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       setOptionsUsed(false);
       setEmailPanelCollapsed(false);
       setInput("");
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem(CHAT_CONSENT_STORAGE_KEY);
+      }
+      setChatConsentAccepted(false);
     } finally {
       setLoading(false);
       inputRef.current?.focus();
@@ -380,7 +399,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
 
   const handleQuickStart = useCallback(
     async (issueType: "installation" | "delivery" | "defect", label: string) => {
-      if (loading) return;
+      if (loading || !chatConsentAccepted) return;
       if (issueType === "defect" && !warrantyState?.model_name?.trim()) {
         setError(null);
         setMessages((prev) => [...prev, { role: "user", content: label }]);
@@ -664,7 +683,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
 
   const sendMessage = useCallback(
     async (text: string) => {
-      if (!text.trim() || loading) return;
+      if (!text.trim() || loading || !chatConsentAccepted) return;
 
       const trimmed = text.trim();
       const atIssueTypeNode =
@@ -779,6 +798,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     },
     [
       loading,
+      chatConsentAccepted,
       warrantyState,
       helpConsent,
       contactSubmitted,
@@ -809,6 +829,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   }
 
   function handleOptionSelect(answerKey: string, label: string) {
+    if (!chatConsentAccepted) return;
     const atIssueTypeNode =
       !warrantyState?.issue_type &&
       warrantyState?.current_node?.node_id === "issue_type";
@@ -909,6 +930,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   const needsModelConfirmation = Boolean(warrantyState?.needs_model_confirmation);
 
   const showIssueTypeOptions =
+    chatConsentAccepted &&
     sessionChecked &&
     !loading &&
     !isTerminal &&
@@ -918,6 +940,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       (!!warrantyState?.model_name && atIssueTypeNode));
 
   const hasWorkflowOptions =
+    chatConsentAccepted &&
     !optionsUsed &&
     !loading &&
     !showIssueTypeOptions &&
@@ -931,6 +954,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
   }, [showIssueTypeOptions]);
 
   const showResolutionGate =
+    chatConsentAccepted &&
     isTerminal &&
     terminalEnrichment?.phase === "awaiting_help_consent" &&
     helpConsent === null &&
@@ -940,13 +964,16 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
     isTerminal && helpConsent === "yes" && !contactSubmitted && warrantyState?.ticket_id
   );
 
-  const showEmailSection = inEmailStep;
+  const showEmailSection = chatConsentAccepted && inEmailStep;
 
   const showInputBar =
-    needsCustomerReply ||
+    chatConsentAccepted &&
+    (needsCustomerReply ||
     !isTerminal ||
     inEmailStep ||
-    (isTerminal && helpConsent === null && !contactSubmitted && !showResolutionGate);
+    (isTerminal && helpConsent === null && !contactSubmitted && !showResolutionGate));
+
+  const interactionsLocked = !chatConsentAccepted;
 
   const inputPlaceholder = needsCustomerReply
     ? "Type your reply to our team here…"
@@ -972,7 +999,10 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
         embed ? "max-w-none" : "max-w-2xl"
       }`}
     >
-      <ChatRecordingNoticeBanner />
+      <ChatRecordingNoticeBanner
+        consentAccepted={chatConsentAccepted}
+        onAccept={acceptChatConsent}
+      />
 
       {warrantyState && !embed && (
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-white px-4 py-2">
@@ -1080,12 +1110,18 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       )}
 
       <div className="chat-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-4">
+        {!chatConsentAccepted && (
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-center text-sm text-amber-900">
+            Please review the notice above and tap <strong>I Agree — start chat</strong> to
+            continue.
+          </div>
+        )}
         <div className="space-y-4">
           {messages.map((msg, i) => (
             <ChatMessageBubble
               key={i}
               message={msg}
-              showFeedback={msg.role === "assistant"}
+              showFeedback={chatConsentAccepted && msg.role === "assistant"}
               feedbackSessionId={sessionId}
               feedbackTicketId={warrantyState?.ticket_id}
               feedbackDomain={storeDomain}
@@ -1112,7 +1148,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
             </p>
             <button
               type="button"
-              disabled={loading}
+              disabled={loading || interactionsLocked}
               onClick={() => confirmInferredModel()}
               className="mt-3 rounded-full bg-violet-700 px-4 py-2 text-sm font-medium text-white hover:bg-violet-800 disabled:opacity-50"
             >
@@ -1132,7 +1168,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
               optionCount={INITIAL_ISSUE_OPTIONS.length}
               expanded={issueTypePanelExpanded}
               onToggle={() => setIssueTypePanelExpanded((open) => !open)}
-              disabled={loading}
+              disabled={loading || interactionsLocked}
             >
               <AnswerOptions
                 options={INITIAL_ISSUE_OPTIONS}
@@ -1143,7 +1179,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
                     label
                   )
                 }
-                disabled={loading}
+                disabled={loading || interactionsLocked}
               />
             </CollapsibleOptionPanel>
           </div>
@@ -1177,12 +1213,12 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
             optionCount={workflowOptionCount}
             expanded={optionsPanelExpanded}
             onToggle={() => setOptionsPanelExpanded((open) => !open)}
-            disabled={loading}
+            disabled={loading || interactionsLocked}
           >
             <AnswerOptions
               options={warrantyState!.current_node!.options}
               onSelect={handleOptionSelect}
-              disabled={loading}
+              disabled={loading || interactionsLocked}
               variant="stack"
             />
           </CollapsibleOptionPanel>
@@ -1195,7 +1231,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
             mode={terminalEnrichment?.interaction_mode ?? "troubleshooting"}
             stage={resolutionStage}
             stepCount={terminalEnrichment?.diagnosis?.steps?.length ?? 0}
-            disabled={loading}
+            disabled={loading || interactionsLocked}
             onStepsCompleted={() =>
               handleResolutionOutcome("steps_completed")
             }
@@ -1264,7 +1300,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
           {needsFirstIntake && (
             <div className="mb-2">
               <SerialPhotoButton
-                disabled={loading}
+                disabled={loading || interactionsLocked}
                 onModelDetected={(name) => {
                   const suffix = input.trim() ? ` ${input.trim()}` : "";
                   setInput(`${name}${suffix}`);
@@ -1281,13 +1317,13 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={inputPlaceholder}
-              disabled={loading}
+              disabled={loading || interactionsLocked}
               className="min-h-[44px] flex-1 resize-none bg-transparent px-2 py-2 text-base text-gray-900 placeholder-gray-400 focus:outline-none disabled:opacity-60 sm:text-sm"
               style={{ maxHeight: "120px" }}
             />
             <button
               type="submit"
-              disabled={!input.trim() || loading}
+              disabled={!input.trim() || loading || interactionsLocked}
               className={`flex h-11 min-w-[4.5rem] flex-shrink-0 items-center justify-center rounded-xl px-4 text-sm font-semibold transition ${
                 !input.trim() || loading
                   ? "cursor-not-allowed bg-gray-200 text-gray-400"

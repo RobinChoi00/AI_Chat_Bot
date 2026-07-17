@@ -52,7 +52,8 @@ def build_chat_welcome_message(language: str = "en") -> str:
             "---\n\n"
             "Al continuar este chat, usted acepta nuestra Política de privacidad y "
             "Términos de servicio. Esta conversación puede grabarse, almacenarse y "
-            "revisarse para brindar soporte y mejorar nuestro servicio."
+            "revisarse para brindar soporte y mejorar nuestro servicio. "
+            "Si no está de acuerdo, cierre este chat y contáctenos por teléfono."
         )
     if language == "ko":
         return (
@@ -62,6 +63,7 @@ def build_chat_welcome_message(language: str = "en") -> str:
             "모델명과 함께 제품 사양, 가격, 주문, 배송, 보증 또는 문제 해결 내용을 말씀해 주세요.\n\n"
             "---\n\n"
             "채팅을 계속하시면 개인정보 처리방침 및 이용약관에 동의하는 것으로 간주됩니다. "
-            "이 대화는 지원 제공 및 서비스 개선을 위해 기록·저장 및 검토될 수 있습니다."
+            "이 대화는 지원 제공 및 서비스 개선을 위해 기록·저장 및 검토될 수 있습니다. "
+            "동의하지 않으시면 이 채팅을 종료하고 전화로 문의해 주세요."
         )
     return CHAT_WELCOME_MESSAGE

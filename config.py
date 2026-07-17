@@ -56,7 +56,8 @@ SHOWROOM_LOCATION = COMPANY_ADDRESS
 CHAT_RECORDING_NOTICE = (
     "By continuing this chat, you agree to our Privacy Policy and Terms of Service. "
     "This conversation may be recorded, stored, and reviewed to provide support "
-    "and improve our service."
+    "and improve our service. "
+    f"If you do not agree, please close this chat and contact us by phone at {WARRANTY_PHONE} instead."
 )
 
 CHAT_WELCOME_MESSAGE = (

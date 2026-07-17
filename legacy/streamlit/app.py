@@ -304,7 +304,8 @@ CHAT_WELCOME_MESSAGE = (
     "---\n\n"
     "By continuing this chat, you agree to our Privacy Policy and Terms of Service. "
     "This conversation may be recorded, stored, and reviewed to provide support "
-    "and improve our service."
+    "and improve our service. "
+    "If you do not agree, please close this chat and contact us by phone at +1-888-848-2630 ext. 3 instead."
 )
 
 if not st.session_state.messages:
