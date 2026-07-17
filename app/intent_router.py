@@ -60,6 +60,9 @@ _EMAIL_PATTERN = re.compile(r"[\w\.\-+]+@[\w\.\-]+\.\w+")
 
 _WARRANTY_CLAIM_PATTERNS = [
     re.compile(r"\b(warranty\s*(claim|request|ticket|issue|case|service|form)|file\s+a\s+warranty|under\s+warranty|submit\s+warranty)\b", re.IGNORECASE),
+    re.compile(r"\b(need|want|get)\s+(?:help\s+with\s+)?warranty\b", re.IGNORECASE),
+    re.compile(r"\bwarranty\s+help\b", re.IGNORECASE),
+    re.compile(r"\bhelp\s+with\s+(?:my\s+)?warranty\b", re.IGNORECASE),
     re.compile(r"\b(defect(ive)?|malfunction(ing)?)\b", re.IGNORECASE),
     re.compile(r"\b(delivery\s+(damage[d]?|issue|problem|wrong)|damaged\s+in\s+transit|box\s+was\s+(damage[d]?|opened|crushed))\b", re.IGNORECASE),
     re.compile(r"\b(i\s+want|i\s+need|i\s+'d\s+like|please)\s+(a\s+)?(replacement|refund|exchange|RMA|repair\s+service|compensation)\b", re.IGNORECASE),

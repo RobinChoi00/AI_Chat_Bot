@@ -22,6 +22,7 @@ Design contract
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional
 
 from warranty_intake_context import enrich_path_text, intake_aware_step_summary
@@ -176,6 +177,89 @@ def _pick_step_tips(
     return tips[:max_tips]
 
 
+def _aggregate_customer_text(turns: list) -> str:
+    parts: list[str] = []
+    for turn in turns:
+        for field in ("customer_answer", "answer_label", "user_message", "answer"):
+            text = _turn_text(turn, field).strip()
+            if text:
+                parts.append(text)
+    return " ".join(parts)
+
+
+_TITLE_STOP_WORDS = frozenset(
+    {"chair", "issue", "problem", "massage", "osaki", "titan", "error", "code", "light"}
+)
+
+
+def _title_grounded_in_customer_context(title: str, customer_text: str) -> bool:
+    """True when the KB subject plausibly matches what the customer actually said."""
+    title_norm = (title or "").strip().lower().rstrip(".")
+    blob = (customer_text or "").lower()
+    if not title_norm or not blob:
+        return False
+    if len(title_norm) >= 10 and title_norm in blob:
+        return True
+    tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", title_norm)
+        if len(token) >= 4 and token not in _TITLE_STOP_WORDS
+    ]
+    if not tokens:
+        return False
+    hits = sum(1 for token in tokens if token in blob)
+    return hits >= max(1, (len(tokens) + 1) // 2)
+
+
+def _step_enrichment_summary(
+    matches: list[KnowledgeEntry],
+    *,
+    defect_category: Optional[str],
+    model_name: str,
+    issue_type: str,
+    turns: list,
+) -> str:
+    """
+    Customer-facing intro before the next workflow question.
+
+    Prefer category-based wording for button-only flows. Only cite a KB/Q&A
+    subject when the customer text supports it (avoids unrelated titles like
+    "Red blinking light" after they only tapped Power issue).
+    """
+    customer_text = _aggregate_customer_text(turns)
+    grounded: list[KnowledgeEntry] = []
+    for entry in matches:
+        if not is_presentable_match_title(entry.title):
+            continue
+        if entry.source == "fonz_error_code":
+            grounded.append(entry)
+            continue
+        if entry.source in {"qa_csv", "auto_check"} and _title_grounded_in_customer_context(
+            entry.title,
+            customer_text,
+        ):
+            grounded.append(entry)
+            continue
+        if entry.source == "freshdesk":
+            # Freshdesk ticket subjects are often generic; category summary is safer.
+            continue
+
+    if grounded:
+        return _friendly_match_summary(
+            grounded,
+            defect_category=defect_category,
+            model_name=model_name,
+            issue_type=issue_type,
+        )
+
+    return _friendly_match_summary(
+        [],
+        defect_category=defect_category,
+        model_name=model_name,
+        issue_type=issue_type,
+    )
+
+
 def format_step_message(
     *,
     base_prompt: str,
@@ -264,11 +348,12 @@ def build_step_enrichment(
         return None
 
     if presentable_matches:
-        summary = _friendly_match_summary(
-            presentable_matches,
+        summary = _step_enrichment_summary(
+            matches,
             defect_category=defect_category,
             model_name=model_name,
             issue_type=issue_type,
+            turns=turns,
         )
     elif tips:
         model_display = (model_name or "your chair").strip()

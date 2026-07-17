@@ -15,6 +15,7 @@ GOLDEN_INTENTS = [
     ("How do I assemble the Osaki Duo?", "get_repair_help"),
     ("Track order OSKMC1234 john@example.com", "lookup_order_status"),
     ("I need to file a warranty claim", "start_warranty_workflow"),
+    ("I need warranty help", "start_warranty_workflow"),
     ("Recommend a chair under $5000", "recommend_chairs"),
     ("What's the price of Solo Flex?", "search_chair_specs"),
     ("How much is the Hypnos 4D?", "search_chair_specs"),

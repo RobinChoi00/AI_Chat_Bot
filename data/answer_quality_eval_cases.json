@@ -4,6 +4,7 @@
     {"query": "My chair won't turn on", "expected_tool": "get_repair_help"},
     {"query": "Track order OSKMC1234 john@example.com", "expected_tool": "lookup_order_status"},
     {"query": "I need to file a warranty claim", "expected_tool": "start_warranty_workflow"},
+    {"query": "I need warranty help", "expected_tool": "start_warranty_workflow"},
     {"query": "Recommend a chair under $5000", "expected_tool": "recommend_chairs"},
     {"query": "What's the price of Solo Flex?", "expected_tool": "search_chair_specs"},
     {"query": "의자가 켜지지 않아요", "expected_tool": "get_repair_help"},

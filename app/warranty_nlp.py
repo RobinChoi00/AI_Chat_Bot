@@ -136,6 +136,18 @@ def _heuristic_option_match(options: list[dict], text: str) -> Optional[str]:
                 if _YES_RE.search(norm) and key.startswith("has"):
                     return key
 
+    words = [word for word in norm.split() if len(word) >= 5]
+    if words:
+        matches: list[str] = []
+        for opt in options:
+            label = _normalize(str(opt.get("label", "")))
+            key = str(opt.get("answer_key", ""))
+            key_norm = _normalize(key)
+            if any(word in label or word in key_norm for word in words):
+                matches.append(key)
+        if len(matches) == 1:
+            return matches[0]
+
     return None
 
 

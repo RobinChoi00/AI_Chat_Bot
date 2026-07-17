@@ -40,6 +40,19 @@ class TestHeuristicOptionMatch:
         assert nlp.interpret_warranty_answer(node, "yeah the box was crushed") == "yes_box_damage"
         assert nlp.interpret_warranty_answer(node, "no it looked fine") == "no_box_damage"
 
+    def test_body_part_word_maps_to_option(self):
+        options = [
+            {"answer_key": "feet", "label": "Feet / Calves"},
+            {"answer_key": "shoulders_hips", "label": "Shoulders / Hips"},
+            {"answer_key": "footrest", "label": "Footrest"},
+        ]
+        node = {
+            "type": "question",
+            "prompt": "Which part of the chair is not inflating properly?",
+            "options": options,
+        }
+        assert nlp.interpret_warranty_answer(node, "shoulders") == "shoulders_hips"
+
     def test_question_text_passthrough(self):
         node = {"type": "question_text", "prompt": "Model name?", "next": "x", "answer_key": "model_name"}
         assert nlp.interpret_warranty_answer(node, "  Maestro V2  ") == "Maestro V2"

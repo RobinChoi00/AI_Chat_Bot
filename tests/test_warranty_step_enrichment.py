@@ -412,3 +412,50 @@ def test_step_enrichment_hides_unconfirmed_error_code_rows(monkeypatch):
     assert result.get("top_match") is None
     assert "fonz_error_code" not in result.get("sources", [])
     assert "4000CS" not in result.get("message", "")
+
+
+def test_build_step_enrichment_avoids_ungrounded_qa_title(monkeypatch):
+    fake_matches = [
+        KnowledgeEntry(
+            source="qa_csv",
+            category="power",
+            title="Red blinking light.",
+            diagnostic="Blinking red light on chair",
+            customer_steps=(
+                "Note what happens when you toggle the back power switch.",
+                "Confirm the power cord and outlet are working.",
+            ),
+        )
+    ]
+    monkeypatch.setattr(step_enrich, "contextual_search_knowledge", lambda **kwargs: fake_matches)
+
+    engine = _FakeEngine(
+        [
+            _turn("warranty", node_id="root"),
+            _turn("defect", node_id="issue_type"),
+            _turn("power", node_id="defect_problem_type"),
+        ]
+    )
+    ticket = SimpleNamespace(ticket_id="t1", issue_type="defect", model_name="OS-4000T")
+    node = {
+        "node_id": "defect_power_remote_on_q",
+        "type": "question",
+        "prompt": "Does the chair's remote control turn ON when you press the power button?",
+    }
+
+    result = step_enrich.build_step_enrichment(engine, ticket, node)
+    assert result is not None
+    assert "Red blinking light" not in result["message"]
+    assert "power" in result["message"].lower()
+    assert "What you can try" in result["message"]
+
+
+def test_title_grounded_requires_customer_overlap():
+    assert step_enrich._title_grounded_in_customer_context(
+        "Red blinking light.",
+        "power issue selected",
+    ) is False
+    assert step_enrich._title_grounded_in_customer_context(
+        "Footrest air not inflating",
+        "Footrest air not inflating on my 3D LTX",
+    ) is True
