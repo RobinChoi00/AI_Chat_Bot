@@ -15,6 +15,10 @@ describe("resolvePolicyStoreDomain", () => {
     expect(resolvePolicyStoreDomain("help.osakichair.com")).toBe("osakiusa.com");
     expect(resolvePolicyStoreDomain("api.osakichair.com")).toBe("osakiusa.com");
   });
+
+  it("falls back for invalid legacy osaki.com host", () => {
+    expect(resolvePolicyStoreDomain("osaki.com")).toBe("osakiusa.com");
+  });
 });
 
 describe("resolveStorePolicyUrls", () => {
@@ -41,6 +45,13 @@ describe("resolveStorePolicyUrls", () => {
 
   it("uses default policy links for help.osakichair.com", () => {
     expect(resolveStorePolicyUrls("help.osakichair.com")).toEqual({
+      storeDomain: "osakiusa.com",
+      ...DEFAULT_POLICY_URLS,
+    });
+  });
+
+  it("uses osakiusa defaults for invalid osaki.com host", () => {
+    expect(resolveStorePolicyUrls("osaki.com")).toEqual({
       storeDomain: "osakiusa.com",
       ...DEFAULT_POLICY_URLS,
     });

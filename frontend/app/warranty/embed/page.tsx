@@ -13,10 +13,15 @@ export const viewport = {
   interactiveWidget: "resizes-content" as const,
 };
 
-export default function WarrantyEmbedPage() {
+export default async function WarrantyEmbedPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ store?: string }>;
+}) {
+  const { store } = await searchParams;
   return (
     <main className="flex h-dvh flex-col overflow-hidden bg-gray-50">
-      <WarrantyChat embed />
+      <WarrantyChat embed storeDomain={store} />
     </main>
   );
 }

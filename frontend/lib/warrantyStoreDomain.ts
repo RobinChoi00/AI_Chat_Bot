@@ -8,7 +8,7 @@
  */
 export function resolveWarrantyStoreDomain(): string {
   if (typeof window === "undefined") {
-    return "osaki.com";
+    return "osakiusa.com";
   }
 
   const fromQuery = new URLSearchParams(window.location.search).get("store")?.trim();
@@ -28,5 +28,5 @@ export function resolveWarrantyStoreDomain(): string {
     /* ignore malformed referrer */
   }
 
-  return (window.location.hostname || "osaki.com").toLowerCase();
+  return (window.location.hostname || "osakiusa.com").toLowerCase();
 }

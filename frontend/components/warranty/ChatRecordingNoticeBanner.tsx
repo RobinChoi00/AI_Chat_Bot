@@ -10,6 +10,7 @@ interface Props {
   className?: string;
   consentAccepted: boolean;
   onAccept: () => void;
+  storeDomain?: string;
 }
 
 /** Top-of-chat privacy / recording disclosure with store policy links. */
@@ -17,8 +18,9 @@ export default function ChatRecordingNoticeBanner({
   className = "",
   consentAccepted,
   onAccept,
+  storeDomain,
 }: Props) {
-  const { privacy, terms } = resolveStorePolicyUrls();
+  const { privacy, terms } = resolveStorePolicyUrls(storeDomain);
 
   return (
     <div

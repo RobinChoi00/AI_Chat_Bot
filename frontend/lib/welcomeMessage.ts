@@ -76,10 +76,23 @@ function normalizeHost(domain: string): string {
   return domain.replace(/^https?:\/\//i, "").replace(/\/$/, "").toLowerCase();
 }
 
+const LEGACY_POLICY_HOSTS = new Set(["osaki.com", "www.osaki.com"]);
+
+function storeHintFromBrowser(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const fromQuery = new URLSearchParams(window.location.search).get("store")?.trim();
+  if (fromQuery) return normalizeHost(fromQuery);
+  return undefined;
+}
+
 /** Resolve which Shopify host identifies the customer store. */
 export function resolvePolicyStoreDomain(domain?: string): string {
-  const host = normalizeHost(domain ?? resolveWarrantyStoreDomain());
-  if (INTERNAL_POLICY_HOSTS.has(host) || host.endsWith(".local")) {
+  const host = normalizeHost(domain ?? storeHintFromBrowser() ?? resolveWarrantyStoreDomain());
+  if (
+    INTERNAL_POLICY_HOSTS.has(host) ||
+    LEGACY_POLICY_HOSTS.has(host) ||
+    host.endsWith(".local")
+  ) {
     return "osakiusa.com";
   }
   return host;
@@ -103,6 +116,10 @@ export function resolveStorePolicyUrls(domain?: string): {
   terms: string;
   storeDomain: string;
 } {
+  if (typeof window === "undefined" && !domain?.trim()) {
+    return { storeDomain: "osakiusa.com", ...DEFAULT_POLICY_URLS };
+  }
+
   const host = resolvePolicyStoreDomain(domain);
   if (INTERNAL_POLICY_HOSTS.has(normalizeHost(domain ?? ""))) {
     return {

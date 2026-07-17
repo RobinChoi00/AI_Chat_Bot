@@ -88,8 +88,14 @@ function trimMessagesBeforeLastUser(messages: ChatMessage[]): ChatMessage[] {
   return messages;
 }
 
-export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
-  const storeDomain = resolveWarrantyStoreDomain();
+export default function WarrantyChat({
+  embed = false,
+  storeDomain: storeDomainProp,
+}: {
+  embed?: boolean;
+  storeDomain?: string;
+}) {
+  const storeDomain = storeDomainProp?.trim() || resolveWarrantyStoreDomain();
   const [sessionId, setSessionId] = useState<string>(() => {
     if (typeof window === "undefined") return uuidv4();
     const stored = sessionStorage.getItem("warranty_session_id");
@@ -1010,6 +1016,7 @@ export default function WarrantyChat({ embed = false }: { embed?: boolean }) {
       <ChatRecordingNoticeBanner
         consentAccepted={chatConsentAccepted}
         onAccept={acceptChatConsent}
+        storeDomain={storeDomain}
       />
 
       {warrantyState && !embed && (
