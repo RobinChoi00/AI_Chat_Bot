@@ -3,7 +3,6 @@ import sys
 import glob
 import json
 import pandas as pd
-import docx
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS as LC_FAISS
@@ -110,6 +109,8 @@ class MasterIngester:
     # ==========================================
     def process_word_policies(self):
         print("🔍 [4/7] 정책 문서(.docx) 파싱 중... -> [web_data] 할당")
+        import docx  # noqa: WPS433 — optional; only needed for full ingest
+
         docx_files = glob.glob(os.path.join(RAW_DIR, "*.docx")) # 💡 Warranty.docx, Sales Policy.docx 2개 동시 처리
         for file_path in docx_files:
             doc = docx.Document(file_path)
