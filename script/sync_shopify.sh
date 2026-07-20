@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Weekly OsakiUSA Shopify → products_export.csv sync (run from project root on EC2).
 #
+# CSV is written on the host because raw_data is mounted read-only inside the backend container.
+#
 # Cron example (Sundays 3:30 AM, after Freshdesk sync):
 #   30 3 * * 0 /home/ubuntu/AI_Chat_Bot/script/sync_shopify.sh
 #
@@ -27,9 +29,15 @@ fi
 
 {
   echo "$(date -Is) Starting Shopify sync (dry_run=${DRY_RUN}, rebuild_faiss=$((1-NO_REBUILD_FAISS)), restart=$((1-NO_RESTART)))"
-  docker compose exec -T backend python script/sync_shopify_products.py \
-    --rebuild-clean-csv \
-    "${DRY_ARGS[@]}"
+  python3 "$ROOT/script/sync_shopify_products.py" "${DRY_ARGS[@]}"
+
+  if [[ "${DRY_RUN}" != "1" && "${DRY_RUN}" != "true" ]]; then
+    if python3 "$ROOT/script/clean_shopify_data.py"; then
+      echo "$(date -Is) cleaned_osaki_products.csv rebuilt"
+    else
+      echo "$(date -Is) WARN: clean_shopify_data.py failed or missing deps; continuing"
+    fi
+  fi
 
   if [[ "${DRY_RUN}" != "1" && "${DRY_RUN}" != "true" && "${NO_REBUILD_FAISS}" != "1" && "${NO_REBUILD_FAISS}" != "true" ]]; then
     docker compose exec -T backend python script/master_ingester.py --only osaki_products

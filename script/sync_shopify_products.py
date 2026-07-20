@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -18,17 +19,24 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "app"))
 
-from dotenv import load_dotenv  # noqa: E402
 
-load_dotenv(ROOT / ".env", override=True)
+def _load_env_file(path: Path) -> None:
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_env_file(ROOT / ".env")
 
 from shopify_product_sync import DEFAULT_CSV_PATH, sync_osakiusa_products  # noqa: E402
-
-
-def _maybe_rebuild_clean_csv() -> None:
-    import clean_shopify_data  # noqa: WPS433
-
-    clean_shopify_data.clean_shopify_for_rag()
 
 
 def main() -> int:
@@ -79,7 +87,12 @@ def main() -> int:
 
     if args.rebuild_clean_csv and not args.dry_run:
         sys.path.insert(0, str(ROOT / "script"))
-        _maybe_rebuild_clean_csv()
+        try:
+            import clean_shopify_data  # noqa: WPS433
+
+            clean_shopify_data.clean_shopify_for_rag()
+        except Exception as exc:
+            print(f"WARN: clean_shopify_data skipped: {exc}")
 
     return 0
 
