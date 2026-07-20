@@ -33,6 +33,7 @@ faiss_index/
 # raw_data는 인제스터 소스 파일(스펙/상품)만 허용하고 나머지는 무시
 raw_data/*
 !raw_data/Specification_Massage Chair.xlsx
+!raw_data/Fonz's All-in-one Warranty List.xlsx
 !raw_data/products_export.csv
 !raw_data/Auto-Check.csv
 !raw_data/fault_judgment.csv
