@@ -1017,14 +1017,32 @@ def _maybe_side_question_message(engine, ticket_id: str, answer: str) -> Optiona
         is_gate_node,
     )
     from warranty_intake_context import try_side_question_for_ticket  # noqa: WPS433
+    from warranty_scope import (  # noqa: WPS433
+        build_warranty_scope_refusal,
+        evaluate_warranty_scope,
+        is_sales_workflow_answer,
+    )
+
+    if is_sales_workflow_answer(answer):
+        return build_warranty_scope_refusal()
 
     node = engine.get_current_node(ticket_id)
     node_id = str(node.get("node_id") or "") if node else ""
+    ticket = engine.get_ticket(ticket_id)
+    issue_type = str(getattr(ticket, "issue_type", "") or "") if ticket else ""
+
     if node and not is_gate_node(node_id):
         from warranty_side_questions import _looks_like_valid_workflow_answer  # noqa: WPS433
 
-        ticket = engine.get_ticket(ticket_id)
         if ticket is not None and not _looks_like_valid_workflow_answer(node, answer):
+            scope = evaluate_warranty_scope(
+                answer,
+                node_id=node_id,
+                issue_type=issue_type or None,
+            )
+            if scope.is_blocked:
+                return build_warranty_scope_refusal()
+
             prompt = str(node.get("prompt") or "").strip()
             mid = format_midflow_error_code_help(
                 ticket,
@@ -1034,6 +1052,15 @@ def _maybe_side_question_message(engine, ticket_id: str, answer: str) -> Optiona
             if mid:
                 _persist_ticket_row(ticket_id, ticket)
                 return mid
+
+    if ticket is not None:
+        scope = evaluate_warranty_scope(
+            answer,
+            node_id=node_id,
+            issue_type=issue_type or None,
+        )
+        if scope.is_blocked:
+            return build_warranty_scope_refusal()
 
     return try_side_question_for_ticket(engine, ticket_id, answer)
 
@@ -1276,7 +1303,13 @@ def _serialize_ticket_state(
         if is_terminal:
             evidence_required = list(node.get("evidence_required", []))
             evidence_email = node.get("evidence_email") or "service@osakititan.com"
-        for opt in node.get("options", []):
+        if node_id == "root":
+            from warranty_scope import filter_warranty_menu_options  # noqa: WPS433
+
+            menu_options = filter_warranty_menu_options(node)
+        else:
+            menu_options = list(node.get("options") or [])
+        for opt in menu_options:
             options.append({
                 "answer_key": opt.get("answer_key", ""),
                 "label": opt.get("label", ""),
@@ -1513,6 +1546,26 @@ async def natural_start_warranty(
     if not message:
         raise HTTPException(status_code=422, detail="message must not be empty")
 
+    from warranty_scope import build_warranty_scope_refusal, evaluate_warranty_scope  # noqa: WPS433
+
+    scope = evaluate_warranty_scope(message)
+    if scope.is_blocked:
+        engine = _lazy_engine()
+        existing = engine.get_active_session_ticket(session_id)
+        if existing is None:
+            ticket_id, _root = engine.start_session(session_id, body.domain)
+            try:
+                engine.submit_answer(ticket_id, "warranty")
+            except ValueError:
+                pass
+        else:
+            ticket_id = str(existing.ticket_id)
+        return _build_side_question_response(
+            engine,
+            ticket_id,
+            build_warranty_scope_refusal(),
+        )
+
     from warranty_nlp import (  # noqa: WPS433
         build_clarifying_issue_type_message,
         interpret_issue_type,
@@ -1607,6 +1660,26 @@ async def smart_start_warranty(
     message = body.message.strip()
     if not message:
         raise HTTPException(status_code=422, detail="message must not be empty")
+
+    from warranty_scope import build_warranty_scope_refusal, evaluate_warranty_scope  # noqa: WPS433
+
+    scope = evaluate_warranty_scope(message)
+    if scope.is_blocked:
+        engine = _lazy_engine()
+        ticket = engine.get_active_session_ticket(session_id)
+        if ticket is None:
+            ticket_id, _root = engine.start_session(session_id, body.domain)
+            try:
+                engine.submit_answer(ticket_id, "warranty")
+            except ValueError:
+                pass
+        else:
+            ticket_id = str(ticket.ticket_id)
+        return _build_side_question_response(
+            engine,
+            ticket_id,
+            build_warranty_scope_refusal(),
+        )
 
     from warranty_intake import (  # noqa: WPS433
         apply_prefill_to_engine,

@@ -235,3 +235,15 @@ def test_smart_start_vague_message_stays_on_issue_menu(warranty_client, monkeypa
     assert payload["smart_start"]["applied_keys"] == ["warranty"]
     assert payload["ticket"]["current_node"]["node_id"] == "issue_type"
     assert "defect" not in payload["smart_start"]["applied_keys"]
+
+
+def test_smart_start_blocks_sales_pricing_question(warranty_client):
+    sid = str(uuid.uuid4())
+    payload = _post(
+        warranty_client,
+        f"/api/v1/warranty/session/{sid}/smart-start",
+        {"message": "How much is the Osaki Solo Flex?", "domain": DOMAIN},
+    )
+    assert payload.get("side_question") is True
+    assert "warranty support" in payload["assistant_message"].lower()
+    assert payload["ticket"]["current_node"]["node_id"] == "issue_type"
