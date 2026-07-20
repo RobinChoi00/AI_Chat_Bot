@@ -18,6 +18,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "app"))
 
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(ROOT / ".env", override=True)
+
 from shopify_product_sync import DEFAULT_CSV_PATH, sync_osakiusa_products  # noqa: E402
 
 
