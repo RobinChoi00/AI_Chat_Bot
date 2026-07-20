@@ -2325,7 +2325,7 @@ def update_faiss_index_background(payload: dict, shop_domain: Optional[str] = No
         handle = payload.get('handle', '')
         
         # 하드코딩 제거: 웹후크를 보낸 쇼피파이 스토어의 실제 도메인을 주입
-        base_domain = shop_domain if shop_domain else "titanchair.com"
+        base_domain = shop_domain if shop_domain else "osakiusa.com"
         product_url = f"https://{base_domain}/products/{handle}"
         checkout_url = f"https://{base_domain}/cart/{variant_id}:1" 
         

@@ -573,24 +573,41 @@ class MasterIngester:
             print(f"💾 [{domain_name}] DB 구축 완료! ({save_path})")
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Build FAISS indexes from raw data sources.")
+    parser.add_argument(
+        "--only",
+        choices=("osaki_products",),
+        default=None,
+        help="Rebuild a single domain only (Shopify CSV + spec join → osaki_products).",
+    )
+    args = parser.parse_args()
+
     os.makedirs(FAISS_DIR, exist_ok=True)
-    
     ingester = MasterIngester()
-    
-    # [CS/Error 뇌세포]
-    ingester.process_error_manuals()    # Auto-Check, fault_judgment
-    ingester.process_qa_reports()       # Warranty Daily Report - Q&A
-    ingester.process_freshdesk_tickets()# freshdesk_tickets.json
-    ingester.process_fonz_error_codes() # fonz_error_codes.json
-    
-    # [Policy/Web 뇌세포]
-    ingester.process_word_policies()    # Warranty.docx, Sales Policy.docx (glob으로 한 번에 2개 섭취)
-    ingester.process_web_data()         # web_crawled_data.json
-    ingester.process_curated_knowledge()# curated_knowledge.json (추천/FAQ/기능교육)
-    
-    # [Products/Specs 뇌세포]
-    ingester.process_shopify_data()     # cleaned_osaki_products.csv
-    ingester.process_specifications()   # products_export.csv + Specification_Massage Chair
-    
-    ingester.build_vector_dbs()
-    print("\n🎉 모든 파이프라인이 성공적으로 완료되었습니다! 7개의 원본 파일과 3개의 정제 파일이 모두 3개의 뇌로 흡수되었습니다.")
+
+    if args.only == "osaki_products":
+        print("🔁 Shopify-only rebuild: osaki_products")
+        ingester.process_shopify_data()
+        ingester.process_specifications()
+        ingester.build_vector_dbs()
+        print("\n✅ osaki_products index rebuild complete.")
+    else:
+        # [CS/Error 뇌세포]
+        ingester.process_error_manuals()    # Auto-Check, fault_judgment
+        ingester.process_qa_reports()       # Warranty Daily Report - Q&A
+        ingester.process_freshdesk_tickets()# freshdesk_tickets.json
+        ingester.process_fonz_error_codes() # fonz_error_codes.json
+
+        # [Policy/Web 뇌세포]
+        ingester.process_word_policies()    # Warranty.docx, Sales Policy.docx (glob으로 한 번에 2개 섭취)
+        ingester.process_web_data()         # web_crawled_data.json
+        ingester.process_curated_knowledge()# curated_knowledge.json (추천/FAQ/기능교육)
+
+        # [Products/Specs 뇌세포]
+        ingester.process_shopify_data()     # cleaned_osaki_products.csv
+        ingester.process_specifications()   # products_export.csv + Specification_Massage Chair
+
+        ingester.build_vector_dbs()
+        print("\n🎉 모든 파이프라인이 성공적으로 완료되었습니다! 7개의 원본 파일과 3개의 정제 파일이 모두 3개의 뇌로 흡수되었습니다.")
