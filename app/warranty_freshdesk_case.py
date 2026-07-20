@@ -402,15 +402,32 @@ def schedule_freshdesk_case_creation(
     ticket_id: str,
     *,
     allow_any_status: bool = False,
-) -> None:
-    """Fire-and-forget Freshdesk case creation (non-blocking HTTP handler)."""
+) -> Dict[str, Any]:
+    """
+    Create a Freshdesk case when a warranty ticket reaches admin review.
+
+    Runs synchronously by default so terminal API responses can include the
+    Freshdesk link. Set ``WARRANTY_FRESHDESK_ASYNC_CREATE=1`` for background.
+    """
     if not _freshdesk_enabled():
-        return
+        return {"created": False, "skipped": True, "reason": "freshdesk_disabled"}
 
-    def _run() -> None:
+    def _run() -> Dict[str, Any]:
         try:
-            maybe_create_freshdesk_case(ticket_id, allow_any_status=allow_any_status)
+            return maybe_create_freshdesk_case(
+                ticket_id,
+                allow_any_status=allow_any_status,
+            )
         except Exception as exc:
-            logger.warning("background Freshdesk create failed for %s: %s", ticket_id, exc)
+            logger.warning("Freshdesk create failed for %s: %s", ticket_id, exc)
+            return {"created": False, "error": str(exc)}
 
-    threading.Thread(target=_run, daemon=True).start()
+    async_flag = os.getenv("WARRANTY_FRESHDESK_ASYNC_CREATE", "0").strip().lower()
+    if async_flag in ("1", "true", "yes", "on"):
+        threading.Thread(
+            target=_run,
+            daemon=True,
+        ).start()
+        return {"created": False, "scheduled": True}
+
+    return _run()

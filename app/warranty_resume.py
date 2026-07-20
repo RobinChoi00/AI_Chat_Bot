@@ -203,17 +203,13 @@ def _resolve_resume_base_url(domain: str) -> str:
         return explicit
 
     d = (domain or "").lower()
-    if "titan" in d:
-        return "https://titanchair.com"
-    if "osakimassage" in d:
-        return "https://osakimassage.com"
-    if "osakititan" in d or "osaki-titan" in d:
-        return "https://osaki-titan.com"
     if d == "phone":
         return os.getenv("WARRANTY_PHONE_RESUME_BASE_URL", "https://titanchair.com").rstrip("/")
-    from warranty_defaults import DEFAULT_STOREFRONT_BASE_URL
 
-    return DEFAULT_STOREFRONT_BASE_URL
+    from store_config import get_storefront_base_url  # noqa: WPS433
+    from warranty_defaults import normalize_warranty_domain  # noqa: WPS433
+
+    return get_storefront_base_url(normalize_warranty_domain(domain))
 
 
 def build_warranty_resume_url(

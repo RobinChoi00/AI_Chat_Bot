@@ -36,3 +36,22 @@ def test_osakimassagechair_storefront_url():
 
 def test_resume_base_url_defaults_to_osakiusa():
     assert _resolve_resume_base_url("") == DEFAULT_STOREFRONT_BASE_URL
+
+
+def test_resume_base_url_per_storefront():
+    assert _resolve_resume_base_url("osakiusa.com") == "https://osakiusa.com"
+    assert _resolve_resume_base_url("titanchair.com") == "https://titanchair.com"
+    assert (
+        _resolve_resume_base_url("osakimassagechair.com")
+        == "https://osakimassagechair.com"
+    )
+    assert _resolve_resume_base_url("osaki.com") == DEFAULT_STOREFRONT_BASE_URL
+
+
+def test_build_warranty_resume_url_uses_store_domain(monkeypatch):
+    import warranty_resume as wr
+
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "a" * 40)
+    url = wr.build_warranty_resume_url("tid", "sid", "osakimassagechair.com")
+    assert url is not None
+    assert url.startswith("https://osakimassagechair.com/warranty?resume=")

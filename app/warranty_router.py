@@ -1225,7 +1225,15 @@ def _finalize_answer_response(
     ):
         from warranty_freshdesk_case import schedule_freshdesk_case_creation  # noqa: WPS433
 
-        schedule_freshdesk_case_creation(ticket_id)
+        freshdesk_result = schedule_freshdesk_case_creation(ticket_id)
+        if freshdesk_result.get("freshdesk_ticket_id"):
+            payload["freshdesk"] = {
+                "ticket_id": freshdesk_result.get("freshdesk_ticket_id"),
+                "url": freshdesk_result.get("freshdesk_url"),
+                "case_reference": freshdesk_result.get("case_reference"),
+            }
+        elif freshdesk_result.get("scheduled"):
+            payload["freshdesk_scheduled"] = True
 
     return payload
 
@@ -1315,6 +1323,8 @@ def _serialize_ticket_state(
             ),
             "admin_decision": str(ticket.admin_decision or "").strip() or None,
             "troubleshooting_outcome": troubleshooting_outcome,
+            "freshdesk_ticket_id": str(collected.get("freshdesk_ticket_id") or "").strip() or None,
+            "freshdesk_url": str(collected.get("freshdesk_url") or "").strip() or None,
             "current_node": {
                 "node_id":            node_id,
                 "node_type":          node_type,

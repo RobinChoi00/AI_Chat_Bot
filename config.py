@@ -193,7 +193,15 @@ SCOPE_CLASSIFIER_LLM = os.environ.get("SCOPE_CLASSIFIER_LLM", "1") == "1"
 # 6. CORS — restrict allowed origins in production
 # ==========================================
 # Comma-separated list, or "*" to allow all (dev only).
-CORS_ALLOWED_ORIGINS = os.environ.get(
-    "CORS_ALLOWED_ORIGINS",
-    "*",  # ⚠️ Tighten in production: https://titanchair.com,https://osakiusa.com,...
-).split(",")
+_DEFAULT_PRODUCTION_CORS = (
+    "https://www.osakiusa.com,https://osakiusa.com,"
+    "https://www.titanchair.com,https://titanchair.com,"
+    "https://www.osakimassagechair.com,https://osakimassagechair.com,"
+    "https://help.osakichair.com"
+)
+_cors_default = (
+    _DEFAULT_PRODUCTION_CORS
+    if os.environ.get("APP_ENV", "").strip().lower() == "production"
+    else "*"
+)
+CORS_ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", _cors_default).split(",")

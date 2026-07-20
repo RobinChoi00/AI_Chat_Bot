@@ -166,6 +166,30 @@ def test_maybe_create_freshdesk_case_phone_ivr_uses_caller_phone(monkeypatch):
     assert "Caller phone" in payload["description"]
 
 
+def test_schedule_freshdesk_case_creation_runs_sync_by_default(monkeypatch):
+    monkeypatch.setenv("WARRANTY_FRESHDESK_CREATE_CASE", "1")
+    monkeypatch.setenv("FRESHDESK_DOMAIN", "titanchair.freshdesk.com")
+    monkeypatch.setenv("FRESHDESK_API_KEY", "test-key")
+    monkeypatch.delenv("WARRANTY_FRESHDESK_ASYNC_CREATE", raising=False)
+
+    calls: list[str] = []
+
+    def _fake_maybe(ticket_id, **kwargs):
+        calls.append(ticket_id)
+        return {"created": True, "freshdesk_ticket_id": "99"}
+
+    monkeypatch.setattr(
+        "warranty_freshdesk_case.maybe_create_freshdesk_case",
+        _fake_maybe,
+    )
+
+    from warranty_freshdesk_case import schedule_freshdesk_case_creation  # noqa: W402
+
+    result = schedule_freshdesk_case_creation("tid-sync")
+    assert calls == ["tid-sync"]
+    assert result["freshdesk_ticket_id"] == "99"
+
+
 def test_maybe_sync_admin_decision_posts_private_note(monkeypatch):
     monkeypatch.setenv("WARRANTY_FRESHDESK_CREATE_CASE", "1")
     monkeypatch.setenv("FRESHDESK_DOMAIN", "titanchair.freshdesk.com")
