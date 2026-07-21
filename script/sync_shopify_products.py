@@ -81,6 +81,16 @@ def main() -> int:
         print(f"Removed handles ({len(result.removed_handles)}): {', '.join(result.removed_handles[:10])}")
         if len(result.removed_handles) > 10:
             print(f"  ... and {len(result.removed_handles) - 10} more")
+    if result.renamed_products:
+        print(f"Renamed by title ({len(result.renamed_products)}): "
+              f"{result.renamed_products[0]['old_handle']} -> {result.renamed_products[0]['new_handle']}"
+              + (f" (+{len(result.renamed_products) - 1} more)" if len(result.renamed_products) > 1 else ""))
+    if result.truly_added_handles:
+        print(f"New products ({len(result.truly_added_handles)}): {', '.join(result.truly_added_handles[:8])}")
+    if result.truly_removed_handles:
+        print(f"Removed products ({len(result.truly_removed_handles)}): {', '.join(result.truly_removed_handles[:8])}")
+    if result.unchanged_handles:
+        print(f"Unchanged handles: {result.unchanged_handles}")
 
     if not result.ok:
         return 1

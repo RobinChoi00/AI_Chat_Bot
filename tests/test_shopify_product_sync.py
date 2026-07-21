@@ -229,3 +229,24 @@ def test_sync_writes_backup_and_report(template_csv: Path, tmp_path: Path, monke
     assert report_files
     payload = json.loads(report_files[0].read_text(encoding="utf-8"))
     assert payload["handles"] == 1
+
+
+def test_classify_handle_renames_by_title():
+    previous = {
+        "osaki-solo-flex": "Osaki Solo Flex",
+        "old-only": "Discontinued Chair",
+    }
+    current = {
+        "osaki-solo-flex-4d": "Osaki Solo Flex",
+        "brand-new": "New Chair",
+    }
+    renamed, truly_added, truly_removed, unchanged = sync._classify_handle_changes(
+        previous=previous,
+        current=current,
+    )
+    assert len(renamed) == 1
+    assert renamed[0]["old_handle"] == "osaki-solo-flex"
+    assert renamed[0]["new_handle"] == "osaki-solo-flex-4d"
+    assert truly_added == ["brand-new"]
+    assert truly_removed == ["old-only"]
+    assert unchanged == 0

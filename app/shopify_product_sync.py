@@ -89,6 +89,10 @@ class SyncResult:
     variant_rows: int = 0
     added_handles: list[str] = field(default_factory=list)
     removed_handles: list[str] = field(default_factory=list)
+    renamed_products: list[dict[str, str]] = field(default_factory=list)
+    truly_added_handles: list[str] = field(default_factory=list)
+    truly_removed_handles: list[str] = field(default_factory=list)
+    unchanged_handles: int = 0
     csv_path: str = ""
     report_path: str = ""
     dry_run: bool = False
@@ -114,16 +118,74 @@ def _load_csv_headers(csv_path: Path) -> list[str]:
 
 
 def _existing_handles(csv_path: Path) -> set[str]:
+    return set(_existing_handle_titles(csv_path).keys())
+
+
+def _normalize_title(title: str) -> str:
+    s = (title or "").lower()
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    return " ".join(s.split())
+
+
+def _existing_handle_titles(csv_path: Path) -> dict[str, str]:
     if not csv_path.is_file():
-        return set()
-    handles: set[str] = set()
+        return {}
+    mapping: dict[str, str] = {}
     with csv_path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
             handle_value = (row.get("Handle") or "").strip()
-            if handle_value:
-                handles.add(handle_value)
-    return handles
+            title = (row.get("Title") or "").strip()
+            if handle_value and title:
+                mapping[handle_value] = title
+    return mapping
+
+
+def _classify_handle_changes(
+    *,
+    previous: dict[str, str],
+    current: dict[str, str],
+) -> tuple[list[dict[str, str]], list[str], list[str], int]:
+    """
+    Return renamed pairs, truly added handles, truly removed handles, unchanged count.
+    Renames are inferred when an removed handle's title matches a new handle's title.
+    """
+    prev_handles = set(previous)
+    new_handles = set(current)
+    added = sorted(new_handles - prev_handles)
+    removed = sorted(prev_handles - new_handles)
+    unchanged = len(prev_handles & new_handles)
+
+    new_by_title: dict[str, list[str]] = {}
+    for handle, title in current.items():
+        norm = _normalize_title(title)
+        if norm:
+            new_by_title.setdefault(norm, []).append(handle)
+
+    renamed: list[dict[str, str]] = []
+    renamed_old: set[str] = set()
+    renamed_new: set[str] = set()
+    for old_handle in removed:
+        title = previous.get(old_handle, "")
+        norm = _normalize_title(title)
+        if not norm:
+            continue
+        candidates = [h for h in new_by_title.get(norm, []) if h in added]
+        if len(candidates) == 1:
+            new_handle = candidates[0]
+            renamed.append(
+                {
+                    "title": title,
+                    "old_handle": old_handle,
+                    "new_handle": new_handle,
+                }
+            )
+            renamed_old.add(old_handle)
+            renamed_new.add(new_handle)
+
+    truly_added = sorted(set(added) - renamed_new)
+    truly_removed = sorted(set(removed) - renamed_old)
+    return renamed, truly_added, truly_removed, unchanged
 
 
 def _blank_row(headers: list[str]) -> dict[str, str]:
@@ -303,7 +365,8 @@ def sync_osakiusa_products(
 
     headers = _load_csv_headers(csv_path)
     metafield_columns = _parse_metafield_columns(headers)
-    previous_handles = _existing_handles(csv_path)
+    previous_catalog = _existing_handle_titles(csv_path)
+    previous_handles = set(previous_catalog)
 
     store = get_store_config(target_domain)
     shop_domain = store.get("shop_domain") or ""
@@ -327,11 +390,15 @@ def sync_osakiusa_products(
 
     rows: list[dict[str, str]] = []
     new_handles: set[str] = set()
+    new_catalog: dict[str, str] = {}
     for product in products:
         handle = str(product.get("handle") or "").strip()
         if not handle:
             continue
         new_handles.add(handle)
+        title = str(product.get("title") or "").strip()
+        if title:
+            new_catalog[handle] = title
         rows.extend(product_to_csv_rows(product, headers, metafield_columns))
 
     threshold = _min_handle_threshold(len(previous_handles), min_handles)
@@ -349,6 +416,10 @@ def sync_osakiusa_products(
 
     added = sorted(new_handles - previous_handles)
     removed = sorted(previous_handles - new_handles)
+    renamed, truly_added, truly_removed, unchanged = _classify_handle_changes(
+        previous=previous_catalog,
+        current=new_catalog,
+    )
 
     report_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -359,8 +430,12 @@ def sync_osakiusa_products(
         "shop_domain": shop_domain,
         "handles": len(new_handles),
         "variant_rows": len(rows),
+        "unchanged_handles": unchanged,
         "added_handles": added,
         "removed_handles": removed,
+        "renamed_products": renamed,
+        "truly_added_handles": truly_added,
+        "truly_removed_handles": truly_removed,
         "dry_run": dry_run,
     }
     report_path.write_text(json.dumps(report_payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -373,6 +448,10 @@ def sync_osakiusa_products(
             variant_rows=len(rows),
             added_handles=added,
             removed_handles=removed,
+            renamed_products=renamed,
+            truly_added_handles=truly_added,
+            truly_removed_handles=truly_removed,
+            unchanged_handles=unchanged,
             csv_path=str(csv_path),
             report_path=str(report_path),
             dry_run=True,
@@ -396,6 +475,10 @@ def sync_osakiusa_products(
         variant_rows=len(rows),
         added_handles=added,
         removed_handles=removed,
+        renamed_products=renamed,
+        truly_added_handles=truly_added,
+        truly_removed_handles=truly_removed,
+        unchanged_handles=unchanged,
         csv_path=str(csv_path),
         report_path=str(report_path),
     )
