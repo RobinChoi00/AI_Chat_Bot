@@ -16,10 +16,13 @@ logger = logging.getLogger(__name__)
 
 
 def ops_alert_recipients() -> list[str]:
+    from config import WARRANTY_TEAM_EMAIL  # noqa: WPS433
+
     raw = os.environ.get("OPS_ALERT_EMAIL", "").strip()
     if raw:
         return [part.strip() for part in raw.split(",") if part.strip()]
-    fallback = os.environ.get("WARRANTY_TEAM_EMAIL", "").strip()
+    env_fallback = os.environ.get("WARRANTY_TEAM_EMAIL", "").strip()
+    fallback = env_fallback or (WARRANTY_TEAM_EMAIL or "").strip()
     return [fallback] if fallback else []
 
 
