@@ -50,7 +50,7 @@ export interface AdminWarrantyTicket {
   issue_type: string | null;
   defect_type: string | null;
   model_name: string | null;
-  collected_data: Record<string, string>;
+  collected_data: Record<string, unknown>;
   customer_email: string | null;
   channel?: string | null;
   caller_phone?: string | null;

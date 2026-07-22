@@ -42,6 +42,39 @@ function formatDate(iso: string | null): string {
   }
 }
 
+function formatCollectedValue(value: unknown): ReactNode {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "—";
+    return (
+      <ul className="list-disc space-y-1 pl-4 text-xs">
+        {value.map((item, index) => (
+          <li key={index}>{formatCollectedValue(item)}</li>
+        ))}
+      </ul>
+    );
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const entries = Object.entries(record);
+    if (entries.length === 0) return "—";
+    return (
+      <dl className="space-y-1 text-xs">
+        {entries.map(([key, nested]) => (
+          <div key={key}>
+            <dt className="font-medium text-gray-500">{key.replace(/_/g, " ")}</dt>
+            <dd className="text-gray-800">{formatCollectedValue(nested)}</dd>
+          </div>
+        ))}
+      </dl>
+    );
+  }
+  return String(value);
+}
+
 export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
   const collectedEntries = Object.entries(ticket.collected_data ?? {}).filter(
     ([key]) =>
@@ -59,11 +92,18 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
         "fonz_category_aligned",
         "error_code_gate_completed",
         "pending_terminal",
+        "troubleshooting_history",
       ].includes(key)
   );
   const fonz = ticket.fonz_diagnostics;
   const customerEmail = ticket.customer_email;
   const isPhone = (ticket.channel || "").toLowerCase() === "phone";
+  const troubleshootingHistory = ticket.collected_data?.troubleshooting_history;
+  const hasTroubleshootingHistory =
+    troubleshootingHistory !== undefined &&
+    troubleshootingHistory !== null &&
+    troubleshootingHistory !== "" &&
+    !(Array.isArray(troubleshootingHistory) && troubleshootingHistory.length === 0);
 
   return (
     <div className="space-y-6">
@@ -254,16 +294,26 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
       )}
 
       {/* ── Collected data ───────────────────────────────────────── */}
-      {collectedEntries.length > 0 && (
+      {(collectedEntries.length > 0 || hasTroubleshootingHistory) && (
         <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-gray-500">
             Collected Data
           </h2>
-          <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {collectedEntries.map(([k, v]) => (
-              <Field key={k} label={k.replace(/_/g, " ")} value={v} />
-            ))}
-          </dl>
+          {hasTroubleshootingHistory && (
+            <div className="mb-4">
+              <Field
+                label="Troubleshooting history"
+                value={formatCollectedValue(troubleshootingHistory)}
+              />
+            </div>
+          )}
+          {collectedEntries.length > 0 && (
+            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {collectedEntries.map(([k, v]) => (
+                <Field key={k} label={k.replace(/_/g, " ")} value={formatCollectedValue(v)} />
+              ))}
+            </dl>
+          )}
         </section>
       )}
 
