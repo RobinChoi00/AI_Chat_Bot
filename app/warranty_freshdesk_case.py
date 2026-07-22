@@ -107,6 +107,13 @@ def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
     return "\n".join(lines)
 
 
+def _default_freshdesk_status_id() -> int:
+    raw = os.getenv("FRESHDESK_WARRANTY_STATUS_ID", "2").strip()
+    if raw.isdigit():
+        return int(raw)
+    return 2
+
+
 def _apply_freshdesk_routing(payload: Dict[str, Any]) -> None:
     group_id = os.getenv("FRESHDESK_WARRANTY_GROUP_ID", "").strip()
     if group_id.isdigit():
@@ -203,7 +210,7 @@ def maybe_create_freshdesk_case(
         "subject": subject[:255],
         "description": _build_case_description(ticket, case_ref=case_ref, turns=turns),
         "priority": 2,
-        "status": 2,
+        "status": _default_freshdesk_status_id(),
         "tags": ["warranty-bot", case_ref],
         "source": 2,
     }

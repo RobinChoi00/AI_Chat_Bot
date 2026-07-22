@@ -2144,6 +2144,39 @@ async def admin_freshdesk_status(
     return get_freshdesk_dashboard(probe_connection=probe)
 
 
+@router.get("/admin/warranty/freshdesk-field-catalog", tags=["admin-warranty"])
+async def admin_freshdesk_field_catalog(
+    x_admin_key: Optional[str] = Header(default=None),
+    refresh: bool = False,
+):
+    """
+    Official Freshdesk status + custom dropdown ID maps (for Ticket Queue labeling).
+
+    Set ``refresh=1`` to pull live from ``/api/v2/admin/ticket_fields`` and update
+    ``data/freshdesk_field_choices.json``.
+    """
+    _require_admin(x_admin_key)
+
+    try:
+        from freshdesk_field_catalog import get_field_catalog  # noqa: WPS433
+    except ImportError:
+        from app.freshdesk_field_catalog import get_field_catalog  # type: ignore  # noqa: WPS433
+
+    try:
+        catalog = get_field_catalog(refresh=refresh)
+    except EnvironmentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if not catalog.get("lookup"):
+        raise HTTPException(
+            status_code=503,
+            detail="Freshdesk field catalog is empty. Set FRESHDESK credentials and refresh=1.",
+        )
+    return catalog
+
+
 @router.post("/admin/warranty/{ticket_id}/freshdesk-link", tags=["admin-warranty"])
 async def admin_freshdesk_link(
     ticket_id: str,
