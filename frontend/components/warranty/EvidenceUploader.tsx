@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useMemo, useRef, useState, type ChangeEvent } from "react";
 import { submitWarrantyContact, uploadEvidence } from "@/lib/api";
 import { WARRANTY_CONTACT_BLURB } from "@/lib/warrantyContact";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
@@ -56,24 +56,22 @@ export default function EvidenceUploader({
   backDisabled = false,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [customerEmail, setCustomerEmail] = useState(initialCustomerEmail);
+  const knownEmail = isValidEmail(initialCustomerEmail)
+    ? initialCustomerEmail.trim()
+    : "";
   const [editingEmail, setEditingEmail] = useState(false);
+  const [customerEmail, setCustomerEmail] = useState(
+    () => knownEmail || initialCustomerEmail
+  );
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   /** Default N/A — most customers submit email only without media. */
   const [evidenceNa, setEvidenceNa] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<"success" | "error" | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
 
-  useEffect(() => {
-    if (initialCustomerEmail.trim()) {
-      setCustomerEmail(initialCustomerEmail);
-      setEditingEmail(false);
-    }
-  }, [initialCustomerEmail]);
-
-  const knownEmail = isValidEmail(initialCustomerEmail) ? initialCustomerEmail.trim() : "";
   const hasKnownEmail = Boolean(knownEmail) && !editingEmail;
+  const activeEmail = hasKnownEmail ? knownEmail : customerEmail.trim();
 
   const evidenceTypeOptions = useMemo(() => {
     if (evidenceRequired.length === 0) {
@@ -127,13 +125,12 @@ export default function EvidenceUploader({
   }
 
   function validateEmail(): string | null {
-    const email = customerEmail.trim();
-    if (!email || !isValidEmail(email)) {
+    if (!activeEmail || !isValidEmail(activeEmail)) {
       setResult("error");
       setErrorMsg("Please enter a valid email address.");
       return null;
     }
-    return email;
+    return activeEmail;
   }
 
   async function handleSubmit() {
@@ -171,7 +168,7 @@ export default function EvidenceUploader({
     }
   }
 
-  const emailValid = isValidEmail(customerEmail);
+  const emailValid = isValidEmail(activeEmail);
   const needsFile = !evidenceNa && !selectedFile;
   const submitDisabled = submitting || !emailValid || needsFile;
 
