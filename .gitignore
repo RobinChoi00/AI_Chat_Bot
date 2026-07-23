@@ -28,6 +28,7 @@ data/*
 !data/answer_quality_eval_cases.json
 !data/fonz_error_codes.json
 !data/fonz_model_diagnostics.json
+!data/install_videos.json
 faiss_index/
 *.jsonl
 *.faiss

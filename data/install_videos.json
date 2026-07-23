@@ -1,0 +1,136 @@
+{
+  "version": "1.2",
+  "updated": "2026-06-01",
+  "description": "Model → installation YouTube URLs (watch links). Keys match product_catalog normalization.",
+  "default": {
+    "url": "https://www.otasupport.com",
+    "label": "Osaki & Titan support center (installation guides)"
+  },
+  "series": {},
+  "models": {
+    "4d-panorama": {
+      "url": "https://youtu.be/kjgBL9EilYo",
+      "label": "4D Panorama installation"
+    },
+    "ador-3d-allure": {
+      "url": "https://youtu.be/s0sXPRBc_z8",
+      "label": "Ador 3D Allure installation"
+    },
+    "ai-vivo-duo-4d-2d": {
+      "url": "https://youtu.be/iEjUUVLyuUM",
+      "label": "Vivo 4D+2D installation"
+    },
+    "amamedic-hilux-4d": {
+      "url": "https://youtu.be/wqEJx3-5LBg",
+      "label": "AmaMedic Hilux 4D installation"
+    },
+    "amamedic-q7": {
+      "url": "https://youtu.be/2H6tmJd4y-0",
+      "label": "AmaMedic Q7 installation"
+    },
+    "apex-duo": {
+      "url": "https://youtu.be/VSR4CMWs0lA",
+      "label": "AI Apex 5D+4D Duo installation"
+    },
+    "atlas-xl": {
+      "url": "https://youtu.be/ANlf71BBguo",
+      "label": "Atlas XL installation"
+    },
+    "flagship-duo": {
+      "url": "https://youtu.be/0zsls9zgAy0",
+      "label": "Flagship Duo installation",
+      "videos": [
+        {
+          "url": "https://youtu.be/0zsls9zgAy0",
+          "label": "Armrest disassembly"
+        },
+        {
+          "url": "https://youtu.be/JMx-wNR-oDs",
+          "label": "Wireless charging PCB replacement"
+        }
+      ]
+    },
+    "grand-duo-4d-4d": {
+      "url": "https://youtu.be/jzp3OSwdYWc",
+      "label": "Grand Duo 4D+4D installation"
+    },
+    "maestro-le": {
+      "url": "https://youtu.be/SUqGxZbvAO4",
+      "label": "Maestro LE 2.0 installation"
+    },
+    "osaki-3d-dreamer-v2": {
+      "url": "https://youtu.be/7BmcooshWLs",
+      "label": "Dreamer V2 installation"
+    },
+    "osaki-3d-hamilton-le": {
+      "url": "https://youtu.be/G6J_iLVe9_4",
+      "label": "Hamilton LE installation"
+    },
+    "osaki-4d-maestro-le-2-0": {
+      "url": "https://youtu.be/SUqGxZbvAO4",
+      "label": "Maestro LE 2.0 installation"
+    },
+    "osaki-ai-apex-duo-5d-4d-free-2-yrs-warranty": {
+      "url": "https://youtu.be/VSR4CMWs0lA",
+      "label": "AI Apex 5D+4D Duo installation"
+    },
+    "osaki-ai-vivo-4d-2d": {
+      "url": "https://youtu.be/iEjUUVLyuUM",
+      "label": "Vivo 4D+2D installation"
+    },
+    "osaki-highpointe-4d": {
+      "url": "https://youtu.be/DqBwOd4DuMo",
+      "label": "Highpointe 4D installation"
+    },
+    "osaki-hypnos-4d-pro-ai": {
+      "url": "https://youtu.be/_LEf-eo3HDw",
+      "label": "Hypnos 4D Pro AI installation"
+    },
+    "osaki-platinum-escape-duo-4d": {
+      "url": "https://youtu.be/amqSdBFdDAg",
+      "label": "Escape Duo 4D installation",
+      "videos": [
+        {
+          "url": "https://youtu.be/amqSdBFdDAg",
+          "label": "Footrest & remote"
+        },
+        {
+          "url": "https://youtu.be/87cYF1dvv_E",
+          "label": "Side panel"
+        }
+      ]
+    },
+    "osaki-platinum-horizon-4d-pro": {
+      "url": "https://youtu.be/0vnwr1wx1cI",
+      "label": "Horizon 4D Pro installation"
+    },
+    "osaki-platinum-sapphire-4d": {
+      "url": "https://youtu.be/AMhVWjcXiIQ",
+      "label": "Sapphire 4D+ installation"
+    },
+    "osaki-somnus-4d-duoflex-ai": {
+      "url": "https://youtu.be/tWRcblridGU",
+      "label": "Somnus 4D DuoFlex AI installation"
+    },
+    "pinnacle-5d-duoflex-ai": {
+      "url": "https://youtu.be/UtiWbrLrNHo",
+      "label": "Pinnacle 5D DuoFlex AI installation"
+    },
+    "pinnacle-duo-flex": {
+      "url": "https://youtu.be/UtiWbrLrNHo",
+      "label": "Pinnacle 5D DuoFlex AI installation"
+    },
+    "titan-3d-quantum": {
+      "url": "https://youtu.be/AUbHOnm4i_k",
+      "label": "3D Quantum installation"
+    },
+    "titan-pro-vigor-4d": {
+      "url": "https://youtu.be/4aFBi-pvKUc",
+      "label": "Pro-Vigor 4D installation"
+    },
+    "vivo-4d-2d": {
+      "url": "https://youtu.be/iEjUUVLyuUM",
+      "label": "Vivo 4D+2D installation"
+    }
+  }
+}
