@@ -120,7 +120,17 @@ jobs:
         with:
           image-ref: ai-chat-frontend:${{ github.sha }}
           format: table
+          output: trivy-frontend.txt
           exit-code: "1"
           ignore-unfixed: true
           severity: CRITICAL,HIGH
           trivyignores: .trivyignore
+      - name: Publish Trivy frontend report on failure
+        if: failure()
+        run: |
+          {
+            echo "### Trivy frontend scan failed"
+            echo '```text'
+            tail -120 trivy-frontend.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
