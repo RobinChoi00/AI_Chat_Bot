@@ -5,6 +5,7 @@ Sources (merged at load time):
   - raw_data/Warranty Daily Report - Q&A.csv
   - data/freshdesk_tickets.json  (Freshdesk API ETL output)
   - raw_data/Auto-Check.csv      (error-code troubleshooting steps)
+  - raw_data/fault_judgment.csv  (massage-chair fault judgment manual)
   - data/fonz_error_codes.json   (Fonz All-in-one Warranty List)
 
 Used by the warranty workflow to suggest customer-safe steps BEFORE asking for email.
@@ -25,6 +26,7 @@ _QA_PATH = _PROJECT_ROOT / "raw_data" / "Warranty Daily Report - Q&A.csv"
 _FRESHDESK_PATH = _PROJECT_ROOT / "data" / "freshdesk_tickets.json"
 _FRESHDESK_KB_PATH = _PROJECT_ROOT / "data" / "freshdesk_solutions.json"
 _AUTOCHECK_PATH = _PROJECT_ROOT / "raw_data" / "Auto-Check.csv"
+_FAULT_JUDGMENT_PATH = _PROJECT_ROOT / "raw_data" / "fault_judgment.csv"
 _FONZ_ERROR_PATH = _PROJECT_ROOT / "data" / "fonz_error_codes.json"
 
 _DEFECT_CATEGORY_MAP: dict[str, str] = {
@@ -170,16 +172,28 @@ _UNHELPFUL_MATCH_TITLE_MARKERS = (
 )
 
 _MAX_CUSTOMER_STEP_LEN = 220
+_MIN_CUSTOMER_STEP_LEN = 10
 _PHONE_RE = re.compile(r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b")
 _ZIP_RE = re.compile(r"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
+# Manual CSVs often use "1. check … 2. replace …" (sometimes without a space).
+_NUMBERED_ITEM_RE = re.compile(r"(?:(?<=^)|(?<=\s))(\d{1,2})[\.\)\:]\s*")
+_CONNECTION_HINT_RE = re.compile(
+    r"\b(connector|wire|wiring|plug|cable|poor[- ]contact|loose|disconnect|"
+    r"hose|tracheal|socket)\b",
+    re.I,
+)
+_BUTTON_HINT_RE = re.compile(r"\b(button|stuck|side panel|keys?)\b", re.I)
+_SENSOR_HINT_RE = re.compile(r"\b(sensor|counting|encoder|limit|hall)\b", re.I)
 
 _CUSTOMER_ACTION_WORDS = (
     "check",
     "verify",
     "ensure",
     "reconnect",
+    "reseat",
     "unplug",
+    "plug",
     "toggle",
     "test",
     "remove",
@@ -190,7 +204,15 @@ _CUSTOMER_ACTION_WORDS = (
     "make sure",
     "power cycle",
     "press and hold",
+    "press",
+    "hold",
     "disconnect",
+    "secure",
+    "reset",
+    "clean",
+    "tighten",
+    "adjust",
+    "detect",
 )
 
 
@@ -288,7 +310,7 @@ def _is_internal(text: str) -> bool:
 
 def _is_customer_safe_step(text: str) -> bool:
     chunk = (text or "").strip()
-    if len(chunk) < 12 or len(chunk) > _MAX_CUSTOMER_STEP_LEN:
+    if len(chunk) < _MIN_CUSTOMER_STEP_LEN or len(chunk) > _MAX_CUSTOMER_STEP_LEN:
         return False
     if _is_internal(chunk):
         return False
@@ -337,23 +359,104 @@ def _is_usable_freshdesk_answer(answer: str) -> bool:
     return True
 
 
+def _normalize_manual_text(text: str) -> str:
+    return re.sub(r"[ \t]+", " ", (text or "").replace("\xa0", " ").replace("\u3000", " ")).strip()
+
+
+def _split_step_chunks(blob: str) -> list[str]:
+    """Split troubleshooting text into candidate step chunks.
+
+    Manual CSVs often pack numbered steps on one line
+    (``1.check … 2.replace …``) without newlines.
+    """
+    text = _normalize_manual_text(blob)
+    if not text:
+        return []
+
+    matches = list(_NUMBERED_ITEM_RE.finditer(text))
+    if len(matches) >= 2 or (len(matches) == 1 and matches[0].start() <= 2):
+        chunks: list[str] = []
+        for i, match in enumerate(matches):
+            start = match.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+            chunk = text[start:end].strip(" \n\t;")
+            if chunk:
+                chunks.append(chunk)
+        if chunks:
+            return chunks
+
+    chunks = []
+    for chunk in re.split(r"[\n;]+", text):
+        chunk = chunk.strip()
+        chunk = re.sub(r"^\d+[\).\]]\s*", "", chunk)
+        if chunk:
+            # Keep period-separated clauses only when they look like actions.
+            if ". " in chunk and any(w in chunk.lower() for w in _CUSTOMER_ACTION_WORDS):
+                for piece in re.split(r"(?<=[a-z0-9\)])\.\s+", chunk):
+                    piece = piece.strip()
+                    if piece:
+                        chunks.append(piece)
+            else:
+                chunks.append(chunk)
+    return chunks
+
+
+def _format_step(chunk: str) -> str:
+    chunk = chunk.strip()
+    if not chunk:
+        return chunk
+    return chunk[0].upper() + chunk[1:]
+
+
 def _extract_customer_steps(*texts: str) -> tuple[str, ...]:
     steps: list[str] = []
     seen: set[str] = set()
     for blob in texts:
         if not blob:
             continue
-        for chunk in re.split(r"[\n.;]+", blob):
-            chunk = chunk.strip()
-            chunk = re.sub(r"^\d+[\).\]]\s*", "", chunk)
+        for chunk in _split_step_chunks(blob):
             if not _is_customer_safe_step(chunk):
                 continue
             key = _normalize(chunk)
             if key in seen:
                 continue
             seen.add(key)
-            steps.append(chunk[0].upper() + chunk[1:] if chunk else chunk)
+            steps.append(_format_step(chunk))
     return tuple(steps[:4])
+
+
+def _fallback_manual_steps(*texts: str) -> tuple[str, ...]:
+    """Customer-safe DIY when a tech manual only lists part replacements."""
+    blob = " ".join(_normalize_manual_text(t) for t in texts if t)
+    if not blob:
+        return ()
+    fallbacks: list[str] = []
+    if _CONNECTION_HINT_RE.search(blob):
+        fallbacks.append(
+            "Check that all visible connectors and cables are firmly seated."
+        )
+        fallbacks.append("Power cycle the chair, then test the same function again.")
+    elif _BUTTON_HINT_RE.search(blob):
+        fallbacks.append(
+            "Check whether any side-panel or remote buttons are stuck down."
+        )
+        fallbacks.append("Power cycle the chair, then retry the same button once.")
+    elif _SENSOR_HINT_RE.search(blob):
+        fallbacks.append(
+            "Power cycle the chair and retry the function once to confirm the symptom."
+        )
+    else:
+        fallbacks.append(
+            "Power cycle the chair once, then note exactly when the issue repeats."
+        )
+    return tuple(fallbacks[:3])
+
+
+def _customer_steps_from_manual(*texts: str) -> tuple[str, ...]:
+    steps = _extract_customer_steps(*texts)
+    if steps:
+        return steps
+    return _fallback_manual_steps(*texts)
 
 
 def _load_qa_entries() -> list[KnowledgeEntry]:
@@ -484,29 +587,74 @@ def _load_autocheck_entries() -> list[KnowledgeEntry]:
         return []
 
     entries: list[KnowledgeEntry] = []
-    with _AUTOCHECK_PATH.open(newline="", encoding="utf-8") as handle:
+    with _AUTOCHECK_PATH.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.reader(handle)
         next(reader, None)
         next(reader, None)
         for row in reader:
             if len(row) < 4:
                 continue
-            code = (row[0] or "").strip()
-            phenomenon = (row[1] or "").strip()
-            description = (row[2] or "").strip()
-            troubleshooting = (row[3] or "").strip()
+            code = _normalize_manual_text(row[0] or "")
+            phenomenon = _normalize_manual_text(row[1] or "")
+            description = _normalize_manual_text(row[2] or "")
+            troubleshooting = _normalize_manual_text(row[3] or "")
             if not code or code.lower() in {"code no.", "nan"}:
                 continue
-            steps = _extract_customer_steps(troubleshooting, description)
-            if not steps:
+            if not phenomenon and not troubleshooting and not description:
                 continue
-            blob = f"{phenomenon} {description}"
+            steps = _customer_steps_from_manual(
+                troubleshooting, description, phenomenon
+            )
+            blob = f"{phenomenon} {description} error {code}"
             entries.append(
                 KnowledgeEntry(
                     source="auto_check",
                     category=_infer_category(blob),
                     title=phenomenon or f"Error {code}",
-                    diagnostic=description[:300],
+                    diagnostic=(description or phenomenon)[:300],
+                    customer_steps=steps,
+                )
+            )
+    return entries
+
+
+def _load_fault_judgment_entries() -> list[KnowledgeEntry]:
+    """Load Massage chair fault judgment manual into customer-safe knowledge."""
+    if not _FAULT_JUDGMENT_PATH.is_file():
+        return []
+
+    entries: list[KnowledgeEntry] = []
+    with _FAULT_JUDGMENT_PATH.open(newline="", encoding="utf-8-sig") as handle:
+        reader = csv.reader(handle)
+        # Skip title / status preamble rows (same offset as master_ingester).
+        for _ in range(5):
+            next(reader, None)
+        header = next(reader, None)
+        if not header:
+            return []
+
+        for row in reader:
+            if len(row) < 4:
+                continue
+            code = _normalize_manual_text(row[0] or "")
+            # Section labels like "Lower mechanism alarm number"
+            if not code or not code.isdigit():
+                continue
+            phenomenon = _normalize_manual_text(row[1] or "")
+            description = _normalize_manual_text(row[2] or "")
+            troubleshooting = _normalize_manual_text(row[3] or "")
+            if not phenomenon and not troubleshooting:
+                continue
+            steps = _customer_steps_from_manual(
+                troubleshooting, description, phenomenon
+            )
+            blob = f"{phenomenon} {description} fault {code}"
+            entries.append(
+                KnowledgeEntry(
+                    source="fault_judgment",
+                    category=_infer_category(blob),
+                    title=phenomenon or f"Fault {code}",
+                    diagnostic=(description or phenomenon)[:300],
                     customer_steps=steps,
                 )
             )
@@ -584,8 +732,10 @@ def _load_fonz_error_entries() -> list[KnowledgeEntry]:
         steps = _extract_customer_steps(troubleshooting, meaning)
         if not steps and troubleshooting:
             trimmed = troubleshooting.strip()
-            if len(trimmed) >= 12 and not _is_internal(trimmed):
+            if len(trimmed) >= _MIN_CUSTOMER_STEP_LEN and not _is_internal(trimmed):
                 steps = (trimmed[:_MAX_CUSTOMER_STEP_LEN],)
+        if not steps:
+            steps = _fallback_manual_steps(troubleshooting, meaning)
         blob = f"{meaning} {troubleshooting} error {code}"
         entries.append(
             KnowledgeEntry(
@@ -607,6 +757,7 @@ def load_knowledge_entries() -> tuple[KnowledgeEntry, ...]:
     combined.extend(_load_freshdesk_entries())
     combined.extend(_load_freshdesk_kb_entries())
     combined.extend(_load_autocheck_entries())
+    combined.extend(_load_fault_judgment_entries())
     return tuple(combined)
 
 
@@ -646,6 +797,8 @@ def _score_entry(
     if entry.source == "qa_csv":
         score += 1.5
     elif entry.source == "auto_check":
+        score += 1.0
+    elif entry.source == "fault_judgment":
         score += 1.0
     elif entry.source == "fonz_error_code":
         score += 2.5

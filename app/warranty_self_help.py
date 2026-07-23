@@ -1,7 +1,7 @@
 """
 Customer-safe diagnosis and self-help for warranty workflow terminals.
 
-Pulls from warranty_knowledge (Q&A CSV + Freshdesk tickets + Auto-Check).
+Pulls from warranty_knowledge (Q&A CSV + Freshdesk + Auto-Check + fault judgment + Fonz).
 """
 
 from __future__ import annotations

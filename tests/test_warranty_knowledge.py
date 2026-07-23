@@ -14,6 +14,45 @@ def test_loads_qa_and_autocheck_entries():
     assert len(entries) > 10
     sources = {e.source for e in entries}
     assert "qa_csv" in sources
+    assert "auto_check" in sources
+    assert "fault_judgment" in sources
+
+
+def test_autocheck_loads_all_numeric_codes():
+    wk.load_knowledge_entries.cache_clear()
+    entries = wk._load_autocheck_entries()
+    assert len(entries) >= 22
+    assert all(e.customer_steps for e in entries)
+
+
+def test_fault_judgment_loads_customer_safe_entries():
+    wk.load_knowledge_entries.cache_clear()
+    entries = wk._load_fault_judgment_entries()
+    assert len(entries) >= 40
+    assert all(e.customer_steps for e in entries)
+    # Prefer real check steps when the manual includes them.
+    power = next(e for e in entries if "POWER button" in e.title)
+    assert any("check" in step.lower() for step in power.customer_steps)
+    assert all("replace the mechanism" not in step.lower() for step in power.customer_steps)
+
+
+def test_extract_customer_steps_splits_numbered_manual_line():
+    steps = wk._extract_customer_steps(
+        "1.check the connector of backrest wire 2.change the backrest wire 3.replace the mechanism"
+    )
+    assert steps
+    assert any("connector" in s.lower() for s in steps)
+    assert all("replace the mechanism" not in s.lower() for s in steps)
+
+
+def test_fallback_manual_steps_for_replace_only_rows():
+    steps = wk._customer_steps_from_manual(
+        "1.replace remote control wire 2.replace remote control",
+        "remote control wire is broken",
+    )
+    assert steps
+    assert any("connector" in s.lower() or "cable" in s.lower() for s in steps)
+    assert all("replace remote" not in s.lower() for s in steps)
 
 
 def test_search_power_path(tmp_path, monkeypatch):
