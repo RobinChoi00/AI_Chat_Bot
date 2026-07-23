@@ -209,13 +209,63 @@ def format_repair_help(entry: dict[str, Any]) -> str:
 
 
 def entry_workflow_category(entry: dict[str, Any]) -> str:
-    cat = str(entry.get("workflow_category") or "").strip()
-    if cat:
-        return cat
-    return infer_workflow_category(
+    """Prefer freshly inferred category so keyword updates take effect.
+
+    Stored ``workflow_category`` values can lag (e.g. ``general`` / wrong
+    ``power``) after Fonz ingest; re-score meaning+troubleshooting first.
+    """
+    inferred = infer_workflow_category(
         str(entry.get("meaning") or ""),
         str(entry.get("troubleshooting") or ""),
     )
+    if inferred and inferred != "general":
+        return inferred
+    cat = str(entry.get("workflow_category") or "").strip().lower()
+    if cat and cat not in {"general", "misc", "unknown", "n/a"}:
+        return cat
+    return inferred or "general"
+
+
+def knowledge_category_to_defect_key(
+    category: str,
+    *,
+    meaning: str = "",
+    troubleshooting: str = "",
+) -> Optional[str]:
+    """Map Fonz/knowledge category → flowchart ``defect_problem_type`` answer_key."""
+    cat = str(category or "").strip().lower()
+    blob = f"{cat} {meaning} {troubleshooting}".lower()
+    # Legrest / calf extension is footrest in the customer flowchart, even when
+    # older Fonz rows were tagged mech/power.
+    if any(
+        token in blob
+        for token in (
+            "footrest",
+            "calf",
+            "calves",
+            "leg rest",
+            "legrest",
+            "leg-rest",
+            "telescop",
+            "extend actuator",
+            "legrest extend",
+            "calf extension",
+        )
+    ):
+        return "footrest"
+    mapping = {
+        "power": "power",
+        "remote": "remote",
+        "air": "air",
+        "footrest": "footrest",
+        "heat": "heat",
+        "voice": "voice",
+        "mech": "rolling",
+        "rolling": "rolling",
+        "recline": "recline",
+        "cosmetic": "cosmetic",
+    }
+    return mapping.get(cat)
 
 
 def code_aligns_with_defect(entry: dict[str, Any], defect_type: str) -> bool:

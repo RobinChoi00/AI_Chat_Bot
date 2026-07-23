@@ -29,11 +29,61 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 _MAX_FREE_TEXT_LEN = 1000
+
+_DEFECT_TYPE_KEYS = frozenset(
+    {
+        "air",
+        "cosmetic",
+        "remote",
+        "rolling",
+        "power",
+        "recline",
+        "footrest",
+        "heat",
+        "voice",
+    }
+)
+
+_ERROR_CODE_PHRASE_RE = re.compile(
+    r"\b(?:error\s*)?code\s*(?:is|:|#|-)?\s*"
+    r"(?:[A-Za-z]{0,3}\s*\d+(?:\.\d+)?|[A-Za-z]{1,4})\b",
+    re.I,
+)
+_FILLER_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "on",
+        "my",
+        "is",
+        "error",
+        "code",
+        "showing",
+        "shows",
+        "display",
+        "screen",
+        "chair",
+        "model",
+        "osaki",
+        "titan",
+        "please",
+        "help",
+        "with",
+        "have",
+        "getting",
+        "got",
+        "see",
+        "sees",
+        "says",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -140,9 +190,16 @@ _SYSTEM_PROMPT = (
     "description (e.g. \"Maestro\", \"OS-4000T\"), return "
     'answer_keys: ["warranty"], set model_name, confidence: high, and stop '
     "— do NOT pick defect/air/power or any symptom branch.\n"
-    "6. Each answer_key belongs to one node — keys are not interchangeable "
+    "6. If the customer mentions an error/code (e.g. \"hiro error code 68\", "
+    "\"code C6\") WITHOUT also describing a clear symptom (won't turn on, "
+    "footrest stuck, air not inflating, etc.), return only "
+    'answer_keys: ["warranty"] (optionally with model_name). Do NOT invent '
+    "power/air/remote/footrest/rolling/recline/heat/voice from an error "
+    "code alone. Never write summaries like \"indicating a power-related "
+    "defect\" unless the customer explicitly described that symptom.\n"
+    "7. Each answer_key belongs to one node — keys are not interchangeable "
     "between nodes. Pick at most one key per node.\n"
-    "7. Return JSON only, no prose, in the schema:\n"
+    "8. Return JSON only, no prose, in the schema:\n"
     "{\n"
     '  "answer_keys": ["warranty", "defect", "air", "footrest"],\n'
     '  "model_name": "OS-4000T" or null,\n'
@@ -153,6 +210,194 @@ _SYSTEM_PROMPT = (
     "picked answer_keys. If you are guessing, use medium or low — the caller "
     "will then drop the extraction."
 )
+
+
+def _extract_model_from_intake(text: str) -> str:
+    """Best-effort chair model from mixed intake like 'hiro error code 68'."""
+    try:
+        from product_catalog import resolve_model_name  # noqa: WPS433
+    except ImportError:
+        return ""
+
+    from error_code_lookup import extract_error_codes_from_text  # noqa: WPS433
+    from fonz_warranty_data import normalize_error_code  # noqa: WPS433
+
+    codes = {
+        normalize_error_code(c)
+        for c in (extract_error_codes_from_text(text) or [])
+        if c
+    }
+    cleaned = _ERROR_CODE_PHRASE_RE.sub(" ", text)
+    for code in codes:
+        if not code:
+            continue
+        cleaned = re.sub(rf"\b{re.escape(code)}\b", " ", cleaned, flags=re.I)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.-")
+    if cleaned:
+        resolved = resolve_model_name(cleaned)
+        if resolved:
+            return resolved
+
+    for word in re.findall(r"[A-Za-z][A-Za-z0-9\-]{1,}", text):
+        lower = word.lower()
+        if lower in _FILLER_WORDS:
+            continue
+        if normalize_error_code(word) in codes:
+            continue
+        resolved = resolve_model_name(word)
+        if resolved:
+            return resolved
+    return ""
+
+
+def _customer_safe_fonz_summary(entry: dict[str, Any], *, model_name: str) -> str:
+    code = str(entry.get("error_code") or "").strip() or "?"
+    model = (model_name or str(entry.get("model") or "your chair")).strip()
+    meaning = str(entry.get("meaning") or "").strip()
+    # First sentence only; drop internal part lists.
+    short = meaning.split("\n")[0].strip()
+    short = re.split(r"(?<=[.!?])\s+", short)[0].strip()
+    if len(short) > 140:
+        short = short[:137].rstrip() + "..."
+    if short:
+        return f"Error code {code} on {model}: {short}"
+    return f"Customer reported error code {code} on {model}."
+
+
+def _looks_like_model_and_code_only(text: str) -> bool:
+    """True when the message is essentially model + error code, no symptom."""
+    from error_code_lookup import extract_error_codes_from_text  # noqa: WPS433
+    from fonz_warranty_data import normalize_error_code  # noqa: WPS433
+
+    codes = {
+        normalize_error_code(c)
+        for c in (extract_error_codes_from_text(text) or [])
+        if c
+    }
+    if not codes:
+        return False
+    remainder = _ERROR_CODE_PHRASE_RE.sub(" ", text)
+    for code in codes:
+        remainder = re.sub(rf"\b{re.escape(code)}\b", " ", remainder, flags=re.I)
+    tokens = [
+        t
+        for t in re.findall(r"[A-Za-z][A-Za-z0-9\-]*", remainder.lower())
+        if t not in _FILLER_WORDS and len(t) > 1
+    ]
+    if not tokens:
+        return True
+    # Remaining tokens should only be model-ish (resolvable), not symptoms.
+    try:
+        from product_catalog import resolve_model_name  # noqa: WPS433
+    except ImportError:
+        return len(tokens) <= 3
+
+    for token in tokens:
+        if resolve_model_name(token):
+            continue
+        # Multi-word model leftovers are ok if the whole cleaned phrase resolves.
+        return False
+    return True
+
+
+def _fonz_prefill_from_text(text: str) -> Optional[dict[str, Any]]:
+    """
+    When intake mentions an error code, route from Fonz — never LLM guesswork.
+
+    Returns a full prefill dict, or None if no usable Fonz hit / no code.
+    """
+    from error_code_lookup import (  # noqa: WPS433
+        entry_workflow_category,
+        extract_error_codes_from_text,
+        knowledge_category_to_defect_key,
+        lookup_error_code,
+    )
+
+    codes = extract_error_codes_from_text(text)
+    if not codes:
+        return None
+
+    model_name = _extract_model_from_intake(text)
+    hit: Optional[dict[str, Any]] = None
+    used_code = ""
+    for code in codes:
+        hit = lookup_error_code(model_name or None, code)
+        if hit:
+            used_code = code
+            break
+
+    if not hit:
+        # Known pattern: model + code only, but Fonz miss → still don't guess.
+        if _looks_like_model_and_code_only(text):
+            code_display = codes[0]
+            model_display = model_name or "their chair"
+            return {
+                "answer_keys": ["warranty"],
+                "model_name": model_name,
+                "confidence": "high",
+                "summary": (
+                    f"Customer reported error code {code_display} on "
+                    f"{model_display}."
+                ),
+                "source": "fonz_code_only",
+            }
+        return None
+
+    if not model_name:
+        model_name = str(hit.get("model") or "").strip()
+
+    category = entry_workflow_category(hit)
+    defect_key = knowledge_category_to_defect_key(
+        category,
+        meaning=str(hit.get("meaning") or ""),
+        troubleshooting=str(hit.get("troubleshooting") or ""),
+    )
+    summary = _customer_safe_fonz_summary(hit, model_name=model_name)
+    answer_keys = ["warranty", "defect"]
+    if defect_key in _DEFECT_TYPE_KEYS:
+        answer_keys.append(defect_key)
+
+    logger.info(
+        "warranty_intake Fonz prefill code=%s model=%s category=%s defect_key=%s",
+        used_code,
+        model_name,
+        category,
+        defect_key,
+    )
+    return {
+        "answer_keys": answer_keys,
+        "model_name": model_name,
+        "confidence": "high",
+        "summary": summary,
+        "source": "fonz",
+    }
+
+
+def _sanitize_llm_error_code_guess(
+    *,
+    text: str,
+    answer_keys: list[str],
+    summary: str,
+) -> tuple[list[str], str]:
+    """Drop invented defect-type keys when the message is only model + code."""
+    from error_code_lookup import extract_error_codes_from_text  # noqa: WPS433
+
+    if not extract_error_codes_from_text(text):
+        return answer_keys, summary
+    if not _looks_like_model_and_code_only(text):
+        return answer_keys, summary
+
+    kept = [k for k in answer_keys if k not in _DEFECT_TYPE_KEYS and k != "defect"]
+    if not kept or kept[0] != "warranty":
+        kept = ["warranty"] + [k for k in kept if k != "warranty"]
+    model = _extract_model_from_intake(text)
+    codes = extract_error_codes_from_text(text)
+    code_display = codes[0] if codes else "?"
+    model_display = model or "their chair"
+    safe_summary = (
+        f"Customer reported error code {code_display} on {model_display}."
+    )
+    return kept, safe_summary
 
 
 def extract_workflow_prefill(
@@ -167,7 +412,7 @@ def extract_workflow_prefill(
         "model_name": "OS-4000T" or "",
         "confidence": "high",
         "summary": "Footrest air not inflating on OS-4000T.",
-        "source": "llm" | "empty",
+        "source": "llm" | "fonz" | "empty",
       }
     On any failure or low-confidence result, returns an "empty" dict with
     answer_keys=[] so the caller falls back to the normal flow.
@@ -201,6 +446,11 @@ def extract_workflow_prefill(
             "summary": f"Chair model: {model_only}.",
             "source": "model_only",
         }
+
+    # Error-code intake: Fonz lookup beats LLM guessing (Hiro 68 ≠ power).
+    fonz_hit = _fonz_prefill_from_text(text)
+    if fonz_hit is not None:
+        return fonz_hit
 
     client = _openai_client()
     if client is None:
@@ -272,10 +522,17 @@ def extract_workflow_prefill(
         model_name = ""
 
     summary = str(parsed.get("summary") or "").strip()
+    answer_keys, summary = _sanitize_llm_error_code_guess(
+        text=text,
+        answer_keys=answer_keys,
+        summary=summary,
+    )
+    if not answer_keys:
+        return empty
 
     return {
         "answer_keys": answer_keys,
-        "model_name": model_name,
+        "model_name": model_name or _extract_model_from_intake(text),
         "confidence": confidence,
         "summary": summary,
         "source": "llm",

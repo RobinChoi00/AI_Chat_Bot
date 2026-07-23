@@ -151,6 +151,60 @@ def test_extract_model_only_skips_llm_and_defect_branch(monkeypatch):
     assert out["confidence"] == "high"
 
 
+def test_extract_hiro_error_code_68_routes_to_footrest_via_fonz(monkeypatch):
+    """Hiro code 68 is calf/footrest — never invent power from the code alone."""
+
+    def _boom():
+        raise AssertionError("LLM must not run when Fonz resolves the error code")
+
+    monkeypatch.setattr(warranty_intake, "_openai_client", _boom)
+
+    out = extract_workflow_prefill(free_text="hiro error code 68", nodes=_NODES)
+    assert out["source"] == "fonz"
+    assert out["answer_keys"] == ["warranty", "defect", "footrest"]
+    assert "power" not in out["answer_keys"]
+    assert "power" not in (out["summary"] or "").lower()
+    assert "68" in out["summary"]
+    assert out["confidence"] == "high"
+    assert out["model_name"]
+
+
+def test_extract_sanitizes_llm_power_guess_for_code_only(monkeypatch):
+    """If LLM somehow runs, strip invented defect keys for model+code-only text."""
+    # Force Fonz miss so LLM path runs, then sanitize.
+    monkeypatch.setattr(
+        warranty_intake,
+        "_fonz_prefill_from_text",
+        lambda text: None,
+    )
+    payload = {
+        "answer_keys": ["warranty", "defect", "power"],
+        "model_name": "Hiro",
+        "confidence": "high",
+        "summary": "Customer reports error code 99, indicating a power-related defect.",
+    }
+    monkeypatch.setattr(warranty_intake, "_openai_client", lambda: _FakeClient(payload))
+    out = extract_workflow_prefill(free_text="hiro error code 99", nodes=_NODES)
+    assert out["source"] == "llm"
+    assert out["answer_keys"] == ["warranty"]
+    assert "power" not in out["answer_keys"]
+    assert "power-related" not in (out["summary"] or "").lower()
+    assert "99" in out["summary"]
+
+
+def test_hiro_68_category_is_footrest_not_power():
+    from error_code_lookup import entry_workflow_category, knowledge_category_to_defect_key, lookup_error_code
+    from warranty_knowledge import _infer_category
+
+    hit = lookup_error_code("hiro", "68")
+    assert hit is not None
+    blob = f"{hit.get('meaning') or ''} {hit.get('troubleshooting') or ''}"
+    assert _infer_category(blob) == "footrest"
+    cat = entry_workflow_category(hit)
+    assert cat == "footrest"
+    assert knowledge_category_to_defect_key(cat, meaning=str(hit.get("meaning") or "")) == "footrest"
+
+
 # ---------------------------------------------------------------------------
 # apply_prefill_to_engine
 # ---------------------------------------------------------------------------
