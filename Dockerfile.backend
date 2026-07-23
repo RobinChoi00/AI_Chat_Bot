@@ -25,6 +25,7 @@ RUN groupadd --gid 1000 app \
 COPY --from=builder /wheels /wheels
 COPY requirements-prod.txt .
 RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements-prod.txt \
+    && pip install --no-cache-dir --upgrade pip \
     && rm -rf /wheels
 
 COPY --chown=app:app . .

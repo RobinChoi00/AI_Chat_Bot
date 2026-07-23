@@ -90,7 +90,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - run: docker build --pull -f Dockerfile.backend -t ai-chat-backend:${{ github.sha }} .
+      - run: docker build --pull --no-cache -f Dockerfile.backend -t ai-chat-backend:${{ github.sha }} .
       - run: >-
           docker build --pull
           --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.invalid
@@ -105,13 +105,15 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
           severity: CRITICAL,HIGH
-      - name: Upload Trivy backend report on failure
+      - name: Publish Trivy backend report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-backend
-          path: trivy-backend.txt
-          if-no-files-found: ignore
+        run: |
+          {
+            echo "### Trivy backend scan failed"
+            echo '```text'
+            tail -120 trivy-backend.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Scan frontend image for remediable high/critical CVEs
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
