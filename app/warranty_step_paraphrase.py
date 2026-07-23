@@ -42,6 +42,8 @@ _CUSTOMER_FORBIDDEN_REFERENCE_MARKERS = (
     "related topic:",
     "refer to:",
     "refer to page",
+    "ticket #",
+    "freshdesk",
 )
 
 
@@ -124,7 +126,10 @@ def build_paraphrase_system_prompt(*, base_prompt: str) -> str:
         "Rules:\n"
         "- Keep every troubleshooting tip and fact from the draft — do not invent steps.\n"
         "- Do NOT promise replacement, refund, technician dispatch, compensation, or approval.\n"
-        "- Do NOT mention support tickets, past cases, knowledge-base sources, internal references, or manual page references.\n"
+        "- Do NOT mention support tickets, ticket numbers, Freshdesk, past cases, "
+        "knowledge-base sources, internal references, or manual page references.\n"
+        "- Soft wording like \"symptoms like yours\" or \"often help\" is OK when "
+        "already present in the draft — do not invent ticket subjects or case IDs.\n"
         "- Do NOT add new questions beyond the one provided.\n"
         "- The message MUST end with this exact workflow question copied verbatim "
         f"(same punctuation):\n{base_prompt.strip()}\n"

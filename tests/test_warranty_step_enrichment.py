@@ -95,10 +95,89 @@ def test_build_step_enrichment_uses_freshdesk_tips(monkeypatch):
     assert result is not None
     assert result["phase"] == "workflow_step"
     assert result["sources"] == ["freshdesk"]
-    assert "What you can try" in result["message"]
+    assert "What you can try" in result["message"] or "symptoms like yours" in result["message"].lower()
     assert "support cases" not in result["message"].lower()
     assert "Toggle the back power switch" in result["message"]
     assert result["message"].rstrip().endswith("do you hear a click?")
+
+
+def test_build_step_enrichment_boosts_similar_freshdesk(monkeypatch):
+    """High-overlap Freshdesk tips should lead, with soft similar-symptom framing."""
+    qa = KnowledgeEntry(
+        source="qa_csv",
+        category="power",
+        title="Generic power tip",
+        diagnostic="General power note",
+        customer_steps=("Confirm the power cord and outlet are working before follow-up.",),
+    )
+    freshdesk = KnowledgeEntry(
+        source="freshdesk",
+        category="power",
+        title="Chair will not turn on after move",
+        diagnostic="Customer said the chair will not turn on and the back switch clicks.",
+        customer_steps=(
+            "Toggle the back power switch OFF for 10 seconds, then ON.",
+            "Try a different wall outlet and verify the cord is seated.",
+        ),
+    )
+    monkeypatch.setattr(
+        step_enrich,
+        "contextual_search_knowledge",
+        lambda **kwargs: [qa, freshdesk],
+    )
+
+    ticket = SimpleNamespace(ticket_id="t1", issue_type="defect", model_name="OS-4000T")
+    ticket.get_collected = lambda: {
+        "intake_summary": "Chair will not turn on and the back switch clicks."
+    }
+    ticket.set_collected = lambda key, value: None
+
+    engine = _FakeEngine(
+        [
+            _turn("warranty", node_id="root"),
+            _turn("defect", node_id="issue_type"),
+            _turn("power", node_id="defect_problem_type"),
+        ]
+    )
+    node = {
+        "node_id": "defect_power_back_switch",
+        "type": "question",
+        "prompt": "When you toggle the back switch, do you hear a click?",
+    }
+
+    result = step_enrich.build_step_enrichment(engine, ticket, node)
+    assert result is not None
+    assert result.get("similar_symptom_match") is True
+    assert result["sources"][0] == "freshdesk"
+    assert "symptoms like yours" in result["message"].lower()
+    assert "Toggle the back power switch" in result["message"]
+    assert "support cases" not in result["message"].lower()
+    assert "ticket #" not in result["message"].lower()
+    assert result.get("top_match") is None
+
+
+def test_pick_step_tips_prefers_freshdesk_when_flagged():
+    qa = KnowledgeEntry(
+        source="qa_csv",
+        category="power",
+        title="QA power",
+        diagnostic="qa",
+        customer_steps=("Confirm the power cord and outlet are working before follow-up.",),
+    )
+    freshdesk = KnowledgeEntry(
+        source="freshdesk",
+        category="power",
+        title="FD power",
+        diagnostic="fd",
+        customer_steps=("Toggle the back power switch OFF for 10 seconds, then ON.",),
+    )
+    tips = step_enrich._pick_step_tips(
+        [qa, freshdesk],
+        (),
+        prefer_freshdesk=True,
+    )
+    assert tips
+    assert "Toggle the back power switch" in tips[0]
 
 
 def test_build_step_enrichment_uses_intake_summary_in_search(monkeypatch):

@@ -108,19 +108,61 @@ def _fonz_match_from_turns(model_name: str, turns: list) -> Optional[KnowledgeEn
     return None
 
 
-# Prefer curated sources over raw Freshdesk ticket threads in mid-flow tips.
+# Prefer curated sources over raw Freshdesk ticket threads in mid-flow tips,
+# unless a Freshdesk hit is strongly similar to what the customer described.
 _STEP_SOURCE_PRIORITY: dict[str, int] = {
     "fonz_error_code": 0,
     "qa_csv": 1,
     "auto_check": 2,
+    "fault_judgment": 2,
     "freshdesk_kb": 3,
     "freshdesk_qa": 3,
     "freshdesk": 5,
 }
 
+# Soft customer framing — never cite ticket IDs / subjects / "past cases".
+_SIMILAR_SYMPTOM_SUMMARY = (
+    "For symptoms like yours, these checks often help before the next question."
+)
+_SIMILAR_SYMPTOM_TIP_HEADING = "**What often helps for symptoms like yours:**"
+_DEFAULT_TIP_HEADING = "**What you can try:**"
+_FRESHDESK_SIMILAR_SOURCES = frozenset({"freshdesk", "freshdesk_kb", "freshdesk_qa"})
+# Keyword overlap score from warranty_knowledge._score_entry; above this we
+# treat a Freshdesk hit as "close enough" to lead the tip block.
+_FRESHDESK_SIMILARITY_THRESHOLD = 5.0
+
 
 def _step_source_rank(entry: KnowledgeEntry) -> int:
     return _STEP_SOURCE_PRIORITY.get(entry.source, 10)
+
+
+def _entry_relevance(entry: KnowledgeEntry, path_text: str, category: Optional[str]) -> float:
+    from warranty_knowledge import _score_entry, _token_set  # noqa: WPS433
+
+    return _score_entry(entry, _token_set(path_text or ""), category)
+
+
+def _freshdesk_similarity_leader(
+    matches: list[KnowledgeEntry],
+    *,
+    path_text: str,
+    defect_category: Optional[str],
+) -> Optional[KnowledgeEntry]:
+    """Return the best Freshdesk/KB hit when it clearly overlaps the customer path."""
+    best: Optional[KnowledgeEntry] = None
+    best_score = 0.0
+    for entry in matches:
+        if entry.source not in _FRESHDESK_SIMILAR_SOURCES:
+            continue
+        if not entry.customer_steps:
+            continue
+        score = _entry_relevance(entry, path_text, defect_category)
+        if score > best_score:
+            best = entry
+            best_score = score
+    if best is None or best_score < _FRESHDESK_SIMILARITY_THRESHOLD:
+        return None
+    return best
 
 
 def _usable_step_text(text: str) -> bool:
@@ -134,6 +176,7 @@ def _pick_step_tips(
     fallback: tuple[str, ...],
     *,
     max_tips: int = 2,
+    prefer_freshdesk: bool = False,
 ) -> list[str]:
     tips: list[str] = []
     seen: set[str] = set()
@@ -147,15 +190,43 @@ def _pick_step_tips(
         seen.add(key)
         tips.append(text.strip())
 
-    ordered = sorted(matches, key=_step_source_rank)
-    curated_sources = frozenset({"fonz_error_code", "qa_csv", "auto_check", "freshdesk_kb", "freshdesk_qa"})
+    if prefer_freshdesk:
+        ordered = sorted(
+            matches,
+            key=lambda entry: (
+                0 if entry.source in _FRESHDESK_SIMILAR_SOURCES else 1,
+                _step_source_rank(entry),
+            ),
+        )
+    else:
+        ordered = sorted(matches, key=_step_source_rank)
 
-    for entry in ordered:
-        if entry.source in curated_sources:
-            for step in entry.customer_steps[:max_tips]:
-                _add(step)
-            if tips:
-                break
+    curated_sources = frozenset(
+        {
+            "fonz_error_code",
+            "qa_csv",
+            "auto_check",
+            "fault_judgment",
+            "freshdesk_kb",
+            "freshdesk_qa",
+        }
+    )
+
+    if prefer_freshdesk:
+        for entry in ordered:
+            if entry.source in _FRESHDESK_SIMILAR_SOURCES:
+                for step in entry.customer_steps[:max_tips]:
+                    _add(step)
+                if tips:
+                    break
+
+    if len(tips) < max_tips:
+        for entry in ordered:
+            if entry.source in curated_sources:
+                for step in entry.customer_steps[:max_tips]:
+                    _add(step)
+                if tips:
+                    break
 
     if len(tips) < max_tips:
         for entry in ordered:
@@ -265,12 +336,13 @@ def format_step_message(
     base_prompt: str,
     summary: str,
     tips: list[str],
+    tip_heading: str = _DEFAULT_TIP_HEADING,
 ) -> str:
     parts: list[str] = []
     if summary.strip():
         parts.append(summary.strip())
     if tips:
-        parts.append("\n\n**What you can try:**")
+        parts.append(f"\n\n{tip_heading.strip()}")
         for idx, tip in enumerate(tips, start=1):
             parts.append(f"{idx}. {tip}")
     parts.append(f"\n\n{base_prompt.strip()}")
@@ -327,19 +399,30 @@ def build_step_enrichment(
         issue_type=issue_type,
         defect_category=defect_category,
         model_name=model_name,
-        limit=2,
+        limit=4,
     )
     # Do not show a model/category-similar error-code row until the customer
     # actually provides a code. Exact captured codes are re-added below.
     matches = [entry for entry in matches if entry.source != "fonz_error_code"]
     if fonz_entry:
         matches = [fonz_entry] + [m for m in matches if m.title != fonz_entry.title]
-        matches = matches[:2]
+        matches = matches[:4]
+
+    similar_freshdesk = _freshdesk_similarity_leader(
+        matches,
+        path_text=path_text,
+        defect_category=defect_category,
+    )
+    prefer_freshdesk = similar_freshdesk is not None
 
     fallback = _collect_fallback_hints(turns, node_id)
     if not fallback and defect_category:
         fallback = category_fallback_hints(defect_category)
-    tips = _pick_step_tips(matches, fallback)
+    tips = _pick_step_tips(
+        matches,
+        fallback,
+        prefer_freshdesk=prefer_freshdesk,
+    )
 
     presentable_matches = [
         m for m in matches if is_presentable_match_title(m.title)
@@ -347,7 +430,11 @@ def build_step_enrichment(
     if not tips and not presentable_matches:
         return None
 
-    if presentable_matches:
+    tip_heading = _DEFAULT_TIP_HEADING
+    if prefer_freshdesk and tips:
+        summary = _SIMILAR_SYMPTOM_SUMMARY
+        tip_heading = _SIMILAR_SYMPTOM_TIP_HEADING
+    elif presentable_matches:
         summary = _step_enrichment_summary(
             matches,
             defect_category=defect_category,
@@ -374,6 +461,7 @@ def build_step_enrichment(
         base_prompt=base_prompt,
         summary=summary,
         tips=tips,
+        tip_heading=tip_heading,
     )
 
     message, paraphrased = paraphrase_step_message(
@@ -384,9 +472,13 @@ def build_step_enrichment(
         options=list(node.get("options") or []),
     )
 
-    sources = list(
-        dict.fromkeys(entry.source for entry in (presentable_matches or matches)[:2])
+    lead_sources = []
+    if prefer_freshdesk and similar_freshdesk is not None:
+        lead_sources.append(similar_freshdesk.source)
+    lead_sources.extend(
+        entry.source for entry in (presentable_matches or matches)[:2]
     )
+    sources = list(dict.fromkeys(lead_sources))
 
     return {
         "message": message,
@@ -394,9 +486,10 @@ def build_step_enrichment(
         "sources": sources,
         "top_match": (
             presentable_matches[0].title
-            if presentable_matches
+            if presentable_matches and not prefer_freshdesk
             else None
         ),
         "tips": tips,
         "paraphrased": paraphrased,
+        "similar_symptom_match": prefer_freshdesk,
     }
