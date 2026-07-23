@@ -44,7 +44,7 @@ jobs:
           pytest -q --tb=short 2>&1 | tee pytest-output.txt
       - name: Upload pytest output on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540849e214b0de59e1281ef4 # v4
+        uses: actions/upload-artifact@v4
         with:
           name: pytest-output
           path: pytest-output.txt
@@ -97,7 +97,7 @@ jobs:
           severity: CRITICAL,HIGH
       - name: Upload Trivy backend report on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540849e214b0de59e1281ef4 # v4
+        uses: actions/upload-artifact@v4
         with:
           name: trivy-backend
           path: trivy-backend.txt
