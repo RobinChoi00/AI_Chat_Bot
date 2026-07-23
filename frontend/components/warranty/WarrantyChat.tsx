@@ -10,6 +10,7 @@ import {
   quickStartWarranty,
   naturalStartWarranty,
   recordWarrantyChatConsent,
+  recordWarrantySessionContactEmail,
   registerWarrantyModel,
   restartWarrantySession,
   resumeWarrantyFromToken,
@@ -41,10 +42,13 @@ import TroubleshootingGate from "./TroubleshootingGate";
 import { WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
 import {
   CHAT_CONSENT_STORAGE_KEY,
+  CHAT_CONTACT_EMAIL_STORAGE_KEY,
+  CHAT_EMAIL_GATE_STORAGE_KEY,
   resolveStorePolicyUrls,
   WARRANTY_WELCOME_MESSAGE,
 } from "@/lib/welcomeMessage";
 import ChatRecordingNoticeBanner from "./ChatRecordingNoticeBanner";
+import ChatEmailGate from "./ChatEmailGate";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 
 import { resolveWarrantyStoreDomain } from "@/lib/warrantyStoreDomain";
@@ -132,6 +136,15 @@ export default function WarrantyChat({
     if (typeof window === "undefined") return false;
     return sessionStorage.getItem(CHAT_CONSENT_STORAGE_KEY) === "1";
   });
+  const [emailGateDone, setEmailGateDone] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const status = sessionStorage.getItem(CHAT_EMAIL_GATE_STORAGE_KEY);
+    return status === "provided" || status === "skipped";
+  });
+  const [intakeContactEmail, setIntakeContactEmail] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return sessionStorage.getItem(CHAT_CONTACT_EMAIL_STORAGE_KEY) || "";
+  });
 
   const acceptChatConsent = useCallback(async () => {
     setChatConsentAccepted(true);
@@ -144,8 +157,38 @@ export default function WarrantyChat({
     } catch (err) {
       console.warn("warranty chat consent record failed", err);
     }
-    inputRef.current?.focus();
   }, [sessionId, storeDomain]);
+
+  const completeEmailGate = useCallback(
+    async (options: { email?: string; skipped?: boolean }) => {
+      const skipped = Boolean(options.skipped);
+      const email = (options.email || "").trim();
+      try {
+        await recordWarrantySessionContactEmail(sessionId, {
+          customerEmail: skipped ? undefined : email,
+          skipped,
+        });
+      } catch (err) {
+        console.warn("warranty session contact email failed", err);
+        throw err;
+      }
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem(
+          CHAT_EMAIL_GATE_STORAGE_KEY,
+          skipped ? "skipped" : "provided"
+        );
+        if (skipped) {
+          sessionStorage.removeItem(CHAT_CONTACT_EMAIL_STORAGE_KEY);
+        } else {
+          sessionStorage.setItem(CHAT_CONTACT_EMAIL_STORAGE_KEY, email);
+        }
+      }
+      setIntakeContactEmail(skipped ? "" : email);
+      setEmailGateDone(true);
+      inputRef.current?.focus();
+    },
+    [sessionId]
+  );
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -215,8 +258,12 @@ export default function WarrantyChat({
       setInput("");
       if (typeof window !== "undefined") {
         sessionStorage.removeItem(CHAT_CONSENT_STORAGE_KEY);
+        sessionStorage.removeItem(CHAT_EMAIL_GATE_STORAGE_KEY);
+        sessionStorage.removeItem(CHAT_CONTACT_EMAIL_STORAGE_KEY);
       }
       setChatConsentAccepted(false);
+      setEmailGateDone(false);
+      setIntakeContactEmail("");
     } finally {
       setLoading(false);
       inputRef.current?.focus();
@@ -413,7 +460,7 @@ export default function WarrantyChat({
 
   const handleQuickStart = useCallback(
     async (issueType: "installation" | "delivery" | "defect", label: string) => {
-      if (loading || !chatConsentAccepted) return;
+      if (loading || !chatConsentAccepted || !emailGateDone) return;
       if (issueType === "defect" && !warrantyState?.model_name?.trim()) {
         setError(null);
         setMessages((prev) => [...prev, { role: "user", content: label }]);
@@ -439,7 +486,7 @@ export default function WarrantyChat({
         inputRef.current?.focus();
       }
     },
-    [loading, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse, warrantyState?.model_name, promptModelForDefect]
+    [loading, chatConsentAccepted, emailGateDone, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse, warrantyState?.model_name, promptModelForDefect]
   );
 
   const advanceWarranty = useCallback(
@@ -697,7 +744,7 @@ export default function WarrantyChat({
 
   const sendMessage = useCallback(
     async (text: string) => {
-      if (!text.trim() || loading || !chatConsentAccepted) return;
+      if (!text.trim() || loading || !chatConsentAccepted || !emailGateDone) return;
 
       const trimmed = text.trim();
       const atIssueTypeNode =
@@ -813,6 +860,7 @@ export default function WarrantyChat({
     [
       loading,
       chatConsentAccepted,
+      emailGateDone,
       warrantyState,
       helpConsent,
       contactSubmitted,
@@ -843,7 +891,7 @@ export default function WarrantyChat({
   }
 
   function handleOptionSelect(answerKey: string, label: string) {
-    if (!chatConsentAccepted) return;
+    if (!chatConsentAccepted || !emailGateDone) return;
     const atIssueTypeNode =
       !warrantyState?.issue_type &&
       warrantyState?.current_node?.node_id === "issue_type";
@@ -945,6 +993,7 @@ export default function WarrantyChat({
 
   const showIssueTypeOptions =
     chatConsentAccepted &&
+    emailGateDone &&
     sessionChecked &&
     !loading &&
     !isTerminal &&
@@ -955,6 +1004,7 @@ export default function WarrantyChat({
 
   const hasWorkflowOptions =
     chatConsentAccepted &&
+    emailGateDone &&
     !optionsUsed &&
     !loading &&
     !showIssueTypeOptions &&
@@ -969,6 +1019,7 @@ export default function WarrantyChat({
 
   const showResolutionGate =
     chatConsentAccepted &&
+    emailGateDone &&
     isTerminal &&
     terminalEnrichment?.phase === "awaiting_help_consent" &&
     helpConsent === null &&
@@ -978,16 +1029,17 @@ export default function WarrantyChat({
     isTerminal && helpConsent === "yes" && !contactSubmitted && warrantyState?.ticket_id
   );
 
-  const showEmailSection = chatConsentAccepted && inEmailStep;
+  const showEmailSection = chatConsentAccepted && emailGateDone && inEmailStep;
 
   const showInputBar =
     chatConsentAccepted &&
+    emailGateDone &&
     (needsCustomerReply ||
     !isTerminal ||
     inEmailStep ||
     (isTerminal && helpConsent === null && !contactSubmitted && !showResolutionGate));
 
-  const interactionsLocked = !chatConsentAccepted;
+  const interactionsLocked = !chatConsentAccepted || !emailGateDone;
 
   const inputPlaceholder = needsCustomerReply
     ? "Type your reply to our team here…"
@@ -1127,16 +1179,23 @@ export default function WarrantyChat({
       <div className="chat-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-4">
         {!chatConsentAccepted && (
           <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-center text-sm text-amber-900">
-            Please review the notice above and tap <strong>I Agree — start chat</strong> to
+            Please review the notice above and tap <strong>I Agree</strong> to
             continue.
           </div>
+        )}
+        {chatConsentAccepted && !emailGateDone && (
+          <ChatEmailGate
+            disabled={loading}
+            onContinue={(email) => completeEmailGate({ email })}
+            onSkip={() => completeEmailGate({ skipped: true })}
+          />
         )}
         <div className="space-y-4">
           {messages.map((msg, i) => (
             <ChatMessageBubble
               key={i}
               message={msg}
-              showFeedback={chatConsentAccepted && msg.role === "assistant"}
+              showFeedback={chatConsentAccepted && emailGateDone && msg.role === "assistant"}
               feedbackSessionId={sessionId}
               feedbackTicketId={warrantyState?.ticket_id}
               feedbackDomain={storeDomain}
@@ -1281,6 +1340,7 @@ export default function WarrantyChat({
           <EvidenceUploader
             ticketId={warrantyState!.ticket_id}
             evidenceRequired={warrantyState!.current_node?.evidence_required}
+            initialCustomerEmail={intakeContactEmail}
             collapsed={emailPanelCollapsed}
             onToggleCollapsed={setEmailPanelCollapsed}
             onBack={goBackFromEmailStep}

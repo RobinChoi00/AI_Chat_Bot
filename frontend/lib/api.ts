@@ -148,6 +148,44 @@ export async function recordWarrantyChatConsent(
 }
 
 /**
+ * Soft-required contact email after I Agree (before chat starts).
+ *
+ * CONTRACT: POST /api/v1/warranty/session/{session_id}/contact-email
+ */
+export async function recordWarrantySessionContactEmail(
+  sessionId: string,
+  options: { customerEmail?: string; skipped?: boolean }
+): Promise<{
+  recorded: boolean;
+  customer_email?: string | null;
+  email_gate_status: string;
+  skipped: boolean;
+}> {
+  const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(
+    sessionId
+  )}/contact-email`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      customer_email: options.customerEmail || "",
+      skipped: Boolean(options.skipped),
+    }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+/**
  * Register chair model — required before issue-type selection.
  *
  * CONTRACT: POST /api/v1/warranty/session/{session_id}/register-model

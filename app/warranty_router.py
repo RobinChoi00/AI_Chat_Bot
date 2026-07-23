@@ -794,6 +794,12 @@ class WarrantyConsentRequest(BaseModel):
     policy_store: str = ""
 
 
+class WarrantySessionContactEmailRequest(BaseModel):
+    """Post-consent email gate — soft-required contact email before chat."""
+    customer_email: str = ""
+    skipped: bool = False
+
+
 _QUICK_START_ISSUE_KEYS = frozenset({"installation", "delivery", "defect"})
 
 
@@ -1475,6 +1481,36 @@ async def record_warranty_chat_consent(session_id: str, body: WarrantyConsentReq
         "consent_recorded": True,
         "accepted_at": accepted_at.isoformat(),
         "policy_store": (body.policy_store or "").strip().lower() or None,
+    }
+
+
+@router.post("/api/v1/warranty/session/{session_id}/contact-email", tags=["warranty"])
+async def record_warranty_session_contact_email(
+    session_id: str,
+    body: WarrantySessionContactEmailRequest,
+):
+    """
+    Soft-required email after I Agree: store on the session so it copies onto
+    the ticket when the warranty workflow starts. ``skipped=true`` allows chat
+    without an email (collected again at the terminal contact step).
+    """
+    from warranty_consent import record_session_contact_email  # noqa: WPS433
+
+    try:
+        result = record_session_contact_email(
+            session_id,
+            customer_email=body.customer_email,
+            skipped=bool(body.skipped),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return {
+        "session_id": session_id,
+        "recorded": True,
+        "customer_email": result.get("customer_email"),
+        "email_gate_status": result.get("email_gate_status"),
+        "skipped": result.get("email_gate_status") == "skipped",
     }
 
 

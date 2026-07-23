@@ -175,6 +175,8 @@ class WarrantyChatConsent(Base):
     session_id = Column(String, unique=True, index=True, nullable=False)
     domain = Column(String, index=True, default="unknown")
     policy_store = Column(String, nullable=True)
+    contact_email = Column(String, nullable=True)
+    email_gate_status = Column(String, nullable=True)  # provided | skipped
     accepted_at = Column(DateTime, default=_now_cst)
     updated_at = Column(DateTime, default=_now_cst, onupdate=_now_cst)
 
@@ -303,6 +305,19 @@ def _migrate_warranty_schema() -> None:
         if "customer_email" not in cols:
             cursor.execute(
                 "ALTER TABLE warranty_evidences ADD COLUMN customer_email TEXT"
+            )
+            raw.commit()
+
+        cursor.execute("PRAGMA table_info(warranty_chat_consents)")
+        consent_cols = {row[1] for row in cursor.fetchall()}
+        if "contact_email" not in consent_cols:
+            cursor.execute(
+                "ALTER TABLE warranty_chat_consents ADD COLUMN contact_email TEXT"
+            )
+            raw.commit()
+        if "email_gate_status" not in consent_cols:
+            cursor.execute(
+                "ALTER TABLE warranty_chat_consents ADD COLUMN email_gate_status TEXT"
             )
             raw.commit()
 

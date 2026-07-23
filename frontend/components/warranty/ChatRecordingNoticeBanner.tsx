@@ -69,7 +69,7 @@ export default function ChatRecordingNoticeBanner({
             onClick={onAccept}
             className="rounded-full bg-amber-700 px-4 py-1.5 text-xs font-semibold text-white hover:bg-amber-800"
           >
-            I Agree — start chat
+            I Agree
           </button>
         </div>
       ) : (
