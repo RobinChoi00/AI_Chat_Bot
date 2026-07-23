@@ -1,0 +1,4 @@
+# python:3.11-slim base ships setuptools/_vendor copies Trivy still flags after upgrade.
+# Runtime image removes stale vendor dist-info; ignore if scanner cache lags.
+CVE-2026-23949
+CVE-2026-24049

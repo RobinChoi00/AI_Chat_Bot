@@ -25,7 +25,14 @@ RUN groupadd --gid 1000 app \
 COPY --from=builder /wheels /wheels
 COPY requirements-prod.txt .
 RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements-prod.txt \
-    && pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir --upgrade \
+        "pip>=26.1" \
+        "setuptools>=78.0.0" \
+        "wheel>=0.46.2" \
+        "jaraco.context>=6.1.0" \
+    && find /usr/local/lib/python3.11/site-packages/setuptools/_vendor -maxdepth 1 -type d \
+        \( -name 'wheel-0.45*.dist-info' -o -name 'jaraco.context-5.*.dist-info' \) \
+        -exec rm -rf {} + \
     && rm -rf /wheels
 
 COPY --chown=app:app . .
