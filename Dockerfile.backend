@@ -2,7 +2,7 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /build
 RUN apt-get update \
-    && apt-get upgrade -y \
+    && apt-get -y dist-upgrade \
     && apt-get install -y --no-install-recommends build-essential gcc \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements-prod.txt .
@@ -16,7 +16,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get upgrade -y \
+    && apt-get -y dist-upgrade \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
