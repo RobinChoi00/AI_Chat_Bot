@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { submitWarrantyContact, uploadEvidence } from "@/lib/api";
 import { WARRANTY_CONTACT_BLURB } from "@/lib/warrantyContact";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
@@ -8,6 +8,7 @@ import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 interface Props {
   ticketId: string;
   evidenceRequired?: string[];
+  /** Email already collected at intake — skip re-asking when valid. */
   initialCustomerEmail?: string;
   onContactSuccess?: (customerEmail: string) => void;
   onUploadSuccess?: (filename: string) => void;
@@ -19,6 +20,7 @@ interface Props {
 
 const ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".pdf", ".mp4", ".mov"];
 const MAX_BYTES = 20 * 1024 * 1024; // 20 MB
+const EMAIL_RE = /^[\w.+-]+@[\w.-]+\.\w+$/;
 
 const EVIDENCE_LABELS: Record<string, string> = {
   damage_photos: "Damage Photos",
@@ -38,6 +40,10 @@ const EVIDENCE_LABELS: Record<string, string> = {
   other: "Other",
 };
 
+function isValidEmail(value: string): boolean {
+  return EMAIL_RE.test(value.trim());
+}
+
 export default function EvidenceUploader({
   ticketId,
   evidenceRequired = [],
@@ -52,11 +58,22 @@ export default function EvidenceUploader({
   const fileRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [customerEmail, setCustomerEmail] = useState(initialCustomerEmail);
+  const [editingEmail, setEditingEmail] = useState(false);
   /** Default N/A — most customers submit email only without media. */
   const [evidenceNa, setEvidenceNa] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<"success" | "error" | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
+
+  useEffect(() => {
+    if (initialCustomerEmail.trim()) {
+      setCustomerEmail(initialCustomerEmail);
+      setEditingEmail(false);
+    }
+  }, [initialCustomerEmail]);
+
+  const knownEmail = isValidEmail(initialCustomerEmail) ? initialCustomerEmail.trim() : "";
+  const hasKnownEmail = Boolean(knownEmail) && !editingEmail;
 
   const evidenceTypeOptions = useMemo(() => {
     if (evidenceRequired.length === 0) {
@@ -111,7 +128,7 @@ export default function EvidenceUploader({
 
   function validateEmail(): string | null {
     const email = customerEmail.trim();
-    if (!email || !/^[\w.+-]+@[\w.-]+\.\w+$/.test(email)) {
+    if (!email || !isValidEmail(email)) {
       setResult("error");
       setErrorMsg("Please enter a valid email address.");
       return null;
@@ -126,7 +143,7 @@ export default function EvidenceUploader({
     const willUpload = !evidenceNa && selectedFile;
     if (!evidenceNa && !selectedFile) {
       setResult("error");
-      setErrorMsg("Choose a file, or check N/A to submit with email only.");
+      setErrorMsg("Choose a file, or check N/A to submit without a photo/video.");
       return;
     }
 
@@ -154,7 +171,7 @@ export default function EvidenceUploader({
     }
   }
 
-  const emailValid = /^[\w.+-]+@[\w.-]+\.\w+$/.test(customerEmail.trim());
+  const emailValid = isValidEmail(customerEmail);
   const needsFile = !evidenceNa && !selectedFile;
   const submitDisabled = submitting || !emailValid || needsFile;
 
@@ -188,12 +205,28 @@ export default function EvidenceUploader({
     );
   }
 
+  const title = hasKnownEmail
+    ? "Final step — send to our warranty team?"
+    : "Final step — how can we reach you?";
+
+  const submitLabel = submitting
+    ? "Submitting…"
+    : hasKnownEmail
+      ? evidenceNa
+        ? "Yes — notify warranty team"
+        : selectedFile
+          ? "Yes — send with attachment"
+          : "Select a file or check N/A"
+      : evidenceNa
+        ? "Submit email only (N/A)"
+        : selectedFile
+          ? "Submit with attachment"
+          : "Select a file or check N/A";
+
   return (
     <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4">
       <div className="mb-1 flex items-start justify-between gap-2">
-        <p className="text-sm font-medium text-gray-800">
-          Final step — how can we reach you?
-        </p>
+        <p className="text-sm font-medium text-gray-800">{title}</p>
         <div className="flex shrink-0 items-center gap-1.5">
           {onBack && (
             <button
@@ -218,24 +251,59 @@ export default function EvidenceUploader({
           )}
         </div>
       </div>
-      <p className="mb-3 text-xs text-gray-500">
-        Enter your email so our warranty team can follow up within 24 hours.{" "}
-        Photos and videos are optional.
-      </p>
 
-      <div className="mb-3">
-        <label className="mb-1 block text-xs text-gray-500">
-          Your email address <span className="text-red-500">*</span>
-        </label>
-        <input
-          type="email"
-          required
-          value={customerEmail}
-          onChange={(e) => setCustomerEmail(e.target.value)}
-          placeholder="you@example.com"
-          className="min-h-[48px] w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-brand-500 sm:text-sm"
-        />
-      </div>
+      {hasKnownEmail ? (
+        <div className="mb-3 space-y-2">
+          <p className="text-xs text-gray-600">
+            We already have <strong className="text-gray-900">{knownEmail}</strong> for
+            this case. Ready to send it to our warranty team? They&apos;ll follow up
+            within 24 hours. Photos and videos are optional.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setEditingEmail(true);
+              setResult(null);
+              setErrorMsg("");
+            }}
+            className="text-xs font-medium text-brand-700 underline-offset-2 hover:underline"
+          >
+            Use a different email
+          </button>
+        </div>
+      ) : (
+        <>
+          <p className="mb-3 text-xs text-gray-500">
+            Enter your email so our warranty team can follow up within 24 hours.{" "}
+            Photos and videos are optional.
+          </p>
+          <div className="mb-3">
+            <label className="mb-1 block text-xs text-gray-500">
+              Your email address <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="email"
+              required
+              value={customerEmail}
+              onChange={(e) => setCustomerEmail(e.target.value)}
+              placeholder="you@example.com"
+              className="min-h-[48px] w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-brand-500 sm:text-sm"
+            />
+            {editingEmail && knownEmail && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomerEmail(knownEmail);
+                  setEditingEmail(false);
+                }}
+                className="mt-1.5 text-xs font-medium text-gray-600 underline-offset-2 hover:underline"
+              >
+                Keep {knownEmail}
+              </button>
+            )}
+          </div>
+        </>
+      )}
 
       <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2.5 text-sm">
         <input
@@ -245,7 +313,8 @@ export default function EvidenceUploader({
           className="mt-0.5"
         />
         <span>
-          <strong>N/A</strong> — I don&apos;t have photos or videos (submit email only)
+          <strong>N/A</strong> — I don&apos;t have photos or videos
+          {hasKnownEmail ? " (notify team only)" : " (submit email only)"}
         </span>
       </label>
 
@@ -314,13 +383,7 @@ export default function EvidenceUploader({
             : "bg-brand-600 text-white hover:bg-brand-700 active:scale-[0.98]"
         }`}
       >
-        {submitting
-          ? "Submitting…"
-          : evidenceNa
-            ? "Submit email only (N/A)"
-            : selectedFile
-              ? "Submit with attachment"
-              : "Select a file or check N/A"}
+        {submitLabel}
       </button>
 
       <WarrantyTeamContactFooter className="mt-4" />

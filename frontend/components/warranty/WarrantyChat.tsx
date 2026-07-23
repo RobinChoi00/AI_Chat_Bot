@@ -945,12 +945,17 @@ export default function WarrantyChat({
         }
 
         setHelpConsent("yes");
+        const hasIntakeEmail = /^[\w.+-]+@[\w.-]+\.\w+$/.test(intakeContactEmail.trim());
         setMessages((previous) => [
           ...previous,
           assistantMessage(
             outcome === "unable_to_attempt"
-              ? "Understood — please don’t attempt anything that feels unsafe. Share your email below and our warranty team will review the next step. Photos or videos are optional."
-              : "Thanks for trying those steps. Since the issue is still there, share your email below and our warranty team will review the next step. Photos or videos are optional."
+              ? hasIntakeEmail
+                ? "Understood — please don’t attempt anything that feels unsafe. We already have your email — confirm below if you’d like us to send this case to our warranty team. Photos or videos are optional."
+                : "Understood — please don’t attempt anything that feels unsafe. Share your email below and our warranty team will review the next step. Photos or videos are optional."
+              : hasIntakeEmail
+                ? "Thanks for trying those steps. Since the issue is still there, we already have your email — confirm below to send this case to our warranty team. Photos or videos are optional."
+                : "Thanks for trying those steps. Since the issue is still there, share your email below and our warranty team will review the next step. Photos or videos are optional."
           ),
         ]);
       } catch (err: unknown) {
@@ -959,7 +964,7 @@ export default function WarrantyChat({
         setLoading(false);
       }
     },
-    [loading, warrantyState?.ticket_id]
+    [loading, warrantyState?.ticket_id, intakeContactEmail]
   );
 
   const isAwaitingAdmin =
@@ -1350,7 +1355,9 @@ export default function WarrantyChat({
               setMessages((prev) => [
                 ...prev,
                 assistantMessage(
-                  "Thank you — your email has been received. Our warranty team will follow up within 24 hours."
+                  intakeContactEmail.trim()
+                    ? "Thank you — we’ve notified our warranty team using your email. They will follow up within 24 hours."
+                    : "Thank you — your email has been received. Our warranty team will follow up within 24 hours."
                 ),
               ]);
             }}
