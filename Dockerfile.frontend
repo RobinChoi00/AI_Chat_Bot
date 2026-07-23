@@ -7,7 +7,7 @@
 
 FROM node:20-alpine AS base
 WORKDIR /app
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates && apk upgrade --no-cache
 
 # Install dependencies — retries + cache for flaky EC2 ↔ npm registry links
 FROM base AS deps
