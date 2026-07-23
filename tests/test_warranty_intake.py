@@ -169,6 +169,24 @@ def test_extract_hiro_error_code_68_routes_to_footrest_via_fonz(monkeypatch):
     assert out["model_name"]
 
 
+def test_extract_hiro_68_works_without_product_catalog(monkeypatch):
+    """Prod may lack Shopify CSV — still match Hiro via Fonz model tokens."""
+    import product_catalog as pc
+
+    monkeypatch.setattr(pc, "resolve_model_name", lambda raw: None)
+    monkeypatch.setattr(pc, "looks_like_model_only", lambda raw: None)
+    monkeypatch.setattr(
+        warranty_intake,
+        "_openai_client",
+        lambda: (_ for _ in ()).throw(AssertionError("LLM should not run")),
+    )
+
+    out = extract_workflow_prefill(free_text="hiro error code 68", nodes=_NODES)
+    assert out["source"] == "fonz"
+    assert out["answer_keys"] == ["warranty", "defect", "footrest"]
+    assert "Hiro" in (out["model_name"] or "")
+
+
 def test_extract_sanitizes_llm_power_guess_for_code_only(monkeypatch):
     """If LLM somehow runs, strip invented defect keys for model+code-only text."""
     # Force Fonz miss so LLM path runs, then sanitize.

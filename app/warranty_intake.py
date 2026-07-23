@@ -212,8 +212,53 @@ _SYSTEM_PROMPT = (
 )
 
 
-def _extract_model_from_intake(text: str) -> str:
-    """Best-effort chair model from mixed intake like 'hiro error code 68'."""
+def _fonz_entries_for_code(code: str) -> list[dict[str, Any]]:
+    from fonz_warranty_data import load_error_code_records, normalize_error_code  # noqa: WPS433
+
+    wanted = normalize_error_code(code)
+    if not wanted:
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in load_error_code_records():
+        if normalize_error_code(str(entry.get("error_code") or "")) != wanted:
+            continue
+        if isinstance(entry, dict):
+            out.append(entry)
+    return out
+
+
+def _score_fonz_model_match(text: str, entry: dict[str, Any]) -> int:
+    """Score how well intake text mentions this Fonz model row."""
+    text_l = (text or "").lower()
+    text_compact = re.sub(r"[^a-z0-9]+", "", text_l)
+    model = str(entry.get("model") or "").lower()
+    model_key = str(entry.get("model_key") or "").lower()
+    model_compact = re.sub(r"[^a-z0-9]+", "", model)
+    key_compact = re.sub(r"[^a-z0-9]+", "", model_key)
+    score = 0
+    if model_compact and len(model_compact) >= 4 and model_compact in text_compact:
+        score += 5
+    if key_compact and len(key_compact) >= 4 and key_compact in text_compact:
+        score += 5
+    tokens = [
+        t
+        for t in re.findall(r"[a-z0-9]+", text_l)
+        if len(t) >= 3 and t not in _FILLER_WORDS
+    ]
+    for token in tokens:
+        if token in {"error", "code"}:
+            continue
+        if token in model or token in model_key.replace("-", " "):
+            score += 3
+        if key_compact.startswith(token) or model_compact.startswith(token):
+            score += 2
+        if token in key_compact or token in model_compact:
+            score += 1
+    return score
+
+
+def _extract_catalog_model(text: str) -> str:
+    """Resolve model via Shopify product catalog only (may be empty in prod)."""
     try:
         from product_catalog import resolve_model_name  # noqa: WPS433
     except ImportError:
@@ -237,7 +282,6 @@ def _extract_model_from_intake(text: str) -> str:
         resolved = resolve_model_name(cleaned)
         if resolved:
             return resolved
-
     for word in re.findall(r"[A-Za-z][A-Za-z0-9\-]{1,}", text):
         lower = word.lower()
         if lower in _FILLER_WORDS:
@@ -247,6 +291,48 @@ def _extract_model_from_intake(text: str) -> str:
         resolved = resolve_model_name(word)
         if resolved:
             return resolved
+    return ""
+
+
+def _match_fonz_entry_for_code(text: str, code: str) -> Optional[dict[str, Any]]:
+    """Resolve model+code using catalog when possible, else Fonz model-name tokens."""
+    from error_code_lookup import lookup_error_code  # noqa: WPS433
+
+    catalog_model = _extract_catalog_model(text)
+    if catalog_model:
+        hit = lookup_error_code(catalog_model, code)
+        if hit:
+            return hit
+
+    candidates = _fonz_entries_for_code(code)
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return dict(candidates[0])
+
+    scored = [(_score_fonz_model_match(text, entry), entry) for entry in candidates]
+    scored = [(s, e) for s, e in scored if s > 0]
+    if not scored:
+        return None
+    scored.sort(key=lambda row: (-row[0], -len(str(row[1].get("model") or ""))))
+    best = scored[0][0]
+    top = [e for s, e in scored if s == best]
+    return dict(top[0])
+
+
+def _extract_model_from_intake(text: str) -> str:
+    """Best-effort chair model from mixed intake like 'hiro error code 68'."""
+    catalog = _extract_catalog_model(text)
+    if catalog:
+        return catalog
+
+    from error_code_lookup import extract_error_codes_from_text  # noqa: WPS433
+
+    # Prod hosts may lack the Shopify catalog CSV — fall back to Fonz model names.
+    for code in extract_error_codes_from_text(text) or []:
+        hit = _match_fonz_entry_for_code(text, code)
+        if hit:
+            return str(hit.get("model") or "").strip()
     return ""
 
 
@@ -286,16 +372,25 @@ def _looks_like_model_and_code_only(text: str) -> bool:
     ]
     if not tokens:
         return True
-    # Remaining tokens should only be model-ish (resolvable), not symptoms.
+
     try:
         from product_catalog import resolve_model_name  # noqa: WPS433
     except ImportError:
-        return len(tokens) <= 3
+        resolve_model_name = None  # type: ignore[assignment]
 
     for token in tokens:
-        if resolve_model_name(token):
+        if resolve_model_name is not None and resolve_model_name(token):
             continue
-        # Multi-word model leftovers are ok if the whole cleaned phrase resolves.
+        matched = False
+        for code in codes:
+            for entry in _fonz_entries_for_code(code):
+                if _score_fonz_model_match(token, entry) > 0:
+                    matched = True
+                    break
+            if matched:
+                break
+        if matched:
+            continue
         return False
     return True
 
@@ -310,21 +405,23 @@ def _fonz_prefill_from_text(text: str) -> Optional[dict[str, Any]]:
         entry_workflow_category,
         extract_error_codes_from_text,
         knowledge_category_to_defect_key,
-        lookup_error_code,
     )
 
     codes = extract_error_codes_from_text(text)
     if not codes:
         return None
 
-    model_name = _extract_model_from_intake(text)
     hit: Optional[dict[str, Any]] = None
     used_code = ""
     for code in codes:
-        hit = lookup_error_code(model_name or None, code)
+        hit = _match_fonz_entry_for_code(text, code)
         if hit:
             used_code = code
             break
+
+    model_name = _extract_model_from_intake(text)
+    if hit and not model_name:
+        model_name = str(hit.get("model") or "").strip()
 
     if not hit:
         # Known pattern: model + code only, but Fonz miss → still don't guess.
@@ -342,9 +439,6 @@ def _fonz_prefill_from_text(text: str) -> Optional[dict[str, Any]]:
                 "source": "fonz_code_only",
             }
         return None
-
-    if not model_name:
-        model_name = str(hit.get("model") or "").strip()
 
     category = entry_workflow_category(hit)
     defect_key = knowledge_category_to_defect_key(
