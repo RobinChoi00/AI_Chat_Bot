@@ -39,10 +39,15 @@
     }
   }
 
-  var TEASER_KEY = "osaki_warranty_launcher_teaser_v2";
+  var TEASER_KEY = "osaki_warranty_launcher_teaser_v3";
   var TEASER_AUTO_HIDE_MS = 4500;
   var Z = 2147483000;
-
+  // Compact support mark: headset + chat bubble (no emoji font dependency).
+  var SUPPORT_ICON_SVG =
+    '<svg class="icon-svg" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">' +
+    '<path fill="#e8d5a3" d="M12 3a7 7 0 0 0-7 7v1.2A3.2 3.2 0 0 0 2.8 14.4V16a2 2 0 0 0 2 2H6v-6.5a6 6 0 0 1 12 0V18h1.2a2 2 0 0 0 2-2v-1.6A3.2 3.2 0 0 0 19 11.2V10a7 7 0 0 0-7-7zm-3.2 10.2a1.3 1.3 0 1 1 0 2.6H7.5a.7.7 0 0 1-.7-.7v-1.2c0-.39.31-.7.7-.7h1.3zm9.9 0h1.3c.39 0 .7.31.7.7v1.2c0 .39-.31.7-.7.7h-1.3a1.3 1.3 0 1 1 0-2.6z"/>' +
+    '<path fill="#c9a962" d="M14.6 17.2c0-.66.54-1.2 1.2-1.2h2.1c.5 0 .9.4.9.9v1.55c0 .28-.13.54-.35.7l-.85.65a.6.6 0 0 1-.95-.35l-.15-.7h-.7a1.2 1.2 0 0 1-1.2-1.2z"/>' +
+    "</svg>";
   var styles = document.createElement("style");
   styles.textContent =
     "#osaki-warranty-root{font-family:Inter,system-ui,-apple-system,sans-serif;" +
@@ -75,11 +80,13 @@
     "background:linear-gradient(145deg,rgba(201,169,98,.35),rgba(201,169,98,.08));" +
     "border:1px solid rgba(201,169,98,.55);box-shadow:inset 0 1px 0 rgba(255,255,255,.15)}" +
     "#osaki-warranty-btn .icon-main{position:absolute;inset:0;display:flex;align-items:center;" +
-    "justify-content:center;font-size:18px;line-height:1}" +
+    "justify-content:center;line-height:1}" +
+    "#osaki-warranty-btn .icon-main .icon-svg{display:block;width:22px;height:22px}" +
     "#osaki-warranty-btn .icon-badge{position:absolute;right:-1px;bottom:-1px;width:16px;height:16px;" +
     "border-radius:50%;background:linear-gradient(135deg,var(--ow-gold),#a8863a);" +
     "border:1.5px solid var(--ow-dark);display:flex;align-items:center;justify-content:center;" +
-    "font-size:9px;line-height:1;box-shadow:0 2px 4px rgba(0,0,0,.2)}" +
+    "line-height:1;box-shadow:0 2px 4px rgba(0,0,0,.2);color:#0f1419;" +
+    "font-size:10px;font-weight:700}" +
     "#osaki-warranty-btn .label{text-align:right;padding-left:2px}" +
     "#osaki-warranty-btn .label strong{display:block;font-size:12px;font-weight:700;" +
     "letter-spacing:.02em;color:#fff}" +
@@ -93,7 +100,7 @@
     "#osaki-warranty-teaser p{font-size:12px}" +
     "#osaki-warranty-btn .label{display:none}" +
     "#osaki-warranty-btn .icon-wrap{width:38px;height:38px}" +
-    "#osaki-warranty-btn .icon-main{font-size:20px}}" +
+    "#osaki-warranty-btn .icon-main .icon-svg{width:20px;height:20px}}" +
     /* Hide our launcher while Tidio (sales) chat is open — avoids overlap */
     "body.osaki-tidio-chat-open #osaki-warranty-btn," +
     "body.osaki-tidio-chat-open #osaki-warranty-teaser{" +
@@ -175,7 +182,7 @@
     teaser.id = "osaki-warranty-teaser";
     teaser.setAttribute("role", "status");
     teaser.setAttribute("aria-live", "polite");
-    teaser.innerHTML = "<p>Need Help</p>";
+    teaser.innerHTML = "<p>Chair help?</p>";
     root.appendChild(teaser);
     setTimeout(hideTeaser, TEASER_AUTO_HIDE_MS);
   }
@@ -187,8 +194,10 @@
   btn.innerHTML =
     '<span class="icon-wrap" aria-hidden="true">' +
     '<span class="icon-ring"></span>' +
-    '<span class="icon-main">🛡️</span>' +
-    '<span class="icon-badge">✓</span>' +
+    '<span class="icon-main">' +
+    SUPPORT_ICON_SVG +
+    "</span>" +
+    '<span class="icon-badge">?</span>' +
     "</span>" +
     '<span class="label"><strong>Setup · Warranty · Delivery</strong>' +
     "<em>Guided help for your chair</em></span>";
