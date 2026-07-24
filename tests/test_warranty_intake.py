@@ -85,6 +85,7 @@ def test_extract_high_confidence_keeps_only_valid_keys(monkeypatch):
         "confidence": "high",
         "summary": "Footrest air not inflating on OS-4000T.",
     }
+    monkeypatch.setattr(warranty_intake, "_keyword_workflow_prefill", lambda text: None)
     monkeypatch.setattr(warranty_intake, "_openai_client", lambda: _FakeClient(payload))
     out = extract_workflow_prefill(
         free_text="OS-4000T footrest air not inflating",
@@ -103,6 +104,7 @@ def test_extract_low_confidence_drops_result(monkeypatch):
         "confidence": "medium",
         "summary": "Not sure",
     }
+    monkeypatch.setattr(warranty_intake, "_keyword_workflow_prefill", lambda text: None)
     monkeypatch.setattr(warranty_intake, "_openai_client", lambda: _FakeClient(payload))
     out = extract_workflow_prefill(free_text="I have a problem", nodes=_NODES)
     assert out["answer_keys"] == []
@@ -115,6 +117,7 @@ def test_extract_injects_warranty_root_when_missing(monkeypatch):
         "confidence": "high",
         "summary": "Power issue.",
     }
+    monkeypatch.setattr(warranty_intake, "_keyword_workflow_prefill", lambda text: None)
     monkeypatch.setattr(warranty_intake, "_openai_client", lambda: _FakeClient(payload))
     out = extract_workflow_prefill(free_text="chair will not turn on", nodes=_NODES)
     assert out["answer_keys"][0] == "warranty"
@@ -127,6 +130,26 @@ def test_extract_returns_empty_when_no_client(monkeypatch):
     out = extract_workflow_prefill(free_text="something wrong", nodes=_NODES)
     assert out["answer_keys"] == []
     assert out["source"] == "empty"
+
+
+def test_extract_keyword_footrest_air_without_llm(monkeypatch):
+    monkeypatch.setattr(warranty_intake, "_openai_client", lambda: None)
+    out = extract_workflow_prefill(
+        free_text="OS-4000T footrest air not inflating",
+        nodes=_NODES,
+    )
+    assert out["source"] == "keyword"
+    assert out["answer_keys"] == ["warranty", "defect", "air", "footrest"]
+    assert out["confidence"] == "high"
+
+
+def test_normalize_air_footrest_keys_prefers_air_location_path():
+    assert warranty_intake._normalize_air_footrest_keys(
+        ["warranty", "defect", "footrest", "air"]
+    ) == ["warranty", "defect", "air", "footrest"]
+    assert warranty_intake._normalize_air_footrest_keys(
+        ["warranty", "defect", "footrest", "air"]
+    )[-1] == "footrest"
 
 
 def test_extract_model_only_skips_llm_and_defect_branch(monkeypatch):

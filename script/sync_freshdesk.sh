@@ -1,45 +1,100 @@
 #!/usr/bin/env bash
 # Weekly Freshdesk → warranty knowledge sync (run from project root on EC2).
 #
-# Uses Search API: Resolved/Closed tickets only (see freshdesk_sync.py).
-# Defaults: 30 search pages (~900 resolved cap) × up to 12 calendar months.
+# Calls sync helpers inside the backend container, then invalidates caches.
+# On failure, sends an ops alert email (same path as Shopify sync).
 #
-# Cron example (Sundays 3:00 AM):
-#   0 3 * * 0 /home/ubuntu/AI_Chat_Bot/script/sync_freshdesk.sh
+# Cron example (Sundays 2:30 AM, before Shopify):
+#   30 2 * * 0 /home/ubuntu/AI_Chat_Bot/script/sync_freshdesk.sh
 #
 # Override via env:
-#   FRESHDESK_SYNC_MAX_PAGES=20 FRESHDESK_SYNC_MONTHS_BACK=6 ./script/sync_freshdesk.sh
-#   FRESHDESK_SYNC_KB=1 ./script/sync_freshdesk.sh   # also sync Solutions/KB
-#   FRESHDESK_NO_REBUILD_FAISS=1 ./script/sync_freshdesk.sh  # skip FAISS rebuild
+#   FRESHDESK_SYNC_NO_ALERT=1 ./script/sync_freshdesk.sh
+#   FRESHDESK_SYNC_MONTHS=6 ./script/sync_freshdesk.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-MAX_PAGES="${FRESHDESK_SYNC_MAX_PAGES:-30}"
-MONTHS_BACK="${FRESHDESK_SYNC_MONTHS_BACK:-12}"
-SYNC_KB="${FRESHDESK_SYNC_KB:-0}"
-NO_REBUILD_FAISS="${FRESHDESK_NO_REBUILD_FAISS:-0}"
+NO_ALERT="${FRESHDESK_SYNC_NO_ALERT:-0}"
+MONTHS="${FRESHDESK_SYNC_MONTHS:-6}"
+PAGES="${FRESHDESK_SYNC_PAGES:-20}"
 
 mkdir -p "$ROOT/logs"
 LOG="$ROOT/logs/freshdesk_sync.log"
 
-KB_ARGS=()
-if [[ "${SYNC_KB}" == "1" || "${SYNC_KB}" == "true" ]]; then
-  KB_ARGS=(--sync-kb)
-fi
-
-FAISS_ARGS=()
-if [[ "${NO_REBUILD_FAISS}" == "1" || "${NO_REBUILD_FAISS}" == "true" ]]; then
-  FAISS_ARGS=(--no-rebuild-faiss)
-fi
+_notify_failure() {
+  local exit_code=$?
+  if [[ "${NO_ALERT}" == "1" || "${NO_ALERT}" == "true" ]]; then
+    return "${exit_code}"
+  fi
+  python3 "$ROOT/script/notify_ops_alert.py" \
+    --subject "[AI Chat Bot] Freshdesk knowledge sync failed" \
+    --body "Freshdesk weekly sync exited with code ${exit_code} on $(hostname)." \
+    --body-file "$LOG" \
+    --tail 80 || true
+  return "${exit_code}"
+}
 
 {
-  echo "$(date -Is) Starting Freshdesk sync (max_pages=${MAX_PAGES}, months_back=${MONTHS_BACK}, sync_kb=${SYNC_KB}, rebuild_faiss=$((1-NO_REBUILD_FAISS)))"
-  docker compose exec -T backend python script/freshdesk_extractor.py \
-    --max-pages "${MAX_PAGES}" \
-    --months-back "${MONTHS_BACK}" \
-    "${KB_ARGS[@]}" \
-    "${FAISS_ARGS[@]}"
-  echo "$(date -Is) Freshdesk sync finished"
-} >> "$LOG" 2>&1
+  echo "$(date -Is) Starting Freshdesk knowledge sync (months=${MONTHS}, pages=${PAGES})"
+
+  FRESHDESK_SYNC_MONTHS="${MONTHS}" FRESHDESK_SYNC_PAGES="${PAGES}" \
+    docker compose exec -T \
+      -e "FRESHDESK_SYNC_MONTHS=${MONTHS}" \
+      -e "FRESHDESK_SYNC_PAGES=${PAGES}" \
+      backend python - <<'PY'
+import os
+import sys
+
+sys.path.insert(0, "/app/app")
+sys.path.insert(0, "/app")
+
+from freshdesk_sync import sync_freshdesk_knowledge, sync_freshdesk_solutions
+from freshdesk_knowledge_refresh import (
+    build_knowledge_yield_stats,
+    invalidate_warranty_knowledge_caches,
+    log_kb_sync_yield,
+    log_ticket_sync_yield,
+)
+
+months = int(os.environ.get("FRESHDESK_SYNC_MONTHS", "6"))
+pages = int(os.environ.get("FRESHDESK_SYNC_PAGES", "20"))
+
+ticket_result = sync_freshdesk_knowledge(max_pages=pages, months_back=months)
+print("tickets:", ticket_result)
+ticket_ok = bool(ticket_result.get("ok", True))
+ticket_count = int(
+    ticket_result.get("ticket_count")
+    or ticket_result.get("usable_qa_pairs")
+    or 0
+)
+resolved_scanned = int(ticket_result.get("resolved_scanned") or 0)
+invalidate_warranty_knowledge_caches()
+stats = build_knowledge_yield_stats(
+    synced_ticket_rows=ticket_count,
+    resolved_scanned=resolved_scanned,
+)
+log_ticket_sync_yield(
+    ok=ticket_ok,
+    ticket_count=ticket_count,
+    resolved_scanned=resolved_scanned,
+    stats=stats,
+)
+
+kb_result = sync_freshdesk_solutions(max_articles=500)
+print("kb:", kb_result)
+kb_ok = bool(kb_result.get("ok", True))
+article_count = int(kb_result.get("article_count") or 0)
+invalidate_warranty_knowledge_caches()
+kb_stats = build_knowledge_yield_stats(synced_kb_articles=article_count)
+log_kb_sync_yield(ok=kb_ok, article_count=article_count, stats=kb_stats)
+
+if not ticket_ok:
+    raise SystemExit(f"ticket sync failed: {ticket_result}")
+if not kb_ok:
+    raise SystemExit(f"kb sync failed: {kb_result}")
+print("knowledge caches invalidated")
+PY
+
+  echo "$(date -Is) Freshdesk knowledge sync finished"
+} >> "$LOG" 2>&1 || _notify_failure

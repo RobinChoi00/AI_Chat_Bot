@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
-# Install weekly Freshdesk ticket sync on EC2 (Sundays 3:00 AM server time).
+# Install weekly Freshdesk knowledge sync on EC2 (Sundays 2:30 AM server time).
 #
 # Usage (on EC2, from project root):
 #   chmod +x script/install_freshdesk_cron.sh
 #   ./script/install_freshdesk_cron.sh
-#
-# To include KB sync each week:
-#   FRESHDESK_SYNC_KB=1 ./script/install_freshdesk_cron.sh
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SYNC="$ROOT/script/sync_freshdesk.sh"
 MARKER="# AI_Chat_Bot Freshdesk weekly sync"
-CRON_LINE="0 3 * * 0 ${SYNC} ${MARKER}"
+CRON_LINE="30 2 * * 0 ${SYNC} ${MARKER}"
 
 chmod +x "$SYNC"
 

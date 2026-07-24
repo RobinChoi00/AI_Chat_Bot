@@ -59,6 +59,14 @@ _ISSUE_KEYWORDS: dict[str, tuple[str, ...]] = {
         "massage",
         "air",
         "inflate",
+        "airbag",
+        "footrest",
+        "foot rest",
+        "not inflating",
+        "won't inflate",
+        "wont inflate",
+        "calf",
+        "legrest",
     ),
 }
 

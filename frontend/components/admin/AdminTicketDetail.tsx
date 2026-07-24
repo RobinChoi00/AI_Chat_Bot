@@ -138,6 +138,7 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
         "error_code_gate_completed",
         "pending_terminal",
         "troubleshooting_history",
+        "chat_timeline",
       ].includes(key)
   );
   const fonz = ticket.fonz_diagnostics;
@@ -458,6 +459,41 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
             </div>
           </div>
         )}
+
+        {Array.isArray(ticket.collected_data?.chat_timeline) &&
+          (ticket.collected_data.chat_timeline as unknown[]).length > 0 && (
+            <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50/50 p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-600">
+                Extra chat (tips & side questions)
+              </p>
+              <ul className="space-y-2">
+                {(ticket.collected_data.chat_timeline as Array<Record<string, unknown>>).map(
+                  (event, idx) => {
+                    const role = String(event.role || "");
+                    const kind = String(event.kind || "");
+                    const text = String(event.text || "");
+                    const when = formatTurnTime(
+                      typeof event.created_at === "string" ? event.created_at : null
+                    );
+                    return (
+                      <li
+                        key={`${idx}-${when}`}
+                        className="rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs"
+                      >
+                        <div className="mb-1 flex flex-wrap gap-2 text-[10px] text-indigo-500">
+                          <span className="font-semibold uppercase">
+                            {role === "user" ? "Customer" : "Bot"} · {kind}
+                          </span>
+                          {when ? <span className="ml-auto">{when}</span> : null}
+                        </div>
+                        <p className="whitespace-pre-wrap text-gray-800">{text}</p>
+                      </li>
+                    );
+                  }
+                )}
+              </ul>
+            </div>
+          )}
       </section>
 
       {/* ── Evidence ─────────────────────────────────────────────── */}

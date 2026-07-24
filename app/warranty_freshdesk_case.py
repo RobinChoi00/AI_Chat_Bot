@@ -96,11 +96,43 @@ def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
     if turns:
         lines.append("")
         lines.append("Recent workflow answers:")
-        for turn in list(turns)[-8:]:
-            prompt = (getattr(turn, "node_prompt", None) or "")[:120]
+        for turn in list(turns)[-12:]:
+            prompt = (getattr(turn, "node_prompt", None) or "")[:160]
             answer = getattr(turn, "customer_answer", None) or ""
+            key = getattr(turn, "answer_key", None) or ""
             lines.append(f"- Q: {prompt}")
-            lines.append(f"  A: {answer}")
+            lines.append(f"  A: {answer}" + (f" (key: {key})" if key and key != answer else ""))
+
+    intake = str(collected.get("intake_summary") or collected.get("intake_raw_message") or "").strip()
+    if intake:
+        lines.append("")
+        lines.append("Customer intake summary:")
+        lines.append(intake[:800])
+
+    timeline = collected.get("chat_timeline")
+    if isinstance(timeline, list) and timeline:
+        lines.append("")
+        lines.append("Extra chat tips / side questions:")
+        for event in timeline[-8:]:
+            if not isinstance(event, dict):
+                continue
+            role = str(event.get("role") or "?")
+            kind = str(event.get("kind") or "")
+            text = str(event.get("text") or "").strip()
+            if not text:
+                continue
+            lines.append(f"- [{role}/{kind}] {text[:240]}")
+
+    history = collected.get("troubleshooting_history")
+    if isinstance(history, list) and history:
+        lines.append("")
+        lines.append("Troubleshooting outcomes:")
+        for row in history[-6:]:
+            if not isinstance(row, dict):
+                continue
+            outcome = str(row.get("outcome") or "")
+            node = str(row.get("terminal_node_id") or "")
+            lines.append(f"- {outcome}" + (f" @ {node}" if node else ""))
 
     lines.append("")
     lines.append("Review this case in the warranty admin portal.")

@@ -128,6 +128,9 @@ export interface MetricsTotals {
   completion_rate_pct: number;
   contact_captured: number;
   contact_rate_pct: number;
+  email_gate_provided?: number;
+  email_gate_skipped?: number;
+  email_gate_provide_rate_pct?: number;
   admin_decided: number;
   resolved: number;
   resolved_rate_pct: number;

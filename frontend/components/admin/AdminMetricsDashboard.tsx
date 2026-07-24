@@ -204,6 +204,12 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
           hint={`${totals.contact_captured} customers left an email`}
         />
         <KpiCard
+          label="Intake email provided"
+          value={`${totals.email_gate_provide_rate_pct ?? 0}%`}
+          hint={`${totals.email_gate_provided ?? 0} provided / ${totals.email_gate_skipped ?? 0} skipped at gate`}
+          tone={(totals.email_gate_provide_rate_pct ?? 0) >= 70 ? "good" : "default"}
+        />
+        <KpiCard
           label="All resolved"
           value={`${totals.resolved} / ${totals.reached_terminal}`}
           hint={

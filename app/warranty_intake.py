@@ -18,7 +18,8 @@ Design contract
   lower is dropped silently (workflow continues as a normal multiple-choice).
 - Graceful no-op: if no OPENAI_API_KEY, malformed JSON, or zero high-confidence
   picks, this function returns an empty extraction and the workflow behaves
-  identically to today.
+  identically to today — except a small keyword prefill path may still
+  advance obvious cases (e.g. footrest air) without the LLM.
 - This module does NOT call WarrantyEngine itself; the caller (main.py route)
   does the actual submit_answer loop so the engine remains the single source
   of state truth.
@@ -35,6 +36,65 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 _MAX_FREE_TEXT_LEN = 1000
+
+_AIR_WORDS = (
+    "air",
+    "airbag",
+    "air bag",
+    "inflate",
+    "inflating",
+    "inflation",
+    "no air",
+    "won't inflate",
+    "wont inflate",
+    "not inflate",
+    "doesn't inflate",
+    "doesnt inflate",
+)
+_FOOTREST_WORDS = (
+    "footrest",
+    "foot rest",
+    "legrest",
+    "leg rest",
+    "calf",
+    "calves",
+    "ottoman",
+)
+_EXTEND_WORDS = ("extend", "extension", "telescop", "won't extend", "wont extend")
+_ROLLER_WORDS = ("roller", "rollers", "knead")
+_POWER_WORDS = (
+    "won't turn on",
+    "wont turn on",
+    "no power",
+    "not turning on",
+    "dead",
+    "fuse",
+    "back switch",
+)
+_REMOTE_WORDS = ("remote", "controller", "tablet", "screen blank")
+_RECLINE_WORDS = ("recline", "zero g", "zero-g", "zerog", "lay flat")
+_ROLLING_WORDS = ("massage head", "rollers stuck", "rolling", "kneading", "mechanism")
+_HEAT_WORDS = ("heat", "heating", "won't heat", "wont heat", "too hot", "not warm")
+_VOICE_WORDS = ("voice", "alexa", "hey osaki", "microphone", "ghost voice")
+_COSMETIC_WORDS = ("scratch", "tear", "ripped", "cosmetic", "leather damage", "seam")
+_DELIVERY_WORDS = (
+    "delivery",
+    "shipping",
+    "tracking",
+    "fedex",
+    "ups",
+    "carrier",
+    "in transit",
+)
+_INSTALL_WORDS = (
+    "install",
+    "installation",
+    "assembly",
+    "assemble",
+    "setup",
+    "set up",
+    "put together",
+)
 
 _DEFECT_TYPE_KEYS = frozenset(
     {
@@ -494,6 +554,164 @@ def _sanitize_llm_error_code_guess(
     return kept, safe_summary
 
 
+def _norm_intake(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").lower()).strip()
+
+
+def _has_any(text: str, words: tuple[str, ...]) -> bool:
+    return any(word in text for word in words)
+
+
+def _normalize_air_footrest_keys(answer_keys: list[str]) -> list[str]:
+    """
+    Rewrite overloaded footrest/air sequences into the flowchart-safe path:
+    warranty → defect → air → footrest
+    """
+    if not answer_keys:
+        return answer_keys
+    keys = list(answer_keys)
+    if "defect" not in keys:
+        return keys
+
+    # Prefer air-location path when both air and footrest appear as defect siblings.
+    if "air" in keys and "footrest" in keys:
+        out: list[str] = []
+        seen: set[str] = set()
+        for key in keys:
+            if key == "footrest" and "air" not in seen:
+                # footrest before air → treat as air location after air
+                continue
+            if key not in seen:
+                out.append(key)
+                seen.add(key)
+        if "air" in out and "footrest" not in out:
+            # Insert footrest after air when it was dropped above.
+            air_idx = out.index("air")
+            out.insert(air_idx + 1, "footrest")
+        return out
+
+    # On mechanical footrest branch, map air-ish keys to air_not_inflating.
+    if "footrest" in keys:
+        mapped: list[str] = []
+        for key in keys:
+            if key in {"air", "air_not_inflating"}:
+                mapped.append("air_not_inflating")
+            else:
+                mapped.append(key)
+        # de-dupe while preserving order
+        deduped: list[str] = []
+        seen2: set[str] = set()
+        for key in mapped:
+            if key in seen2:
+                continue
+            deduped.append(key)
+            seen2.add(key)
+        return deduped
+
+    return keys
+
+
+def _keyword_workflow_prefill(text: str) -> Optional[dict[str, Any]]:
+    """
+    Deterministic high-confidence prefill for common symptom phrases.
+
+    Returns None when the text is too ambiguous for a keyword path.
+    """
+    norm = _norm_intake(text)
+    if not norm:
+        return None
+
+    has_air = _has_any(norm, _AIR_WORDS)
+    has_foot = _has_any(norm, _FOOTREST_WORDS)
+    has_extend = _has_any(norm, _EXTEND_WORDS)
+    has_roller = _has_any(norm, _ROLLER_WORDS)
+
+    # Footrest air is the highest-value / most ambiguous case.
+    if has_air and has_foot:
+        return {
+            "answer_keys": ["warranty", "defect", "air", "footrest"],
+            "model_name": _extract_model_from_intake(text),
+            "confidence": "high",
+            "summary": "Footrest air not inflating.",
+            "source": "keyword",
+        }
+
+    if has_air and not has_foot:
+        return {
+            "answer_keys": ["warranty", "defect", "air"],
+            "model_name": _extract_model_from_intake(text),
+            "confidence": "high",
+            "summary": "Air inflation issue.",
+            "source": "keyword",
+        }
+
+    if has_foot and has_extend and not has_air:
+        return {
+            "answer_keys": ["warranty", "defect", "footrest"],
+            "model_name": _extract_model_from_intake(text),
+            "confidence": "high",
+            "summary": "Footrest extension issue.",
+            "source": "keyword",
+        }
+
+    if has_foot and has_roller and not has_air:
+        return {
+            "answer_keys": ["warranty", "defect", "footrest"],
+            "model_name": _extract_model_from_intake(text),
+            "confidence": "high",
+            "summary": "Footrest roller issue.",
+            "source": "keyword",
+        }
+
+    if has_foot and not has_air:
+        return {
+            "answer_keys": ["warranty", "defect", "footrest"],
+            "model_name": _extract_model_from_intake(text),
+            "confidence": "high",
+            "summary": "Footrest issue.",
+            "source": "keyword",
+        }
+
+    defect_checks: list[tuple[tuple[str, ...], str, str]] = [
+        (_POWER_WORDS, "power", "Power issue."),
+        (_REMOTE_WORDS, "remote", "Remote / controller issue."),
+        (_RECLINE_WORDS, "recline", "Recline issue."),
+        (_ROLLING_WORDS, "rolling", "Massage mechanism issue."),
+        (_HEAT_WORDS, "heat", "Heating issue."),
+        (_VOICE_WORDS, "voice", "Voice control issue."),
+        (_COSMETIC_WORDS, "cosmetic", "Cosmetic damage."),
+    ]
+    for words, key, summary in defect_checks:
+        if _has_any(norm, words):
+            return {
+                "answer_keys": ["warranty", "defect", key],
+                "model_name": _extract_model_from_intake(text),
+                "confidence": "high",
+                "summary": summary,
+                "source": "keyword",
+            }
+
+    # Issue-type only (no defect category) — still better than landing cold.
+    if _has_any(norm, _DELIVERY_WORDS) and not _has_any(norm, _INSTALL_WORDS):
+        return {
+            "answer_keys": ["warranty", "delivery"],
+            "model_name": _extract_model_from_intake(text),
+            "confidence": "high",
+            "summary": "Delivery / shipping help.",
+            "source": "keyword",
+        }
+    if _has_any(norm, _INSTALL_WORDS) and not _has_any(norm, _DELIVERY_WORDS):
+        return {
+            "answer_keys": ["warranty", "installation"],
+            "model_name": _extract_model_from_intake(text),
+            "confidence": "high",
+            "summary": "Setup / installation help.",
+            "source": "keyword",
+        }
+
+    return None
+
+
 def extract_workflow_prefill(
     *,
     free_text: str,
@@ -506,7 +724,7 @@ def extract_workflow_prefill(
         "model_name": "OS-4000T" or "",
         "confidence": "high",
         "summary": "Footrest air not inflating on OS-4000T.",
-        "source": "llm" | "fonz" | "empty",
+        "source": "llm" | "fonz" | "keyword" | "empty",
       }
     On any failure or low-confidence result, returns an "empty" dict with
     answer_keys=[] so the caller falls back to the normal flow.
@@ -545,6 +763,11 @@ def extract_workflow_prefill(
     fonz_hit = _fonz_prefill_from_text(text)
     if fonz_hit is not None:
         return fonz_hit
+
+    # Deterministic keyword path before LLM — works offline / when API fails.
+    keyword_hit = _keyword_workflow_prefill(text)
+    if keyword_hit is not None:
+        return keyword_hit
 
     client = _openai_client()
     if client is None:
@@ -623,6 +846,8 @@ def extract_workflow_prefill(
     )
     if not answer_keys:
         return empty
+
+    answer_keys = _normalize_air_footrest_keys(answer_keys)
 
     return {
         "answer_keys": answer_keys,

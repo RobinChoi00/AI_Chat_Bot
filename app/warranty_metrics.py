@@ -162,6 +162,8 @@ async def warranty_metrics(
     started = len(tickets)
     reached_terminal = 0
     contact_captured = 0
+    email_gate_provided = 0
+    email_gate_skipped = 0
     admin_decided = 0
     resolved = 0
     abandoned = 0
@@ -192,13 +194,22 @@ async def warranty_metrics(
         troubleshooting_outcome = str(
             collected.get("troubleshooting_outcome") or ""
         ).strip().lower()
-        has_email = bool(str(collected.get("customer_email") or "").strip())
+        has_email = bool(
+            str(collected.get("customer_email") or "").strip()
+            or str(collected.get("customer_contact_email") or "").strip()
+        )
+        intake_gate = str(collected.get("intake_email_gate_status") or "").strip().lower()
         is_completed = status != "in_progress"
 
         status_counts[status] += 1
         issue_totals[issue_type]["count"] += 1
         domain_totals[dom]["count"] += 1
         daily[day]["started"] += 1
+
+        if intake_gate == "provided":
+            email_gate_provided += 1
+        elif intake_gate == "skipped":
+            email_gate_skipped += 1
 
         if is_completed:
             reached_terminal += 1
@@ -266,6 +277,12 @@ async def warranty_metrics(
             "completion_rate_pct": _percent(reached_terminal, started),
             "contact_captured": contact_captured,
             "contact_rate_pct": _percent(contact_captured, started),
+            "email_gate_provided": email_gate_provided,
+            "email_gate_skipped": email_gate_skipped,
+            "email_gate_provide_rate_pct": _percent(
+                email_gate_provided,
+                email_gate_provided + email_gate_skipped,
+            ),
             "admin_decided": admin_decided,
             "resolved": resolved,
             "resolved_rate_pct": _percent(resolved, reached_terminal),

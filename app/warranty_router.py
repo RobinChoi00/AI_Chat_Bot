@@ -1075,9 +1075,35 @@ def _build_side_question_response(
     engine,
     ticket_id: str,
     message: str,
+    *,
+    customer_text: str = "",
 ) -> Dict[str, Any]:
     ticket = engine.get_ticket(ticket_id)
     node = engine.get_current_node(ticket_id)
+    node_id = str((node or {}).get("node_id") or getattr(ticket, "current_node_id", "") or "")
+    try:
+        from warranty_chat_timeline import append_chat_event  # noqa: WPS433
+
+        if customer_text.strip():
+            append_chat_event(
+                ticket,
+                role="user",
+                kind="side_question",
+                text=customer_text,
+                node_id=node_id,
+            )
+        if message.strip():
+            append_chat_event(
+                ticket,
+                role="assistant",
+                kind="side_question",
+                text=message,
+                node_id=node_id,
+            )
+            # Refresh after persist.
+            ticket = engine.get_ticket(ticket_id) or ticket
+    except Exception:
+        pass
     session_id = str(getattr(ticket, "session_id", "") or "")
     payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
     payload["side_question"] = True
@@ -1337,6 +1363,24 @@ def _serialize_ticket_state(
     )
     terminal_enrichment = enrichment.get("terminal_enrichment")
     assistant_message = enrichment.get("assistant_message")
+
+    # Persist enriched assistant tips once per node (best-effort).
+    try:
+        base_prompt = (node_prompt or "").strip()
+        enriched = (assistant_message or "").strip()
+        if enriched and enriched != base_prompt and node_id:
+            from warranty_chat_timeline import append_chat_event  # noqa: WPS433
+
+            append_chat_event(
+                ticket,
+                role="assistant",
+                kind="enrichment",
+                text=enriched,
+                node_id=str(node_id),
+            )
+    except Exception:
+        pass
+
     collected = ticket.get_collected()
     troubleshooting_outcome = str(
         collected.get("troubleshooting_outcome") or ""
@@ -1844,11 +1888,15 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
 
     side_message = _maybe_side_question_message(engine, ticket_id, answer)
     if side_message:
-        return _build_side_question_response(engine, ticket_id, side_message)
+        return _build_side_question_response(
+            engine, ticket_id, side_message, customer_text=answer
+        )
 
     defect_guard = _guard_defect_requires_model(engine, ticket_id, answer)
     if defect_guard:
-        return _build_side_question_response(engine, ticket_id, defect_guard)
+        return _build_side_question_response(
+            engine, ticket_id, defect_guard, customer_text=answer
+        )
 
     try:
         result, nlp_interpreted, clarify = _submit_answer_with_nlp(
@@ -1860,7 +1908,9 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if clarify:
-        return _build_side_question_response(engine, ticket_id, clarify)
+        return _build_side_question_response(
+            engine, ticket_id, clarify, customer_text=answer
+        )
 
     if result is None:
         raise HTTPException(status_code=422, detail="Could not process answer.")
