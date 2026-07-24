@@ -5,13 +5,12 @@ import { FormEvent, useState } from "react";
 interface Props {
   disabled?: boolean;
   onContinue: (email: string) => Promise<void> | void;
-  onSkip: () => Promise<void> | void;
 }
 
 const EMAIL_RE = /^[\w.+-]+@[\w.-]+\.\w+$/;
 
-/** Soft-required email step shown after I Agree, before chat is unlocked. */
-export default function ChatEmailGate({ disabled, onContinue, onSkip }: Props) {
+/** Required email step shown after I Agree, before chat is unlocked. */
+export default function ChatEmailGate({ disabled, onContinue }: Props) {
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -36,28 +35,14 @@ export default function ChatEmailGate({ disabled, onContinue, onSkip }: Props) {
     }
   }
 
-  async function handleSkip() {
-    if (busy || disabled) return;
-    setBusy(true);
-    setError("");
-    try {
-      await onSkip();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not continue.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <div className="mx-3 mb-4 rounded-xl border border-sky-200 bg-sky-50/90 px-4 py-4 sm:mx-4">
       <p className="text-sm font-semibold text-sky-950">
         Where should we email follow-up?
       </p>
       <p className="mt-1 text-sm text-sky-900">
-        We use this only so our warranty team can reply about your case — parts,
-        technician updates, and support. You can skip for now and add it later if
-        needed.
+        Please enter your email so our warranty team can reply about your case —
+        parts, technician updates, and support.
       </p>
       <p className="mt-2 rounded-lg border border-sky-100 bg-white/70 px-3 py-2 text-xs leading-snug text-sky-800">
         We do <strong>not</strong> sell or share your email with third parties, and we
@@ -66,11 +51,12 @@ export default function ChatEmailGate({ disabled, onContinue, onSkip }: Props) {
       </p>
       <form onSubmit={handleContinue} className="mt-3 space-y-2">
         <label className="block text-xs font-medium text-sky-900" htmlFor="chat-email-gate">
-          Email address
+          Email address <span className="text-red-500">*</span>
         </label>
         <input
           id="chat-email-gate"
           type="email"
+          required
           autoComplete="email"
           inputMode="email"
           value={email}
@@ -91,14 +77,6 @@ export default function ChatEmailGate({ disabled, onContinue, onSkip }: Props) {
           {busy ? "Saving…" : "Continue"}
         </button>
       </form>
-      <button
-        type="button"
-        disabled={busy || disabled}
-        onClick={handleSkip}
-        className="mt-2 w-full text-center text-xs font-medium text-sky-800 underline-offset-2 hover:underline disabled:opacity-50"
-      >
-        Skip for now
-      </button>
     </div>
   );
 }

@@ -75,6 +75,51 @@ function formatCollectedValue(value: unknown): ReactNode {
   return String(value);
 }
 
+const ANSWER_KEY_LABELS: Record<string, string> = {
+  warranty: "Warranty issue",
+  sales: "Sales inquiry",
+  installation: "Setup / installation",
+  delivery: "Delivery",
+  defect: "Chair malfunction",
+  power: "Power issue",
+  remote: "Remote / controller",
+  air: "Air / inflation",
+  rolling: "Massage mechanism",
+  recline: "Recline / position",
+  footrest: "Footrest",
+  cosmetic: "Cosmetic damage",
+  heat: "Heat",
+  voice: "Voice control",
+  general_setup: "General setup help",
+  footrest_or_no_air: "Footrest / no air",
+  yes: "Yes",
+  no: "No",
+};
+
+function humanAnswer(turn: AdminWarrantyTurn): string {
+  const raw = (turn.customer_answer || "").trim();
+  const key = (turn.answer_key || "").trim();
+  if (raw && raw !== key) return raw;
+  if (key && ANSWER_KEY_LABELS[key]) return ANSWER_KEY_LABELS[key];
+  if (raw) return ANSWER_KEY_LABELS[raw] || raw;
+  if (key) return key.replace(/_/g, " ");
+  return "—";
+}
+
+function formatTurnTime(iso: string | null): string {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
 export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
   const collectedEntries = Object.entries(ticket.collected_data ?? {}).filter(
     ([key]) =>
@@ -137,6 +182,12 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
               Follow up within 24 hours
             </span>
           </div>
+        ) : ticket.intake_email_gate_status === "skipped" ||
+          ticket.collected_data?.intake_email_gate_status === "skipped" ? (
+          <p className="text-sm text-amber-900">
+            Customer skipped the intake email step. Ask them to upload evidence with
+            an email, or use the final handoff contact form if they reach it.
+          </p>
         ) : (
           <p className="text-sm text-emerald-800">
             No customer email captured yet. Check conversation answers or ask the
@@ -320,9 +371,10 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
       {/* ── Conversation turns ───────────────────────────────────── */}
       <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-gray-500">
-          Conversation ({turns.length} step{turns.length !== 1 ? "s" : ""})
+          Conversation ({turns.length} step{turns.length !== 1 ? "s" : ""}
+          {ticket.current_node_id ? " + current" : ""})
         </h2>
-        {turns.length === 0 ? (
+        {turns.length === 0 && !ticket.current_node_prompt ? (
           <p className="text-sm text-gray-400 italic">No turns recorded yet.</p>
         ) : (
           <ol className="space-y-3">
@@ -332,37 +384,79 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
                   {i + 1}
                 </span>
                 <div className="min-w-0 flex-1 rounded-lg border border-gray-100 bg-gray-50 p-3 text-xs">
-                  <p className="mb-1 font-medium text-gray-700">
-                    <span className="rounded bg-gray-200 px-1 py-0.5 font-mono text-[10px]">
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <span className="rounded bg-gray-200 px-1 py-0.5 font-mono text-[10px] font-medium text-gray-700">
                       {turn.node_id}
                     </span>
                     {turn.node_type && (
-                      <span className="ml-2 text-gray-400">
-                        ({turn.node_type})
+                      <span className="text-gray-400">({turn.node_type})</span>
+                    )}
+                    {turn.created_at && (
+                      <span className="ml-auto text-[10px] text-gray-400">
+                        {formatTurnTime(turn.created_at)}
                       </span>
                     )}
-                  </p>
+                  </div>
                   {turn.node_prompt && (
-                    <p className="mb-1 text-gray-600">
-                      <span className="font-medium">Prompt:</span>{" "}
+                    <p className="mb-2 text-gray-600">
+                      <span className="font-medium text-gray-500">Bot asked:</span>{" "}
                       {turn.node_prompt}
                     </p>
                   )}
-                  {turn.customer_answer && (
-                    <p className="text-gray-800">
-                      <span className="font-medium">Answer:</span>{" "}
-                      {turn.customer_answer}
-                      {turn.answer_key && turn.answer_key !== turn.customer_answer && (
-                        <span className="ml-2 text-gray-400">
-                          (key: {turn.answer_key})
-                        </span>
-                      )}
+                  <p className="text-sm text-gray-900">
+                    <span className="font-medium text-indigo-700">Customer:</span>{" "}
+                    {humanAnswer(turn)}
+                  </p>
+                  {turn.answer_key &&
+                    turn.answer_key !== turn.customer_answer &&
+                    humanAnswer(turn) !== turn.answer_key && (
+                      <p className="mt-1 text-[10px] text-gray-400">
+                        key: {turn.answer_key}
+                      </p>
+                    )}
+                </div>
+              </li>
+            ))}
+
+            {ticket.current_node_id && (
+              <li className="flex gap-3">
+                <span className="mt-1 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-800">
+                  →
+                </span>
+                <div className="min-w-0 flex-1 rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-xs">
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <span className="rounded bg-amber-200/80 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
+                      Current step
+                    </span>
+                    <span className="rounded bg-white/80 px-1 py-0.5 font-mono text-[10px] text-amber-900">
+                      {ticket.current_node_id}
+                    </span>
+                  </div>
+                  {ticket.current_node_prompt ? (
+                    <p className="whitespace-pre-wrap text-sm text-amber-950">
+                      <span className="font-medium text-amber-800">Bot is showing:</span>{" "}
+                      {ticket.current_node_prompt}
+                    </p>
+                  ) : (
+                    <p className="text-amber-800/80 italic">
+                      Waiting on this node (prompt not available).
                     </p>
                   )}
                 </div>
               </li>
-            ))}
+            )}
           </ol>
+        )}
+
+        {hasTroubleshootingHistory && (
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Extra troubleshooting notes
+            </p>
+            <div className="text-xs text-slate-800">
+              {formatCollectedValue(troubleshootingHistory)}
+            </div>
+          </div>
         )}
       </section>
 

@@ -139,7 +139,7 @@ export default function WarrantyChat({
   const [emailGateDone, setEmailGateDone] = useState(() => {
     if (typeof window === "undefined") return false;
     const status = sessionStorage.getItem(CHAT_EMAIL_GATE_STORAGE_KEY);
-    return status === "provided" || status === "skipped";
+    return status === "provided";
   });
   const [intakeContactEmail, setIntakeContactEmail] = useState(() => {
     if (typeof window === "undefined") return "";
@@ -160,30 +160,22 @@ export default function WarrantyChat({
   }, [sessionId, storeDomain]);
 
   const completeEmailGate = useCallback(
-    async (options: { email?: string; skipped?: boolean }) => {
-      const skipped = Boolean(options.skipped);
+    async (options: { email: string }) => {
       const email = (options.email || "").trim();
       try {
         await recordWarrantySessionContactEmail(sessionId, {
-          customerEmail: skipped ? undefined : email,
-          skipped,
+          customerEmail: email,
+          skipped: false,
         });
       } catch (err) {
         console.warn("warranty session contact email failed", err);
         throw err;
       }
       if (typeof window !== "undefined") {
-        sessionStorage.setItem(
-          CHAT_EMAIL_GATE_STORAGE_KEY,
-          skipped ? "skipped" : "provided"
-        );
-        if (skipped) {
-          sessionStorage.removeItem(CHAT_CONTACT_EMAIL_STORAGE_KEY);
-        } else {
-          sessionStorage.setItem(CHAT_CONTACT_EMAIL_STORAGE_KEY, email);
-        }
+        sessionStorage.setItem(CHAT_EMAIL_GATE_STORAGE_KEY, "provided");
+        sessionStorage.setItem(CHAT_CONTACT_EMAIL_STORAGE_KEY, email);
       }
-      setIntakeContactEmail(skipped ? "" : email);
+      setIntakeContactEmail(email);
       setEmailGateDone(true);
       inputRef.current?.focus();
     },
@@ -1192,7 +1184,6 @@ export default function WarrantyChat({
           <ChatEmailGate
             disabled={loading}
             onContinue={(email) => completeEmailGate({ email })}
-            onSkip={() => completeEmailGate({ skipped: true })}
           />
         )}
         <div className="space-y-4">

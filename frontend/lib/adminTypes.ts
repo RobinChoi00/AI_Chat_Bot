@@ -46,12 +46,14 @@ export interface AdminWarrantyTicket {
   session_id: string;
   domain: string;
   current_node_id: string;
+  current_node_prompt?: string | null;
   status: AdminTicketStatus;
   issue_type: string | null;
   defect_type: string | null;
   model_name: string | null;
   collected_data: Record<string, unknown>;
   customer_email: string | null;
+  intake_email_gate_status?: string | null;
   channel?: string | null;
   caller_phone?: string | null;
   admin_decision: string | null;

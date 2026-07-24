@@ -5,7 +5,7 @@ import { resolveWarrantyStoreDomain } from "./warrantyStoreDomain";
 /** sessionStorage key — set when the customer taps I Agree. */
 export const CHAT_CONSENT_STORAGE_KEY = "warranty_chat_consent_accepted";
 
-/** sessionStorage — post-consent email gate: "provided" | "skipped". */
+/** sessionStorage — post-consent email gate: "provided". */
 export const CHAT_EMAIL_GATE_STORAGE_KEY = "warranty_chat_email_gate";
 
 /** sessionStorage — email entered at the post-consent gate (if provided). */

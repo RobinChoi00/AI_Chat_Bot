@@ -83,6 +83,11 @@ export default function AdminTicketQueue({ tickets }: Props) {
                   >
                     {t.customer_email}
                   </a>
+                ) : t.intake_email_gate_status === "skipped" ||
+                  t.collected_data?.intake_email_gate_status === "skipped" ? (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                    Skipped
+                  </span>
                 ) : (
                   <span className="text-gray-400">—</span>
                 )}

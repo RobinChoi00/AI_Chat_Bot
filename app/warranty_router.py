@@ -2009,7 +2009,27 @@ def _serialize_admin_ticket(ticket, turns=None, evidences=None) -> dict:
     payload["channel"] = collected.get("channel")
     payload["caller_phone"] = collected.get("caller_phone")
     payload["customer_email"] = resolve_customer_email(ticket, turns=turns, evidences=evidences)
+    payload["intake_email_gate_status"] = collected.get("intake_email_gate_status")
     payload["fonz_diagnostics"] = build_admin_fonz_payload(ticket)
+
+    # Current node prompt so admins can see what the customer is looking at
+    # even before that node is answered (no turn yet).
+    current_prompt = None
+    try:
+        engine = _lazy_engine()
+        ticket_id = str(getattr(ticket, "ticket_id", "") or "")
+        node = engine.get_current_node(ticket_id) if ticket_id else None
+        if isinstance(node, dict):
+            current_prompt = str(node.get("prompt") or "").strip() or None
+        if not current_prompt:
+            node_id = str(getattr(ticket, "current_node_id", "") or "")
+            nodes = engine.get_flowchart_nodes() if hasattr(engine, "get_flowchart_nodes") else {}
+            raw = nodes.get(node_id) if isinstance(nodes, dict) and node_id else None
+            if isinstance(raw, dict):
+                current_prompt = str(raw.get("prompt") or "").strip() or None
+    except Exception:
+        current_prompt = None
+    payload["current_node_prompt"] = current_prompt
     return payload
 
 
