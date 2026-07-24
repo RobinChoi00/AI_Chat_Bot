@@ -154,22 +154,23 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
     troubleshootingHistory !== "" &&
     !(Array.isArray(troubleshootingHistory) && troubleshootingHistory.length === 0);
 
-  let eligibility: {
+  type EligibilityInfo = {
     status?: string;
     purchase_date?: string;
     summary?: string;
     expires_on?: string;
     days_remaining?: number | null;
-  } | null = null;
+  };
+  let eligibility: EligibilityInfo | null = null;
   const eligibilityRaw = ticket.collected_data?.warranty_eligibility;
   if (typeof eligibilityRaw === "string" && eligibilityRaw.trim()) {
     try {
-      eligibility = JSON.parse(eligibilityRaw) as typeof eligibility;
+      eligibility = JSON.parse(eligibilityRaw) as EligibilityInfo;
     } catch {
       eligibility = null;
     }
   } else if (eligibilityRaw && typeof eligibilityRaw === "object") {
-    eligibility = eligibilityRaw as typeof eligibility;
+    eligibility = eligibilityRaw as EligibilityInfo;
   }
 
   return (
