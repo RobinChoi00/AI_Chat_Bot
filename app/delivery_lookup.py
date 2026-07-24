@@ -373,7 +373,10 @@ def format_warranty_tracking_message(
 
 
 def persist_snapshot(ticket_id: str, snapshot: TrackingSnapshot) -> None:
+    from warranty_eligibility import evaluate_purchase_eligibility  # noqa: WPS433
     from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    eligibility = evaluate_purchase_eligibility(snapshot.purchase_date)
 
     with warranty_db_session() as db:
         ticket = (
@@ -383,3 +386,46 @@ def persist_snapshot(ticket_id: str, snapshot: TrackingSnapshot) -> None:
         )
         if ticket:
             ticket.set_collected("tracking_snapshot", json.dumps(snapshot.to_dict()))
+            ticket.set_collected("warranty_eligibility", json.dumps(eligibility.to_dict()))
+            if eligibility.purchase_date_iso:
+                ticket.set_collected("purchase_date", eligibility.purchase_date_iso)
+            ticket.set_collected("warranty_eligibility_status", eligibility.status)
+
+
+def append_eligibility_to_tracking_message(message: str, ticket_id: str) -> str:
+    """Append a soft eligibility note when purchase date was evaluated."""
+    from warranty_eligibility import customer_eligibility_note  # noqa: WPS433
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    with warranty_db_session() as db:
+        ticket = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        if ticket is None:
+            return message
+        raw = ticket.get_collected().get("warranty_eligibility")
+    if not raw:
+        return message
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        return message
+    if not isinstance(data, dict):
+        return message
+    from warranty_eligibility import EligibilityResult  # noqa: WPS433
+
+    result = EligibilityResult(
+        status=str(data.get("status") or "unknown"),
+        purchase_date=str(data.get("purchase_date") or ""),
+        purchase_date_iso=str(data.get("purchase_date_iso") or ""),
+        eligibility_years=int(data.get("eligibility_years") or 3),
+        expires_on=str(data.get("expires_on") or ""),
+        days_remaining=data.get("days_remaining"),
+        summary=str(data.get("summary") or ""),
+    )
+    note = customer_eligibility_note(result)
+    if not note:
+        return message
+    return f"{message.rstrip()}{note}"

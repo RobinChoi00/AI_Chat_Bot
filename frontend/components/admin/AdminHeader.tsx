@@ -20,7 +20,7 @@ export default function AdminHeader() {
 
   return (
     <header className="sticky top-0 z-10 border-b border-gray-200 bg-white shadow-sm">
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
         {/* Brand */}
         <Link href="/admin/warranty" className="flex items-center gap-2 text-sm font-semibold text-gray-800 hover:text-indigo-600">
           <span className="text-lg">🛡️</span>
@@ -30,14 +30,33 @@ export default function AdminHeader() {
           </span>
         </Link>
 
-        {/* Logout */}
-        <button
-          onClick={handleLogout}
-          disabled={loggingOut}
-          className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50 hover:text-red-600 disabled:opacity-50"
-        >
-          {loggingOut ? "Signing out…" : "Sign out"}
-        </button>
+        <nav className="flex items-center gap-2 text-xs">
+          <Link
+            href="/admin/warranty"
+            className="rounded-md px-2 py-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+          >
+            Tickets
+          </Link>
+          <Link
+            href="/admin/warranty/dashboard"
+            className="rounded-md px-2 py-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+          >
+            Metrics
+          </Link>
+          <Link
+            href="/admin/ops"
+            className="rounded-md px-2 py-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+          >
+            Cost & feedback
+          </Link>
+          <button
+            onClick={handleLogout}
+            disabled={loggingOut}
+            className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50 hover:text-red-600 disabled:opacity-50"
+          >
+            {loggingOut ? "Signing out…" : "Sign out"}
+          </button>
+        </nav>
       </div>
     </header>
   );

@@ -139,6 +139,9 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
         "pending_terminal",
         "troubleshooting_history",
         "chat_timeline",
+        "warranty_eligibility",
+        "warranty_eligibility_status",
+        "purchase_date",
       ].includes(key)
   );
   const fonz = ticket.fonz_diagnostics;
@@ -150,6 +153,24 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
     troubleshootingHistory !== null &&
     troubleshootingHistory !== "" &&
     !(Array.isArray(troubleshootingHistory) && troubleshootingHistory.length === 0);
+
+  let eligibility: {
+    status?: string;
+    purchase_date?: string;
+    summary?: string;
+    expires_on?: string;
+    days_remaining?: number | null;
+  } | null = null;
+  const eligibilityRaw = ticket.collected_data?.warranty_eligibility;
+  if (typeof eligibilityRaw === "string" && eligibilityRaw.trim()) {
+    try {
+      eligibility = JSON.parse(eligibilityRaw) as typeof eligibility;
+    } catch {
+      eligibility = null;
+    }
+  } else if (eligibilityRaw && typeof eligibilityRaw === "object") {
+    eligibility = eligibilityRaw as typeof eligibility;
+  }
 
   return (
     <div className="space-y-6">
@@ -263,6 +284,34 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
           <Field label="Updated" value={formatDate(ticket.updated_at)} />
         </dl>
       </section>
+
+      {eligibility?.status && eligibility.status !== "unknown" && (
+        <section
+          className={`rounded-xl border p-5 shadow-sm ${
+            eligibility.status === "possibly_expired"
+              ? "border-amber-200 bg-amber-50"
+              : "border-sky-200 bg-sky-50"
+          }`}
+        >
+          <h2
+            className={`mb-3 text-sm font-semibold uppercase tracking-wide ${
+              eligibility.status === "possibly_expired"
+                ? "text-amber-800"
+                : "text-sky-800"
+            }`}
+          >
+            Warranty eligibility (soft)
+          </h2>
+          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <Field label="Status" value={eligibility.status} />
+            <Field label="Purchase date" value={eligibility.purchase_date} />
+            <Field label="Default expires" value={eligibility.expires_on} />
+          </dl>
+          {eligibility.summary ? (
+            <p className="mt-3 text-sm text-gray-700">{eligibility.summary}</p>
+          ) : null}
+        </section>
+      )}
 
       {/* ── Fonz error-code diagnostics (internal) ───────────────── */}
       {fonz?.error_code && (

@@ -79,6 +79,12 @@ export default async function AdminWarrantyQueuePage({
           >
             Completion dashboard →
           </Link>
+          <Link
+            href="/admin/ops"
+            className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-800 hover:bg-indigo-100"
+          >
+            Cost & feedback →
+          </Link>
         </div>
       </header>
 

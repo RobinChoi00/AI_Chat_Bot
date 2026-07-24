@@ -1206,6 +1206,7 @@ def _finalize_answer_response(
     previous_node = result.get("previous_node_id")
     if previous_node in ("delivery_get_tracking_number", "delivery_get_name"):
         from delivery_lookup import (  # noqa: WPS433
+            append_eligibility_to_tracking_message,
             build_self_service_lookup_links,
             format_warranty_tracking_message,
             lookup_by_order_or_email,
@@ -1232,14 +1233,18 @@ def _finalize_answer_response(
             lookup_kind=lookup_kind,
             raw_input=lookup_text,
         )
+        tracking_message = format_warranty_tracking_message(
+            snapshot,
+            domain=domain,
+            lookup_kind=lookup_kind,
+            raw_input=lookup_text,
+        )
+        tracking_message = append_eligibility_to_tracking_message(
+            tracking_message, ticket_id
+        )
         tracking_summary = {
             "available": snapshot.available,
-            "message": format_warranty_tracking_message(
-                snapshot,
-                domain=domain,
-                lookup_kind=lookup_kind,
-                raw_input=lookup_text,
-            ),
+            "message": tracking_message,
             "snapshot": snapshot.to_dict(),
             "self_service_links": [
                 {"label": label, "url": url} for label, url in self_service_links
