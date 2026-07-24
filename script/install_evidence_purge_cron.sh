@@ -8,19 +8,19 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PURGE="$ROOT/script/purge_warranty_evidence.py"
+PURGE_SH="$ROOT/script/purge_warranty_evidence.sh"
 MARKER="# AI_Chat_Bot warranty evidence purge"
-CRON_LINE="0 4 * * 0 cd ${ROOT} && python3 ${PURGE} --apply >> ${ROOT}/logs/evidence_purge.log 2>&1 ${MARKER}"
+CRON_LINE="0 4 * * 0 ${PURGE_SH} --apply ${MARKER}"
 
-chmod +x "$PURGE"
+chmod +x "$PURGE_SH" "$ROOT/script/purge_warranty_evidence.py"
 mkdir -p "$ROOT/logs"
 
-if crontab -l 2>/dev/null | grep -Fq "$MARKER"; then
-  echo "Evidence purge cron already installed."
-  crontab -l | grep -F "$MARKER" || true
-  exit 0
-fi
+# Drop any previous evidence-purge cron lines (old host-python form included).
+TMP="$(mktemp)"
+crontab -l 2>/dev/null | grep -vF "$MARKER" > "$TMP" || true
+echo "$CRON_LINE" >> "$TMP"
+crontab "$TMP"
+rm -f "$TMP"
 
-( crontab -l 2>/dev/null || true; echo "$CRON_LINE" ) | crontab -
 echo "Installed weekly evidence purge:"
 crontab -l | grep -F "$MARKER"
