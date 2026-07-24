@@ -559,7 +559,17 @@ def _norm_intake(text: str) -> str:
 
 
 def _has_any(text: str, words: tuple[str, ...]) -> bool:
-    return any(word in text for word in words)
+    """Match whole words/phrases; avoid ``air`` matching inside ``chair``."""
+    for word in words:
+        if not word:
+            continue
+        if " " in word or "'" in word or "-" in word:
+            if word in text:
+                return True
+            continue
+        if re.search(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])", text):
+            return True
+    return False
 
 
 def _normalize_air_footrest_keys(answer_keys: list[str]) -> list[str]:

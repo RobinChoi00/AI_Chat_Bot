@@ -132,6 +132,17 @@ def test_extract_returns_empty_when_no_client(monkeypatch):
     assert out["source"] == "empty"
 
 
+def test_extract_keyword_power_not_confused_by_chair_substring(monkeypatch):
+    """``air`` must not match inside ``chair``."""
+    monkeypatch.setattr(warranty_intake, "_openai_client", lambda: None)
+    out = extract_workflow_prefill(
+        free_text="chair won't turn on",
+        nodes=_NODES,
+    )
+    assert out["source"] == "keyword"
+    assert out["answer_keys"] == ["warranty", "defect", "power"]
+
+
 def test_extract_keyword_footrest_air_without_llm(monkeypatch):
     monkeypatch.setattr(warranty_intake, "_openai_client", lambda: None)
     out = extract_workflow_prefill(
