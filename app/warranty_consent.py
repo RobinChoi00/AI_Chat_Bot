@@ -93,11 +93,42 @@ def record_session_contact_email(
             db.add(row)
         row.contact_email = email or None
         row.email_gate_status = status
-        return {
-            "session_id": sid,
-            "customer_email": email or None,
-            "email_gate_status": status,
-        }
+
+    # Keep any already-open ticket in sync (reload / race with start_session).
+    _sync_email_gate_to_active_ticket(sid, status=status, email=email)
+
+    return {
+        "session_id": sid,
+        "customer_email": email or None,
+        "email_gate_status": status,
+    }
+
+
+def _sync_email_gate_to_active_ticket(
+    session_id: str,
+    *,
+    status: str,
+    email: str,
+) -> None:
+    """Copy gate status onto the active in-progress ticket for this session."""
+    with warranty_db_session() as db:
+        ticket = (
+            db.query(WarrantyTicket)
+            .filter(
+                WarrantyTicket.session_id == session_id,
+                WarrantyTicket.status == "in_progress",
+            )
+            .order_by(WarrantyTicket.created_at.desc())
+            .first()
+        )
+        if ticket is None:
+            return
+        ticket.set_collected("intake_email_gate_status", status)
+        if status == EMAIL_GATE_PROVIDED and email:
+            ticket.set_collected("customer_contact_email", email)
+            ticket.set_collected("intake_email_skipped", "")
+        elif status == EMAIL_GATE_SKIPPED:
+            ticket.set_collected("intake_email_skipped", "1")
 
 
 def get_chat_consent(session_id: str) -> Optional[WarrantyChatConsent]:
@@ -131,6 +162,9 @@ def attach_consent_to_ticket(db: Session, session_id: str, ticket: WarrantyTicke
 
     status = str(getattr(row, "email_gate_status", None) or "").strip().lower()
     email = str(getattr(row, "contact_email", None) or "").strip().lower()
+    # Consent row may have an email before status was backfilled.
+    if not status and email:
+        status = EMAIL_GATE_PROVIDED
     if status:
         ticket.set_collected("intake_email_gate_status", status)
     if status == EMAIL_GATE_PROVIDED and email:

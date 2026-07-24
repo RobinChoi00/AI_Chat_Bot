@@ -48,6 +48,7 @@ try:
         call_state_stats,
         cleanup_completed_events,
         event_stats,
+        last_webhook_received_at,
         process_event,
         process_pending_events,
         release_session_retries,
@@ -69,6 +70,7 @@ except ImportError:
         call_state_stats,
         cleanup_completed_events,
         event_stats,
+        last_webhook_received_at,
         process_event,
         process_pending_events,
         release_session_retries,
@@ -258,6 +260,7 @@ def rc_health():
         )
     stats = event_stats()
     calls = call_state_stats()
+    last_webhook = last_webhook_received_at()
     healthy = (
         all(required.values())
         and stats.get("dead_letter", 0) == 0
@@ -270,6 +273,18 @@ def rc_health():
         "worker": {"enabled": worker_enabled, "alive": worker_alive},
         "events": stats,
         "calls": calls,
+        "last_webhook_received_at": last_webhook,
+        "live_call_blocker": (
+            "ApplicationExtension must be enabled by RingCentral and routed "
+            "from the main menu Warranty option before live after-hours calls work."
+        ),
+        "live_e2e_checklist": [
+            "Confirm RC ApplicationExtension activation email completed",
+            "Roman: route after-hours Warranty key to Osaki Warranty IVR app",
+            "Place a closed-hours test call to 888-848-2630 → Warranty",
+            "Confirm SMS follow-up + team email after hangup",
+            "Confirm last_webhook_received_at updates on /rc/health",
+        ],
     }
     if not healthy and os.getenv("APP_ENV", "development").strip().lower() == "production":
         from fastapi.responses import JSONResponse

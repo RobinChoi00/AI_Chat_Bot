@@ -62,20 +62,46 @@ def _format_health_report(status_code: int, payload: dict) -> str:
         lines.extend(["", "Events:", json.dumps(events, indent=2)])
     if calls:
         lines.extend(["", "Calls:", json.dumps(calls, indent=2)])
+    last_webhook = payload.get("last_webhook_received_at")
     lines.extend(
         [
+            "",
+            f"Last webhook: {last_webhook or '(none yet — no live RC callbacks received)'}",
             "",
             "Blocker reminder:",
             "  ApplicationExtension must be enabled by RingCentral platform team",
             "  before after-hours warranty IVR can receive live calls.",
             "",
             "Next steps:",
-            "  1) Confirm RC activation email completed",
-            "  2) Roman: route after-hours warranty queue to Osaki Warranty IVR",
-            "  3) Test call + SMS + email follow-up",
         ]
     )
+    checklist = payload.get("live_e2e_checklist") or [
+        "Confirm RC activation email completed",
+        "Roman: route after-hours warranty queue to Osaki Warranty IVR",
+        "Test call + SMS + email follow-up",
+    ]
+    for idx, step in enumerate(checklist, start=1):
+        lines.append(f"  {idx}) {step}")
     return "\n".join(lines)
+
+
+def _run_e2e_sim() -> int:
+    sim = ROOT / "script" / "run_rc_ivr_e2e_sim.py"
+    if not sim.is_file():
+        print(f"Simulate script missing: {sim}")
+        return 1
+    import runpy
+
+    print("Running RC IVR software e2e simulation...")
+    try:
+        runpy.run_path(str(sim), run_name="__main__")
+    except SystemExit as exc:
+        code = int(exc.code or 0) if isinstance(exc.code, int) or exc.code is None else 1
+        return code
+    except Exception as exc:  # noqa: BLE001
+        print(f"Simulate failed: {exc}")
+        return 1
+    return 0
 
 
 def main() -> int:
@@ -89,6 +115,11 @@ def main() -> int:
         "--notify",
         action="store_true",
         help="Email ops when health is degraded",
+    )
+    parser.add_argument(
+        "--simulate",
+        action="store_true",
+        help="Also run software IVR e2e simulation (no live call)",
     )
     parser.add_argument("--timeout", type=float, default=10.0)
     args = parser.parse_args()
@@ -110,14 +141,18 @@ def main() -> int:
     report = _format_health_report(status_code, payload)
     print(report)
 
-    if healthy:
+    sim_code = 0
+    if args.simulate:
+        sim_code = _run_e2e_sim()
+
+    if healthy and sim_code == 0:
         return 0
 
-    if args.notify:
+    if not healthy and args.notify:
         from ops_notify import send_ops_alert  # noqa: WPS433
 
         send_ops_alert("[AI Chat Bot] RC IVR degraded", report)
-    return 1
+    return 1 if (not healthy or sim_code != 0) else 0
 
 
 if __name__ == "__main__":

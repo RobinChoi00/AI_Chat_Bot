@@ -210,6 +210,9 @@ async def warranty_metrics(
             email_gate_provided += 1
         elif intake_gate == "skipped":
             email_gate_skipped += 1
+        elif has_email and not intake_gate:
+            # Older tickets / reload races: email captured but gate flag missing.
+            email_gate_provided += 1
 
         if is_completed:
             reached_terminal += 1

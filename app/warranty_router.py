@@ -1283,6 +1283,7 @@ def _finalize_answer_response(
         "awaiting_evidence",
     ):
         from warranty_freshdesk_case import schedule_freshdesk_case_creation  # noqa: WPS433
+        from warranty_email import maybe_send_customer_receipt_email  # noqa: WPS433
 
         freshdesk_result = schedule_freshdesk_case_creation(ticket_id)
         if freshdesk_result.get("freshdesk_ticket_id"):
@@ -1293,6 +1294,28 @@ def _finalize_answer_response(
             }
         elif freshdesk_result.get("scheduled"):
             payload["freshdesk_scheduled"] = True
+
+        # Customer receipt (idempotent) — works even when Freshdesk create is skipped.
+        with warranty_db_session() as db:
+            ticket_row = (
+                db.query(WarrantyTicket)
+                .filter(WarrantyTicket.ticket_id == ticket_id)
+                .first()
+            )
+            if ticket_row:
+                turns = engine.get_turns(ticket_id)
+                receipt_sent, receipt_skip = maybe_send_customer_receipt_email(
+                    ticket=ticket_row,
+                    turns=turns,
+                    case_reference=str(
+                        (freshdesk_result or {}).get("case_reference") or ""
+                    ),
+                    freshdesk_url=str((freshdesk_result or {}).get("freshdesk_url") or ""),
+                )
+                if receipt_sent:
+                    payload["receipt_email_sent"] = True
+                elif receipt_skip:
+                    payload["receipt_email_skip_reason"] = receipt_skip
 
     return payload
 

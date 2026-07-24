@@ -231,6 +231,22 @@ def event_stats() -> dict[str, int]:
     return stats
 
 
+def last_webhook_received_at() -> Optional[str]:
+    """ISO timestamp of the newest inbound RC webhook (any status), or None."""
+    with warranty_db_session() as db:
+        row = (
+            db.query(RingCentralWebhookEvent)
+            .order_by(RingCentralWebhookEvent.created_at.desc())
+            .first()
+        )
+        if row is None or row.created_at is None:
+            return None
+        created = row.created_at
+        if getattr(created, "tzinfo", None) is None:
+            return f"{created.isoformat()}Z"
+        return created.isoformat()
+
+
 def call_state_stats() -> dict[str, int]:
     stale_before = _utcnow() - timedelta(hours=24)
     with warranty_db_session() as db:

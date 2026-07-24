@@ -444,6 +444,9 @@ def maybe_send_warranty_transcript(
     ticket.set_collected("customer_contact_email", email)
 
     collected = ticket.get_collected()
+    if not str(collected.get("intake_email_gate_status") or "").strip():
+        ticket.set_collected("intake_email_gate_status", "provided")
+
     if collected.get("transcript_emailed") == "1":
         return email, False
 
@@ -859,6 +862,159 @@ def build_admin_decision_customer_body(
         ]
     )
     return "\n".join(lines)
+
+
+def build_customer_receipt_body(
+    *,
+    case_reference: str,
+    customer_email: str,
+    model_name: str = "",
+    issue_type: str = "",
+    freshdesk_url: str = "",
+) -> str:
+    """Plain-text receipt after a warranty case is submitted for team follow-up."""
+    lines = [
+        "Thank you — we received your warranty request.",
+        "",
+        f"Case reference : {case_reference}",
+        f"Email on file  : {customer_email}",
+    ]
+    if model_name:
+        lines.append(f"Model          : {model_name}")
+    if issue_type:
+        lines.append(f"Issue type     : {issue_type}")
+    lines.extend(
+        [
+            "",
+            "What happens next:",
+            "  • Our warranty team will review your case.",
+            "  • We typically reply within 1 business day during warranty hours.",
+            "  • Please keep this case reference for your records.",
+            "",
+        ]
+    )
+    if freshdesk_url:
+        lines.append("You do not need to open a link — we will email you updates.")
+        lines.append("")
+    lines.extend(
+        [
+            "If you need to add photos or details, reply to this email or contact:",
+            f"  Phone : {WARRANTY_PHONE}",
+            f"  Email : {WARRANTY_TEAM_EMAIL}",
+            f"  Hours : {WARRANTY_BUSINESS_HOURS}",
+            "",
+            "-- Osaki / Titan Warranty Support --",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def send_customer_receipt_email(
+    *,
+    to_email: str,
+    case_reference: str,
+    model_name: str = "",
+    issue_type: str = "",
+    freshdesk_url: str = "",
+) -> bool:
+    """Send a customer-facing receipt with the case reference."""
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        logger.error(
+            "Customer receipt email not sent — EMAIL_SENDER / EMAIL_PASSWORD not configured."
+        )
+        return False
+
+    subject = f"[Osaki/Titan Warranty] We received your case — {case_reference}"
+    body = build_customer_receipt_body(
+        case_reference=case_reference,
+        customer_email=to_email,
+        model_name=model_name,
+        issue_type=issue_type,
+        freshdesk_url=freshdesk_url,
+    )
+
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = to_email
+    msg["Reply-To"] = WARRANTY_TEAM_EMAIL
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.send_message(msg)
+        logger.info(
+            "Customer receipt emailed — case=%s to=%s",
+            case_reference,
+            to_email,
+        )
+        return True
+    except smtplib.SMTPException as exc:
+        logger.error("Customer receipt email failed: %s", exc)
+        return False
+
+
+def maybe_send_customer_receipt_email(
+    *,
+    ticket,
+    turns: Optional[Sequence[Any]] = None,
+    case_reference: str = "",
+    freshdesk_url: str = "",
+) -> tuple[bool, Optional[str]]:
+    """
+    Send a one-time receipt when a case is submitted for human follow-up.
+
+    Returns (sent, skip_reason).
+    """
+    collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
+    if str(collected.get("receipt_email_sent") or "").strip() == "1":
+        return False, "already_sent"
+
+    status = str(getattr(ticket, "status", "") or "").strip().lower()
+    if status not in {
+        "awaiting_admin_review",
+        "awaiting_evidence",
+        "admin_reviewing",
+        "need_more_information",
+    }:
+        return False, "status_not_eligible"
+
+    to_email = resolve_customer_email(ticket, turns=turns)
+    if not to_email:
+        return False, "no_customer_email"
+
+    from warranty_case_ref import case_reference_for_ticket  # noqa: WPS433
+
+    case_ref = (
+        (case_reference or "").strip()
+        or str(collected.get("case_reference") or "").strip()
+        or case_reference_for_ticket(ticket)
+    )
+    if not case_ref:
+        return False, "no_case_reference"
+
+    fd_url = (freshdesk_url or "").strip() or str(
+        collected.get("freshdesk_url") or ""
+    ).strip()
+
+    sent = send_customer_receipt_email(
+        to_email=to_email,
+        case_reference=case_ref,
+        model_name=str(getattr(ticket, "model_name", "") or ""),
+        issue_type=str(getattr(ticket, "issue_type", "") or ""),
+        freshdesk_url=fd_url,
+    )
+    if sent:
+        ticket.set_collected("receipt_email_sent", "1")
+        ticket.set_collected("case_reference", case_ref)
+        return True, None
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        return False, "smtp_not_configured"
+    return False, "send_failed"
 
 
 def send_admin_decision_customer_email(

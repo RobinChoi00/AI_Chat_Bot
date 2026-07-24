@@ -10,11 +10,13 @@ sys.path.insert(0, str(APP_DIR))
 
 from warranty_email import (  # noqa: E402
     build_admin_decision_customer_body,
+    build_customer_receipt_body,
     build_evidence_notification_body,
     build_phone_ivr_team_email_body,
     build_transcript_body,
     extract_email,
     maybe_send_admin_decision_customer_email,
+    maybe_send_customer_receipt_email,
     maybe_send_warranty_transcript,
     resolve_customer_email,
     send_admin_decision_customer_email,
@@ -349,3 +351,40 @@ def test_send_admin_decision_customer_email_sets_reply_to_team(monkeypatch):
     assert msg["Reply-To"] == "service@osakititan.com"
     assert "Not approved" in msg["Subject"]
     assert "WR-77" in msg["Subject"]
+
+
+def test_build_customer_receipt_body_includes_case_ref():
+    body = build_customer_receipt_body(
+        case_reference="WR-20260724-ABCDEF",
+        customer_email="buyer@example.com",
+        model_name="OS-4000T",
+        issue_type="defect",
+    )
+    assert "WR-20260724-ABCDEF" in body
+    assert "buyer@example.com" in body
+    assert "OS-4000T" in body
+    assert "What happens next" in body
+
+
+def test_maybe_send_customer_receipt_email_idempotent(monkeypatch):
+    sent = []
+
+    def fake_send(**kwargs):
+        sent.append(kwargs)
+        return True
+
+    monkeypatch.setattr("warranty_email.send_customer_receipt_email", fake_send)
+    ticket = FakeTicket()
+    ticket.status = "awaiting_admin_review"
+    ticket.set_collected("customer_contact_email", "buyer@example.com")
+    ticket.set_collected("case_reference", "WR-20260724-ABCDEF")
+
+    ok, reason = maybe_send_customer_receipt_email(ticket=ticket)
+    assert ok is True
+    assert reason is None
+    assert ticket.get_collected().get("receipt_email_sent") == "1"
+
+    ok2, reason2 = maybe_send_customer_receipt_email(ticket=ticket)
+    assert ok2 is False
+    assert reason2 == "already_sent"
+    assert len(sent) == 1

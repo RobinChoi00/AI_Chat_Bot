@@ -182,6 +182,29 @@ export default function WarrantyChat({
     [sessionId]
   );
 
+  // Reload / tab restore: sessionStorage may say "provided" without a server row.
+  useEffect(() => {
+    if (!chatConsentAccepted || !emailGateDone) return;
+    const email = (intakeContactEmail || "").trim();
+    if (!email) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await recordWarrantySessionContactEmail(sessionId, {
+          customerEmail: email,
+          skipped: false,
+        });
+      } catch (err) {
+        if (!cancelled) {
+          console.warn("warranty session contact email re-sync failed", err);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [chatConsentAccepted, emailGateDone, intakeContactEmail, sessionId]);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 

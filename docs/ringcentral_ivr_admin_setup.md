@@ -97,6 +97,24 @@ operator review before the affected call can be considered complete.
 
 ---
 
+## Software E2E simulation (no live call)
+
+When RC ApplicationExtension is still waiting, verify our IVR logic with:
+
+```bash
+# On EC2
+cd ~/AI_Chat_Bot
+docker compose exec -T backend python script/run_rc_ivr_e2e_sim.py
+# or
+python3 script/check_rc_ivr_readiness.py --simulate
+```
+
+This walks: call-enter → issue menu → digit `3` (defect) and asserts a workflow ticket is created with `channel=phone`.
+
+Live phone E2E still requires the checklist below (RC activation + Roman routing).
+
+---
+
 ## Checklist for Roman / phone admin
 
 - [ ] Main IVR has **Warranty** as its own key (not only Sales / Technical).
@@ -107,6 +125,7 @@ operator review before the affected call can be considered complete.
 - [ ] Keep “have invoice / order / ticket ready” prompt (team liked this).
 - [ ] Verify `RC_WEBHOOK_VERIFICATION_TOKEN` on server matches RC app.
 - [ ] Verify `/rc/health` is `ok` with zero dead-letter events.
+- [ ] Confirm `/rc/health` `last_webhook_received_at` updates after a test call.
 - [ ] Simulate one duplicate callback and one backend restart during a test call.
 - [ ] Test after close: Cong/Jose/Ryan scenario — should hear **closed + hours**, not 5‑minute hold → Sales.
 
