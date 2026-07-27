@@ -47,6 +47,44 @@ _SALES_ONLY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Pre-purchase shipping eligibility (not post-purchase tracking / damage claims).
+_RESTRICTED_SHIP_REGION_RE = re.compile(
+    r"\b("
+    r"hawaii|hawaiian|alaska|alaskan|guam|guamanian|"
+    r"honolulu|anchorage"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_RESTRICTED_STATE_CODE_RE = re.compile(
+    r"(?:^|[^\w])(?:hi|ak)(?:$|[^\w])",
+    re.IGNORECASE,
+)
+
+_PRE_PURCHASE_SHIPPING_ASK_RE = re.compile(
+    r"\b("
+    r"free\s+(?:deliver(?:y|ies)?|shipping)|"
+    r"(?:do\s+you|can\s+you|will\s+you|able\s+to)\s+(?:deliver|ship)\b|"
+    r"(?:deliver|ship|shipping|delivery)\s+to\b|"
+    r"ship\s+to\b|deliver\s+to\b|"
+    r"(?:available|eligibility)\s+(?:in|for|to)\b|"
+    r"shipping\s+(?:to|for|policy|cost|fee|rate|price)|"
+    r"delivery\s+(?:to|for|available|fee|cost)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_POST_PURCHASE_DELIVERY_RE = re.compile(
+    r"\b("
+    r"tracking|track(?:ing)?\s+(?:number|my)|fedex|ups|usps|"
+    r"in\s+transit|where\s+is\s+my\s+(?:order|chair|package|shipment)|"
+    r"damaged|damage|box\s+(?:was\s+)?(?:damage|crushed|opened)|"
+    r"missing\s+part|wrong\s+item|signed\s+(?:cleared|damaged)|"
+    r"my\s+order\s+(?:#|number)|order\s+(?:#|number)\s*[a-z0-9]"
+    r")\b",
+    re.IGNORECASE,
+)
+
 _OFF_TOPIC_RE = [
     re.compile(
         r"\b(write|generate|create|make)\s+(me\s+)?(a\s+)?"
@@ -72,7 +110,15 @@ class WarrantyScopeDecision:
         return not self.in_scope
 
 
-def build_warranty_scope_refusal() -> str:
+def build_warranty_scope_refusal(reason: str = "") -> str:
+    if (reason or "").strip().lower() == "shipping_policy":
+        return (
+            "We **do not deliver** to **Hawaii, Alaska, or Guam**.\n\n"
+            "This chat is for **warranty support** only — setup, a delivery "
+            "problem after purchase, or a chair malfunction.\n\n"
+            "For other shipping or sales questions, please check the shipping "
+            "policy on our website or contact our sales team."
+        )
     return (
         "This chat is for **warranty support** only — installation, delivery, "
         "or a chair malfunction.\n\n"
@@ -81,6 +127,30 @@ def build_warranty_scope_refusal() -> str:
         "If you have a warranty issue, describe your chair model and what "
         "you need help with (setup, delivery, or a defect)."
     )
+
+
+def is_pre_purchase_shipping_policy(text: str) -> bool:
+    """True for free-shipping / region-eligibility questions (not claim tracking)."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if _POST_PURCHASE_DELIVERY_RE.search(raw):
+        return False
+
+    has_region = bool(
+        _RESTRICTED_SHIP_REGION_RE.search(raw) or _RESTRICTED_STATE_CODE_RE.search(raw)
+    )
+    has_shipping_ask = bool(_PRE_PURCHASE_SHIPPING_ASK_RE.search(raw))
+
+    if has_region and has_shipping_ask:
+        return True
+    # "free delivery?" with no region still belongs to sales/shipping policy.
+    if has_shipping_ask and re.search(r"\bfree\s+(?:deliver|shipping)", raw, re.I):
+        return True
+    # Region + delivery/shipping word without post-purchase signal.
+    if has_region and re.search(r"\b(deliver|delivery|ship|shipping)\b", raw, re.I):
+        return True
+    return False
 
 
 def _enabled() -> bool:
@@ -124,6 +194,11 @@ def evaluate_warranty_scope(
 
     if is_sales_workflow_answer(raw):
         return WarrantyScopeDecision(in_scope=False, reason="sales")
+
+    # Pre-purchase HI/AK/Guam / free-shipping questions must not enter the
+    # post-purchase delivery flowchart (even though they contain "delivery").
+    if is_pre_purchase_shipping_policy(raw):
+        return WarrantyScopeDecision(in_scope=False, reason="shipping_policy")
 
     try:
         from delivery_intake import detect_delivery_spec_question  # noqa: WPS433

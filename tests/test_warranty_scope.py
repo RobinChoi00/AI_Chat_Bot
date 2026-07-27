@@ -30,8 +30,37 @@ def test_allows_warranty_defect_message():
     assert decision.in_scope
 
 
-def test_allows_delivery_tracking():
+def test_blocks_hawaii_free_delivery_policy():
+    decision = evaluate_warranty_scope("is it free delivery for hawaii")
+    assert decision.is_blocked
+    assert decision.reason == "shipping_policy"
+    msg = build_warranty_scope_refusal(decision.reason)
+    assert "hawaii" in msg.lower()
+    assert "alaska" in msg.lower()
+    assert "guam" in msg.lower()
+    assert "do not deliver" in msg.lower()
+
+
+def test_blocks_alaska_and_guam_shipping_questions():
+    for text in (
+        "Do you ship to Alaska?",
+        "Can you deliver to Guam?",
+        "shipping to HI available?",
+    ):
+        decision = evaluate_warranty_scope(text)
+        assert decision.is_blocked, text
+        assert decision.reason == "shipping_policy", text
+
+
+def test_allows_post_purchase_delivery_tracking():
     decision = evaluate_warranty_scope("Where is my FedEx tracking number?")
+    assert decision.in_scope
+
+
+def test_allows_damaged_delivery_even_if_hawaii_mentioned():
+    decision = evaluate_warranty_scope(
+        "My Hawaii shipment arrived damaged and the box was crushed"
+    )
     assert decision.in_scope
 
 

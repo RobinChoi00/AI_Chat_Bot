@@ -1035,7 +1035,7 @@ def _maybe_side_question_message(engine, ticket_id: str, answer: str) -> Optiona
     )
 
     if is_sales_workflow_answer(answer):
-        return build_warranty_scope_refusal()
+        return build_warranty_scope_refusal("sales")
 
     node = engine.get_current_node(ticket_id)
     node_id = str(node.get("node_id") or "") if node else ""
@@ -1052,7 +1052,7 @@ def _maybe_side_question_message(engine, ticket_id: str, answer: str) -> Optiona
                 issue_type=issue_type or None,
             )
             if scope.is_blocked:
-                return build_warranty_scope_refusal()
+                return build_warranty_scope_refusal(scope.reason)
 
             prompt = str(node.get("prompt") or "").strip()
             mid = format_midflow_error_code_help(
@@ -1071,7 +1071,7 @@ def _maybe_side_question_message(engine, ticket_id: str, answer: str) -> Optiona
             issue_type=issue_type or None,
         )
         if scope.is_blocked:
-            return build_warranty_scope_refusal()
+            return build_warranty_scope_refusal(scope.reason)
 
     return try_side_question_for_ticket(engine, ticket_id, answer)
 
@@ -1684,7 +1684,7 @@ async def natural_start_warranty(
         return _build_side_question_response(
             engine,
             ticket_id,
-            build_warranty_scope_refusal(),
+            build_warranty_scope_refusal(scope.reason),
         )
 
     from warranty_nlp import (  # noqa: WPS433
@@ -1799,7 +1799,7 @@ async def smart_start_warranty(
         return _build_side_question_response(
             engine,
             ticket_id,
-            build_warranty_scope_refusal(),
+            build_warranty_scope_refusal(scope.reason),
         )
 
     from warranty_intake import (  # noqa: WPS433

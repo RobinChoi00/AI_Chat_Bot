@@ -702,7 +702,18 @@ def _keyword_workflow_prefill(text: str) -> Optional[dict[str, Any]]:
             }
 
     # Issue-type only (no defect category) — still better than landing cold.
-    if _has_any(norm, _DELIVERY_WORDS) and not _has_any(norm, _INSTALL_WORDS):
+    # Pre-purchase shipping policy (HI/AK/Guam, free delivery) must not open
+    # the post-purchase delivery flowchart.
+    try:
+        from warranty_scope import is_pre_purchase_shipping_policy  # noqa: WPS433
+    except ImportError:
+        is_pre_purchase_shipping_policy = lambda _t: False  # type: ignore
+
+    if (
+        _has_any(norm, _DELIVERY_WORDS)
+        and not _has_any(norm, _INSTALL_WORDS)
+        and not is_pre_purchase_shipping_policy(text)
+    ):
         return {
             "answer_keys": ["warranty", "delivery"],
             "model_name": _extract_model_from_intake(text),
