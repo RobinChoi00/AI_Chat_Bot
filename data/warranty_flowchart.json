@@ -117,16 +117,85 @@
 
     "delivery_get_name": {
       "type": "question_text",
-      "prompt": "Please share your order number or the email used at checkout so we can locate your shipment. Next we'll ask a few questions about the delivery.",
+      "prompt": "Please share your order number or the email used at checkout so we can locate your shipment. Next we'll ask what kind of delivery problem you have.",
       "answer_key": "order_or_email",
-      "next": "delivery_visible_damage_q"
+      "next": "delivery_problem_type_q"
     },
 
     "delivery_get_tracking_number": {
       "type": "question_text",
-      "prompt": "Please share your tracking number so we can locate your shipment. Next we'll ask a few questions about the delivery.",
+      "prompt": "Please share your tracking number so we can locate your shipment. Next we'll ask what kind of delivery problem you have.",
       "answer_key": "tracking_number",
-      "next": "delivery_visible_damage_q"
+      "next": "delivery_problem_type_q"
+    },
+
+    "delivery_problem_type_q": {
+      "type": "question",
+      "prompt": "What best describes the delivery problem?",
+      "options": [
+        {"label": "Box or chair arrived damaged", "answer_key": "damaged_in_transit", "next": "delivery_visible_damage_q"},
+        {"label": "Missing parts or incomplete delivery", "answer_key": "missing_parts", "next": "delivery_missing_parts_q"},
+        {"label": "Wrong item was delivered", "answer_key": "wrong_item", "next": "delivery_wrong_item_terminal"},
+        {"label": "Never arrived / marked delivered but missing", "answer_key": "never_arrived", "next": "delivery_never_arrived_terminal"},
+        {"label": "Delivery was late", "answer_key": "late_delivery", "next": "delivery_late_terminal"},
+        {"label": "Something else", "answer_key": "other_delivery_problem", "next": "delivery_other_problem_q"}
+      ]
+    },
+
+    "delivery_missing_parts_q": {
+      "type": "question_text",
+      "prompt": "What parts or items are missing from your delivery?",
+      "answer_key": "missing_parts_description",
+      "next": "delivery_missing_parts_terminal"
+    },
+
+    "delivery_missing_parts_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Thanks — we've noted the missing items. Please send photos of what you received (and the packing list if you have it). Our team will follow up to arrange the missing parts.",
+      "internal_note": "Missing parts / incomplete delivery. Review order BOM vs customer description + photos. Ship missing parts or open carrier claim as needed.",
+      "evidence_required": ["damage_photos"],
+      "evidence_email": "service@osakititan.com"
+    },
+
+    "delivery_wrong_item_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Thanks — please send photos of the item you received (labels/serial if visible). Our team will confirm the order and arrange the correct product or a return label.",
+      "internal_note": "Wrong item delivered. Compare Shopify/Netsuite order to photos. Arrange swap / return label / pickup.",
+      "evidence_required": ["damage_photos"],
+      "evidence_email": "service@osakititan.com"
+    },
+
+    "delivery_never_arrived_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Thanks — we've logged that the shipment never arrived (or was marked delivered but is missing). Our team will check carrier tracking and follow up with next steps.",
+      "internal_note": "Never arrived / porch theft / false delivery scan. Check Track123/carrier POD, file claim or reship per policy.",
+      "evidence_required": []
+    },
+
+    "delivery_late_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Thanks — we've noted the late delivery. Our team will review the carrier timeline and follow up with an update or goodwill options if appropriate.",
+      "internal_note": "Late delivery complaint. Verify ETA vs actual; carrier delay vs warehouse delay. Reply with status / courtesy credit if policy allows.",
+      "evidence_required": []
+    },
+
+    "delivery_other_problem_q": {
+      "type": "question_text",
+      "prompt": "Please briefly describe the delivery problem so our team can help.",
+      "answer_key": "other_delivery_problem_description",
+      "next": "delivery_other_problem_terminal"
+    },
+
+    "delivery_other_problem_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Thank you for the details. Our team will review your delivery situation and follow up shortly.",
+      "internal_note": "Other delivery problem (free-text). Read customer description + tracking snapshot; route to correct ops owner.",
+      "evidence_required": []
     },
 
     "delivery_visible_damage_q": {
@@ -134,16 +203,17 @@
       "prompt": "When the chair was delivered, was there any visible damage to the outer shipping box?",
       "options": [
         {"label": "Yes, the box was visibly damaged", "answer_key": "yes_box_damage", "next": "delivery_signed_q"},
-        {"label": "No, the box appeared fine",        "answer_key": "no_box_damage",  "next": "delivery_no_box_damage_terminal"}
+        {"label": "No, the box appeared fine",        "answer_key": "no_box_damage",  "next": "delivery_chair_inside_damage_q"}
       ]
     },
 
-    "delivery_no_box_damage_terminal": {
-      "type": "terminal",
-      "action": "awaiting_admin",
-      "prompt": "Thank you for the information. Our team will follow up on your delivery situation.",
-      "internal_note": "Tracking provided and no visible box damage. Look up order in Netsuite, contact the carrier, and provide a status update to the customer.",
-      "evidence_required": []
+    "delivery_chair_inside_damage_q": {
+      "type": "question",
+      "prompt": "Was the chair itself damaged when you opened the box (even though the outer box looked fine)?",
+      "options": [
+        {"label": "Yes, the chair was damaged inside", "answer_key": "yes_chair_inside_damage", "next": "delivery_signed_q"},
+        {"label": "No chair damage — something else", "answer_key": "no_chair_inside_damage", "next": "delivery_other_problem_q"}
+      ]
     },
 
     "delivery_signed_q": {

@@ -312,6 +312,13 @@ def _delivery_intent_key(ticket, *, turns=None, collected: Optional[Dict[str, An
                 "minor_comp",
                 "get_name",
                 "get_tracking",
+                "problem_type",
+                "missing",
+                "wrong",
+                "never_arrived",
+                "late",
+                "other_problem",
+                "chair_inside",
             )
         ):
             return "damage_issue"

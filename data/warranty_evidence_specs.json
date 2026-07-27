@@ -71,7 +71,11 @@
   },
 
   "terminal_evidence_map": {
-    "delivery_no_box_damage_terminal":         { "required": [],                                                             "optional": [] },
+    "delivery_missing_parts_terminal":         { "required": ["damage_photos"],                                              "optional": [] },
+    "delivery_wrong_item_terminal":            { "required": ["damage_photos"],                                              "optional": [] },
+    "delivery_never_arrived_terminal":         { "required": [],                                                             "optional": [] },
+    "delivery_late_terminal":                  { "required": [],                                                             "optional": [] },
+    "delivery_other_problem_terminal":         { "required": [],                                                             "optional": [] },
     "delivery_signed_cleared_terminal":        { "required": ["damage_photos"],                                              "optional": [] },
     "delivery_replace_claim_terminal":         { "required": ["damage_photos", "box_photos"],                                "optional": ["signed_delivery_receipt"] },
     "delivery_minor_comp_terminal":            { "required": ["damage_photos"],                                              "optional": [] },

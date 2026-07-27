@@ -91,7 +91,7 @@ SCENARIOS: List[Tuple[str, List[str], str, str]] = [
     ),
     (
         "Delivery — tracking + box damage signed cleared → admin review",
-        ["warranty", "delivery", "damage_issue", "has_tracking", "1Z999AA10123456784", "yes_box_damage", "signed_cleared"],
+        ["warranty", "delivery", "damage_issue", "has_tracking", "1Z999AA10123456784", "damaged_in_transit", "yes_box_damage", "signed_cleared"],
         "awaiting_admin_review",
         "delivery_signed_cleared_terminal",
     ),

@@ -122,7 +122,11 @@ _HEATING_TERMINALS = frozenset({
 })
 
 _DELIVERY_TERMINALS = frozenset({
-    "delivery_no_box_damage_terminal",
+    "delivery_missing_parts_terminal",
+    "delivery_wrong_item_terminal",
+    "delivery_never_arrived_terminal",
+    "delivery_late_terminal",
+    "delivery_other_problem_terminal",
     "delivery_signed_cleared_terminal",
     "delivery_replace_claim_terminal",
     "delivery_minor_comp_terminal",

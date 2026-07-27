@@ -268,7 +268,7 @@ def test_defect_heating_too_hot_to_diy_terminal():
 # Scenario 2 — Delivery, no tracking → lookup by name → awaiting_admin
 # ---------------------------------------------------------------------------
 
-def test_delivery_no_tracking_continues_to_damage_question():
+def test_delivery_no_tracking_continues_to_problem_type():
     ticket_id, _ = start()
 
     result = walk(ticket_id, [
@@ -276,10 +276,10 @@ def test_delivery_no_tracking_continues_to_damage_question():
         "delivery",        # issue_type → delivery_intent_q
         "damage_issue",    # delivery_intent_q → delivery_tracking_q
         "no_tracking",     # delivery_tracking_q → delivery_get_name
-        "customer@example.com",  # delivery_get_name → delivery_visible_damage_q
+        "customer@example.com",  # delivery_get_name → delivery_problem_type_q
     ])
 
-    assert result["next_node_id"] == "delivery_visible_damage_q"
+    assert result["next_node_id"] == "delivery_problem_type_q"
     assert result["is_terminal"] is False
 
     t = ticket(ticket_id)
@@ -320,7 +320,8 @@ def test_delivery_tracking_box_damage_signed_cleared():
         "delivery",           # issue_type → delivery_intent_q
         "damage_issue",       # → delivery_tracking_q
         "has_tracking",       # delivery_tracking_q → delivery_get_tracking_number
-        "1Z999AA10123456784", # tracking number → delivery_visible_damage_q
+        "1Z999AA10123456784", # tracking number → delivery_problem_type_q
+        "damaged_in_transit", # → delivery_visible_damage_q
         "yes_box_damage",     # delivery_visible_damage_q → delivery_signed_q
         "signed_cleared",     # delivery_signed_q → delivery_signed_cleared_terminal
     ])
@@ -333,6 +334,62 @@ def test_delivery_tracking_box_damage_signed_cleared():
     t = ticket(ticket_id)
     assert str(t.status) == "awaiting_admin_review"
     assert t.get_collected().get("tracking_number") == "1Z999AA10123456784"
+
+
+def test_delivery_missing_parts_path():
+    ticket_id, _ = start()
+
+    result = walk(ticket_id, [
+        "warranty",
+        "delivery",
+        "damage_issue",
+        "no_tracking",
+        "customer@example.com",
+        "missing_parts",
+        "remote control and side bolts",
+    ])
+
+    assert result["next_node_id"] == "delivery_missing_parts_terminal"
+    assert result["is_terminal"] is True
+    t = ticket(ticket_id)
+    assert str(t.status) == "awaiting_admin_review"
+    assert t.get_collected().get("missing_parts_description") == "remote control and side bolts"
+
+
+def test_delivery_never_arrived_path():
+    ticket_id, _ = start()
+
+    result = walk(ticket_id, [
+        "warranty",
+        "delivery",
+        "damage_issue",
+        "has_tracking",
+        "1Z999AA10123456784",
+        "never_arrived",
+    ])
+
+    assert result["next_node_id"] == "delivery_never_arrived_terminal"
+    assert result["is_terminal"] is True
+
+
+def test_delivery_box_fine_but_chair_damaged_continues_to_signed():
+    ticket_id, _ = start()
+
+    result = walk(ticket_id, [
+        "warranty",
+        "delivery",
+        "damage_issue",
+        "has_tracking",
+        "1Z999AA10123456784",
+        "damaged_in_transit",
+        "no_box_damage",
+        "yes_chair_inside_damage",
+        "signed_damaged",
+        "visible_at_unboxing",
+    ])
+
+    assert result["next_node_id"] == "delivery_replace_claim_terminal"
+    assert result["is_terminal"] is True
 
 
 # ---------------------------------------------------------------------------

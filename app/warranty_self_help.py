@@ -1504,6 +1504,31 @@ _DELIVERY_STEPS: dict[str, tuple[str, ...]] = {
         "Have your tracking number, order number, and checkout email ready.",
         "If you don't see movement in the tracking after 3 business days, note the last scan location for our team.",
     ),
+    "missing_parts": (
+        "Photograph everything that arrived, including the packing list if you have one.",
+        "List each missing part (remote, side panels, bolts, accessories) as specifically as you can.",
+        "Keep all packaging until our team confirms the missing items have been shipped.",
+    ),
+    "wrong_item": (
+        "Photograph the item you received, including any model labels or serial stickers.",
+        "Do not discard the wrong item or packaging — we may need to arrange a return pickup.",
+        "Have your order confirmation ready so our team can match the correct SKU.",
+    ),
+    "never_arrived": (
+        "Check with neighbors or building staff in case the package was left nearby.",
+        "Screenshot the carrier tracking page showing the last scan or 'Delivered' status.",
+        "Note the delivery address on the order so our team can verify it with the carrier.",
+    ),
+    "late_delivery": (
+        "Save the promised delivery date from your confirmation email if you still have it.",
+        "Note the last carrier scan time and location from tracking.",
+        "Our team will compare the carrier timeline to your order and follow up with options.",
+    ),
+    "other_delivery_problem": (
+        "Keep tracking and order details handy for our team.",
+        "Add any photos that show the problem clearly.",
+        "Describe what you expected versus what happened in a short note if you haven't already.",
+    ),
     "signed_cleared": (
         "Take clear photos of the chair damage and the shipping box from multiple angles.",
         "Note exactly when you first saw the damage relative to delivery (same day, next day, etc.).",
@@ -1525,7 +1550,11 @@ _DELIVERY_STEPS: dict[str, tuple[str, ...]] = {
 }
 
 _NODE_DELIVERY_SYMPTOM: dict[str, str] = {
-    "delivery_no_box_damage_terminal": "no_box_damage",
+    "delivery_missing_parts_terminal": "missing_parts",
+    "delivery_wrong_item_terminal": "wrong_item",
+    "delivery_never_arrived_terminal": "never_arrived",
+    "delivery_late_terminal": "late_delivery",
+    "delivery_other_problem_terminal": "other_delivery_problem",
     "delivery_signed_cleared_terminal": "signed_cleared",
     "delivery_replace_claim_terminal": "visible_at_unboxing",
     "delivery_minor_comp_terminal": "noticed_later",
@@ -1533,6 +1562,11 @@ _NODE_DELIVERY_SYMPTOM: dict[str, str] = {
 
 _DELIVERY_SUMMARY_LABELS: dict[str, str] = {
     "no_box_damage": "a delivery with no visible box damage on arrival",
+    "missing_parts": "a delivery with missing parts or incomplete contents",
+    "wrong_item": "a wrong item delivered",
+    "never_arrived": "a shipment that never arrived or was marked delivered but missing",
+    "late_delivery": "a late delivery",
+    "other_delivery_problem": "another delivery problem",
     "signed_cleared": "delivery damage with a receipt signed as Cleared",
     "visible_at_unboxing": "delivery damage visible immediately at unboxing",
     "noticed_later": "delivery damage noticed after delivery",
@@ -1546,6 +1580,16 @@ def infer_delivery_symptom_from_turns(turns, node_id: str = "") -> str:
     keys_set = set(answer_keys)
     if "no_box_damage" in keys_set:
         return "no_box_damage"
+    if "missing_parts" in keys_set:
+        return "missing_parts"
+    if "wrong_item" in keys_set:
+        return "wrong_item"
+    if "never_arrived" in keys_set:
+        return "never_arrived"
+    if "late_delivery" in keys_set:
+        return "late_delivery"
+    if "other_delivery_problem" in keys_set:
+        return "other_delivery_problem"
     if "signed_cleared" in keys_set:
         return "signed_cleared"
     if "visible_at_unboxing" in keys_set:

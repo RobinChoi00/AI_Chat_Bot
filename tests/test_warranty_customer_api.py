@@ -302,7 +302,7 @@ def test_submit_answer_returns_tracking_summary(client, monkeypatch):
     data = resp.json()
     assert data["tracking_summary"]["available"] is True
     assert "IN_TRANSIT" in data["tracking_summary"]["message"]
-    assert data["ticket"]["current_node"]["node_id"] == "delivery_visible_damage_q"
+    assert data["ticket"]["current_node"]["node_id"] == "delivery_problem_type_q"
 
 
 def test_get_session_returns_ticket_after_admin_terminal(client, monkeypatch):
@@ -310,6 +310,7 @@ def test_get_session_returns_ticket_after_admin_terminal(client, monkeypatch):
 
     unavailable = TrackingSnapshot(source="unavailable", available=False)
 
+    monkeypatch.setenv("WARRANTY_FRESHDESK_CREATE_CASE", "0")
     monkeypatch.setattr("delivery_lookup.lookup_by_order_or_email", lambda *_a, **_k: unavailable)
     monkeypatch.setattr(
         "delivery_lookup.lookup_by_tracking_number",
@@ -323,6 +324,10 @@ def test_get_session_returns_ticket_after_admin_terminal(client, monkeypatch):
     monkeypatch.setattr(
         "warranty_email.send_warranty_transcript_email",
         lambda **_k: True,
+    )
+    monkeypatch.setattr(
+        "warranty_email.maybe_send_customer_receipt_email",
+        lambda **_k: (False, "disabled_in_test"),
     )
 
     session_id = "cust-api-terminal"
@@ -344,6 +349,10 @@ def test_get_session_returns_ticket_after_admin_terminal(client, monkeypatch):
     client.post(
         f"/api/v1/warranty/{ticket_id}/answer",
         json={"answer": "customer@example.com"},
+    )
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "damaged_in_transit"},
     )
     client.post(
         f"/api/v1/warranty/{ticket_id}/answer",
