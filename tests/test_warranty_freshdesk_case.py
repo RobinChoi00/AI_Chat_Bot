@@ -36,15 +36,60 @@ def test_maybe_create_freshdesk_case_skips_when_disabled(monkeypatch):
     assert result["skipped"] is True
 
 
+def test_resolve_freshdesk_ticket_type_mapping(monkeypatch):
+    monkeypatch.delenv("FRESHDESK_WARRANTY_TYPE", raising=False)
+    monkeypatch.delenv("FRESHDESK_WARRANTY_DEFAULT_TYPE", raising=False)
+
+    from warranty_freshdesk_case import resolve_freshdesk_ticket_type  # noqa: W402
+
+    damage = _FakeTicket()
+    assert resolve_freshdesk_ticket_type(damage) == "Issue with Product"
+
+    status = _FakeTicket()
+    status.current_node_id = "delivery_status_terminal"
+    assert resolve_freshdesk_ticket_type(status) == "Inquiry"
+
+    class _Turn:
+        def __init__(self, node_id, answer_key):
+            self.node_id = node_id
+            self.answer_key = answer_key
+
+    intent_ticket = _FakeTicket()
+    intent_ticket.current_node_id = "delivery_get_tracking_number"
+    assert (
+        resolve_freshdesk_ticket_type(
+            intent_ticket,
+            turns=[_Turn("delivery_intent_q", "status_check")],
+        )
+        == "Inquiry"
+    )
+
+    defect = _FakeTicket()
+    defect.issue_type = "defect"
+    assert resolve_freshdesk_ticket_type(defect) == "Issue with Product"
+
+    phone = _FakeTicket()
+    phone.issue_type = None
+    phone.current_node_id = "issue_type"
+    phone.collected_data = json.dumps({"channel": "phone"})
+    assert resolve_freshdesk_ticket_type(phone) == "Inquiry"
+
+    monkeypatch.setenv("FRESHDESK_WARRANTY_TYPE", "Service Task")
+    assert resolve_freshdesk_ticket_type(damage) == "Service Task"
+
+
 def test_maybe_create_freshdesk_case_creates_and_persists(monkeypatch):
     monkeypatch.setenv("WARRANTY_FRESHDESK_CREATE_CASE", "1")
     monkeypatch.setenv("FRESHDESK_DOMAIN", "titanchair.freshdesk.com")
     monkeypatch.setenv("FRESHDESK_API_KEY", "test-key")
+    monkeypatch.delenv("FRESHDESK_WARRANTY_TYPE", raising=False)
 
     fake_ticket = _FakeTicket()
     engine = MagicMock()
     engine.get_ticket.return_value = fake_ticket
     engine.get_turns.return_value = []
+
+    captured: list[dict] = []
 
     class FakeResponse:
         status_code = 201
@@ -53,9 +98,13 @@ def test_maybe_create_freshdesk_case_creates_and_persists(monkeypatch):
         def json():
             return {"id": 99901}
 
+    def _fake_post(*args, **kwargs):
+        captured.append(kwargs.get("json") or {})
+        return FakeResponse()
+
     monkeypatch.setattr(
         "warranty_freshdesk_case.requests.post",
-        lambda *args, **kwargs: FakeResponse(),
+        _fake_post,
     )
 
     mem_engine = __import__("sqlalchemy").create_engine(
@@ -89,6 +138,8 @@ def test_maybe_create_freshdesk_case_creates_and_persists(monkeypatch):
     assert result["created"] is True
     assert result["freshdesk_ticket_id"] == "99901"
     assert "freshdesk.com/a/tickets/99901" in result["freshdesk_url"]
+    assert captured
+    assert captured[0]["type"] == "Issue with Product"
 
     with session_factory() as db:
         saved = (
@@ -164,6 +215,13 @@ def test_maybe_create_freshdesk_case_phone_ivr_uses_caller_phone(monkeypatch):
     assert payload["phone"] == "+15551234567"
     assert "phone-ivr" in payload["tags"]
     assert "Caller phone" in payload["description"]
+    assert payload["type"] in {
+        "Issue with Product",
+        "Inquiry",
+        "Purchase Parts",
+        "Service Task",
+        "IDNT",
+    }
 
 
 def test_schedule_freshdesk_case_creation_runs_sync_by_default(monkeypatch):

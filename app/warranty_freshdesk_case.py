@@ -155,6 +155,114 @@ def _apply_freshdesk_routing(payload: Dict[str, Any]) -> None:
         payload["product_id"] = int(product_id)
 
 
+# Freshdesk Type is required on this account. Values must match the portal exactly.
+_FRESHDESK_TICKET_TYPES = frozenset(
+    {
+        "Issue with Product",
+        "Inquiry",
+        "Purchase Parts",
+        "Service Task",
+        "IDNT",
+    }
+)
+
+
+def _delivery_intent_key(ticket, *, turns=None, collected: Optional[Dict[str, Any]] = None) -> str:
+    """Return status_check / damage_issue when known from turns, node, or collected data."""
+    if collected is None:
+        collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
+
+    for raw in (
+        collected.get("delivery_intent"),
+        collected.get("delivery_intent_key"),
+    ):
+        key = str(raw or "").strip().lower()
+        if key in ("status_check", "damage_issue"):
+            return key
+
+    for turn in reversed(list(turns or [])):
+        node_id = str(getattr(turn, "node_id", "") or "").strip()
+        if node_id != "delivery_intent_q":
+            continue
+        key = str(getattr(turn, "answer_key", "") or "").strip().lower()
+        if key in ("status_check", "damage_issue"):
+            return key
+
+    node_id = str(getattr(ticket, "current_node_id", "") or "").strip().lower()
+    if node_id.startswith("delivery_status") or node_id == "delivery_status_terminal":
+        return "status_check"
+    if node_id.startswith("delivery_") and "status" not in node_id:
+        # Damage / claim terminals and mid-flow damage nodes.
+        if any(
+            token in node_id
+            for token in (
+                "damage",
+                "replace",
+                "signed",
+                "box",
+                "tracking",
+                "minor_comp",
+                "get_name",
+                "get_tracking",
+            )
+        ):
+            return "damage_issue"
+    return ""
+
+
+def resolve_freshdesk_ticket_type(
+    ticket,
+    *,
+    turns=None,
+    collected: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Pick a required Freshdesk ``type`` for outbound warranty ticket create.
+
+    Mapping (product default):
+    - delivery + status_check → Inquiry
+    - delivery damage / defect / installation → Issue with Product
+    - parts → Purchase Parts
+    - phone IVR with no issue yet → Inquiry
+    """
+    forced = os.getenv("FRESHDESK_WARRANTY_TYPE", "").strip()
+    if forced in _FRESHDESK_TICKET_TYPES:
+        return forced
+
+    default = os.getenv(
+        "FRESHDESK_WARRANTY_DEFAULT_TYPE", "Issue with Product"
+    ).strip()
+    if default not in _FRESHDESK_TICKET_TYPES:
+        default = "Issue with Product"
+
+    if collected is None:
+        collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
+
+    issue = str(getattr(ticket, "issue_type", "") or "").strip().lower()
+    channel = str(collected.get("channel") or "").strip().lower()
+    node_id = str(getattr(ticket, "current_node_id", "") or "").strip().lower()
+
+    if issue in ("parts", "purchase_parts", "part"):
+        return "Purchase Parts"
+
+    if issue == "delivery":
+        intent = _delivery_intent_key(ticket, turns=turns, collected=collected)
+        if intent == "status_check":
+            return "Inquiry"
+        return "Issue with Product"
+
+    if issue in ("defect", "installation", "install"):
+        return "Issue with Product"
+
+    if "status" in node_id and "delivery" in node_id:
+        return "Inquiry"
+
+    if channel == "phone" and not issue:
+        return "Inquiry"
+
+    return default
+
+
 def _post_private_note(fd_id: str, body: str) -> Dict[str, Any]:
     cfg = _client()
     try:
@@ -243,6 +351,9 @@ def maybe_create_freshdesk_case(
         "description": _build_case_description(ticket, case_ref=case_ref, turns=turns),
         "priority": 2,
         "status": _default_freshdesk_status_id(),
+        "type": resolve_freshdesk_ticket_type(
+            ticket, turns=turns, collected=collected
+        ),
         "tags": ["warranty-bot", case_ref],
         "source": 2,
     }
