@@ -32,7 +32,7 @@
   },
   "overrides": {
     "postcss": "$postcss",
-    "minimatch": "9.0.9",
+    "minimatch": "10.2.5",
     "brace-expansion": "5.0.8",
     "sharp": "^0.35.3"
   }
