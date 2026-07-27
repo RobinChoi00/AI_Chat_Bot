@@ -248,6 +248,10 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
                 ticketId={ticket.ticket_id}
                 freshdeskUrl={ticket.freshdesk_url}
                 freshdeskTicketId={ticket.freshdesk_ticket_id}
+                createError={ticket.freshdesk_create_error}
+                createErrorDetail={ticket.freshdesk_create_error_detail}
+                createFailedAt={ticket.freshdesk_create_failed_at}
+                createAttemptCount={ticket.freshdesk_create_attempt_count}
               />
             }
           />

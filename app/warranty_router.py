@@ -1312,6 +1312,14 @@ def _finalize_answer_response(
             }
         elif freshdesk_result.get("scheduled"):
             payload["freshdesk_scheduled"] = True
+        elif freshdesk_result.get("error") and not freshdesk_result.get("skipped"):
+            payload["freshdesk_error"] = {
+                "error": freshdesk_result.get("error"),
+                "detail": freshdesk_result.get("detail"),
+                "failed_at": freshdesk_result.get("failed_at"),
+                "attempt_count": freshdesk_result.get("attempt_count"),
+                "case_reference": freshdesk_result.get("case_reference"),
+            }
 
         # Customer receipt (idempotent) — works even when Freshdesk create is skipped.
         with warranty_db_session() as db:
@@ -1449,6 +1457,10 @@ def _serialize_ticket_state(
             "troubleshooting_outcome": troubleshooting_outcome,
             "freshdesk_ticket_id": str(collected.get("freshdesk_ticket_id") or "").strip() or None,
             "freshdesk_url": str(collected.get("freshdesk_url") or "").strip() or None,
+            "freshdesk_create_error": str(
+                collected.get("freshdesk_create_error") or ""
+            ).strip()
+            or None,
             "current_node": {
                 "node_id":            node_id,
                 "node_type":          node_type,
@@ -2097,6 +2109,16 @@ def _serialize_admin_ticket(ticket, turns=None, evidences=None) -> dict:
     collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
     payload["freshdesk_ticket_id"] = collected.get("freshdesk_ticket_id")
     payload["freshdesk_url"] = collected.get("freshdesk_url")
+    payload["freshdesk_create_error"] = collected.get("freshdesk_create_error") or None
+    payload["freshdesk_create_error_detail"] = (
+        collected.get("freshdesk_create_error_detail") or None
+    )
+    payload["freshdesk_create_failed_at"] = (
+        collected.get("freshdesk_create_failed_at") or None
+    )
+    payload["freshdesk_create_attempt_count"] = collected.get(
+        "freshdesk_create_attempt_count"
+    )
     payload["channel"] = collected.get("channel")
     payload["caller_phone"] = collected.get("caller_phone")
     payload["customer_email"] = resolve_customer_email(ticket, turns=turns, evidences=evidences)

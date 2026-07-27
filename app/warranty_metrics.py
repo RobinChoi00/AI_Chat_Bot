@@ -164,6 +164,8 @@ async def warranty_metrics(
     contact_captured = 0
     email_gate_provided = 0
     email_gate_skipped = 0
+    freshdesk_linked = 0
+    freshdesk_create_failed = 0
     admin_decided = 0
     resolved = 0
     abandoned = 0
@@ -213,6 +215,11 @@ async def warranty_metrics(
         elif has_email and not intake_gate:
             # Older tickets / reload races: email captured but gate flag missing.
             email_gate_provided += 1
+
+        if str(collected.get("freshdesk_ticket_id") or "").strip():
+            freshdesk_linked += 1
+        elif str(collected.get("freshdesk_create_error") or "").strip():
+            freshdesk_create_failed += 1
 
         if is_completed:
             reached_terminal += 1
@@ -285,6 +292,12 @@ async def warranty_metrics(
             "email_gate_provide_rate_pct": _percent(
                 email_gate_provided,
                 email_gate_provided + email_gate_skipped,
+            ),
+            "freshdesk_linked": freshdesk_linked,
+            "freshdesk_create_failed": freshdesk_create_failed,
+            "freshdesk_link_rate_pct": _percent(
+                freshdesk_linked,
+                freshdesk_linked + freshdesk_create_failed,
             ),
             "admin_decided": admin_decided,
             "resolved": resolved,

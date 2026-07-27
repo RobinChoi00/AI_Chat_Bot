@@ -62,6 +62,10 @@ export interface AdminWarrantyTicket {
   customer_message: string | null;
   freshdesk_ticket_id?: string | null;
   freshdesk_url?: string | null;
+  freshdesk_create_error?: string | null;
+  freshdesk_create_error_detail?: string | null;
+  freshdesk_create_failed_at?: string | null;
+  freshdesk_create_attempt_count?: number | null;
   fonz_diagnostics?: AdminFonzDiagnostics | null;
   created_at: string | null;
   updated_at: string | null;

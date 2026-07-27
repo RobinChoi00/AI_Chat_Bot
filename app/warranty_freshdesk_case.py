@@ -7,16 +7,124 @@ This module handles the outbound path: warranty ticket → Freshdesk case.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 import requests
 
 from warranty_case_ref import case_reference_for_ticket
 
 logger = logging.getLogger(__name__)
+
+_FRESHDESK_ERROR_KEYS = (
+    "freshdesk_create_error",
+    "freshdesk_create_error_detail",
+    "freshdesk_create_failed_at",
+)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
+        "+00:00", "Z"
+    )
+
+
+def _patch_ticket_collected(
+    ticket_id: str,
+    updates: Dict[str, Any],
+    *,
+    clear_keys: Optional[List[str]] = None,
+) -> None:
+    """Merge keys into ``WarrantyTicket.collected_data`` (best-effort)."""
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    with warranty_db_session() as db:
+        row = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        if row is None:
+            return
+        collected = row.get_collected()
+        for key in clear_keys or []:
+            collected.pop(key, None)
+        for key, value in updates.items():
+            if value is None:
+                collected.pop(key, None)
+            else:
+                collected[key] = value
+        row.collected_data = json.dumps(collected)
+
+
+def _record_freshdesk_create_failure(
+    ticket_id: str,
+    *,
+    error: str,
+    detail: str = "",
+    case_ref: str = "",
+    collected: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    prior = collected or {}
+    try:
+        attempts = int(prior.get("freshdesk_create_attempt_count") or 0) + 1
+    except (TypeError, ValueError):
+        attempts = 1
+    failed_at = _utc_now_iso()
+    updates: Dict[str, Any] = {
+        "freshdesk_create_error": str(error or "create_failed")[:120],
+        "freshdesk_create_error_detail": str(detail or "")[:400],
+        "freshdesk_create_failed_at": failed_at,
+        "freshdesk_create_attempt_count": attempts,
+    }
+    if case_ref:
+        updates["case_reference"] = case_ref
+    try:
+        _patch_ticket_collected(ticket_id, updates)
+    except Exception as exc:  # pragma: no cover - persistence must not hide API error
+        logger.warning(
+            "Could not persist Freshdesk create failure for %s: %s", ticket_id, exc
+        )
+    return {
+        "created": False,
+        "error": updates["freshdesk_create_error"],
+        "detail": updates["freshdesk_create_error_detail"],
+        "failed_at": failed_at,
+        "attempt_count": attempts,
+        "case_reference": case_ref or None,
+    }
+
+
+def _record_freshdesk_create_success(
+    ticket_id: str,
+    *,
+    fd_id: str,
+    fd_url: str,
+    domain: str,
+    case_ref: str,
+    collected: Optional[Dict[str, Any]] = None,
+) -> None:
+    prior = collected or {}
+    try:
+        attempts = int(prior.get("freshdesk_create_attempt_count") or 0) + 1
+    except (TypeError, ValueError):
+        attempts = 1
+    _patch_ticket_collected(
+        ticket_id,
+        {
+            "freshdesk_ticket_id": fd_id,
+            "freshdesk_url": fd_url,
+            "freshdesk_domain": domain,
+            "case_reference": case_ref,
+            "freshdesk_create_attempt_count": attempts,
+            "freshdesk_create_succeeded_at": _utc_now_iso(),
+        },
+        clear_keys=list(_FRESHDESK_ERROR_KEYS),
+    )
 
 
 def _create_enabled() -> bool:
@@ -333,7 +441,6 @@ def maybe_create_freshdesk_case(
         return {"created": False, "skipped": True, "reason": "status_not_eligible"}
 
     from warranty_email import resolve_customer_email  # noqa: WPS433
-    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
 
     turns = engine.get_turns(ticket_id)
     case_ref = case_reference_for_ticket(ticket)
@@ -384,40 +491,57 @@ def maybe_create_freshdesk_case(
         )
     except requests.RequestException as exc:
         logger.warning("Freshdesk case create failed for %s: %s", ticket_id, exc)
-        return {"created": False, "error": str(exc)}
+        return _record_freshdesk_create_failure(
+            ticket_id,
+            error=str(exc),
+            detail="",
+            case_ref=case_ref,
+            collected=collected,
+        )
 
     if response.status_code >= 400:
+        detail = (response.text or "")[:400]
         logger.warning(
             "Freshdesk case create HTTP %s for %s: %s",
             response.status_code,
             ticket_id,
-            (response.text or "")[:400],
+            detail,
         )
-        return {
-            "created": False,
-            "error": f"http_{response.status_code}",
-            "detail": (response.text or "")[:400],
-        }
+        return _record_freshdesk_create_failure(
+            ticket_id,
+            error=f"http_{response.status_code}",
+            detail=detail,
+            case_ref=case_ref,
+            collected=collected,
+        )
 
     data = response.json()
     fd_id = str(data.get("id") or "")
     fd_url = freshdesk_ticket_url(cfg["domain"], fd_id)
 
-    with warranty_db_session() as db:
-        row = (
-            db.query(WarrantyTicket)
-            .filter(WarrantyTicket.ticket_id == ticket_id)
-            .first()
+    try:
+        _record_freshdesk_create_success(
+            ticket_id,
+            fd_id=fd_id,
+            fd_url=fd_url,
+            domain=cfg["domain"],
+            case_ref=case_ref,
+            collected=collected,
         )
-        if row:
-            c = row.get_collected()
-            c["freshdesk_ticket_id"] = fd_id
-            c["freshdesk_url"] = fd_url
-            c["freshdesk_domain"] = cfg["domain"]
-            c["case_reference"] = case_ref
-            import json as _json  # noqa: WPS433
-
-            row.collected_data = _json.dumps(c)
+    except Exception as exc:
+        logger.warning(
+            "Freshdesk created fd=%s but failed to persist link for %s: %s",
+            fd_id,
+            ticket_id,
+            exc,
+        )
+        return {
+            "created": True,
+            "freshdesk_ticket_id": fd_id,
+            "freshdesk_url": fd_url,
+            "case_reference": case_ref,
+            "persist_error": str(exc),
+        }
 
     logger.info(
         "Freshdesk case created ticket=%s fd_id=%s ref=%s",
@@ -570,7 +694,11 @@ def schedule_freshdesk_case_creation(
             )
         except Exception as exc:
             logger.warning("Freshdesk create failed for %s: %s", ticket_id, exc)
-            return {"created": False, "error": str(exc)}
+            return _record_freshdesk_create_failure(
+                ticket_id,
+                error=str(exc),
+                detail="",
+            )
 
     async_flag = os.getenv("WARRANTY_FRESHDESK_ASYNC_CREATE", "0").strip().lower()
     if async_flag in ("1", "true", "yes", "on"):

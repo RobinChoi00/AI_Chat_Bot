@@ -224,6 +224,152 @@ def test_maybe_create_freshdesk_case_phone_ivr_uses_caller_phone(monkeypatch):
     }
 
 
+def test_maybe_create_freshdesk_case_persists_http_failure(monkeypatch):
+    monkeypatch.setenv("WARRANTY_FRESHDESK_CREATE_CASE", "1")
+    monkeypatch.setenv("FRESHDESK_DOMAIN", "titanchair.freshdesk.com")
+    monkeypatch.setenv("FRESHDESK_API_KEY", "test-key")
+    monkeypatch.delenv("FRESHDESK_WARRANTY_TYPE", raising=False)
+
+    fake_ticket = _FakeTicket()
+    engine = MagicMock()
+    engine.get_ticket.return_value = fake_ticket
+    engine.get_turns.return_value = []
+
+    class FakeResponse:
+        status_code = 400
+        text = '{"description":"Validation failed","errors":[{"field":"type","message":"Unexpected/invalid field value"}]}'
+
+        @staticmethod
+        def json():
+            return {}
+
+    monkeypatch.setattr(
+        "warranty_freshdesk_case.requests.post",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+
+    mem_engine = __import__("sqlalchemy").create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+    )
+    from sqlalchemy.orm import sessionmaker
+
+    import warranty_models as wm
+
+    wm.Base.metadata.create_all(bind=mem_engine)
+    session_factory = sessionmaker(bind=mem_engine)
+    monkeypatch.setattr(wm, "_engine", mem_engine)
+    monkeypatch.setattr(wm, "_SessionFactory", session_factory)
+
+    with session_factory() as db:
+        row = wm.WarrantyTicket(
+            ticket_id="tid-123",
+            session_id="sess-1",
+            domain="osaki.com",
+            status="awaiting_admin_review",
+            current_node_id="delivery_replace_claim_terminal",
+            collected_data="{}",
+        )
+        db.add(row)
+        db.commit()
+
+    from warranty_freshdesk_case import maybe_create_freshdesk_case  # noqa: W402
+
+    result = maybe_create_freshdesk_case("tid-123", engine=engine)
+    assert result["created"] is False
+    assert result["error"] == "http_400"
+    assert "Validation failed" in (result.get("detail") or "")
+    assert result.get("failed_at")
+    assert result.get("attempt_count") == 1
+
+    with session_factory() as db:
+        saved = (
+            db.query(wm.WarrantyTicket)
+            .filter(wm.WarrantyTicket.ticket_id == "tid-123")
+            .first()
+        )
+        collected = saved.get_collected()
+        assert collected["freshdesk_create_error"] == "http_400"
+        assert "Validation failed" in collected["freshdesk_create_error_detail"]
+        assert collected["freshdesk_create_attempt_count"] == 1
+        assert collected["case_reference"].startswith("WR-")
+        assert "freshdesk_ticket_id" not in collected
+
+
+def test_maybe_create_freshdesk_case_clears_error_on_success(monkeypatch):
+    monkeypatch.setenv("WARRANTY_FRESHDESK_CREATE_CASE", "1")
+    monkeypatch.setenv("FRESHDESK_DOMAIN", "titanchair.freshdesk.com")
+    monkeypatch.setenv("FRESHDESK_API_KEY", "test-key")
+
+    fake_ticket = _FakeTicket()
+    fake_ticket.collected_data = json.dumps(
+        {
+            "freshdesk_create_error": "http_400",
+            "freshdesk_create_error_detail": "old failure",
+            "freshdesk_create_failed_at": "2026-01-01T00:00:00Z",
+            "freshdesk_create_attempt_count": 2,
+        }
+    )
+    engine = MagicMock()
+    engine.get_ticket.return_value = fake_ticket
+    engine.get_turns.return_value = []
+
+    class FakeResponse:
+        status_code = 201
+
+        @staticmethod
+        def json():
+            return {"id": 777}
+
+    monkeypatch.setattr(
+        "warranty_freshdesk_case.requests.post",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+
+    mem_engine = __import__("sqlalchemy").create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+    )
+    from sqlalchemy.orm import sessionmaker
+
+    import warranty_models as wm
+
+    wm.Base.metadata.create_all(bind=mem_engine)
+    session_factory = sessionmaker(bind=mem_engine)
+    monkeypatch.setattr(wm, "_engine", mem_engine)
+    monkeypatch.setattr(wm, "_SessionFactory", session_factory)
+
+    with session_factory() as db:
+        row = wm.WarrantyTicket(
+            ticket_id="tid-123",
+            session_id="sess-1",
+            domain="osaki.com",
+            status="awaiting_admin_review",
+            current_node_id="delivery_replace_claim_terminal",
+            collected_data=fake_ticket.collected_data,
+        )
+        db.add(row)
+        db.commit()
+
+    from warranty_freshdesk_case import maybe_create_freshdesk_case  # noqa: W402
+
+    result = maybe_create_freshdesk_case("tid-123", engine=engine)
+    assert result["created"] is True
+
+    with session_factory() as db:
+        saved = (
+            db.query(wm.WarrantyTicket)
+            .filter(wm.WarrantyTicket.ticket_id == "tid-123")
+            .first()
+        )
+        collected = saved.get_collected()
+        assert collected["freshdesk_ticket_id"] == "777"
+        assert "freshdesk_create_error" not in collected
+        assert "freshdesk_create_error_detail" not in collected
+        assert "freshdesk_create_failed_at" not in collected
+        assert collected["freshdesk_create_attempt_count"] == 3
+
+
 def test_schedule_freshdesk_case_creation_runs_sync_by_default(monkeypatch):
     monkeypatch.setenv("WARRANTY_FRESHDESK_CREATE_CASE", "1")
     monkeypatch.setenv("FRESHDESK_DOMAIN", "titanchair.freshdesk.com")

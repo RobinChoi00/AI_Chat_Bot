@@ -8,17 +8,28 @@ interface Props {
   ticketId: string;
   freshdeskUrl?: string | null;
   freshdeskTicketId?: string | null;
+  createError?: string | null;
+  createErrorDetail?: string | null;
+  createFailedAt?: string | null;
+  createAttemptCount?: number | null;
 }
 
 export default function AdminFreshdeskLinkButton({
   ticketId,
   freshdeskUrl,
   freshdeskTicketId,
+  createError,
+  createErrorDetail,
+  createFailedAt,
+  createAttemptCount,
 }: Props) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+
+  const hasLink = Boolean(freshdeskUrl);
+  const hasCreateFailure = Boolean(createError) && !hasLink;
 
   async function handleLink() {
     setLoading(true);
@@ -55,6 +66,10 @@ export default function AdminFreshdeskLinkButton({
           >
             Open Freshdesk #{freshdeskTicketId}
           </a>
+        ) : hasCreateFailure ? (
+          <span className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900">
+            Freshdesk create failed
+          </span>
         ) : (
           <span className="text-xs text-gray-500">No Freshdesk ticket linked yet.</span>
         )}
@@ -62,21 +77,37 @@ export default function AdminFreshdeskLinkButton({
           type="button"
           onClick={handleLink}
           disabled={loading}
-          className="rounded-lg border border-indigo-300 bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className={`rounded-lg border px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60 ${
+            hasCreateFailure
+              ? "border-amber-500 bg-amber-600 hover:bg-amber-700"
+              : "border-indigo-300 bg-indigo-600 hover:bg-indigo-700"
+          }`}
         >
           {loading
             ? "Linking…"
-            : freshdeskUrl
+            : hasLink
               ? "Retry / refresh link"
-              : "Create Freshdesk ticket"}
+              : hasCreateFailure
+                ? "Retry Freshdesk create"
+                : "Create Freshdesk ticket"}
         </button>
       </div>
-      {message && (
-        <p className="text-xs text-green-700">{message}</p>
+      {hasCreateFailure && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+          <p className="font-medium">Last create error: {createError}</p>
+          {createErrorDetail ? (
+            <p className="mt-1 break-words text-amber-900/90">{createErrorDetail}</p>
+          ) : null}
+          <p className="mt-1 text-amber-800/80">
+            {createFailedAt ? `Failed at ${createFailedAt}` : null}
+            {typeof createAttemptCount === "number"
+              ? `${createFailedAt ? " · " : ""}Attempts: ${createAttemptCount}`
+              : null}
+          </p>
+        </div>
       )}
-      {error && (
-        <p className="text-xs text-red-700">{error}</p>
-      )}
+      {message && <p className="text-xs text-green-700">{message}</p>}
+      {error && <p className="text-xs text-red-700">{error}</p>}
     </div>
   );
 }
