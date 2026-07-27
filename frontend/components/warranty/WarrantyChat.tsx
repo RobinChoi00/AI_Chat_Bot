@@ -77,6 +77,20 @@ const INITIAL_ISSUE_OPTIONS: AnswerOption[] = [
   { answer_key: "defect", label: "Chair malfunction" },
 ];
 
+const ISSUE_TYPE_KEYS = new Set(["installation", "delivery", "defect"]);
+
+function resolveSuggestedIssueType(
+  resp: Pick<WarrantySessionResponse, "smart_start" | "suggested_issue_type">
+): string | null {
+  const raw =
+    resp.smart_start?.suggested_issue_type ||
+    resp.smart_start?.routing_confirmation?.inferred_issue_type ||
+    resp.suggested_issue_type ||
+    "";
+  const key = String(raw).trim().toLowerCase();
+  return ISSUE_TYPE_KEYS.has(key) ? key : null;
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -131,6 +145,7 @@ export default function WarrantyChat({
   const [issueTypePanelExpanded, setIssueTypePanelExpanded] = useState(true);
   const [emailPanelCollapsed, setEmailPanelCollapsed] = useState(false);
   const [pendingDefectStart, setPendingDefectStart] = useState<string | null>(null);
+  const [suggestedIssueType, setSuggestedIssueType] = useState<string | null>(null);
   const [chatConsentAccepted, setChatConsentAccepted] = useState(() => {
     if (typeof window === "undefined") return false;
     return sessionStorage.getItem(CHAT_CONSENT_STORAGE_KEY) === "1";
@@ -267,6 +282,8 @@ export default function WarrantyChat({
       setMessages([{ role: "assistant", content: WARRANTY_WELCOME_MESSAGE }]);
       setWarrantyState(null);
       setTerminalEnrichment(null);
+      setSuggestedIssueType(null);
+      setPendingDefectStart(null);
       setHelpConsent(null);
       setResolutionStage("review");
       setContactSubmitted(false);
@@ -481,6 +498,7 @@ export default function WarrantyChat({
   const handleQuickStart = useCallback(
     async (issueType: "installation" | "delivery" | "defect", label: string) => {
       if (loading || !chatConsentAccepted || !emailGateDone) return;
+      setSuggestedIssueType(null);
       if (issueType === "defect" && !warrantyState?.model_name?.trim()) {
         setError(null);
         setMessages((prev) => [...prev, { role: "user", content: label }]);
@@ -583,6 +601,7 @@ export default function WarrantyChat({
         const needsIntentConfirm = Boolean(
           routingConfirm?.requires_confirmation || routingConfirm?.message
         );
+        setSuggestedIssueType(resolveSuggestedIssueType(resp));
 
         applySessionResponse(resp);
 
@@ -1242,7 +1261,11 @@ export default function WarrantyChat({
           <div className="mt-3 sm:mt-4">
             <CollapsibleOptionPanel
               title="What can we help you with?"
-              hint="Choose one option to continue"
+              hint={
+                suggestedIssueType
+                  ? "Suggested option is highlighted — tap to confirm"
+                  : "Choose one option to continue"
+              }
               optionCount={INITIAL_ISSUE_OPTIONS.length}
               expanded={issueTypePanelExpanded}
               onToggle={() => setIssueTypePanelExpanded((open) => !open)}
@@ -1250,6 +1273,7 @@ export default function WarrantyChat({
             >
               <AnswerOptions
                 options={INITIAL_ISSUE_OPTIONS}
+                highlightedKey={suggestedIssueType}
                 variant="stack"
                 onSelect={(key, label) =>
                   handleQuickStart(

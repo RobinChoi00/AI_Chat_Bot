@@ -8,6 +8,8 @@ interface Props {
   disabled?: boolean;
   /** inline = compact grid; stack = full-width tap targets (mobile-friendly) */
   variant?: "inline" | "stack";
+  /** Soft-highlight a suggested option without auto-selecting it. */
+  highlightedKey?: string | null;
 }
 
 const OPTION_ICONS: Record<string, string> = {
@@ -209,6 +211,7 @@ export default function AnswerOptions({
   onSelect,
   disabled,
   variant = "stack",
+  highlightedKey = null,
 }: Props) {
   if (!options.length) return null;
 
@@ -227,12 +230,15 @@ export default function AnswerOptions({
     >
       {options.map((opt) => {
         const label = displayLabel(opt, compact);
+        const highlighted =
+          Boolean(highlightedKey) && opt.answer_key === highlightedKey && !disabled;
         return (
           <button
             key={opt.answer_key}
             type="button"
             onClick={() => onSelect(opt.answer_key, opt.label)}
             disabled={disabled}
+            aria-current={highlighted ? "true" : undefined}
             className={`flex w-full items-center text-left font-medium transition active:scale-[0.98] ${
               compact
                 ? "min-h-[44px] gap-1.5 rounded-lg border px-2 py-2 text-[11px] leading-snug sm:min-h-[52px] sm:gap-3 sm:rounded-2xl sm:px-4 sm:py-3.5 sm:text-sm"
@@ -240,7 +246,9 @@ export default function AnswerOptions({
             } ${
               disabled
                 ? "cursor-not-allowed border-gray-200 bg-gray-50 text-gray-400"
-                : "border-brand-200 bg-white text-gray-800 shadow-sm hover:border-brand-400 hover:bg-brand-50/60"
+                : highlighted
+                  ? "border-brand-500 bg-brand-50 text-gray-900 shadow-sm ring-2 ring-brand-400/60"
+                  : "border-brand-200 bg-white text-gray-800 shadow-sm hover:border-brand-400 hover:bg-brand-50/60"
             }`}
           >
             <span
@@ -253,7 +261,14 @@ export default function AnswerOptions({
             >
               {iconFor(opt.answer_key, opt.label)}
             </span>
-            <span className="min-w-0 flex-1 leading-tight sm:leading-snug">{label}</span>
+            <span className="min-w-0 flex-1 leading-tight sm:leading-snug">
+              {label}
+              {highlighted ? (
+                <span className="mt-0.5 block text-[10px] font-normal text-brand-700 sm:text-xs">
+                  Suggested from your description
+                </span>
+              ) : null}
+            </span>
             {!compact && (
               <span className="flex-shrink-0 text-sm text-brand-500 sm:text-base" aria-hidden>
                 ›
