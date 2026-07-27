@@ -24,6 +24,8 @@ const OPTION_ICONS: Record<string, string> = {
   general_setup: "📖",
 
   // Delivery
+  status_check: "📍",
+  damage_issue: "📦",
   no_tracking: "❓",
   has_tracking: "📍",
   yes_box_damage: "📦",

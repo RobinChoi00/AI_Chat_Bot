@@ -273,7 +273,8 @@ def test_delivery_no_tracking_continues_to_damage_question():
 
     result = walk(ticket_id, [
         "warranty",        # root → issue_type
-        "delivery",        # issue_type → delivery_tracking_q
+        "delivery",        # issue_type → delivery_intent_q
+        "damage_issue",    # delivery_intent_q → delivery_tracking_q
         "no_tracking",     # delivery_tracking_q → delivery_get_name
         "customer@example.com",  # delivery_get_name → delivery_visible_damage_q
     ])
@@ -286,7 +287,25 @@ def test_delivery_no_tracking_continues_to_damage_question():
     assert t.get_collected().get("order_or_email") == "customer@example.com"
 
     turns = WarrantyEngine.get_turns(ticket_id)
-    assert len(turns) == 4
+    assert len(turns) == 5
+
+
+def test_delivery_status_check_ends_at_status_terminal():
+    ticket_id, _ = start()
+
+    result = walk(ticket_id, [
+        "warranty",
+        "delivery",
+        "status_check",
+        "no_tracking",
+        "customer@example.com",
+    ])
+
+    assert result["next_node_id"] == "delivery_status_terminal"
+    assert result["is_terminal"] is True
+    t = ticket(ticket_id)
+    assert str(t.status) == "awaiting_admin_review"
+    assert t.get_collected().get("order_or_email") == "customer@example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +317,8 @@ def test_delivery_tracking_box_damage_signed_cleared():
 
     result = walk(ticket_id, [
         "warranty",           # root → issue_type
-        "delivery",           # issue_type → delivery_tracking_q
+        "delivery",           # issue_type → delivery_intent_q
+        "damage_issue",       # → delivery_tracking_q
         "has_tracking",       # delivery_tracking_q → delivery_get_tracking_number
         "1Z999AA10123456784", # tracking number → delivery_visible_damage_q
         "yes_box_damage",     # delivery_visible_damage_q → delivery_signed_q

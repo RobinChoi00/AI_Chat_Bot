@@ -211,6 +211,10 @@ def test_submit_answer_side_questions_box_size_at_delivery_lookup(client, monkey
 
     client.post(
         f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "damage_issue"},
+    )
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
         json={"answer": "no_tracking"},
     )
     resp = client.post(
@@ -284,6 +288,10 @@ def test_submit_answer_returns_tracking_summary(client, monkeypatch):
 
     client.post(
         f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "damage_issue"},
+    )
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
         json={"answer": "has_tracking"},
     )
     resp = client.post(
@@ -325,6 +333,10 @@ def test_get_session_returns_ticket_after_admin_terminal(client, monkeypatch):
     )
     ticket_id = start.json()["ticket"]["ticket_id"]
 
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "damage_issue"},
+    )
     client.post(
         f"/api/v1/warranty/{ticket_id}/answer",
         json={"answer": "no_tracking"},
@@ -442,7 +454,7 @@ def test_model_then_issue_via_natural_start(client, monkeypatch):
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["ticket"]["issue_type"] == "delivery"
-    assert data["ticket"]["current_node"]["node_id"] == "delivery_tracking_q"
+    assert data["ticket"]["current_node"]["node_id"] == "delivery_intent_q"
 
 
 def test_submit_answer_clarifying_on_ambiguous(client, monkeypatch):
@@ -467,7 +479,7 @@ def test_submit_answer_clarifying_on_ambiguous(client, monkeypatch):
     data = resp.json()
     assert data.get("side_question") is True
     assert "choices" in data["assistant_message"].lower() or "tap one" in data["assistant_message"].lower()
-    assert data["ticket"]["current_node"]["node_id"] == "delivery_tracking_q"
+    assert data["ticket"]["current_node"]["node_id"] == "delivery_intent_q"
 
 
 def test_natural_start_maps_issue_type(client, monkeypatch):
@@ -499,6 +511,10 @@ def test_submit_answer_nlp_maps_natural_language(client):
     )
     ticket_id = start.json()["ticket"]["ticket_id"]
 
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "damage_issue"},
+    )
     resp = client.post(
         f"/api/v1/warranty/{ticket_id}/answer",
         json={"answer": "I don't have a tracking number"},

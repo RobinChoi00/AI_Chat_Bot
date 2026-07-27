@@ -45,7 +45,12 @@ _QUESTION_HINT_RE = re.compile(
 _SKIP_SIDE_NODE_IDS = frozenset({"root"})
 
 _DELIVERY_TEXT_NODES = frozenset(
-    {"delivery_get_name", "delivery_get_tracking_number"}
+    {
+        "delivery_get_name",
+        "delivery_get_tracking_number",
+        "delivery_status_get_order_email",
+        "delivery_status_get_tracking",
+    }
 )
 
 
@@ -152,13 +157,13 @@ def _looks_like_valid_workflow_answer(node: dict, text: str) -> bool:
     if node_id in _DELIVERY_TEXT_NODES:
         from warranty_email import extract_email  # noqa: WPS433
 
-        if node_id == "delivery_get_name":
+        if node_id in ("delivery_get_name", "delivery_status_get_order_email"):
             embedded = extract_email(raw)
             if embedded and is_plausible_email(embedded):
                 return True
             return is_plausible_email(raw) or is_plausible_order_id(raw)
 
-        if node_id == "delivery_get_tracking_number":
+        if node_id in ("delivery_get_tracking_number", "delivery_status_get_tracking"):
             return is_plausible_tracking_number(raw)
 
     if node.get("type") == "question_text" and node_id == "install_model":
@@ -251,9 +256,9 @@ def try_answer_side_question(
     node_id = str(node.get("node_id") or "")
     spec = detect_delivery_spec_question(text)
     if spec:
-        if node_id == "delivery_get_name":
+        if node_id in ("delivery_get_name", "delivery_status_get_order_email"):
             reprompt = _reprompt_order_or_email()
-        elif node_id == "delivery_get_tracking_number":
+        elif node_id in ("delivery_get_tracking_number", "delivery_status_get_tracking"):
             reprompt = _reprompt_tracking_number()
         else:
             reprompt = _reprompt_current(node)

@@ -234,6 +234,7 @@ def test_build_step_enrichment_skips_delivery_path(monkeypatch):
         [
             _turn("warranty", node_id="root"),
             _turn("delivery", node_id="issue_type"),
+            _turn("damage_issue", node_id="delivery_intent_q"),
             _turn("no_tracking", node_id="delivery_tracking_q"),
         ]
     )

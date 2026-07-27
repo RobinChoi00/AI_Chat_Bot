@@ -91,9 +91,15 @@ SCENARIOS: List[Tuple[str, List[str], str, str]] = [
     ),
     (
         "Delivery — tracking + box damage signed cleared → admin review",
-        ["warranty", "delivery", "has_tracking", "1Z999AA10123456784", "yes_box_damage", "signed_cleared"],
+        ["warranty", "delivery", "damage_issue", "has_tracking", "1Z999AA10123456784", "yes_box_damage", "signed_cleared"],
         "awaiting_admin_review",
         "delivery_signed_cleared_terminal",
+    ),
+    (
+        "Delivery — status check by email → admin review",
+        ["warranty", "delivery", "status_check", "no_tracking", "customer@example.com"],
+        "awaiting_admin_review",
+        "delivery_status_terminal",
     ),
 ]
 

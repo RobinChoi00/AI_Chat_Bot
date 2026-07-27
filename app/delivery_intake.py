@@ -264,7 +264,7 @@ def validate_delivery_text_answer(
     if not text:
         raise ValueError("Please enter a response before continuing.")
 
-    if node_id == "delivery_get_name":
+    if node_id in ("delivery_get_name", "delivery_status_get_order_email"):
         from warranty_email import extract_email  # noqa: WPS433
 
         embedded_email = extract_email(text)
@@ -275,7 +275,7 @@ def validate_delivery_text_answer(
 
         raise ValueError(_reprompt_order_or_email())
 
-    if node_id == "delivery_get_tracking_number":
+    if node_id in ("delivery_get_tracking_number", "delivery_status_get_tracking"):
         if is_plausible_tracking_number(text):
             return
 

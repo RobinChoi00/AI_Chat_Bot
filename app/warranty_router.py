@@ -994,7 +994,12 @@ def _validate_text_before_submit(engine, ticket_id: str, answer: str) -> None:
 
 
 _DELIVERY_TEXT_NODES = frozenset(
-    {"delivery_get_name", "delivery_get_tracking_number"}
+    {
+        "delivery_get_name",
+        "delivery_get_tracking_number",
+        "delivery_status_get_order_email",
+        "delivery_status_get_tracking",
+    }
 )
 
 
@@ -1204,7 +1209,12 @@ def _finalize_answer_response(
     """Build the browser payload after a successful submit_answer."""
     tracking_summary: Optional[Dict[str, Any]] = None
     previous_node = result.get("previous_node_id")
-    if previous_node in ("delivery_get_tracking_number", "delivery_get_name"):
+    if previous_node in (
+        "delivery_get_tracking_number",
+        "delivery_get_name",
+        "delivery_status_get_tracking",
+        "delivery_status_get_order_email",
+    ):
         from delivery_lookup import (  # noqa: WPS433
             append_eligibility_to_tracking_message,
             build_self_service_lookup_links,
@@ -1220,7 +1230,10 @@ def _finalize_answer_response(
         )
 
         lookup_text = answer
-        if previous_node == "delivery_get_tracking_number":
+        if previous_node in (
+            "delivery_get_tracking_number",
+            "delivery_status_get_tracking",
+        ):
             lookup_kind = "tracking"
             snapshot = lookup_by_tracking_number(lookup_text, domain)
         else:

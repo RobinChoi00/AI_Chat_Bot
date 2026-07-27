@@ -1,8 +1,8 @@
 {
   "version": "1.1",
   "source": "WARRANTY FLOW CHART - MICHAEL - MICHAEL (2).pdf",
-  "updated": "2026-06-01",
-  "description": "Osaki/Titan warranty intake workflow. The backend engine controls ALL branching. The LLM only paraphrases 'prompt' fields into customer-friendly language. The LLM must NEVER decide on replacement, compensation, tech dispatch, or refund — those are admin-only actions reached through 'awaiting_admin' terminals.",
+  "updated": "2026-07-27",
+  "description": "Osaki/Titan warranty intake workflow. Delivery splits status lookup vs damage claim. The backend engine controls ALL branching. The LLM only paraphrases 'prompt' fields into customer-friendly language. The LLM must NEVER decide on replacement, compensation, tech dispatch, or refund — those are admin-only actions reached through 'awaiting_admin' terminals.",
   "root": "root",
   "nodes": {
 
@@ -28,9 +28,49 @@
       "prompt": "Which area do you need help with: setup, delivery, or a chair malfunction?",
       "options": [
         {"label": "Installation Issue",    "answer_key": "installation", "next": "install_model"},
-        {"label": "Delivery Issue",        "answer_key": "delivery",     "next": "delivery_tracking_q"},
+        {"label": "Delivery Issue",        "answer_key": "delivery",     "next": "delivery_intent_q"},
         {"label": "Defect / Malfunction",  "answer_key": "defect",       "next": "defect_problem_type"}
       ]
+    },
+
+    "delivery_intent_q": {
+      "type": "question",
+      "prompt": "How can we help with your delivery today?",
+      "options": [
+        {"label": "Check delivery / tracking status", "answer_key": "status_check", "next": "delivery_status_tracking_q"},
+        {"label": "Report damage or a delivery problem", "answer_key": "damage_issue", "next": "delivery_tracking_q"}
+      ]
+    },
+
+    "delivery_status_tracking_q": {
+      "type": "question",
+      "prompt": "Do you have a tracking number for your delivery?",
+      "options": [
+        {"label": "No, I don't have a tracking number", "answer_key": "no_tracking",  "next": "delivery_status_get_order_email"},
+        {"label": "Yes, I have my tracking number",     "answer_key": "has_tracking", "next": "delivery_status_get_tracking"}
+      ]
+    },
+
+    "delivery_status_get_order_email": {
+      "type": "question_text",
+      "prompt": "Please share your order number or the email address used at checkout so we can look up your delivery status.",
+      "answer_key": "order_or_email",
+      "next": "delivery_status_terminal"
+    },
+
+    "delivery_status_get_tracking": {
+      "type": "question_text",
+      "prompt": "Please share your tracking number so we can look up your delivery status.",
+      "answer_key": "tracking_number",
+      "next": "delivery_status_terminal"
+    },
+
+    "delivery_status_terminal": {
+      "type": "terminal",
+      "action": "awaiting_admin",
+      "prompt": "Thanks — we've received your details and looked up what we can on our side. Our team will follow up with your delivery status shortly.",
+      "internal_note": "Status-only delivery inquiry. Use collected order/email/tracking + delivery_lookup snapshot. Check Netsuite/Shopify/carrier and reply to the customer.",
+      "evidence_required": []
     },
 
     "install_model": {
@@ -77,14 +117,14 @@
 
     "delivery_get_name": {
       "type": "question_text",
-      "prompt": "No problem! Please provide your order number OR the email address used at checkout, and we will look up your delivery status right away.",
+      "prompt": "Please share your order number or the email used at checkout so we can locate your shipment. Next we'll ask a few questions about the delivery.",
       "answer_key": "order_or_email",
       "next": "delivery_visible_damage_q"
     },
 
     "delivery_get_tracking_number": {
       "type": "question_text",
-      "prompt": "Please share your tracking number and we will check the status right away.",
+      "prompt": "Please share your tracking number so we can locate your shipment. Next we'll ask a few questions about the delivery.",
       "answer_key": "tracking_number",
       "next": "delivery_visible_damage_q"
     },
