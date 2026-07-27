@@ -468,8 +468,35 @@ def test_model_then_issue_via_natural_start(client, monkeypatch):
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert data["ticket"]["issue_type"] == "delivery"
-    assert data["ticket"]["current_node"]["node_id"] == "delivery_intent_q"
+    # Suggest delivery; customer must tap to enter the path.
+    assert data.get("side_question") is True
+    assert data.get("suggested_issue_type") == "delivery"
+    assert not data["ticket"].get("issue_type")
+    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
+    assert "tap" in data["assistant_message"].lower()
+
+
+def test_submit_answer_button_key_still_advances(client):
+    """Exact answer_key taps still advance — only free-text guesses need confirm."""
+    session_id = "cust-api-button-advance"
+    _register_model(client, session_id)
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "delivery", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "damage_issue"},
+    )
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "no_tracking"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("side_question") is not True
+    assert data["ticket"]["current_node"]["node_id"] == "delivery_get_name"
 
 
 def test_submit_answer_clarifying_on_ambiguous(client, monkeypatch):
@@ -511,10 +538,14 @@ def test_natural_start_maps_issue_type(client, monkeypatch):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["nlp_interpreted"] is True
-    assert data["interpreted_issue_type"] == "defect"
-    assert data["ticket"]["issue_type"] == "defect"
-    assert data["ticket"]["current_node"]["node_id"] == "defect_problem_type"
+    # Suggest defect, but do not auto-enter the path — wait for a tap.
+    assert data.get("side_question") is True
+    assert data.get("suggested_issue_type") == "defect"
+    assert data.get("intent_confirmation_required") is True
+    assert "defect" in data["assistant_message"].lower() or "warranty" in data["assistant_message"].lower()
+    assert "tap" in data["assistant_message"].lower()
+    assert not data["ticket"].get("issue_type")
+    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
 
 
 def test_submit_answer_nlp_maps_natural_language(client):
@@ -530,14 +561,20 @@ def test_submit_answer_nlp_maps_natural_language(client):
         f"/api/v1/warranty/{ticket_id}/answer",
         json={"answer": "damage_issue"},
     )
+    before = client.get(f"/api/v1/warranty/session/{session_id}").json()
+    stuck_node = before["ticket"]["current_node"]["node_id"]
+
     resp = client.post(
         f"/api/v1/warranty/{ticket_id}/answer",
         json={"answer": "I don't have a tracking number"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data.get("nlp_interpreted") is True
-    assert data["ticket"]["current_node"]["node_id"] == "delivery_get_name"
+    # Free-text option guess → confirm by tap; do not silently advance.
+    assert data.get("side_question") is True
+    assert data.get("nlp_interpreted") is not True
+    assert "confirm" in data["assistant_message"].lower() or "tap" in data["assistant_message"].lower()
+    assert data["ticket"]["current_node"]["node_id"] == stuck_node
 
 
 def test_register_model_rejects_issue_description(client):
@@ -886,7 +923,14 @@ def test_smart_start_sets_model_from_hint(client, monkeypatch):
     data = resp.json()
     assert data["ticket"]["model_name"] == "OS-4000T"
     assert data["smart_start"]["model_name_hint"] == "OS-4000T"
-    assert len(data["smart_start"]["applied_keys"]) >= 3
+    # Free-text must not deep-jump; only open warranty and ask for confirmation.
+    assert data["smart_start"]["applied_keys"] == ["warranty"]
+    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
+    assert not data["ticket"].get("issue_type")
+    assert data["smart_start"]["suggested_issue_type"] == "defect"
+    confirm = data["smart_start"]["routing_confirmation"]
+    assert confirm["requires_confirmation"] is True
+    assert "tap" in confirm["message"].lower()
 
 
 def test_smart_start_model_only_stays_on_issue_type(client, monkeypatch):
@@ -969,7 +1013,12 @@ def test_smart_start_routing_confirmation_when_issue_inferred(client, monkeypatc
     data = resp.json()
     confirm = data["smart_start"]["routing_confirmation"]
     assert confirm["inferred_issue_type"] == "delivery"
+    assert confirm["requires_confirmation"] is True
     assert "delivery" in confirm["message"].lower()
+    assert "tap" in confirm["message"].lower()
+    assert data["smart_start"]["applied_keys"] == ["warranty"]
+    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
+    assert not data["ticket"].get("issue_type")
 
 
 def _start_defect_air_feet(client, session_id: str, model: str = "3D LTX") -> str:

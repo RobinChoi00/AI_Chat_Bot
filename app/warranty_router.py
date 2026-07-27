@@ -1184,7 +1184,11 @@ def _submit_answer_with_nlp(
     node_id = str(node.get("node_id") or "") if node else ""
 
     from warranty_error_code_gate import is_gate_node, map_gate_free_text  # noqa: WPS433
-    from warranty_nlp import build_clarifying_workflow_message, interpret_warranty_answer  # noqa: WPS433
+    from warranty_nlp import (  # noqa: WPS433
+        build_clarifying_workflow_message,
+        build_intent_confirmation_message,
+        interpret_warranty_answer,
+    )
 
     if node and is_gate_node(node_id):
         mapped = map_gate_free_text(node_id, answer)
@@ -1227,6 +1231,7 @@ def _submit_answer_with_nlp(
         if not mapped or mapped == answer:
             return None, False, build_clarifying_workflow_message(node, answer)
 
+        # Free-text capture nodes may normalize input; safe to store as typed.
         if node.get("type") == "question_text":
             return (
                 engine.submit_answer(
@@ -1238,14 +1243,11 @@ def _submit_answer_with_nlp(
                 None,
             )
 
+        # Menu / intent options: never auto-advance on an interpreted guess.
         return (
-            engine.submit_answer(
-                ticket_id,
-                mapped,
-                customer_display=answer,
-            ),
-            True,
             None,
+            False,
+            build_intent_confirmation_message(node, mapped, answer),
         )
 
 
@@ -1769,6 +1771,7 @@ async def natural_start_warranty(
 
     from warranty_nlp import (  # noqa: WPS433
         build_clarifying_issue_type_message,
+        build_suggested_issue_type_message,
         interpret_issue_type,
     )
     from warranty_intake_context import (  # noqa: WPS433
@@ -1804,34 +1807,56 @@ async def natural_start_warranty(
             return payload
 
     issue_type = interpret_issue_type(message)
-    if not issue_type:
-        if ticket is None:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Please tell us your chair model first (for example OS-4000T), "
-                    "then describe the type of issue."
-                ),
-            )
-        model_name = str(getattr(ticket, "model_name", "") or "")
-        clarify = build_clarifying_issue_type_message(message, model_name=model_name)
-        return _build_side_question_response(
-            engine,
-            str(ticket.ticket_id),
-            clarify,
+    if ticket is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Please tell us your chair model first (for example OS-4000T), "
+                "then describe the type of issue."
+            ),
         )
-    payload = _quick_start_ticket(engine, session_id, issue_type, body.domain)
+
+    ticket_id = str(ticket.ticket_id)
+    node = engine.get_current_node(ticket_id)
+    node_id = node.get("node_id") if node else None
+    try:
+        if node_id == "root":
+            engine.submit_answer(ticket_id, "warranty")
+        elif node_id != "issue_type":
+            # Already past issue menu — do not re-route from free text.
+            pass
+        else:
+            pass
+    except ValueError:
+        pass
+
     from warranty_intake_context import persist_intake_summary  # noqa: WPS433
 
-    ticket = engine.get_ticket(str(payload.get("ticket", {}).get("ticket_id") or ""))
-    if ticket is None:
-        active = engine.get_active_session_ticket(session_id)
-        ticket = active
+    ticket = engine.get_ticket(ticket_id)
     persist_intake_summary(ticket, raw_message=message)
     if ticket is not None:
-        _persist_ticket_row(str(ticket.ticket_id), ticket)
-    payload["nlp_interpreted"] = True
-    payload["interpreted_issue_type"] = issue_type
+        _persist_ticket_row(ticket_id, ticket)
+
+    node = engine.get_current_node(ticket_id)
+    current_id = str((node or {}).get("node_id") or "")
+    if current_id != "issue_type":
+        # Mid-flow: never re-route issue type from free text.
+        return _build_side_question_response(
+            engine,
+            ticket_id,
+            "Please tap one of the choices below to continue.",
+        )
+
+    if not issue_type:
+        model_name = str(getattr(ticket, "model_name", "") or "")
+        clarify = build_clarifying_issue_type_message(message, model_name=model_name)
+        return _build_side_question_response(engine, ticket_id, clarify)
+
+    # Suggest issue type but require an explicit tap — never auto-enter the path.
+    confirm = build_suggested_issue_type_message(issue_type, message)
+    payload = _build_side_question_response(engine, ticket_id, confirm)
+    payload["suggested_issue_type"] = issue_type
+    payload["intent_confirmation_required"] = True
     return payload
 
 
@@ -1900,19 +1925,36 @@ async def smart_start_warranty(
     extraction = extract_workflow_prefill(free_text=message, nodes=_NODES)
     answer_keys: list[str] = list(extraction.get("answer_keys") or [])
 
+    # Intent safety: never auto-walk deep flowchart paths from free text.
+    # Only open the warranty menu; ask the customer to confirm issue type.
+    suggested_issue_type: Optional[str] = None
+    for key in answer_keys:
+        if key in ("installation", "delivery", "defect"):
+            suggested_issue_type = key
+            break
+
+    safe_keys: list[str] = []
+    if answer_keys:
+        safe_keys = ["warranty"]
+
     apply_result: dict[str, Any] = {
         "applied": [],
         "skipped": [],
         "stopped_reason": "empty",
         "final_node": engine.get_current_node(ticket_id),
     }
-    if answer_keys:
+    if safe_keys:
         apply_result = apply_prefill_to_engine(
             engine=engine,
             ticket_id=ticket_id,
             nodes=_NODES,
-            answer_keys=answer_keys,
+            answer_keys=safe_keys,
         )
+        # Preserve what the model suggested but did not auto-apply.
+        skipped_deep = [k for k in answer_keys if k not in safe_keys]
+        apply_result["skipped"] = list(apply_result.get("skipped") or []) + skipped_deep
+        if skipped_deep:
+            apply_result["stopped_reason"] = "awaiting_intent_confirmation"
 
     model_hint = str(extraction.get("model_name") or "").strip()
     if model_hint:
@@ -1954,27 +1996,20 @@ async def smart_start_warranty(
         build_model_confirmation_message,
         needs_model_confirmation,
     )
-
-    inferred_issue_type: Optional[str] = None
-    if len(applied_keys_list) >= 2 and applied_keys_list[1] in (
-        "installation",
-        "delivery",
-        "defect",
-    ):
-        inferred_issue_type = applied_keys_list[1]
+    from warranty_nlp import build_suggested_issue_type_message  # noqa: WPS433
 
     routing_confirmation: Optional[Dict[str, Any]] = None
-    if inferred_issue_type and len(applied_keys_list) >= 2:
+    if suggested_issue_type:
         summary = str(extraction.get("summary") or "").strip()
         routing_confirmation = {
-            "inferred_issue_type": inferred_issue_type,
+            "inferred_issue_type": suggested_issue_type,
             "applied_count": len(applied_keys_list),
             "summary": summary,
-            "message": (
-                f"We're treating this as a {inferred_issue_type} issue"
-                + (f": {summary}" if summary else "")
-                + ". If that's wrong, tap **Start over** and choose again."
+            "message": build_suggested_issue_type_message(
+                suggested_issue_type,
+                message,
             ),
+            "requires_confirmation": True,
         }
 
     payload["smart_start"] = {
@@ -1985,6 +2020,7 @@ async def smart_start_warranty(
         "stopped_reason": apply_result["stopped_reason"],
         "model_name_hint": extraction.get("model_name", ""),
         "routing_confirmation": routing_confirmation,
+        "suggested_issue_type": suggested_issue_type,
     }
     if ticket and needs_model_confirmation(ticket):
         model_display = str(ticket.model_name or model_hint or "").strip()

@@ -108,6 +108,7 @@ export interface SmartStartRoutingConfirmation {
   applied_count: number;
   summary: string;
   message: string;
+  requires_confirmation?: boolean;
 }
 
 export interface SmartStartMetadata {
@@ -118,6 +119,7 @@ export interface SmartStartMetadata {
   stopped_reason: string;
   model_name_hint?: string;
   routing_confirmation?: SmartStartRoutingConfirmation | null;
+  suggested_issue_type?: string | null;
 }
 
 export interface ModelConfirmationMetadata {
@@ -132,6 +134,8 @@ export interface WarrantySessionResponse {
   email_notified?: boolean;
   nlp_interpreted?: boolean;
   interpreted_issue_type?: string;
+  suggested_issue_type?: string;
+  intent_confirmation_required?: boolean;
   assistant_message?: string | null;
   terminal_enrichment?: TerminalEnrichment | null;
   model_registered?: boolean;

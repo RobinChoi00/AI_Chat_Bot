@@ -44,6 +44,7 @@ def warranty_client(monkeypatch):
     monkeypatch.setattr(wm, "_engine", mem_engine)
     monkeypatch.setattr(wm, "_SessionFactory", mem_session_factory)
     monkeypatch.setattr(wf, "_SessionFactory", mem_session_factory)
+    monkeypatch.setenv("WARRANTY_REQUIRE_CHAT_PRIVACY", "0")
 
     app = FastAPI()
     app.include_router(router)
@@ -160,13 +161,23 @@ def test_shoulders_free_text_maps_to_option(warranty_client):
     )
     tid = payload["ticket"]["ticket_id"]
     _post(warranty_client, f"/api/v1/warranty/{tid}/answer", {"answer": "air"})
+    stuck = _post(
+        warranty_client,
+        f"/api/v1/warranty/{tid}/answer",
+        {"answer": "my shoulders"},
+    )
+    # Free-text guesses require a tap confirmation — do not silent-advance.
+    assert stuck.get("side_question") is True
+    assert stuck["ticket"]["current_node"]["node_id"] == "defect_air_location"
+    assert "tap" in _customer_message(stuck).lower() or "confirm" in _customer_message(stuck).lower()
+
     payload = _post(
         warranty_client,
         f"/api/v1/warranty/{tid}/answer",
-        {"answer": "shoulders"},
+        {"answer": "shoulders_hips"},
     )
-    node_id = payload["ticket"]["current_node"]["node_id"]
-    assert node_id == "defect_air_shoulders_hissing_q"
+    # Exact answer_key tap still advances.
+    assert payload["ticket"]["current_node"]["node_id"] == "defect_air_shoulders_hissing_q"
 
 
 def test_clarifying_message_when_answer_is_ambiguous(warranty_client):
@@ -213,8 +224,13 @@ def test_smart_start_footrest_air_advances_flow(warranty_client, monkeypatch):
         {"message": "OS-4000T footrest air not inflating", "domain": DOMAIN},
     )
     assert payload["ticket"]["model_name"] == "OS-4000T"
-    assert len(payload["smart_start"]["applied_keys"]) >= 3
-    assert "footrest" in payload["ticket"]["current_node"]["node_id"]
+    # Suggest defect, but stay on the issue menu until the customer taps.
+    assert payload["smart_start"]["applied_keys"] == ["warranty"]
+    assert payload["ticket"]["current_node"]["node_id"] == "issue_type"
+    assert not payload["ticket"].get("issue_type")
+    confirm = payload["smart_start"]["routing_confirmation"]
+    assert confirm["requires_confirmation"] is True
+    assert "defect" in confirm["message"].lower() or "warranty" in confirm["message"].lower()
     text = _customer_message(payload)
     assert "Red blinking light" not in text
 

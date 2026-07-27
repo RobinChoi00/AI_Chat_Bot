@@ -633,13 +633,9 @@ export default function WarrantyChat({
 
         const smart = resp.smart_start;
         const routingConfirm = smart?.routing_confirmation;
-        const jumped =
-          routingConfirm?.message ||
-          (smart &&
-            smart.source === "llm" &&
-            smart.applied_keys &&
-            smart.applied_keys.length >= 3 &&
-            smart.summary);
+        const needsIntentConfirm = Boolean(
+          routingConfirm?.requires_confirmation || routingConfirm?.message
+        );
 
         applySessionResponse(resp);
 
@@ -650,22 +646,14 @@ export default function WarrantyChat({
             assistantMessage(resp.model_confirmation!.message),
           ]);
           setOptionsUsed(false);
-        } else if (routingConfirm?.message) {
+        } else if (needsIntentConfirm && routingConfirm?.message) {
+          // Suggest an issue type, but never auto-advance — wait for a tap.
           await sleep(THINKING_DELAY_MS);
           setMessages((prev) => [
             ...prev,
             assistantMessage(routingConfirm.message),
           ]);
-          await appendAssistantFromResponse(resp.ticket, resp);
-        } else if (jumped && smart?.summary) {
-          await sleep(THINKING_DELAY_MS);
-          setMessages((prev) => [
-            ...prev,
-            assistantMessage(
-              `Got it — ${smart.summary} I'll skip the extra menu questions and take you straight to the next step.`
-            ),
-          ]);
-          await appendAssistantFromResponse(resp.ticket, resp);
+          setOptionsUsed(false);
         } else if (
           resp.ticket?.ready_for_issue_type &&
           resp.ticket?.model_name &&
@@ -678,6 +666,7 @@ export default function WarrantyChat({
               `Thanks — I have **${resp.ticket!.model_name}** on file.\n\nWhat type of issue can we help you with? Choose below or describe it in your own words.`
             ),
           ]);
+          setOptionsUsed(false);
         } else {
           await appendAssistantFromResponse(resp.ticket, resp);
         }

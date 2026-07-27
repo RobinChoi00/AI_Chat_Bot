@@ -305,6 +305,36 @@ def build_clarifying_workflow_message(node: dict, user_text: str) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
+def build_intent_confirmation_message(
+    node: dict,
+    mapped_key: str,
+    user_text: str,
+) -> str:
+    """Ask the customer to tap the matched option — never auto-advance on guess."""
+    options = list(node.get("options") or [])
+    label = str(mapped_key or "").strip()
+    for opt in options:
+        if str(opt.get("answer_key") or "") == mapped_key:
+            label = str(opt.get("label") or mapped_key).strip()
+            break
+
+    trimmed = (user_text or "").strip()
+    parts: list[str] = []
+    if trimmed:
+        parts.append(
+            f'Just to confirm — for **"{trimmed[:120]}"**, did you mean **{label}**?'
+        )
+    else:
+        parts.append(f"Just to confirm — did you mean **{label}**?")
+    parts.append(
+        "Please tap that option below to continue. I won't choose and move forward for you."
+    )
+    bullets = _format_option_bullets(options)
+    if bullets:
+        parts.append(bullets)
+    return "\n\n".join(parts)
+
+
 _ISSUE_TYPE_LABELS: tuple[tuple[str, str], ...] = (
     ("installation", "Setup & installation"),
     ("delivery", "Delivery & tracking"),
@@ -332,6 +362,30 @@ def build_clarifying_issue_type_message(
     parts.append("Choose one of these, or describe your issue a bit more specifically:")
     for _key, label in _ISSUE_TYPE_LABELS:
         parts.append(f"• **{label}**")
+    return "\n\n".join(parts)
+
+
+def build_suggested_issue_type_message(issue_type: str, user_text: str = "") -> str:
+    """Ask the customer to confirm an inferred issue type by tapping a button."""
+    label = issue_type
+    for key, pretty in _ISSUE_TYPE_LABELS:
+        if key == issue_type:
+            label = pretty
+            break
+    trimmed = (user_text or "").strip()
+    parts: list[str] = []
+    if trimmed:
+        parts.append(
+            f'Based on **"{trimmed[:120]}"**, this sounds like **{label}**.'
+        )
+    else:
+        parts.append(f"This sounds like **{label}**.")
+    parts.append(
+        f"Please tap **{label}** below to confirm. I won't start that path until you choose."
+    )
+    parts.append("Or pick a different option if I misunderstood:")
+    for _key, pretty in _ISSUE_TYPE_LABELS:
+        parts.append(f"• **{pretty}**")
     return "\n\n".join(parts)
 
 
