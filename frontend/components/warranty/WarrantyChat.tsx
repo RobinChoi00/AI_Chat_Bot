@@ -53,10 +53,9 @@ import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 
 import { resolveWarrantyStoreDomain } from "@/lib/warrantyStoreDomain";
 
-// Short "reviewing your answer…" pause before the assistant bubble appears.
-// Kept small because ChatMessageBubble now types the response out on its own,
-// giving the actual streamed-response perception.
-const THINKING_DELAY_MS = 1500;
+// Short pause before the assistant bubble. Kept small because ChatMessageBubble
+// already types the response out.
+const THINKING_DELAY_MS = 700;
 
 function assistantMessage(content: string): ChatMessage {
   return { role: "assistant", content, animate: true };
@@ -141,10 +140,13 @@ export default function WarrantyChat({
     const status = sessionStorage.getItem(CHAT_EMAIL_GATE_STORAGE_KEY);
     return status === "provided";
   });
-  const [intakeContactEmail, setIntakeContactEmail] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return sessionStorage.getItem(CHAT_CONTACT_EMAIL_STORAGE_KEY) || "";
-  });
+  const [intakeContactEmail, setIntakeContactEmail] = useState("");
+
+  // Privacy: never keep contact email in sessionStorage (shared devices / XSS surface).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    sessionStorage.removeItem(CHAT_CONTACT_EMAIL_STORAGE_KEY);
+  }, []);
 
   const acceptChatConsent = useCallback(async () => {
     setChatConsentAccepted(true);
@@ -173,7 +175,7 @@ export default function WarrantyChat({
       }
       if (typeof window !== "undefined") {
         sessionStorage.setItem(CHAT_EMAIL_GATE_STORAGE_KEY, "provided");
-        sessionStorage.setItem(CHAT_CONTACT_EMAIL_STORAGE_KEY, email);
+        sessionStorage.removeItem(CHAT_CONTACT_EMAIL_STORAGE_KEY);
       }
       setIntakeContactEmail(email);
       setEmailGateDone(true);
@@ -457,9 +459,12 @@ export default function WarrantyChat({
   const appendAssistantFromResponse = useCallback(
     async (
       ticket: WarrantyTicketState | null,
-      resp: Pick<WarrantySessionResponse, "assistant_message" | "terminal_enrichment">
+      resp: Pick<WarrantySessionResponse, "assistant_message" | "terminal_enrichment">,
+      options?: { skipDelay?: boolean }
     ) => {
-      await sleep(THINKING_DELAY_MS);
+      if (!options?.skipDelay) {
+        await sleep(THINKING_DELAY_MS);
+      }
       const content = assistantContentFromResponse(ticket, resp);
       if (!content) return;
       setMessages((prev) => [...prev, assistantMessage(content)]);
@@ -533,8 +538,10 @@ export default function WarrantyChat({
             ...prev,
             assistantMessage(resp.tracking_summary!.message),
           ]);
+          await appendAssistantFromResponse(resp.ticket, resp, { skipDelay: true });
+        } else {
+          await appendAssistantFromResponse(resp.ticket, resp);
         }
-        await appendAssistantFromResponse(resp.ticket, resp);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Something went wrong.";
         setError(msg);
@@ -1132,7 +1139,17 @@ export default function WarrantyChat({
       )}
 
       {warrantyState?.ticket_id && embed && (
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-b border-gray-100 bg-white px-3 py-1.5">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-white px-3 py-1.5">
+          <div className="min-w-0 text-left">
+            {caseReference ? (
+              <p className="truncate text-xs font-medium text-gray-700">
+                Case <span className="font-mono">{caseReference}</span>
+              </p>
+            ) : (
+              <p className="text-xs text-gray-500">Warranty chat</p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
           {!isTerminal && (
             <SaveProgressButton sessionId={sessionId} disabled={loading} />
           )}
@@ -1156,6 +1173,7 @@ export default function WarrantyChat({
           >
             Start over
           </button>
+          </div>
         </div>
       )}
 

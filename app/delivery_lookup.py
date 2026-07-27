@@ -5,7 +5,7 @@ Warranty Delivery flow — live tracking lookup (no LLM).
 
 Supports either:
   - Tracking number  → Track123 (+ AfterShip fallback)
-  - Order # OR email → Shopify (+ Track123 enrich inside fetch_shopify_order_status)
+  - Checkout email (or order number + email) → Shopify (+ Track123 enrich)
 """
 
 from __future__ import annotations
@@ -159,18 +159,87 @@ def _snapshot_from_tracking_data(
 
 
 def parse_order_or_email(raw: str) -> tuple[str, str]:
-    """Split customer input into (order_number, email). Either may be empty."""
+    """Split customer input into (order_number, email). Either may be empty.
+
+    Prefer extracting an embedded email first so customers can paste
+    ``#12345 you@example.com`` and we keep both for a privacy-safe lookup.
+    """
     from delivery_intake import is_plausible_email, is_plausible_order_id  # noqa: WPS433
+    from warranty_email import extract_email  # noqa: WPS433
 
     text = (raw or "").strip()
     if not text:
         return "", ""
-    if is_plausible_email(text):
-        return "", text
-    clean = text.replace("#", "").strip()
-    if is_plausible_order_id(clean):
-        return clean, ""
-    return "", ""
+
+    email = extract_email(text) or ""
+    if not email and is_plausible_email(text):
+        email = text
+
+    remainder = text
+    if email:
+        remainder = text.replace(email, " ").strip()
+
+    order = ""
+    if remainder:
+        clean = remainder.replace("#", "").strip()
+        # Prefer a contiguous order-looking token.
+        for token in re.split(r"[\s,;/|]+", clean):
+            token = token.strip()
+            if token and is_plausible_order_id(token):
+                order = token
+                break
+        if not order and is_plausible_order_id(clean):
+            order = clean
+
+    if not order and not email and is_plausible_order_id(text.replace("#", "").strip()):
+        order = text.replace("#", "").strip()
+
+    return order, email
+
+
+def lookup_by_order_or_email(raw: str, domain: str) -> TrackingSnapshot:
+    """Shopify order lookup — email required when looking up by order number."""
+    order, email = parse_order_or_email(raw)
+    if not order and not email:
+        return TrackingSnapshot(
+            source="unavailable",
+            available=False,
+            error="Please provide your checkout email, or your order number together with that email.",
+            looked_up_at=_now_iso(),
+        )
+    if order and not email:
+        return TrackingSnapshot(
+            source="unavailable",
+            available=False,
+            error=(
+                "For your privacy, we need the checkout email along with your order number. "
+                "Please reply with both (for example: #12345 you@example.com)."
+            ),
+            looked_up_at=_now_iso(),
+        )
+
+    logistics = _lazy_logistics()
+    fetch = logistics.fetch_shopify_order_status
+    try:
+        data = fetch(order, email, domain, allow_order_only=False)
+    except TypeError:
+        # Older / test stubs without the privacy kwarg.
+        data = fetch(order, email, domain)
+    return _snapshot_from_tracking_data(data, source="shopify")
+
+
+def public_tracking_summary_payload(
+    *,
+    available: bool,
+    message: str,
+    self_service_links: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    """Browser-safe tracking payload — message + links only (no raw snapshot PII)."""
+    return {
+        "available": available,
+        "message": message,
+        "self_service_links": self_service_links,
+    }
 
 
 def lookup_by_tracking_number(tracking_number: str, domain: str) -> TrackingSnapshot:
@@ -215,22 +284,6 @@ def lookup_by_tracking_number(tracking_number: str, domain: str) -> TrackingSnap
     snap = _snapshot_from_tracking_data(data, source="track123", tracking_number=tn)
     snap.available = True
     return snap
-
-
-def lookup_by_order_or_email(raw: str, domain: str) -> TrackingSnapshot:
-    """Shopify order lookup — order number OR email is enough."""
-    order, email = parse_order_or_email(raw)
-    if not order and not email:
-        return TrackingSnapshot(
-            source="unavailable",
-            available=False,
-            error="Please provide your order number or checkout email.",
-            looked_up_at=_now_iso(),
-        )
-
-    logistics = _lazy_logistics()
-    data = logistics.fetch_shopify_order_status(order, email, domain)
-    return _snapshot_from_tracking_data(data, source="shopify")
 
 
 _CARRIER_PATTERNS = [

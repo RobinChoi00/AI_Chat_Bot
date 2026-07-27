@@ -48,9 +48,12 @@ export default function ChatRecordingNoticeBanner({
         >
           Terms of Service
         </a>
-        . This conversation may be recorded, stored, and reviewed to provide support
-        and improve our service. Messages, email addresses, and photos or videos you
-        share may also be stored for warranty support.
+        . This conversation may be recorded and stored for warranty support.
+        Messages, order or tracking details, email, and photos or videos you share
+        may be reviewed by our support team and processors we use only for this case
+        (for example helpdesk, shipping lookup, and email delivery). We keep case
+        records as needed for warranty support and remove uploaded evidence on a
+        regular retention schedule.
       </p>
       {!consentAccepted ? (
         <div className="mt-2 space-y-2">

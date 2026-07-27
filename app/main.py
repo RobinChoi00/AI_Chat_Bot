@@ -393,8 +393,18 @@ def _shopify_orders_search(
     return data.get("data", {}).get("orders", {}).get("edges", [])
 
 
-def fetch_shopify_order_status(order_number: str, email: str, target_domain: str) -> Dict[str, Any]:
-    """접속 도메인에 맞춰 3개의 스토어 토큰 중 하나를 선택해 쇼피파이 API를 직접 호출합니다."""
+def fetch_shopify_order_status(
+    order_number: str,
+    email: str,
+    target_domain: str,
+    *,
+    allow_order_only: bool = True,
+) -> Dict[str, Any]:
+    """접속 도메인에 맞춰 3개의 스토어 토큰 중 하나를 선택해 쇼피파이 API를 직접 호출합니다.
+
+    ``allow_order_only=False`` blocks order-number-only lookups so warranty chat
+    cannot disclose another customer's order from a guessed order id.
+    """
     store_config = get_store_config(target_domain)
     SHOP_DOMAIN = store_config["shop_domain"]
     ACCESS_TOKEN = store_config["shop_access_token"]
@@ -460,11 +470,11 @@ def fetch_shopify_order_status(order_number: str, email: str, target_domain: str
                     f"name:'{candidate}' AND email:'{clean_email}'",
                 )
                 if edges:
-                    logger.info(f"✅ Order found by name:'{candidate}' + email")
+                    logger.info("Order found by name + email")
                     break
 
-        if not edges and clean_order:
-            logger.info(f"🔍 Trying order-number-only search for: {clean_order}")
+        if not edges and clean_order and allow_order_only:
+            logger.info("Trying order-number-only search for candidate count=%s", len(order_candidates))
             for candidate in order_candidates:
                 edges = _shopify_orders_search(
                     url,
@@ -473,8 +483,12 @@ def fetch_shopify_order_status(order_number: str, email: str, target_domain: str
                     f"name:'{candidate}'",
                 )
                 if edges:
-                    logger.info(f"✅ Order found by name:'{candidate}'")
+                    logger.info("Order found by name-only candidate")
                     break
+        elif not edges and clean_order and not allow_order_only:
+            logger.info(
+                "Skipping order-number-only Shopify search (email required for privacy)"
+            )
 
         if not edges and clean_email:
             logger.info("🔍 Trying email-only order fallback")

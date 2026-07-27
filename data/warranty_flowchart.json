@@ -53,7 +53,7 @@
 
     "delivery_status_get_order_email": {
       "type": "question_text",
-      "prompt": "Please share your order number or the email address used at checkout so we can look up your delivery status.",
+      "prompt": "Please share your checkout email (preferred). If you also have an order number, include both — for example: #12345 you@example.com so we can look up your delivery status.",
       "answer_key": "order_or_email",
       "next": "delivery_status_terminal"
     },
@@ -117,7 +117,7 @@
 
     "delivery_get_name": {
       "type": "question_text",
-      "prompt": "Please share your order number or the email used at checkout so we can locate your shipment. Next we'll ask what kind of delivery problem you have.",
+      "prompt": "Please share your checkout email (preferred). If you also have an order number, include both — for example: #12345 you@example.com. Next we'll ask what kind of delivery problem you have.",
       "answer_key": "order_or_email",
       "next": "delivery_problem_type_q"
     },

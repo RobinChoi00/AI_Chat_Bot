@@ -25,6 +25,29 @@ def test_parse_order_or_email_detects_order():
     assert parse_order_or_email("#12345") == ("12345", "")
 
 
+def test_parse_order_or_email_detects_both():
+    assert parse_order_or_email("#12345 buyer@example.com") == (
+        "12345",
+        "buyer@example.com",
+    )
+
+
+def test_lookup_by_order_requires_email(monkeypatch):
+    called = {"n": 0}
+
+    class FakeMain:
+        @staticmethod
+        def fetch_shopify_order_status(*_a, **_k):
+            called["n"] += 1
+            return {"status": "FULFILLED"}
+
+    monkeypatch.setattr("delivery_lookup._lazy_logistics", lambda: FakeMain())
+    snap = lookup_by_order_or_email("#12345", "osaki.com")
+    assert snap.available is False
+    assert "privacy" in (snap.error or "").lower()
+    assert called["n"] == 0
+
+
 def test_format_unavailable_message():
     msg = format_warranty_tracking_message(
         TrackingSnapshot(source="unavailable", available=False, error="not found")

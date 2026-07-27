@@ -28,6 +28,7 @@ from config import (
     WARRANTY_PHONE,
     WARRANTY_TEAM_EMAIL,
 )
+from pii_redact import mask_email, mask_phone
 
 # Admin decisions that may trigger a customer email (when message + email exist).
 _ADMIN_DECISION_NOTIFY = frozenset(
@@ -416,7 +417,7 @@ def send_phone_ivr_team_email(
             WARRANTY_TEAM_EMAIL,
             ticket_id,
             session_id,
-            caller_phone,
+            mask_phone(caller_phone),
         )
         return True
     except smtplib.SMTPException as exc:
@@ -950,7 +951,7 @@ def send_customer_receipt_email(
         logger.info(
             "Customer receipt emailed — case=%s to=%s",
             case_reference,
-            to_email,
+            mask_email(to_email),
         )
         return True
     except smtplib.SMTPException as exc:

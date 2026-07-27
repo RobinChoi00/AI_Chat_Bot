@@ -38,6 +38,8 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from pii_redact import mask_email
+
 logger = logging.getLogger(__name__)
 
 _TOKEN_MAX_AGE_SECS = 30 * 24 * 3600  # 30 days
@@ -164,7 +166,7 @@ def _send_resume_email(
             "warranty_resume sent ticket=%s domain=%s to=%s",
             ticket_id,
             domain,
-            customer_email,
+            mask_email(customer_email),
         )
         return True
     except Exception as exc:  # noqa: BLE001
@@ -263,7 +265,8 @@ async def send_warranty_resume_link(session_id: str, body: ResumeLinkRequest):
 
     return {
         "sent": True,
-        "customer_email": email,
+        "customer_email": mask_email(email),
+        "email_saved": True,
         "expires_in_days": _TOKEN_MAX_AGE_SECS // 86400,
     }
 

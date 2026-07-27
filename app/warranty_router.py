@@ -60,6 +60,54 @@ def _now_cst_iso() -> str:
 
 logger = logging.getLogger(__name__)
 
+
+def _chat_privacy_enforced() -> bool:
+    return os.getenv("WARRANTY_REQUIRE_CHAT_PRIVACY", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _require_web_chat_privacy(session_id: str) -> None:
+    """Block web chat mutators until consent + email gate are recorded server-side."""
+    if not _chat_privacy_enforced():
+        return
+    from warranty_consent import (  # noqa: WPS433
+        EMAIL_GATE_PROVIDED,
+        get_chat_consent,
+    )
+
+    row = get_chat_consent(session_id)
+    if row is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Please agree to the privacy notice before continuing.",
+        )
+    status = str(getattr(row, "email_gate_status", "") or "").strip().lower()
+    if status != EMAIL_GATE_PROVIDED:
+        raise HTTPException(
+            status_code=403,
+            detail="Please provide your email so we can follow up on your case securely.",
+        )
+
+
+def _require_web_chat_privacy_for_ticket(ticket) -> None:
+    collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
+    if str(collected.get("channel") or "").strip().lower() == "phone":
+        return
+    _require_web_chat_privacy(str(getattr(ticket, "session_id", "") or ""))
+
+
+def _masked_public_email(value: str | None) -> Optional[str]:
+    from pii_redact import mask_email  # noqa: WPS433
+
+    text = (value or "").strip()
+    if not text:
+        return None
+    return mask_email(text)
+
 # ---------------------------------------------------------------------------
 # Router — all endpoints registered here are included by main.py
 # ---------------------------------------------------------------------------
@@ -186,6 +234,7 @@ async def upload_evidence(
     ticket = engine.get_ticket(ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+    _require_web_chat_privacy_for_ticket(ticket)
 
     normalized_email = extract_email(customer_email.strip())
     if not normalized_email:
@@ -301,7 +350,8 @@ async def upload_evidence(
         "ticket_status":     str(ticket.status),
         "evidence_type":     evidence_type,
         "original_filename": original_filename,
-        "customer_email":    normalized_email,
+        "customer_email":    _masked_public_email(normalized_email),
+        "email_saved":       True,
         "mime_type":         mime,
         "file_size_bytes":   file_size,
     }
@@ -412,7 +462,8 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
 
     return {
         "ticket_id": ticket_id,
-        "customer_email": normalized_email,
+        "customer_email": _masked_public_email(normalized_email),
+        "email_saved": True,
         "evidence_type": "not_available",
         "evidence_na": True,
         "email_notified": True,
@@ -1222,6 +1273,7 @@ def _finalize_answer_response(
             lookup_by_order_or_email,
             lookup_by_tracking_number,
             persist_snapshot,
+            public_tracking_summary_payload,
         )
 
         ticket_for_domain = engine.get_ticket(ticket_id)
@@ -1260,14 +1312,13 @@ def _finalize_answer_response(
         tracking_message = append_eligibility_to_tracking_message(
             tracking_message, ticket_id
         )
-        tracking_summary = {
-            "available": snapshot.available,
-            "message": tracking_message,
-            "snapshot": snapshot.to_dict(),
-            "self_service_links": [
+        tracking_summary = public_tracking_summary_payload(
+            available=snapshot.available,
+            message=tracking_message,
+            self_service_links=[
                 {"label": label, "url": url} for label, url in self_service_links
             ],
-        }
+        )
 
     ticket = engine.get_ticket(ticket_id)
     if ticket is None:
@@ -1310,19 +1361,16 @@ def _finalize_answer_response(
 
         freshdesk_result = schedule_freshdesk_case_creation(ticket_id)
         if freshdesk_result.get("freshdesk_ticket_id"):
+            # Public clients only need the customer case reference — not agent portal URLs.
             payload["freshdesk"] = {
-                "ticket_id": freshdesk_result.get("freshdesk_ticket_id"),
-                "url": freshdesk_result.get("freshdesk_url"),
                 "case_reference": freshdesk_result.get("case_reference"),
+                "linked": True,
             }
         elif freshdesk_result.get("scheduled"):
             payload["freshdesk_scheduled"] = True
         elif freshdesk_result.get("error") and not freshdesk_result.get("skipped"):
             payload["freshdesk_error"] = {
-                "error": freshdesk_result.get("error"),
-                "detail": freshdesk_result.get("detail"),
-                "failed_at": freshdesk_result.get("failed_at"),
-                "attempt_count": freshdesk_result.get("attempt_count"),
+                "linked": False,
                 "case_reference": freshdesk_result.get("case_reference"),
             }
 
@@ -1460,12 +1508,6 @@ def _serialize_ticket_state(
             ),
             "admin_decision": str(ticket.admin_decision or "").strip() or None,
             "troubleshooting_outcome": troubleshooting_outcome,
-            "freshdesk_ticket_id": str(collected.get("freshdesk_ticket_id") or "").strip() or None,
-            "freshdesk_url": str(collected.get("freshdesk_url") or "").strip() or None,
-            "freshdesk_create_error": str(
-                collected.get("freshdesk_create_error") or ""
-            ).strip()
-            or None,
             "current_node": {
                 "node_id":            node_id,
                 "node_type":          node_type,
@@ -1593,10 +1635,24 @@ async def record_warranty_session_contact_email(
 ):
     """
     Soft-required email after I Agree: store on the session so it copies onto
-    the ticket when the warranty workflow starts. ``skipped=true`` allows chat
-    without an email (collected again at the terminal contact step).
+    the ticket when the warranty workflow starts. Skip is disabled when
+    ``WARRANTY_REQUIRE_CHAT_PRIVACY`` is on (default).
     """
-    from warranty_consent import record_session_contact_email  # noqa: WPS433
+    from warranty_consent import (  # noqa: WPS433
+        get_chat_consent,
+        record_session_contact_email,
+    )
+
+    if get_chat_consent(session_id) is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Please agree to the privacy notice before providing your email.",
+        )
+    if bool(body.skipped) and _chat_privacy_enforced():
+        raise HTTPException(
+            status_code=422,
+            detail="Email is required for warranty chat follow-up.",
+        )
 
     try:
         result = record_session_contact_email(
@@ -1610,7 +1666,10 @@ async def record_warranty_session_contact_email(
     return {
         "session_id": session_id,
         "recorded": True,
-        "customer_email": result.get("customer_email"),
+        "email_saved": bool(result.get("customer_email")),
+        "customer_email": _masked_public_email(
+            str(result.get("customer_email") or "")
+        ),
         "email_gate_status": result.get("email_gate_status"),
         "skipped": result.get("email_gate_status") == "skipped",
     }
@@ -1621,6 +1680,7 @@ async def register_warranty_model(session_id: str, body: WarrantyRegisterModelRe
     """
     Step 1 of warranty intake: confirm chair model, then show issue-type options.
     """
+    _require_web_chat_privacy(session_id)
     engine = _lazy_engine()
     return _register_model_ticket(engine, session_id, body.model, body.domain)
 
@@ -1630,6 +1690,7 @@ async def confirm_warranty_model(session_id: str, body: WarrantyConfirmModelRequ
     """
     Confirm or correct the chair model after smart-start inferred it from free text.
     """
+    _require_web_chat_privacy(session_id)
     from product_catalog import resolve_model_name  # noqa: WPS433
     from warranty_intake_context import mark_model_confirmed  # noqa: WPS433
 
@@ -1665,6 +1726,7 @@ async def quick_start_warranty(session_id: str, body: WarrantyQuickStartRequest)
     Start (or resume) a warranty ticket and jump to Installation / Delivery / Defect
     without any LLM call. Used by the frontend landing buttons on /warranty.
     """
+    _require_web_chat_privacy(session_id)
     engine = _lazy_engine()
     return _quick_start_ticket(engine, session_id, body.issue_type, body.domain)
 
@@ -1680,6 +1742,7 @@ async def natural_start_warranty(
     Start warranty intake from free-text — LLM maps message to issue type, then
     runs the same deterministic flowchart as quick-start.
     """
+    _require_web_chat_privacy(session_id)
     message = body.message.strip()
     if not message:
         raise HTTPException(status_code=422, detail="message must not be empty")
@@ -1795,6 +1858,7 @@ async def smart_start_warranty(
       - Returns the same ticket-state payload as other warranty endpoints, plus
         `smart_start` metadata explaining what was inferred.
     """
+    _require_web_chat_privacy(session_id)
     message = body.message.strip()
     if not message:
         raise HTTPException(status_code=422, detail="message must not be empty")
@@ -1940,6 +2004,11 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
     natural language (mapped to the closest option via NLP when needed).
     """
     engine = _lazy_engine()
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+    _require_web_chat_privacy_for_ticket(ticket)
+
     answer = body.answer.strip()
     if not answer:
         raise HTTPException(status_code=422, detail="answer must not be empty")

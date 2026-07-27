@@ -45,9 +45,10 @@ export default function ChatEmailGate({ disabled, onContinue }: Props) {
         parts, technician updates, and support.
       </p>
       <p className="mt-2 rounded-lg border border-sky-100 bg-white/70 px-3 py-2 text-xs leading-snug text-sky-800">
-        We do <strong>not</strong> sell or share your email with third parties, and we
-        do <strong>not</strong> use it for advertising or marketing lists. It is only
-        for warranty support on this case.
+        We do <strong>not</strong> sell or share your email for advertising or marketing
+        lists. It is used only to follow up on this warranty case (and related support
+        tools like our helpdesk and email). Please avoid shared or public computers when
+        possible, and use <strong>Start over</strong> when you are done on a shared device.
       </p>
       <form onSubmit={handleContinue} className="mt-3 space-y-2">
         <label className="block text-xs font-medium text-sky-900" htmlFor="chat-email-gate">

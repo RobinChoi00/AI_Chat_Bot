@@ -28,6 +28,8 @@ import warranty_models as wm  # noqa: E402
 def in_memory_db(monkeypatch):
     import warranty_workflow as wf
 
+    monkeypatch.setenv("WARRANTY_REQUIRE_CHAT_PRIVACY", "0")
+
     mem_engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -1051,3 +1053,37 @@ def test_error_code_gate_midflow_side_question(client):
     assert data.get("side_question") is True
     assert "C6" in data["assistant_message"]
     assert data["ticket"]["current_node"]["node_id"] == "defect_problem_type"
+
+
+def test_web_chat_requires_privacy_consent_and_email(client, monkeypatch):
+    monkeypatch.setenv("WARRANTY_REQUIRE_CHAT_PRIVACY", "1")
+    session_id = "cust-api-privacy"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/register-model",
+        json={"model": "OS-4000T", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 403
+
+    client.post(
+        f"/api/v1/warranty/session/{session_id}/consent",
+        json={"domain": "osaki.com", "policy_store": "osakiusa.com"},
+    )
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/register-model",
+        json={"model": "OS-4000T", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 403
+
+    email_resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/contact-email",
+        json={"customer_email": "buyer@example.com", "skipped": False},
+    )
+    assert email_resp.status_code == 200
+    assert email_resp.json()["email_saved"] is True
+    assert "buyer@example.com" not in (email_resp.json().get("customer_email") or "")
+
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/register-model",
+        json={"model": "OS-4000T", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200, resp.text
