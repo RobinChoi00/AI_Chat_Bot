@@ -408,6 +408,10 @@ def test_submit_answer_notifies_on_email_in_text(client, monkeypatch):
     ticket_id = start.json()["ticket"]["ticket_id"]
     client.post(
         f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "damage_issue"},
+    )
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
         json={"answer": "no_tracking"},
     )
 

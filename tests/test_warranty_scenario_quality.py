@@ -95,7 +95,8 @@ def test_delivery_path_asks_for_tracking(warranty_client):
         {"issue_type": "delivery", "domain": DOMAIN},
     )
     text = _customer_message(payload)
-    assert "tracking" in text.lower()
+    assert "delivery" in text.lower()
+    assert payload["ticket"]["current_node"]["node_id"] == "delivery_intent_q"
 
 
 def test_defect_air_path_avoids_unrelated_symptom_labels(warranty_client):

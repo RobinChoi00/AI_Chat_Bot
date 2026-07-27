@@ -76,6 +76,11 @@ def test_build_step_enrichment_uses_freshdesk_tips(monkeypatch):
     ]
 
     monkeypatch.setattr(step_enrich, "contextual_search_knowledge", lambda **kwargs: fake_matches)
+    monkeypatch.setattr(
+        step_enrich,
+        "paraphrase_step_message",
+        lambda message, **kwargs: (message, False),
+    )
 
     engine = _FakeEngine(
         [
@@ -124,6 +129,11 @@ def test_build_step_enrichment_boosts_similar_freshdesk(monkeypatch):
         step_enrich,
         "contextual_search_knowledge",
         lambda **kwargs: [qa, freshdesk],
+    )
+    monkeypatch.setattr(
+        step_enrich,
+        "paraphrase_step_message",
+        lambda message, **kwargs: (message, False),
     )
 
     ticket = SimpleNamespace(ticket_id="t1", issue_type="defect", model_name="OS-4000T")
@@ -508,6 +518,11 @@ def test_build_step_enrichment_avoids_ungrounded_qa_title(monkeypatch):
         )
     ]
     monkeypatch.setattr(step_enrich, "contextual_search_knowledge", lambda **kwargs: fake_matches)
+    monkeypatch.setattr(
+        step_enrich,
+        "paraphrase_step_message",
+        lambda message, **kwargs: (message, False),
+    )
 
     engine = _FakeEngine(
         [
