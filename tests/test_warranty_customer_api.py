@@ -520,7 +520,7 @@ def test_submit_answer_clarifying_on_ambiguous(client, monkeypatch):
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data.get("side_question") is True
-    assert "choices" in data["assistant_message"].lower() or "tap one" in data["assistant_message"].lower()
+    assert "tap" in data["assistant_message"].lower() or "option" in data["assistant_message"].lower()
     assert data["ticket"]["current_node"]["node_id"] == "delivery_intent_q"
 
 
@@ -549,6 +549,7 @@ def test_natural_start_maps_issue_type(client, monkeypatch):
 
 
 def test_submit_answer_nlp_maps_natural_language(client):
+    """Menu nodes are buttons-only — free text must not advance or 'confirm' a guess."""
     session_id = "cust-api-nlp-answer"
     _register_model(client, session_id)
     start = client.post(
@@ -570,10 +571,10 @@ def test_submit_answer_nlp_maps_natural_language(client):
     )
     assert resp.status_code == 200
     data = resp.json()
-    # Free-text option guess → confirm by tap; do not silently advance.
     assert data.get("side_question") is True
     assert data.get("nlp_interpreted") is not True
-    assert "confirm" in data["assistant_message"].lower() or "tap" in data["assistant_message"].lower()
+    assert "tap" in data["assistant_message"].lower()
+    assert "confirm" not in data["assistant_message"].lower()
     assert data["ticket"]["current_node"]["node_id"] == stuck_node
 
 

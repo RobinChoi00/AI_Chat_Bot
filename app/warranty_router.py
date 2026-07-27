@@ -1173,7 +1173,11 @@ def _submit_answer_with_nlp(
     answer: str,
 ) -> tuple[Optional[dict], bool, Optional[str]]:
     """
-    Submit a workflow answer; on option mismatch, map natural language via NLP.
+    Submit a workflow answer.
+
+    Menu nodes (options) are buttons-only: free text that is not an exact
+    answer_key/label does not advance. Text-capture nodes and error-code
+    gates still accept typed answers.
 
     Returns (submit_result, nlp_interpreted, clarifying_message).
     When clarifying_message is set, the workflow does not advance.
@@ -1186,7 +1190,6 @@ def _submit_answer_with_nlp(
     from warranty_error_code_gate import is_gate_node, map_gate_free_text  # noqa: WPS433
     from warranty_nlp import (  # noqa: WPS433
         build_clarifying_workflow_message,
-        build_intent_confirmation_message,
         interpret_warranty_answer,
     )
 
@@ -1227,28 +1230,30 @@ def _submit_answer_with_nlp(
         if not node:
             raise
 
-        mapped = interpret_warranty_answer(node, answer)
-        if not mapped or mapped == answer:
-            return None, False, build_clarifying_workflow_message(node, answer)
-
         # Free-text capture nodes may normalize input; safe to store as typed.
         if node.get("type") == "question_text":
+            mapped = interpret_warranty_answer(node, answer)
+            if mapped and mapped != answer:
+                return (
+                    engine.submit_answer(
+                        ticket_id,
+                        mapped,
+                        customer_display=answer,
+                    ),
+                    True,
+                    None,
+                )
+            return None, False, build_clarifying_workflow_message(node, answer)
+
+        # Menu / instruction nodes: buttons only — do not interpret free text.
+        if node.get("options"):
             return (
-                engine.submit_answer(
-                    ticket_id,
-                    mapped,
-                    customer_display=answer,
-                ),
-                True,
                 None,
+                False,
+                "Please tap one of the options below to continue.",
             )
 
-        # Menu / intent options: never auto-advance on an interpreted guess.
-        return (
-            None,
-            False,
-            build_intent_confirmation_message(node, mapped, answer),
-        )
+        return None, False, build_clarifying_workflow_message(node, answer)
 
 
 def _finalize_answer_response(

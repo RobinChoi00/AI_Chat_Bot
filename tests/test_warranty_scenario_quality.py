@@ -166,10 +166,11 @@ def test_shoulders_free_text_maps_to_option(warranty_client):
         f"/api/v1/warranty/{tid}/answer",
         {"answer": "my shoulders"},
     )
-    # Free-text guesses require a tap confirmation — do not silent-advance.
+    # Menu free text is buttons-only — do not interpret or advance.
     assert stuck.get("side_question") is True
     assert stuck["ticket"]["current_node"]["node_id"] == "defect_air_location"
-    assert "tap" in _customer_message(stuck).lower() or "confirm" in _customer_message(stuck).lower()
+    assert "tap" in _customer_message(stuck).lower()
+    assert "confirm" not in _customer_message(stuck).lower()
 
     payload = _post(
         warranty_client,
@@ -200,7 +201,7 @@ def test_clarifying_message_when_answer_is_ambiguous(warranty_client):
         {"answer": "yes"},
     )
     text = _customer_message(payload)
-    assert "wasn't fully sure" in text.lower() or "please tap" in text.lower()
+    assert "please tap" in text.lower() or "tap one" in text.lower()
 
 
 def test_smart_start_footrest_air_advances_flow(warranty_client, monkeypatch):

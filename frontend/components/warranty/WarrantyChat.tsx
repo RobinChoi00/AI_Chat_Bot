@@ -313,7 +313,7 @@ export default function WarrantyChat({
       if (ticket?.ready_for_issue_type && ticket.model_name) {
         content =
           `Great — I have **${ticket.model_name}** on file.\n\n` +
-          "What type of issue can we help you with? Choose below or describe it in your own words.";
+          "What type of issue can we help you with? Please choose an option below.";
       } else {
         content = hydrationAssistantContent(ticket, resp);
       }
@@ -419,7 +419,7 @@ export default function WarrantyChat({
             { role: "assistant", content: WARRANTY_WELCOME_MESSAGE },
             {
               role: "assistant",
-              content: `Great — I have **${ticket.model_name}** on file.\n\nWhat type of issue can we help you with? Choose below or describe it in your own words.`,
+              content: `Great — I have **${ticket.model_name}** on file.\n\nWhat type of issue can we help you with? Please choose an option below.`,
             },
           ]);
         } else if (ticket?.current_node?.prompt && !ticket.current_node.is_terminal) {
@@ -554,59 +554,6 @@ export default function WarrantyChat({
     [warrantyState?.ticket_id, loading, applySessionResponse, appendAssistantFromResponse]
   );
 
-  const startViaNaturalIssueType = useCallback(
-    async (text: string) => {
-      if (loading) return;
-      setError(null);
-      setLoading(true);
-      setOptionsUsed(true);
-      setHelpConsent(null);
-      setMessages((prev) => [...prev, { role: "user", content: text }]);
-      setInput("");
-
-      try {
-        const resp = await naturalStartWarranty(sessionId, text, storeDomain);
-        applySessionResponse(resp);
-
-        if (resp.side_question && resp.assistant_message) {
-          await sleep(THINKING_DELAY_MS);
-          setMessages((prev) => [
-            ...prev,
-            assistantMessage(resp.assistant_message!),
-          ]);
-          setOptionsUsed(false);
-          return;
-        }
-
-        if (resp.interpreted_issue_type && resp.ticket?.issue_type) {
-          await sleep(THINKING_DELAY_MS);
-          const label =
-            resp.interpreted_issue_type === "installation"
-              ? "setup & installation"
-              : resp.interpreted_issue_type === "delivery"
-                ? "delivery & tracking"
-                : "chair malfunction";
-          setMessages((prev) => [
-            ...prev,
-            assistantMessage(
-              `Got it — we'll treat this as a **${label}** issue and continue with the next questions.`
-            ),
-          ]);
-        }
-
-        await appendAssistantFromResponse(resp.ticket, resp);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : "Something went wrong.";
-        setError(msg);
-        setOptionsUsed(false);
-      } finally {
-        setLoading(false);
-        inputRef.current?.focus();
-      }
-    },
-    [loading, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse]
-  );
-
   const startViaSmartIntake = useCallback(
     async (text: string) => {
       if (loading) return;
@@ -663,7 +610,7 @@ export default function WarrantyChat({
           setMessages((prev) => [
             ...prev,
             assistantMessage(
-              `Thanks — I have **${resp.ticket!.model_name}** on file.\n\nWhat type of issue can we help you with? Choose below or describe it in your own words.`
+              `Thanks — I have **${resp.ticket!.model_name}** on file.\n\nWhat type of issue can we help you with? Please choose an option below.`
             ),
           ]);
           setOptionsUsed(false);
@@ -849,13 +796,30 @@ export default function WarrantyChat({
       }
 
       if (atIssueTypeNode && warrantyState?.model_name) {
-        await startViaNaturalIssueType(trimmed);
+        // Issue menu is buttons-only — do not route from free text.
+        setError("Please choose an option below.");
         return;
       }
 
-      if (warrantyState?.ticket_id && !warrantyState.current_node?.is_terminal) {
+      const optionCount = warrantyState?.current_node?.options?.length ?? 0;
+      const nodeType = warrantyState?.current_node?.node_type;
+      const isTextCapture =
+        nodeType === "question_text" ||
+        (optionCount === 0 && !!warrantyState?.ticket_id);
+      const gateAllowsTyping = workflowNodeId.startsWith("defect_error_code");
+
+      if (
+        warrantyState?.ticket_id &&
+        !warrantyState.current_node?.is_terminal &&
+        (isTextCapture || gateAllowsTyping)
+      ) {
         await advanceWarranty(trimmed, trimmed);
         setInput("");
+        return;
+      }
+
+      if (warrantyState?.ticket_id && optionCount > 0) {
+        setError("Please tap one of the options below to continue.");
         return;
       }
 
@@ -877,7 +841,6 @@ export default function WarrantyChat({
       contactSubmitted,
       confirmInferredModel,
       startViaSmartIntake,
-      startViaNaturalIssueType,
       advanceWarranty,
       appendAssistantFromResponse,
       submitFollowUpNote,
@@ -886,6 +849,7 @@ export default function WarrantyChat({
       sessionId,
       storeDomain,
       applySessionResponse,
+      workflowNodeId,
     ]
   );
 
@@ -1047,13 +1011,29 @@ export default function WarrantyChat({
 
   const showEmailSection = chatConsentAccepted && emailGateDone && inEmailStep;
 
+  const nodeType = warrantyState?.current_node?.node_type;
+  const isTextCaptureNode = nodeType === "question_text";
+  const atIssueTypeWithoutModel =
+    atIssueTypeNode && !warrantyState?.model_name?.trim();
+
+  // Menus are buttons-only. Free text only for intake, model, text-capture,
+  // error-code gate typing, and follow-up notes.
   const showInputBar =
     chatConsentAccepted &&
     emailGateDone &&
     (needsCustomerReply ||
-    !isTerminal ||
-    inEmailStep ||
-    (isTerminal && helpConsent === null && !contactSubmitted && !showResolutionGate));
+      needsFirstIntake ||
+      needsModelConfirmation ||
+      Boolean(pendingDefectStart) ||
+      atIssueTypeWithoutModel ||
+      isTextCaptureNode ||
+      isErrorCodeGateNode ||
+      inEmailStep ||
+      (isTerminal &&
+        helpConsent === null &&
+        !contactSubmitted &&
+        !showResolutionGate &&
+        !showIssueTypeOptions));
 
   const interactionsLocked = !chatConsentAccepted || !emailGateDone;
 
@@ -1061,19 +1041,17 @@ export default function WarrantyChat({
     ? "Type your reply to our team here…"
     : needsModelConfirmation
       ? "Type the correct model name (e.g. Hypnos, OS-4000T)…"
-    : pendingDefectStart
+    : pendingDefectStart || atIssueTypeWithoutModel
       ? "Enter your chair model (e.g. OS-4000T, 3D LTX)…"
     : needsFirstIntake
     ? "Model + issue (e.g. OS-4000T footrest air not inflating)…"
-    : showIssueTypeOptions
-      ? "Describe your issue (e.g. my chair won't turn on)…"
       : inEmailStep
         ? "Anything else our team should know? Type here…"
-        : warrantyState?.ticket_id
-          ? isErrorCodeGateNode
-            ? "Type yes/no, or enter the error code (e.g. C6)…"
-            : "Type your answer…"
-          : "Enter your chair model…";
+        : isErrorCodeGateNode
+          ? "Type yes/no, or enter the error code (e.g. C6)…"
+          : isTextCaptureNode
+            ? "Type your answer…"
+            : "Enter your chair model…";
 
   return (
     <div
@@ -1264,7 +1242,7 @@ export default function WarrantyChat({
           <div className="mt-3 sm:mt-4">
             <CollapsibleOptionPanel
               title="What can we help you with?"
-              hint="Or type your issue below"
+              hint="Choose one option to continue"
               optionCount={INITIAL_ISSUE_OPTIONS.length}
               expanded={issueTypePanelExpanded}
               onToggle={() => setIssueTypePanelExpanded((open) => !open)}
@@ -1309,7 +1287,7 @@ export default function WarrantyChat({
         <div className="shrink-0 border-t border-gray-100 bg-white px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-3 sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <CollapsibleOptionPanel
             title="Choose an option"
-            hint="Or type your answer in the box below"
+            hint="Tap an option to continue"
             optionCount={workflowOptionCount}
             expanded={optionsPanelExpanded}
             onToggle={() => setOptionsPanelExpanded((open) => !open)}
