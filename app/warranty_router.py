@@ -1251,6 +1251,11 @@ def _finalize_answer_response(
             domain=domain,
             lookup_kind=lookup_kind,
             raw_input=lookup_text,
+            continue_with_questions=previous_node
+            in (
+                "delivery_get_tracking_number",
+                "delivery_get_name",
+            ),
         )
         tracking_message = append_eligibility_to_tracking_message(
             tracking_message, ticket_id

@@ -77,6 +77,34 @@ def test_format_success_message_includes_tracking():
     msg = format_warranty_tracking_message(snap)
     assert "IN_TRANSIT" in msg
     assert "1Z999AA10123456784" in msg
+    assert "We'll continue with your delivery warranty questions below." in msg
+
+
+def test_format_success_message_status_path_does_not_promise_more_questions():
+    snap = TrackingSnapshot(
+        source="track123",
+        available=True,
+        status="IN_TRANSIT",
+        carrier="UPS",
+        tracking_number="1Z999AA10123456784",
+    )
+    msg = format_warranty_tracking_message(snap, continue_with_questions=False)
+    assert "IN_TRANSIT" in msg
+    assert "We'll continue with your delivery warranty questions below." not in msg
+    assert "Our team will follow up shortly" in msg
+
+
+def test_format_processing_message_status_path_closing():
+    snap = TrackingSnapshot(
+        source="shopify",
+        available=True,
+        status="PROCESSING",
+        order_number="#1001",
+    )
+    msg = format_warranty_tracking_message(snap, continue_with_questions=False)
+    assert "PROCESSING" in msg
+    assert "We'll continue with your delivery warranty questions below." not in msg
+    assert "Our team will follow up shortly" in msg
 
 
 def test_format_success_message_includes_order_details():

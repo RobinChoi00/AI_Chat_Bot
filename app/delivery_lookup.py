@@ -299,8 +299,22 @@ def format_warranty_tracking_message(
     domain: str = "",
     lookup_kind: str = "",
     raw_input: str = "",
+    continue_with_questions: bool = True,
 ) -> str:
-    """Customer-facing English message for the warranty chat (no sales footer)."""
+    """Customer-facing English message for the warranty chat (no sales footer).
+
+    When ``continue_with_questions`` is False (status-only lookup path), close with
+    a follow-up note instead of promising more warranty questions.
+    """
+    closing = (
+        "We'll continue with your delivery warranty questions below."
+        if continue_with_questions
+        else (
+            "That's the latest status we have. "
+            "Our team will follow up shortly if you need more help."
+        )
+    )
+
     if not snapshot.available:
         lines = [
             "We couldn't verify your delivery details automatically right now.",
@@ -333,7 +347,7 @@ def format_warranty_tracking_message(
                 "- A tracking number will be emailed once the carrier picks up the shipment.",
                 "- Typical processing time before pickup: **1–3 business days**.",
                 "",
-                "We'll continue with your delivery warranty questions below.",
+                closing,
             ]
         )
         return "\n".join(lines)
@@ -368,7 +382,7 @@ def format_warranty_tracking_message(
             lines.append(f"- {t} | {loc} | {msg}")
 
     lines.append("")
-    lines.append("We'll continue with your delivery warranty questions below.")
+    lines.append(closing)
     return "\n".join(lines)
 
 
