@@ -148,7 +148,7 @@ def test_resume_link_and_verify_roundtrip(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["sent"] is True
-    assert body["customer_email"] == "buyer@example.com"
+    assert body["customer_email"] == "b***r@example.com"
 
     # Directly generate a token — the SMTP side-effect is mocked, so we
     # cannot pluck the URL out of the email. We verify the round-trip via

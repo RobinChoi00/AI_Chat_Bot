@@ -98,7 +98,7 @@ def test_session_contact_email_endpoint(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["recorded"] is True
-    assert body["customer_email"] == "buyer@example.com"
+    assert body["customer_email"] == "b***r@example.com"
     assert body["email_gate_status"] == "provided"
     assert body["skipped"] is False
 
@@ -145,6 +145,10 @@ def test_session_contact_email_copied_onto_ticket():
 
 def test_session_contact_email_requires_valid_address(client):
     session_id = f"sess-email-bad-{uuid.uuid4().hex[:8]}"
+    client.post(
+        f"/api/v1/warranty/session/{session_id}/consent",
+        json={"domain": "osakiusa.com", "policy_store": "osakiusa.com"},
+    )
     resp = client.post(
         f"/api/v1/warranty/session/{session_id}/contact-email",
         json={"customer_email": "not-an-email"},

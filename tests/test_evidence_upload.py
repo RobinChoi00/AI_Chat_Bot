@@ -330,7 +330,7 @@ class TestEvidenceUploadEndpoint:
             files={"file": ("img.jpg", io.BytesIO(jpg_data), "image/jpeg")},
         )
         assert response.status_code == 200, response.text
-        assert response.json()["customer_email"] == "buyer@example.com"
+        assert response.json()["customer_email"] == "b***r@example.com"
         assert len(calls) == 1
         assert calls[0]["customer_email"] == "buyer@example.com"
         assert calls[0]["ticket_id"] == ticket_id
@@ -452,7 +452,7 @@ class TestWarrantyContactEndpoint:
         )
         assert response.status_code == 200, response.text
         body = response.json()
-        assert body["customer_email"] == "buyer@example.com"
+        assert body["customer_email"] == "b***r@example.com"
         assert body["evidence_type"] == "not_available"
         assert body["evidence_na"] is True
         assert "case_summary" in body
