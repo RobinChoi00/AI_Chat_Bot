@@ -369,6 +369,9 @@ def resolve_freshdesk_ticket_type(
     if issue in ("defect", "installation", "install"):
         return "Issue with Product"
 
+    if issue in ("order_cancel", "cancel", "refund", "return"):
+        return "Inquiry"
+
     if "status" in node_id and "delivery" in node_id:
         return "Inquiry"
 

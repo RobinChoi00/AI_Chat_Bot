@@ -142,6 +142,7 @@ export interface WarrantySessionResponse {
   resolved_model?: string;
   smart_start?: SmartStartMetadata | null;
   model_confirmation?: ModelConfirmationMetadata | null;
+  order_cancel_escalated?: boolean;
   side_question?: boolean;
   went_back?: boolean;
   rewind?: { restored_node_id: string; turn_count: number; can_go_back: boolean };

@@ -99,6 +99,22 @@ _OFF_TOPIC_RE = [
 
 _SALES_ANSWER_KEYS = frozenset({"sales"})
 
+# Cancel / refund / return — do not troubleshoot; escalate to warranty team.
+_ORDER_CANCEL_RE = re.compile(
+    r"\b("
+    r"cancel(?:ling|led)?\s+(?:my\s+)?(?:order|purchase|buy|subscription)|"
+    r"(?:want|need|please|how\s+(?:do|can)\s+i)\s+to\s+cancel|"
+    r"cancel\s+(?:my\s+)?(?:order|purchase)|"
+    r"order\s+cancel|"
+    r"refund(?:\s+my\s+(?:order|purchase|money|payment))?|"
+    r"(?:want|need|please)\s+(?:a\s+)?refund|"
+    r"return\s+(?:my\s+)?(?:order|chair|purchase|item)|"
+    r"undo\s+(?:my\s+)?(?:order|purchase)|"
+    r"취소|환불|반품"
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class WarrantyScopeDecision:
@@ -110,7 +126,25 @@ class WarrantyScopeDecision:
         return not self.in_scope
 
 
+def is_order_cancel_request(text: str) -> bool:
+    """True when the customer wants to cancel, refund, or return an order."""
+    raw = re.sub(r"[._]+", " ", (text or "").strip())
+    if not raw:
+        return False
+    return bool(_ORDER_CANCEL_RE.search(raw))
+
+
+def build_order_cancel_handoff_message() -> str:
+    """Minimal confirmation — no cancel policy advice from the bot."""
+    return (
+        "We've sent your request to our **warranty team**. "
+        "They will follow up with you by email."
+    )
+
+
 def build_warranty_scope_refusal(reason: str = "") -> str:
+    if (reason or "").strip().lower() == "order_cancel":
+        return build_order_cancel_handoff_message()
     if (reason or "").strip().lower() == "shipping_policy":
         return (
             "We **do not deliver** to **Hawaii, Alaska, or Guam**.\n\n"
@@ -191,6 +225,10 @@ def evaluate_warranty_scope(
 
     if _GREETING_RE.match(raw):
         return WarrantyScopeDecision(in_scope=True, reason="greeting")
+
+    # Cancel / refund / return → warranty team handoff (not sales, not defect flow).
+    if is_order_cancel_request(raw):
+        return WarrantyScopeDecision(in_scope=False, reason="order_cancel")
 
     if is_sales_workflow_answer(raw):
         return WarrantyScopeDecision(in_scope=False, reason="sales")

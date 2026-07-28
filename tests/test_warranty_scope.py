@@ -87,3 +87,30 @@ def test_refusal_mentions_warranty_only():
     msg = build_warranty_scope_refusal()
     assert "warranty support" in msg.lower()
     assert "sales" in msg.lower()
+
+
+def test_blocks_order_cancel_as_order_cancel_reason():
+    from warranty_scope import is_order_cancel_request
+
+    for text in (
+        "Cancel my purchase",
+        "Cancel my.purchase",
+        "I want to cancel my order",
+        "Please refund my order",
+        "I need to return my chair",
+    ):
+        assert is_order_cancel_request(text), text
+        decision = evaluate_warranty_scope(text)
+        assert decision.is_blocked, text
+        assert decision.reason == "order_cancel", text
+
+    msg = build_warranty_scope_refusal("order_cancel")
+    assert "warranty team" in msg.lower()
+    assert "discount" not in msg.lower()
+    assert "follow up" in msg.lower()
+
+
+def test_order_cancel_not_confused_with_defect():
+    decision = evaluate_warranty_scope("OS-4000T footrest air not inflating")
+    assert decision.in_scope
+    assert evaluate_warranty_scope("Cancel my purchase").reason == "order_cancel"

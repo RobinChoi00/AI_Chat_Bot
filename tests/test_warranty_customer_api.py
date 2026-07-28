@@ -588,6 +588,50 @@ def test_register_model_rejects_issue_description(client):
     assert "problem description" in resp.json()["detail"].lower()
 
 
+def test_cancel_purchase_escalates_to_warranty_team(client, monkeypatch):
+    """Cancel/refund text must not become a model or enter defect — escalate."""
+    scheduled = []
+
+    monkeypatch.setattr(
+        "warranty_freshdesk_case.schedule_freshdesk_case_creation",
+        lambda ticket_id: scheduled.append(ticket_id) or {"scheduled": True},
+    )
+
+    session_id = "cust-api-cancel-purchase"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/smart-start",
+        json={"message": "Cancel my.purchase", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data.get("order_cancel_escalated") is True
+    assert "warranty team" in (data.get("assistant_message") or "").lower()
+    ticket = data["ticket"]
+    assert ticket["status"] == "awaiting_admin_review"
+    assert ticket["issue_type"] == "order_cancel"
+    assert "cancel" not in (ticket.get("model_name") or "").lower()
+    assert ticket["current_node"]["is_terminal"] is True
+    assert ticket["current_node"]["options"] == []
+    assert scheduled == [ticket["ticket_id"]]
+
+
+def test_register_model_cancel_text_escalates(client, monkeypatch):
+    monkeypatch.setattr(
+        "warranty_freshdesk_case.schedule_freshdesk_case_creation",
+        lambda ticket_id: {"scheduled": True},
+    )
+    session_id = "cust-api-cancel-as-model"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/register-model",
+        json={"model": "Cancel my purchase", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data.get("order_cancel_escalated") is True
+    assert data["ticket"]["status"] == "awaiting_admin_review"
+    assert not (data["ticket"].get("model_name") or "").strip()
+
+
 def test_restart_session_abandons_active_ticket(client):
     """Restart should close the in-progress ticket so the next call sees no
     active session, allowing a clean restart without stale model/issue data."""

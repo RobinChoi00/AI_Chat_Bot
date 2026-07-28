@@ -541,6 +541,20 @@ export default function WarrantyChat({
       try {
         const resp = await submitWarrantyAnswer(ticketId, answer);
         applySessionResponse(resp);
+        if (resp.order_cancel_escalated) {
+          await sleep(THINKING_DELAY_MS);
+          setMessages((prev) => [
+            ...prev,
+            assistantMessage(
+              resp.assistant_message ||
+                "We've sent your request to our warranty team. They will follow up with you by email."
+            ),
+          ]);
+          setHelpConsent("yes");
+          setContactSubmitted(true);
+          setOptionsUsed(true);
+          return;
+        }
         if (resp.side_question && resp.assistant_message) {
           await sleep(THINKING_DELAY_MS);
           setMessages((prev) => [
@@ -604,6 +618,21 @@ export default function WarrantyChat({
         setSuggestedIssueType(resolveSuggestedIssueType(resp));
 
         applySessionResponse(resp);
+
+        if (resp.order_cancel_escalated) {
+          await sleep(THINKING_DELAY_MS);
+          setMessages((prev) => [
+            ...prev,
+            assistantMessage(
+              resp.assistant_message ||
+                "We've sent your request to our warranty team. They will follow up with you by email."
+            ),
+          ]);
+          setHelpConsent("yes");
+          setContactSubmitted(true);
+          setOptionsUsed(true);
+          return;
+        }
 
         if (resp.model_confirmation?.message) {
           await sleep(THINKING_DELAY_MS);

@@ -929,10 +929,19 @@ def _register_model_ticket(
     domain: str,
 ) -> Dict[str, Any]:
     from product_catalog import resolve_model_name  # noqa: WPS433
+    from warranty_scope import is_order_cancel_request  # noqa: WPS433
 
     raw = model.strip()
     if not raw:
         raise HTTPException(status_code=422, detail="model must not be empty")
+
+    if is_order_cancel_request(raw):
+        return _escalate_order_cancel_to_warranty_team(
+            engine,
+            session_id,
+            raw,
+            domain,
+        )
 
     lower = raw.lower()
     issue_markers = (
@@ -954,6 +963,9 @@ def _register_model_ticket(
         "delivery",
         "tracking",
         "installation",
+        "cancel",
+        "refund",
+        "return my",
     )
     if any(marker in lower for marker in issue_markers) or len(raw.split()) >= 4:
         raise HTTPException(
@@ -990,6 +1002,89 @@ def _register_model_ticket(
     payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
     payload["model_registered"] = True
     payload["resolved_model"] = resolved
+    return payload
+
+
+def _escalate_order_cancel_to_warranty_team(
+    engine,
+    session_id: str,
+    message: str,
+    domain: str,
+) -> Dict[str, Any]:
+    """
+    Cancel / refund / return: do not answer or enter defect flow.
+    Queue for the warranty team and create Freshdesk when possible.
+    """
+    from warranty_intake_context import persist_intake_summary  # noqa: WPS433
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+    from warranty_scope import (  # noqa: WPS433
+        build_order_cancel_handoff_message,
+        is_order_cancel_request,
+    )
+
+    existing = engine.get_active_session_ticket(session_id)
+    if existing is None:
+        ticket_id, _root = engine.start_session(session_id, domain)
+        try:
+            engine.submit_answer(ticket_id, "warranty")
+        except ValueError:
+            pass
+    else:
+        ticket_id = str(existing.ticket_id)
+
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Warranty session not found.")
+
+    persist_intake_summary(
+        ticket,
+        summary="Order cancel / refund / return request",
+        raw_message=message,
+    )
+    ticket.set_collected("escalation_reason", "order_cancel")
+    ticket.set_collected("order_cancel_request", (message or "")[:500])
+
+    # Never keep cancel text as the chair model name.
+    clear_model = is_order_cancel_request(str(getattr(ticket, "model_name", "") or ""))
+
+    with warranty_db_session() as db:
+        row = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Warranty session not found.")
+        row.collected_data = ticket.collected_data
+        row.status = "awaiting_admin_review"
+        if clear_model:
+            row.model_name = ""
+        if not str(row.issue_type or "").strip():
+            # Keep a visible label for admin / Freshdesk without entering defect tree.
+            row.issue_type = "order_cancel"
+
+    try:
+        from warranty_freshdesk_case import schedule_freshdesk_case_creation  # noqa: WPS433
+
+        schedule_freshdesk_case_creation(ticket_id)
+    except Exception:
+        pass
+
+    ticket = engine.get_ticket(ticket_id)
+    node = engine.get_current_node(ticket_id)
+    payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    # Stop the flowchart UI — case is with the team.
+    if payload.get("ticket"):
+        payload["ticket"]["ready_for_issue_type"] = False
+        current = payload["ticket"].get("current_node") or {}
+        current = dict(current)
+        current["is_terminal"] = True
+        current["options"] = []
+        current["prompt"] = build_order_cancel_handoff_message()
+        payload["ticket"]["current_node"] = current
+    payload["assistant_message"] = build_order_cancel_handoff_message()
+    payload["order_cancel_escalated"] = True
+    payload["side_question"] = True
     return payload
 
 
@@ -1759,6 +1854,13 @@ async def natural_start_warranty(
     scope = evaluate_warranty_scope(message)
     if scope.is_blocked:
         engine = _lazy_engine()
+        if scope.reason == "order_cancel":
+            return _escalate_order_cancel_to_warranty_team(
+                engine,
+                session_id,
+                message,
+                body.domain,
+            )
         existing = engine.get_active_session_ticket(session_id)
         if existing is None:
             ticket_id, _root = engine.start_session(session_id, body.domain)
@@ -1898,6 +2000,13 @@ async def smart_start_warranty(
     scope = evaluate_warranty_scope(message)
     if scope.is_blocked:
         engine = _lazy_engine()
+        if scope.reason == "order_cancel":
+            return _escalate_order_cancel_to_warranty_team(
+                engine,
+                session_id,
+                message,
+                body.domain,
+            )
         ticket = engine.get_active_session_ticket(session_id)
         if ticket is None:
             ticket_id, _root = engine.start_session(session_id, body.domain)
@@ -2053,6 +2162,18 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
     answer = body.answer.strip()
     if not answer:
         raise HTTPException(status_code=422, detail="answer must not be empty")
+
+    from warranty_scope import is_order_cancel_request  # noqa: WPS433
+
+    if is_order_cancel_request(answer):
+        domain = str(getattr(ticket, "domain", "") or "osaki.com")
+        session_id = str(getattr(ticket, "session_id", "") or "")
+        return _escalate_order_cancel_to_warranty_team(
+            engine,
+            session_id,
+            answer,
+            domain,
+        )
 
     side_message = _maybe_side_question_message(engine, ticket_id, answer)
     if side_message:
