@@ -1,0 +1,254 @@
+"""
+tests/test_sales_intent.py
+==========================
+Guardrails-first contract tests for the Sales AI intent classifier.
+
+These tests are the *safety net*: if a warranty question or a cancel/refund
+message ever gets classified as ``price`` or ``recommend`` again, the sales
+AI could accidentally answer instead of handing off to the warranty team.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+APP_DIR = Path(__file__).resolve().parent.parent / "app"
+sys.path.insert(0, str(APP_DIR))
+
+from sales_intent import (  # noqa: E402
+    HANDOFF_INTENTS,
+    INTENT_CANCEL_REFUND,
+    INTENT_COMPARE,
+    INTENT_DISCOUNT,
+    INTENT_ETA_SHIPPING,
+    INTENT_GREETING,
+    INTENT_HUMAN,
+    INTENT_INTENSITY,
+    INTENT_ORDER_STATUS,
+    INTENT_PARTS_TECHNICIAN,
+    INTENT_PRICE,
+    INTENT_RECOMMEND,
+    INTENT_SPECS,
+    INTENT_STOCK,
+    INTENT_UNCLEAR,
+    INTENT_WARRANTY_REDIRECT,
+    classify,
+    handoff_message,
+)
+
+
+# ---------------------------------------------------------------------------
+# Guardrails — every message here MUST end up as a handoff.
+# ---------------------------------------------------------------------------
+
+
+def test_warranty_defect_language_redirects_to_warranty():
+    for text in [
+        "my chair won't power on",
+        "footrest is stuck and airbag stopped inflating",
+        "remote not working",
+        "error code E1 on the display",
+        "my chair is broken, please help",
+        "installation help — the base wobbles",
+        "delivered damaged yesterday",
+        "보증 관련 질문이에요",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_WARRANTY_REDIRECT, text
+        assert intent.is_handoff, text
+
+
+def test_cancel_and_refund_route_to_warranty_team():
+    for text in [
+        "I want to cancel my order",
+        "please refund my purchase",
+        "return my chair",
+        "cancel my subscription",
+        "환불해주세요",
+        "취소하고 싶어요",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_CANCEL_REFUND, text
+        assert intent.is_handoff, text
+
+
+def test_parts_and_technician_route_to_warranty_team():
+    for text in [
+        "I need a replacement part for my footrest",
+        "can you send a technician to my house",
+        "please dispatch a repair tech",
+        "send someone to come fix it",
+        "I need a spare part",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_PARTS_TECHNICIAN, text
+        assert intent.is_handoff, text
+
+
+def test_discount_never_answered_directly():
+    for text in [
+        "any discount available?",
+        "do you have a promo code",
+        "can you do better on the price",
+        "price match with amazon",
+        "coupon code please",
+        "할인 되나요",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_DISCOUNT, text
+        assert intent.is_handoff, text
+
+
+def test_eta_and_delivery_promise_route_to_human():
+    for text in [
+        "when will it arrive",
+        "how long until delivery",
+        "estimated delivery date?",
+        "can you guarantee delivery before Christmas",
+        "lead time please",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_ETA_SHIPPING, text
+        assert intent.is_handoff, text
+
+
+def test_human_request_is_recognized():
+    for text in [
+        "talk to a human",
+        "connect me to a rep",
+        "speak with sales",
+        "call me please",
+        "상담원 연결",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_HUMAN, text
+        assert intent.is_handoff, text
+
+
+def test_all_handoff_labels_produce_a_handoff_message():
+    """Every guardrail intent must have a canned safe reply."""
+    for label in HANDOFF_INTENTS:
+        from sales_intent import SalesIntent
+
+        intent = SalesIntent(label=label, confidence="high", handoff=True)
+        assert handoff_message(intent), f"missing handoff copy for {label}"
+
+
+# ---------------------------------------------------------------------------
+# Priority: mixed messages fall to the *safer* intent.
+# ---------------------------------------------------------------------------
+
+
+def test_mixed_defect_plus_price_routes_to_warranty():
+    """
+    A message that includes both a warranty problem AND a price question
+    must go to warranty — never answered as a price question.
+    """
+    intent = classify("my chair is broken and how much is the OS-Pro Maestro?")
+    assert intent.label == INTENT_WARRANTY_REDIRECT
+    assert intent.is_handoff
+
+
+def test_mixed_cancel_plus_price_routes_to_cancel():
+    intent = classify("I want to cancel my order but also how much is the Titan?")
+    assert intent.label == INTENT_CANCEL_REFUND
+    assert intent.is_handoff
+
+
+# ---------------------------------------------------------------------------
+# Happy-path sales sub-intents.
+# ---------------------------------------------------------------------------
+
+
+def test_price_intent():
+    for text in [
+        "how much is the Osaki OS-Pro Maestro LE",
+        "price of the Titan Jupiter",
+        "what's the cost of this chair",
+        "가격 알려주세요",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_PRICE, text
+        assert not intent.is_handoff
+
+
+def test_stock_intent():
+    for text in [
+        "is the OS-Pro Maestro in stock",
+        "do you have it available",
+        "재고 있나요",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_STOCK, text
+
+
+def test_recommend_intent():
+    for text in [
+        "can you recommend a chair for a tall guy",
+        "which chair should I buy",
+        "best chair for back pain",
+        "I am 6'2\" and 220 lb",
+        "추천 부탁해요",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_RECOMMEND, text
+
+
+def test_compare_intent():
+    for text in [
+        "compare OS-Pro Maestro vs Titan Jupiter",
+        "difference between 3D and 4D",
+        "which is better, Osaki or Titan",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_COMPARE, text
+
+
+def test_specs_intent():
+    for text in [
+        "does it have zero gravity",
+        "what's the weight capacity",
+        "L-track or S-track?",
+        "features of this chair",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_SPECS, text
+
+
+def test_intensity_intent():
+    for text in [
+        "is the massage strong enough",
+        "how deep does it go",
+        "massage intensity please",
+        "세기가 얼마나 세나요",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_INTENSITY, text
+
+
+def test_greeting_is_greeting():
+    for text in ["hi", "hello!", "안녕하세요"]:
+        intent = classify(text)
+        assert intent.label == INTENT_GREETING, text
+
+
+def test_empty_text_is_unclear():
+    assert classify("").label == INTENT_UNCLEAR
+    assert classify("   ").label == INTENT_UNCLEAR
+
+
+def test_random_off_topic_is_unclear_not_answered():
+    """A message we can't classify must NOT be answered — force the menu."""
+    intent = classify("purple monkey dishwasher")
+    assert intent.label == INTENT_UNCLEAR
+
+
+def test_order_status_is_recognized():
+    for text in [
+        "where is my order",
+        "tracking number for my chair",
+        "FedEx delivery for my order",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_ORDER_STATUS, text

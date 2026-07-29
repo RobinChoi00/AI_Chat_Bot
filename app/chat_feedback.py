@@ -42,7 +42,7 @@ _ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
 _MAX_MESSAGE_LEN = 4000
 _MAX_COMMENT_LEN = 1000
 _ALLOWED_RATINGS = frozenset({"up", "down"})
-_ALLOWED_CONTEXTS = frozenset({"warranty", "chat"})
+_ALLOWED_CONTEXTS = frozenset({"warranty", "chat", "sales"})
 
 
 def _now_cst() -> datetime:

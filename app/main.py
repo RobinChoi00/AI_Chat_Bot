@@ -1095,6 +1095,13 @@ except ImportError:
     from warranty_ocr import router as warranty_ocr_router  # type: ignore
 app.include_router(warranty_ocr_router)
 
+# Sales AI (Tidio-backed) — deterministic intent router + catalog tools.
+try:
+    from app.sales_router import router as sales_router
+except ImportError:
+    from sales_router import router as sales_router  # type: ignore
+app.include_router(sales_router)
+
 # 🚦 Rate limiting: shared Limiter from cost_guard. We attach the SlowAPI
 # middleware/handler so that exceeding the per-IP budget returns HTTP 429
 # (instead of leaking a stack trace) with a clear Retry-After header.
