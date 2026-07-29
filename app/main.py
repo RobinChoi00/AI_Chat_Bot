@@ -1102,6 +1102,13 @@ except ImportError:
     from sales_router import router as sales_router  # type: ignore
 app.include_router(sales_router)
 
+# Tidio webhook + Flow turn adapter for OsakiUSA Sales AI.
+try:
+    from app.sales_tidio_router import router as sales_tidio_router
+except ImportError:
+    from sales_tidio_router import router as sales_tidio_router  # type: ignore
+app.include_router(sales_tidio_router)
+
 # 🚦 Rate limiting: shared Limiter from cost_guard. We attach the SlowAPI
 # middleware/handler so that exceeding the per-IP budget returns HTTP 429
 # (instead of leaking a stack trace) with a clear Retry-After header.
