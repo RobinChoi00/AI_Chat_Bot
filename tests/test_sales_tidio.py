@@ -135,7 +135,9 @@ def test_tidio_turn_runs_sales_agent(client):
     body = resp.json()
     assert body["intent"] == "greeting"
     assert body["reply"]
-    assert body["reply_plain"] == body["reply"]
+    assert body["reply_plain"]
+    assert "**" not in body["reply_plain"]
+    assert body["next_action"] == "reply"
     assert body["session_id"].startswith("tidio:")
     assert body["handoff"] is False
 
@@ -149,6 +151,7 @@ def test_tidio_turn_shipping_goes_to_warranty(client):
     body = resp.json()
     assert body["intent"] == "eta_shipping"
     assert body["handoff"] is True
+    assert body["next_action"] == "warranty_redirect"
     assert "warranty" in body["reply"].lower()
 
 
@@ -161,9 +164,25 @@ def test_tidio_turn_discount_is_silent_handoff(client):
     body = resp.json()
     assert body["intent"] == "discount"
     assert body["handoff"] is True
+    assert body["next_action"] == "transfer_operator"
     assert "%" not in body["reply"]
     assert "promo" not in body["reply"].lower()
 
+
+def test_tidio_turn_secret_required_when_configured(client, monkeypatch):
+    monkeypatch.setenv("TIDIO_TURN_SECRET", "flow-secret-123")
+    bad = client.post(
+        "/api/v1/sales/tidio/turn",
+        json={"message": "hello"},
+    )
+    assert bad.status_code == 401
+    good = client.post(
+        "/api/v1/sales/tidio/turn",
+        json={"message": "hello"},
+        headers={"X-Tidio-Turn-Secret": "flow-secret-123"},
+    )
+    assert good.status_code == 200
+    assert good.json()["intent"] == "greeting"
 
 # ---------------------------------------------------------------------------
 # Webhook

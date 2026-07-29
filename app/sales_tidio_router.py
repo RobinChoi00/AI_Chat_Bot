@@ -25,14 +25,21 @@ GET  /api/v1/sales/tidio/health
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
+import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from sales_agent import respond
+from sales_intent import (
+    INTENT_DISCOUNT,
+    INTENT_HUMAN,
+    WARRANTY_ROUTE_INTENTS,
+)
 from sales_models import (
     get_or_create_session,
     record_message,
@@ -108,8 +115,48 @@ class TidioTurnResponse(BaseModel):
     quick_replies: list[dict[str, str]] = Field(default_factory=list)
     session_id: str
     contact_id: Optional[str] = None
-    # Flat text for Tidio Flow "use response body path" mappers that can't nest.
+    # Flat text for Tidio Flow mappers (markdown stars stripped).
     reply_plain: str = ""
+    # Flow branch helper:
+    #   reply              → send reply_plain, stay in bot
+    #   transfer_operator  → send reply_plain, then Transfer to operator
+    #   warranty_redirect  → send reply_plain only (point to Warranty chat)
+    next_action: str = "reply"
+
+
+def _strip_md(text: str) -> str:
+    """Tidio chat shows plain text better without **bold** markers."""
+    return re.sub(r"\*\*([^*]+)\*\*", r"\1", text or "").strip()
+
+
+def _next_action(intent: str, handoff: bool) -> str:
+    if intent in WARRANTY_ROUTE_INTENTS:
+        return "warranty_redirect"
+    if intent in (INTENT_DISCOUNT, INTENT_HUMAN) or (
+        handoff and intent not in WARRANTY_ROUTE_INTENTS
+    ):
+        return "transfer_operator"
+    return "reply"
+
+
+def _require_turn_secret(request: Request) -> None:
+    """
+    Optional shared secret for the Flow API Call node.
+
+    Set TIDIO_TURN_SECRET on the server and the same value in the Flow
+    header ``X-Tidio-Turn-Secret``. When unset, the endpoint stays open
+    (rate-limited) so local/dev Flows keep working.
+    """
+    expected = (os.getenv("TIDIO_TURN_SECRET") or "").strip()
+    if not expected:
+        return
+    received = (
+        request.headers.get("X-Tidio-Turn-Secret")
+        or request.headers.get("x-tidio-turn-secret")
+        or ""
+    ).strip()
+    if not received or not hmac.compare_digest(expected, received):
+        raise HTTPException(status_code=401, detail="Invalid turn secret.")
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +179,8 @@ def _run_sales_turn(
         tidio_visitor_id=contact_id,
     )
     result = respond(message, payload=payload)
+    plain = _strip_md(result.reply)
+    action = _next_action(result.intent, result.handoff)
 
     if message:
         record_message(session_id, role="user", content=message, intent=result.intent)
@@ -149,7 +198,7 @@ def _run_sales_turn(
         content=result.reply,
         intent=result.intent,
         handoff=result.handoff_reason if result.handoff else None,
-        tools_used=result.tools_used + ["tidio"],
+        tools_used=result.tools_used + ["tidio", f"action:{action}"],
     )
     update_session_last_intent(
         session_id,
@@ -159,7 +208,7 @@ def _run_sales_turn(
     )
     return {
         "reply": result.reply,
-        "reply_plain": result.reply,
+        "reply_plain": plain,
         "intent": result.intent,
         "handoff": result.handoff,
         "handoff_reason": result.handoff_reason,
@@ -168,6 +217,7 @@ def _run_sales_turn(
         ],
         "session_id": session_id,
         "contact_id": contact_id,
+        "next_action": action,
     }
 
 
@@ -250,11 +300,13 @@ async def tidio_health():
             os.getenv("TIDIO_WEBHOOK_SECRET", "").strip()
             or os.getenv("TIDIO_PRIVATE_KEY", "").strip()
         ),
+        "turn_secret_set": bool(os.getenv("TIDIO_TURN_SECRET", "").strip()),
         "openapi_configured": openapi_configured(),
         "operator_id_set": bool(operator_id()),
         "webhook_url_hint": "/api/v1/sales/tidio/webhook",
         "turn_url_hint": "/api/v1/sales/tidio/turn",
         "recommended_live_chat_path": "tidio_flow_http_request",
+        "goal": "ai_first_24_7_before_human_agent",
     }
 
 
@@ -265,10 +317,11 @@ async def tidio_turn(request: Request, body: TidioTurnRequest):
     Tidio Flow / Bot HTTP Request target.
 
     Map the Flow's visitor message into ``message`` (and optional ``contact_id``).
-    Use ``reply`` (or ``reply_plain``) as the bot's outgoing text.
+    Use ``reply_plain`` as the bot's outgoing text, then branch on ``next_action``.
     """
     if not tidio_enabled():
         raise HTTPException(status_code=503, detail="Tidio sales adapter disabled.")
+    _require_turn_secret(request)
 
     message = (body.message or "").strip()[:_MAX_MESSAGE_LEN]
     payload = (body.payload or "").strip()[:200] or None
