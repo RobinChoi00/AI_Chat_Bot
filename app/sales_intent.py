@@ -53,7 +53,19 @@ HANDOFF_INTENTS = frozenset(
         INTENT_PARTS_TECHNICIAN,
         INTENT_DISCOUNT,
         INTENT_ETA_SHIPPING,
+        INTENT_ORDER_STATUS,  # tracking / "where's my order" → Warranty
         INTENT_HUMAN,
+    }
+)
+
+# Route to Warranty chat (not sales human). Discount stays with sales human.
+WARRANTY_ROUTE_INTENTS = frozenset(
+    {
+        INTENT_WARRANTY_REDIRECT,
+        INTENT_CANCEL_REFUND,
+        INTENT_PARTS_TECHNICIAN,
+        INTENT_ETA_SHIPPING,
+        INTENT_ORDER_STATUS,
     }
 )
 
@@ -139,16 +151,22 @@ _DISCOUNT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# --- ETA / shipping promise — AI must not guarantee a date -----------
+# --- Shipping / ETA — OsakiUSA: never answer; redirect to Warranty chat ---
+# Covers delivery dates, free shipping, ship-to region, and freight questions.
 _ETA_SHIPPING_RE = re.compile(
     r"\b("
     r"when\s+(?:will|does)\s+(?:it|this|my)\s+(?:arrive|ship|deliver)|"
     r"how\s+(?:long|many\s+days)\s+(?:until|to\s+(?:deliver|arrive|ship))|"
-    r"delivery\s+(?:date|time|eta)|estimated\s+(?:delivery|arrival)|"
-    r"lead\s+time|shipping\s+time|delivery\s+window|"
+    r"delivery\s+(?:date|time|eta|fee|cost|price|window)|"
+    r"estimated\s+(?:delivery|arrival)|"
+    r"lead\s+time|shipping\s+(?:time|cost|fee|rate|price|policy)|"
+    r"free\s+(?:shipping|delivery)|"
+    r"(?:do\s+you|can\s+you|will\s+you)\s+(?:ship|deliver)\b|"
+    r"(?:ship|deliver|shipping|delivery)\s+to\b|"
     r"guarantee\s+(?:by|before)|"
     r"before\s+(?:christmas|xmas|new\s*year|thanksgiving|father'?s\s+day|mother'?s\s+day|"
-    r"black\s+friday|cyber\s+monday|holidays?)"
+    r"black\s+friday|cyber\s+monday|holidays?)|"
+    r"hawaii|alaska|guam"
     r")\b",
     re.IGNORECASE,
 )
@@ -251,6 +269,8 @@ _KOREAN_INTENT_TOKENS: tuple[tuple[str, str], ...] = (
     ("할인", INTENT_DISCOUNT),
     ("쿠폰", INTENT_DISCOUNT),
     ("프로모", INTENT_DISCOUNT),
+    ("배송", INTENT_ETA_SHIPPING),
+    ("택배", INTENT_ETA_SHIPPING),
     ("상담원", INTENT_HUMAN),
     ("담당자", INTENT_HUMAN),
     ("사람 연결", INTENT_HUMAN),
@@ -390,12 +410,13 @@ def classify(text: str) -> SalesIntent:
             matched_terms=hits,
         )
 
-    # 7) Order status (post-purchase tracking) — safe to answer via tool.
+    # 7) Order status (post-purchase tracking) — Warranty chat, not sales.
     hits = _matched(_ORDER_STATUS_RE, raw)
     if hits:
         return SalesIntent(
             label=INTENT_ORDER_STATUS,
             confidence="high",
+            handoff=True,
             matched_terms=hits,
         )
 
@@ -447,44 +468,43 @@ def classify(text: str) -> SalesIntent:
 # ---------------------------------------------------------------------------
 
 
+_WARRANTY_CHAT_REDIRECT = (
+    "Our **Warranty team** handles this.\n\n"
+    "Please tap the **Warranty chat** icon on the site (next to shopping chat) "
+    "and continue there."
+)
+
+
 def handoff_message(intent: SalesIntent) -> Optional[str]:
-    """Return the safe, non-committal reply for a handoff intent."""
+    """Return the safe, non-committal reply for a handoff intent.
+
+    OsakiUSA Sales (Tidio) policy:
+      - Never explain discount or shipping policy in this chat.
+      - Shipping / tracking / delivery → Warranty chat only.
+      - Discount → silent handoff to sales human (email capture).
+    """
     label = intent.label
     if label == INTENT_WARRANTY_REDIRECT:
-        return (
-            "It sounds like this is about a chair you already own — our "
-            "**Warranty team** handles setup, delivery problems, and defects.\n\n"
-            "Please tap the **Warranty chat** icon (below the shopping chat), "
-            "or I can pass your info to the warranty team here — just let me know."
-        )
+        return _WARRANTY_CHAT_REDIRECT
     if label == INTENT_CANCEL_REFUND:
         return (
-            "I've flagged your **cancel/refund** request. Our warranty team will "
-            "reach out by email — I won't try to process it here."
+            "I've sent your request to our warranty team. "
+            "They will follow up by email."
         )
     if label == INTENT_PARTS_TECHNICIAN:
-        return (
-            "**Parts and technician requests** are handled by our warranty team, "
-            "not sales. I'll pass your message along — please share your **order "
-            "number or email** so they can follow up."
-        )
+        return _WARRANTY_CHAT_REDIRECT
+    if label in (INTENT_ETA_SHIPPING, INTENT_ORDER_STATUS):
+        # No dates, no ZIP talk, no shipping policy — Warranty only.
+        return _WARRANTY_CHAT_REDIRECT
     if label == INTENT_DISCOUNT:
+        # No promo %, no "current offers" language — just connect a human.
         return (
-            "**Discounts and promotions** are decided by our sales team — I can't "
-            "quote a percentage on my own. Share your **email** and the model "
-            "you're interested in, and a rep will get back to you within one "
-            "business day with any current offer."
-        )
-    if label == INTENT_ETA_SHIPPING:
-        return (
-            "I don't guarantee a delivery date automatically — it depends on your "
-            "**ZIP code**, warehouse stock, and freight carrier. A sales rep can "
-            "give you a firm window once we know your ZIP. Want me to connect you?"
+            "I'll connect you with our sales team. "
+            "Please share your **email** and they will follow up."
         )
     if label == INTENT_HUMAN:
         return (
-            "Absolutely — I'll get a human involved. Please share your **email** "
-            "(and optionally a **phone number**) and the sales team will reach "
-            "out within one business day."
+            "I'll connect you with our sales team. "
+            "Please share your **email** (and optionally a phone number)."
         )
     return None

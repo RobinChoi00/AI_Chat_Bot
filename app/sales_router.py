@@ -218,7 +218,7 @@ async def sales_chat(request: Request, body: SalesChatRequest):  # noqa: WPS231 
 
     session_row = get_or_create_session(
         session_id=body.session_id,
-        domain=body.domain or "unknown",
+        domain=body.domain or "osakiusa.com",
         channel=body.channel or "tidio",
         tidio_visitor_id=body.tidio_visitor_id,
     )

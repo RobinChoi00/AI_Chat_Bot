@@ -72,13 +72,15 @@ def client():
         ("send a technician to my house", "parts_technician"),
         ("any discount available?", "discount"),
         ("when will it arrive?", "eta_shipping"),
+        ("where is my order", "order_status"),
+        ("do you ship to Alaska", "eta_shipping"),
         ("talk to a human", "human"),
     ],
 )
 def test_guardrail_intents_return_handoff(client, message, expected_intent):
     resp = client.post(
         "/api/v1/sales/chat",
-        json={"session_id": "s-guard", "message": message},
+        json={"session_id": "s-guard", "message": message, "domain": "osakiusa.com"},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -86,6 +88,12 @@ def test_guardrail_intents_return_handoff(client, message, expected_intent):
     assert body["handoff"] is True
     assert body["handoff_reason"] == expected_intent
     assert body["reply"], "handoff replies must not be empty"
+    if expected_intent in ("eta_shipping", "order_status", "warranty_redirect"):
+        assert "warranty" in body["reply"].lower()
+        assert "zip" not in body["reply"].lower()
+    if expected_intent == "discount":
+        assert "%" not in body["reply"]
+        assert "promo" not in body["reply"].lower()
 
 
 # ---------------------------------------------------------------------------

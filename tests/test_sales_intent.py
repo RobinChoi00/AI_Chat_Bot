@@ -107,10 +107,37 @@ def test_eta_and_delivery_promise_route_to_human():
         "estimated delivery date?",
         "can you guarantee delivery before Christmas",
         "lead time please",
+        "do you offer free shipping",
+        "can you ship to Hawaii",
     ]:
         intent = classify(text)
         assert intent.label == INTENT_ETA_SHIPPING, text
         assert intent.is_handoff, text
+
+
+def test_shipping_and_tracking_handoff_copy_points_to_warranty():
+    from sales_intent import SalesIntent, handoff_message
+
+    for label in (INTENT_ETA_SHIPPING, INTENT_ORDER_STATUS, INTENT_WARRANTY_REDIRECT):
+        msg = handoff_message(SalesIntent(label=label, confidence="high", handoff=True))
+        assert msg
+        assert "warranty" in msg.lower()
+        assert "zip" not in msg.lower()
+        assert "%" not in msg
+
+
+def test_discount_handoff_does_not_explain_policy():
+    from sales_intent import SalesIntent, handoff_message
+
+    msg = handoff_message(
+        SalesIntent(label=INTENT_DISCOUNT, confidence="high", handoff=True)
+    )
+    assert msg
+    assert "email" in msg.lower()
+    assert "%" not in msg
+    assert "promo" not in msg.lower()
+    assert "offer" not in msg.lower()
+    assert "discount" not in msg.lower()  # don't talk about the policy topic
 
 
 def test_human_request_is_recognized():
@@ -252,3 +279,4 @@ def test_order_status_is_recognized():
     ]:
         intent = classify(text)
         assert intent.label == INTENT_ORDER_STATUS, text
+        assert intent.is_handoff, text

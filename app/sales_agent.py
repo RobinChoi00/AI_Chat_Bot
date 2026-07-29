@@ -106,9 +106,10 @@ def _menu_quick_replies() -> list[QuickReply]:
 
 _MENU_INTRO = (
     "Hi! I'm the Osaki shopping assistant. I can help with **model "
-    "recommendations, pricing, specs, and availability**. For anything about "
-    "an order you already placed (delivery, defects, cancel/refund) I'll "
-    "connect you to the warranty team.\n\nWhat would you like to do?"
+    "recommendations, pricing, specs, and availability**.\n\n"
+    "For **shipping, delivery, order tracking, or anything about a chair "
+    "you already own**, please use the **Warranty chat** icon on the site.\n\n"
+    "What would you like to do?"
 )
 
 
@@ -170,8 +171,8 @@ def _price_reply(message: str) -> SalesReply:
     reply = (
         f"**{product.display_name}** — {price_txt}.\n\n"
         f"{availability}\n\n"
-        "Prices shown are the base configuration. Bundles, promotions, and "
-        "financing are handled by a rep — I don't quote discounts on my own."
+        "This is the published base price. For any other offer, I can connect "
+        "you with our sales team."
     )
     return SalesReply(
         reply=reply,
@@ -469,17 +470,15 @@ def _intensity_reply(message: str) -> SalesReply:
 
 
 def _order_status_reply(_message: str) -> SalesReply:
+    from sales_intent import SalesIntent, INTENT_ORDER_STATUS, handoff_message
+
+    intent = SalesIntent(label=INTENT_ORDER_STATUS, confidence="high", handoff=True)
     return SalesReply(
-        reply=(
-            "For **order tracking** please share your **order number** or the "
-            "**email** used at checkout — a rep will confirm the latest status. "
-            "I don't guess ship dates on my own."
-        ),
+        reply=handoff_message(intent) or "",
         intent=INTENT_ORDER_STATUS,
         handoff=True,
         handoff_reason=INTENT_ORDER_STATUS,
         quick_replies=[
-            QuickReply(label="Share my email", payload="lead:email"),
             QuickReply(label="Back to menu", payload="menu"),
         ],
     )
