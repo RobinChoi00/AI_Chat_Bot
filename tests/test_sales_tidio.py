@@ -152,7 +152,41 @@ def test_tidio_turn_shipping_goes_to_warranty(client):
     assert body["intent"] == "eta_shipping"
     assert body["handoff"] is True
     assert body["next_action"] == "warranty_redirect"
+    assert body["is_warranty_route"] is True
     assert "warranty" in body["reply"].lower()
+    assert "top of the page" in body["reply_plain"].lower()
+
+
+def test_tidio_turn_cancel_refund_uses_warranty_redirect(client):
+    """Cancel/refund must reuse the warranty-icon copy — not the old
+    ``I've sent your request to our warranty team`` line — and must set
+    ``is_warranty_route`` so Tidio ends the flow instead of assigning."""
+    resp = client.post(
+        "/api/v1/sales/tidio/turn",
+        json={"message": "I want to cancel my order"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["intent"] == "cancel_refund"
+    assert body["is_warranty_route"] is True
+    assert body["next_action"] == "warranty_redirect"
+    assert "top of the page" in body["reply_plain"].lower()
+    assert "follow up by email" not in body["reply_plain"].lower()
+
+
+def test_tidio_turn_body_hints_recommend_not_intensity(client):
+    """Regression: ``I'm 5'5", 200 pounds and prefer strong massage`` used
+    to route to intensity. It must route to recommend so the AI proposes
+    actual chairs based on the customer's body."""
+    resp = client.post(
+        "/api/v1/sales/tidio/turn",
+        json={"message": "I'm 5'5\", 200 pounds and prefer strong massage"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["intent"] == "recommend"
+    assert body["is_warranty_route"] is False
+    assert body["next_action"] == "reply"
 
 
 def test_tidio_turn_discount_is_silent_handoff(client):

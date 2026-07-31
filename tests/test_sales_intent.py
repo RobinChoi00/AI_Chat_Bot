@@ -254,6 +254,43 @@ def test_intensity_intent():
         assert intent.label == INTENT_INTENSITY, text
 
 
+def test_body_fit_hints_route_to_recommend_not_intensity():
+    """Mixed body-fit + intensity language must go to recommend so the AI
+    proposes an actual chair for the customer's body (regression: this
+    used to be labelled intensity because ``strong`` matched first)."""
+    for text in [
+        "I'm 5'5\", 200 pounds and prefer strong massage",
+        "I want strong hamstring and glute massage",
+        "6'2 220 lb, back pain, need a firm massage",
+        "my lower back hurts and I like deep massage",
+        "petite wife with neck pain — which chair?",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_RECOMMEND, text
+
+
+def test_cancel_and_shipping_reuse_warranty_icon_copy():
+    """Every warranty-route intent must direct the visitor to the Warranty
+    chat icon at the top of the page — never invent its own follow-up."""
+    from sales_intent import SalesIntent
+
+    warranty_labels = (
+        INTENT_WARRANTY_REDIRECT,
+        INTENT_CANCEL_REFUND,
+        INTENT_PARTS_TECHNICIAN,
+        INTENT_ETA_SHIPPING,
+        INTENT_ORDER_STATUS,
+    )
+    baseline = handoff_message(
+        SalesIntent(label=INTENT_WARRANTY_REDIRECT, confidence="high", handoff=True)
+    )
+    assert baseline
+    assert "top of the page" in baseline.lower()
+    for label in warranty_labels:
+        msg = handoff_message(SalesIntent(label=label, confidence="high", handoff=True))
+        assert msg == baseline, f"{label} should reuse the shared warranty redirect copy"
+
+
 def test_greeting_is_greeting():
     for text in ["hi", "hello!", "안녕하세요"]:
         intent = classify(text)

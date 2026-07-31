@@ -122,6 +122,11 @@ class TidioTurnResponse(BaseModel):
     #   transfer_operator  → send reply_plain, then Transfer to operator
     #   warranty_redirect  → send reply_plain only (point to Warranty chat)
     next_action: str = "reply"
+    # Boolean shortcut for Tidio Flows that can only branch on a single
+    # variable at a time. True whenever the intent belongs to the Warranty
+    # chat (warranty defect / cancel / refund / parts / shipping / tracking).
+    # Tidio should show ``reply_plain`` and END the flow (no sales handoff).
+    is_warranty_route: bool = False
 
 
 def _strip_md(text: str) -> str:
@@ -181,6 +186,7 @@ def _run_sales_turn(
     result = respond(message, payload=payload)
     plain = _strip_md(result.reply)
     action = _next_action(result.intent, result.handoff)
+    is_warranty_route = result.intent in WARRANTY_ROUTE_INTENTS
 
     if message:
         record_message(session_id, role="user", content=message, intent=result.intent)
@@ -218,6 +224,7 @@ def _run_sales_turn(
         "session_id": session_id,
         "contact_id": contact_id,
         "next_action": action,
+        "is_warranty_route": is_warranty_route,
     }
 
 

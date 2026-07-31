@@ -224,9 +224,15 @@ def list_active_products() -> list[ProductSpecs]:
 _TALL_MIN_IN = 74  # 6'2"+ → prefer L-Track / SL-Track & 4D
 _TALL_HINT_RE = re.compile(r"\b(tall|large|big\s+guy|nba|basketball)\b", re.I)
 _PETITE_HINT_RE = re.compile(r"\b(petite|small|short|tiny|wife|mom|mother|elder(?:ly)?)\b", re.I)
-_BACK_HINT_RE = re.compile(r"\b(back|spine|lower\s+back|sciatica|posture)\b", re.I)
+_BACK_HINT_RE = re.compile(
+    r"\b("
+    r"back|spine|lower\s+back|sciatica|posture|"
+    r"glute|glutes|buttock|buttocks|hamstring|hamstrings"
+    r")\b",
+    re.I,
+)
 _NECK_HINT_RE = re.compile(r"\b(neck|shoulder|shoulders|traps)\b", re.I)
-_FEET_HINT_RE = re.compile(r"\b(feet|foot|calf|legs?)\b", re.I)
+_FEET_HINT_RE = re.compile(r"\b(feet|foot|calf|calves|legs?)\b", re.I)
 _BUDGET_RE = re.compile(r"\$?\s*(\d{3,5})(?:\s*(?:k|,000))?\b", re.I)
 
 

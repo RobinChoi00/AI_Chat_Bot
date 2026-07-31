@@ -109,10 +109,21 @@ jobs:
       - name: Publish Trivy backend report on failure
         if: failure()
         run: |
+          echo "::group::Trivy backend scan report (stdout copy)"
+          if [ -s trivy-backend.txt ]; then
+            cat trivy-backend.txt
+          else
+            echo "(trivy-backend.txt missing or empty — scan step may have failed before writing the report)"
+          fi
+          echo "::endgroup::"
           {
             echo "### Trivy backend scan failed"
             echo '```text'
-            tail -120 trivy-backend.txt
+            if [ -s trivy-backend.txt ]; then
+              tail -200 trivy-backend.txt
+            else
+              echo "(trivy-backend.txt missing or empty)"
+            fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Scan frontend image for remediable high/critical CVEs
@@ -128,9 +139,20 @@ jobs:
       - name: Publish Trivy frontend report on failure
         if: failure()
         run: |
+          echo "::group::Trivy frontend scan report (stdout copy)"
+          if [ -s trivy-frontend.txt ]; then
+            cat trivy-frontend.txt
+          else
+            echo "(trivy-frontend.txt missing or empty — scan step may not have run)"
+          fi
+          echo "::endgroup::"
           {
             echo "### Trivy frontend scan failed"
             echo '```text'
-            tail -120 trivy-frontend.txt
+            if [ -s trivy-frontend.txt ]; then
+              tail -200 trivy-frontend.txt
+            else
+              echo "(trivy-frontend.txt missing or empty)"
+            fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

@@ -250,6 +250,31 @@ _INTENSITY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# --- Body-fit hints — treat as strong recommend signal -----------------------
+# When a message mentions height / weight / body-part cues, the customer is
+# almost always asking us to recommend a chair for *their* body (even if the
+# same sentence also mentions "strong" or "deep" massage). Without this
+# override "I'm 5'5", 200 pounds and prefer strong massage" was being
+# labelled `intensity`, so the recommend flow never ran.
+_BODY_FIT_RE = re.compile(
+    r"("
+    # Height patterns: 5'5, 6 ft 2, 6 feet, 6'2", 175 cm
+    r"\b\d\s*(?:'|ft|feet|foot)\s*\d{0,2}\s*(?:\"|in|inches)?|"
+    r"\b\d{3}\s*cm\b|"
+    # Weight patterns: 200 lb, 200 lbs, 200 pounds, 90 kg
+    r"\b\d{2,3}\s*(?:lb|lbs|pound|pounds|kg)\b|"
+    # "I'm 6", "I am 5'5", "im 200 lb"
+    r"\bi(?:\s*am|'m|m)\s+\d+|"
+    # Body-part cues typical of "recommend a chair for my …"
+    r"\b(?:back|neck|shoulder|shoulders|lower\s+back|hip|hips|calf|calves|"
+    r"foot|feet|hamstring|hamstrings|glute|glutes|buttock|buttocks|"
+    r"sciatica|scoliosis|posture)\b|"
+    r"\bmy\s+(?:height|weight|back|neck|shoulders?|posture|body)\b|"
+    r"\b(?:tall|petite|short|large|big\s+guy)\b"
+    r")",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Korean substring lookup — `\b` doesn't work between CJK chars, so we do a
@@ -431,6 +456,7 @@ def classify(text: str) -> SalesIntent:
     stock_hits = _matched(_STOCK_RE, raw)
     compare_hits = _matched(_COMPARE_RE, raw)
     recommend_hits = _matched(_RECOMMEND_RE, raw)
+    body_fit_hits = _matched(_BODY_FIT_RE, raw)
     intensity_hits = _matched(_INTENSITY_RE, raw)
     specs_hits = _matched(_SPECS_RE, raw)
 
@@ -440,9 +466,14 @@ def classify(text: str) -> SalesIntent:
         return SalesIntent(label=INTENT_STOCK, confidence="high", matched_terms=stock_hits)
     if compare_hits:
         return SalesIntent(label=INTENT_COMPARE, confidence="high", matched_terms=compare_hits)
-    if recommend_hits:
+    # Body-fit cues (height/weight/body-part) win over intensity — a customer
+    # who shares physical details wants a recommendation, not a lecture on
+    # massage strength.
+    if recommend_hits or body_fit_hits:
         return SalesIntent(
-            label=INTENT_RECOMMEND, confidence="high", matched_terms=recommend_hits
+            label=INTENT_RECOMMEND,
+            confidence="high",
+            matched_terms=recommend_hits + body_fit_hits,
         )
     if intensity_hits:
         return SalesIntent(
@@ -469,9 +500,9 @@ def classify(text: str) -> SalesIntent:
 
 
 _WARRANTY_CHAT_REDIRECT = (
-    "Our **Warranty team** handles this.\n\n"
-    "Please tap the **Warranty chat** icon on the site (next to shopping chat) "
-    "and continue there."
+    "This one is best handled by our **Warranty team**.\n\n"
+    "Please tap the **Warranty chat icon at the top of the page** "
+    "(right next to this shopping chat) and they'll take it from there."
 )
 
 
@@ -480,21 +511,20 @@ def handoff_message(intent: SalesIntent) -> Optional[str]:
 
     OsakiUSA Sales (Tidio) policy:
       - Never explain discount or shipping policy in this chat.
-      - Shipping / tracking / delivery → Warranty chat only.
-      - Discount → silent handoff to sales human (email capture).
+      - Warranty / cancel / refund / return / shipping / tracking / delivery /
+        parts / technician requests all go to the **Warranty chat icon** —
+        the AI must never try to handle these itself.
+      - Discount / explicit human request → silent handoff to sales human
+        (email capture, no policy talk).
     """
     label = intent.label
-    if label == INTENT_WARRANTY_REDIRECT:
-        return _WARRANTY_CHAT_REDIRECT
-    if label == INTENT_CANCEL_REFUND:
-        return (
-            "I've sent your request to our warranty team. "
-            "They will follow up by email."
-        )
-    if label == INTENT_PARTS_TECHNICIAN:
-        return _WARRANTY_CHAT_REDIRECT
-    if label in (INTENT_ETA_SHIPPING, INTENT_ORDER_STATUS):
-        # No dates, no ZIP talk, no shipping policy — Warranty only.
+    if label in (
+        INTENT_WARRANTY_REDIRECT,
+        INTENT_CANCEL_REFUND,
+        INTENT_PARTS_TECHNICIAN,
+        INTENT_ETA_SHIPPING,
+        INTENT_ORDER_STATUS,
+    ):
         return _WARRANTY_CHAT_REDIRECT
     if label == INTENT_DISCOUNT:
         # No promo %, no "current offers" language — just connect a human.
