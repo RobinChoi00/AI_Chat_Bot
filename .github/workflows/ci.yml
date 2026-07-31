@@ -96,22 +96,20 @@ jobs:
           --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.invalid
           -f Dockerfile.frontend
           -t ai-chat-frontend:${{ github.sha }} .
-      # Install Trivy once, then scan with `tee` so CVE tables always land in
-      # the job log / Step Summary (the previous action+output-file path often
-      # produced empty summaries when the scan failed).
-      - name: Install Trivy
-        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
-        with:
-          version: v0.72.0
-          cache: true
+      # Run Trivy via its official image (docker.sock) so we don't depend on
+      # setup-trivy PATH wiring. Exit 127 previously left empty reports.
+      # `tee` keeps the CVE table in the job log + Step Summary + artifact.
       - name: Scan backend image for remediable high/critical CVEs
         id: trivy_backend
         run: |
           set -o pipefail
-          trivy image \
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/.trivyignore:/.trivyignore:ro" \
+            aquasec/trivy:0.72.0 image \
             --severity HIGH,CRITICAL \
             --ignore-unfixed \
-            --ignorefile .trivyignore \
+            --ignorefile /.trivyignore \
             --format table \
             --exit-code 1 \
             "ai-chat-backend:${{ github.sha }}" \
@@ -121,10 +119,13 @@ jobs:
         if: success() || failure()
         run: |
           set -o pipefail
-          trivy image \
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/.trivyignore:/.trivyignore:ro" \
+            aquasec/trivy:0.72.0 image \
             --severity HIGH,CRITICAL \
             --ignore-unfixed \
-            --ignorefile .trivyignore \
+            --ignorefile /.trivyignore \
             --format table \
             --exit-code 1 \
             "ai-chat-frontend:${{ github.sha }}" \
