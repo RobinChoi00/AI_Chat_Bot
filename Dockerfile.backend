@@ -38,6 +38,10 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements-p
            -o -name 'jaraco.context-[0-5].*.dist-info' \
            -o -name 'jaraco.context-6.0*.dist-info' \) \
         -exec rm -rf {} + \
+    # pip ships _vendor/bom.cdx.json listing outdated vendored pins (msgpack
+    # 1.1.2 / setuptools 70.3.0). Trivy treats that SBOM as installed packages
+    # and fails HIGH/CRITICAL even though the real runtime pkgs are patched.
+    && find /usr/local/lib -path '*/pip/_vendor/bom.cdx.json' -delete \
     && rm -rf /wheels
 
 COPY --chown=app:app . .

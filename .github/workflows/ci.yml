@@ -105,11 +105,11 @@ jobs:
           set -o pipefail
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$PWD/.trivyignore:/.trivyignore:ro" \
+            -v "$PWD:/project:ro" \
             aquasec/trivy:0.72.0 image \
             --severity HIGH,CRITICAL \
             --ignore-unfixed \
-            --ignorefile /.trivyignore \
+            --ignorefile /project/.trivyignore \
             --format table \
             --exit-code 1 \
             "ai-chat-backend:${{ github.sha }}" \
@@ -121,11 +121,11 @@ jobs:
           set -o pipefail
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$PWD/.trivyignore:/.trivyignore:ro" \
+            -v "$PWD:/project:ro" \
             aquasec/trivy:0.72.0 image \
             --severity HIGH,CRITICAL \
             --ignore-unfixed \
-            --ignorefile /.trivyignore \
+            --ignorefile /project/.trivyignore \
             --format table \
             --exit-code 1 \
             "ai-chat-frontend:${{ github.sha }}" \
