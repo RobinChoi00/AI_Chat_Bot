@@ -96,63 +96,75 @@ jobs:
           --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.invalid
           -f Dockerfile.frontend
           -t ai-chat-frontend:${{ github.sha }} .
-      - name: Scan backend image for remediable high/critical CVEs
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      # Install Trivy once, then scan with `tee` so CVE tables always land in
+      # the job log / Step Summary (the previous action+output-file path often
+      # produced empty summaries when the scan failed).
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
-          image-ref: ai-chat-backend:${{ github.sha }}
-          format: table
-          output: trivy-backend.txt
-          exit-code: "1"
-          ignore-unfixed: true
-          severity: CRITICAL,HIGH
-          trivyignores: .trivyignore
-      - name: Publish Trivy backend report on failure
-        if: failure()
+          version: v0.72.0
+          cache: true
+      - name: Scan backend image for remediable high/critical CVEs
+        id: trivy_backend
         run: |
-          echo "::group::Trivy backend scan report (stdout copy)"
-          if [ -s trivy-backend.txt ]; then
-            cat trivy-backend.txt
-          else
-            echo "(trivy-backend.txt missing or empty — scan step may have failed before writing the report)"
-          fi
-          echo "::endgroup::"
+          set -o pipefail
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --ignorefile .trivyignore \
+            --format table \
+            --exit-code 1 \
+            "ai-chat-backend:${{ github.sha }}" \
+            | tee trivy-backend.txt
+      - name: Scan frontend image for remediable high/critical CVEs
+        id: trivy_frontend
+        if: success() || failure()
+        run: |
+          set -o pipefail
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --ignorefile .trivyignore \
+            --format table \
+            --exit-code 1 \
+            "ai-chat-frontend:${{ github.sha }}" \
+            | tee trivy-frontend.txt
+      - name: Publish Trivy reports
+        if: always()
+        run: |
           {
-            echo "### Trivy backend scan failed"
+            echo "### Trivy backend"
             echo '```text'
             if [ -s trivy-backend.txt ]; then
-              tail -200 trivy-backend.txt
+              cat trivy-backend.txt
             else
               echo "(trivy-backend.txt missing or empty)"
             fi
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-      - name: Scan frontend image for remediable high/critical CVEs
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ai-chat-frontend:${{ github.sha }}
-          format: table
-          output: trivy-frontend.txt
-          exit-code: "1"
-          ignore-unfixed: true
-          severity: CRITICAL,HIGH
-          trivyignores: .trivyignore
-      - name: Publish Trivy frontend report on failure
-        if: failure()
-        run: |
-          echo "::group::Trivy frontend scan report (stdout copy)"
-          if [ -s trivy-frontend.txt ]; then
-            cat trivy-frontend.txt
-          else
-            echo "(trivy-frontend.txt missing or empty — scan step may not have run)"
-          fi
-          echo "::endgroup::"
-          {
-            echo "### Trivy frontend scan failed"
+            echo
+            echo "### Trivy frontend"
             echo '```text'
             if [ -s trivy-frontend.txt ]; then
-              tail -200 trivy-frontend.txt
+              cat trivy-frontend.txt
             else
               echo "(trivy-frontend.txt missing or empty)"
             fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Trivy reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-reports-${{ github.sha }}
+          path: |
+            trivy-backend.txt
+            trivy-frontend.txt
+          if-no-files-found: ignore
+      - name: Fail job when Trivy found remediable HIGH/CRITICAL CVEs
+        if: always()
+        run: |
+          if [ "${{ steps.trivy_backend.outcome }}" != "success" ] \
+             || [ "${{ steps.trivy_frontend.outcome }}" != "success" ]; then
+            echo "Trivy reported remediable HIGH/CRITICAL CVEs (see Step Summary / artifact)."
+            exit 1
+          fi

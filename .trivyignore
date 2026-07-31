@@ -1,4 +1,6 @@
-# python:3.11-slim base ships setuptools/_vendor copies Trivy still flags after upgrade.
-# Runtime image removes stale vendor dist-info; ignore if scanner cache lags.
+# setuptools/_vendor historically shipped vulnerable jaraco.context / wheel
+# copies (CVE-2026-23949, CVE-2026-24049). Dockerfile.backend upgrades the
+# top-level packages and deletes stale vendor dist-info; keep these ignores
+# as a safety net when the scanner still attributes the CVE to vendored trees.
 CVE-2026-23949
 CVE-2026-24049

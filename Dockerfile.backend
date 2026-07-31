@@ -27,11 +27,16 @@ COPY requirements-prod.txt .
 RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements-prod.txt \
     && pip install --no-cache-dir --upgrade \
         "pip>=26.1" \
-        "setuptools>=78.0.0" \
+        "setuptools>=83.0.0" \
         "wheel>=0.46.2" \
         "jaraco.context>=6.1.0" \
+    # setuptools still ships older _vendor copies that Trivy flags even after
+    # the top-level package is upgraded (CVE-2026-23949 / CVE-2026-24049).
     && find /usr/local/lib/python3.11/site-packages/setuptools/_vendor -maxdepth 1 -type d \
-        \( -name 'wheel-0.45*.dist-info' -o -name 'jaraco.context-5.*.dist-info' \) \
+        \( -name 'wheel-0.4[0-5]*.dist-info' \
+           -o -name 'wheel-0.46.[01].dist-info' \
+           -o -name 'jaraco.context-[0-5].*.dist-info' \
+           -o -name 'jaraco.context-6.0*.dist-info' \) \
         -exec rm -rf {} + \
     && rm -rf /wheels
 
