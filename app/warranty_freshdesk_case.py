@@ -7,13 +7,14 @@ This module handles the outbound path: warranty ticket → Freshdesk case.
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
 import re
 import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import requests
 
@@ -280,7 +281,48 @@ def freshdesk_ticket_url(domain: str, ticket_id: int | str) -> str:
     return f"https://{domain}/a/tickets/{ticket_id}"
 
 
+def _h(text: Any) -> str:
+    """HTML-escape for Freshdesk description bodies."""
+    return html.escape(str(text or ""), quote=True)
+
+
+def _html_section(title: str, body_html: str) -> str:
+    return (
+        f'<h3 style="margin:16px 0 8px;font-size:14px;">{_h(title)}</h3>'
+        f"{body_html}"
+    )
+
+
+def _html_kv_table(rows: Sequence[Tuple[str, str]]) -> str:
+    """Simple 2-column table — Freshdesk renders this cleanly for agents."""
+    cells: List[str] = []
+    for label, value in rows:
+        if not str(value or "").strip():
+            continue
+        cells.append(
+            "<tr>"
+            f'<td style="padding:4px 12px 4px 0;vertical-align:top;'
+            f'white-space:nowrap;color:#555;"><b>{_h(label)}</b></td>'
+            f'<td style="padding:4px 0;vertical-align:top;">{_h(value)}</td>'
+            "</tr>"
+        )
+    if not cells:
+        return "<p>—</p>"
+    return (
+        '<table style="border-collapse:collapse;font-size:13px;'
+        'line-height:1.4;">'
+        + "".join(cells)
+        + "</table>"
+    )
+
+
 def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
+    """Build an HTML Freshdesk description.
+
+    Freshdesk collapses plain-text ``\\n`` into a single wall of text in the
+    agent UI, which is what made Fred's ticket unreadable. HTML sections + a
+    small key/value table keep the same facts but make them scannable.
+    """
     from warranty_email import resolve_customer_email  # noqa: WPS433
 
     collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
@@ -290,79 +332,99 @@ def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
     else:
         opener = "Warranty chat case submitted via the Osaki/Titan warranty bot."
 
-    lines = [
-        opener,
-        "",
-        f"Case reference: {case_ref}",
-        f"Internal ticket ID: {ticket.ticket_id}",
-        f"Session: {ticket.session_id}",
-        f"Domain: {ticket.domain}",
-        f"Status: {ticket.status}",
-        f"Issue type: {ticket.issue_type or '—'}",
-        f"Model: {ticket.model_name or '—'}",
-        f"Terminal node: {ticket.current_node_id}",
-    ]
+    email = resolve_customer_email(ticket, turns=turns) or ""
     caller_phone = str(collected.get("caller_phone") or "").strip()
-    if caller_phone:
-        lines.append(f"Caller phone: {caller_phone}")
-
-    email = resolve_customer_email(ticket, turns=turns)
-    if email:
-        lines.append(f"Customer email: {email}")
-
     error_code = str(collected.get("error_code") or "").strip()
+    intake = str(
+        collected.get("intake_summary") or collected.get("intake_raw_message") or ""
+    ).strip()
+
+    summary_rows: List[Tuple[str, str]] = [
+        ("Case reference", case_ref),
+        ("Model", str(ticket.model_name or "—")),
+        ("Issue type", str(ticket.issue_type or "—")),
+        ("Status", str(ticket.status or "—")),
+        ("Domain", str(ticket.domain or "—")),
+        ("Customer email", email),
+        ("Caller phone", caller_phone),
+        ("Error code", error_code),
+        ("Terminal node", str(ticket.current_node_id or "—")),
+        ("Internal ticket ID", str(ticket.ticket_id or "")),
+        ("Session", str(ticket.session_id or "")),
+    ]
     if error_code:
-        lines.append(f"Customer error code: {error_code}")
         fonz_meaning = str(collected.get("fonz_meaning") or "").strip()
         fonz_parts = str(collected.get("fonz_parts_internal") or "").strip()
         if fonz_meaning:
-            lines.append(f"Fonz meaning: {fonz_meaning[:400]}")
+            summary_rows.append(("Fonz meaning", _smart_truncate(fonz_meaning, 400)))
         if fonz_parts:
-            lines.append(f"Fonz parts (internal): {fonz_parts[:300]}")
+            summary_rows.append(("Fonz parts (internal)", _smart_truncate(fonz_parts, 300)))
 
-    tracking_raw = collected.get("tracking_snapshot")
-    if tracking_raw:
-        lines.append("")
-        lines.append("Tracking snapshot was captured during delivery intake.")
+    parts: List[str] = [
+        f'<p style="margin:0 0 8px;">{_h(opener)}</p>',
+        _html_section("Case summary", _html_kv_table(summary_rows)),
+    ]
+
+    if collected.get("tracking_snapshot"):
+        parts.append(
+            '<p style="margin:8px 0;">Tracking snapshot was captured during '
+            "delivery intake.</p>"
+        )
+
+    if intake:
+        parts.append(
+            _html_section(
+                "Customer intake",
+                f'<p style="margin:0;">{_h(_smart_truncate(_plain_text(intake), 800))}</p>',
+            )
+        )
 
     if turns:
-        lines.append("")
-        lines.append("Recent workflow answers:")
-        for turn in list(turns)[-12:]:
-            prompt = _plain_text(getattr(turn, "node_prompt", None) or "")
-            answer = _plain_text(getattr(turn, "customer_answer", None) or "")
+        qa_rows: List[str] = []
+        for idx, turn in enumerate(list(turns)[-12:], start=1):
+            prompt = _smart_truncate(
+                _plain_text(getattr(turn, "node_prompt", None) or ""), 240
+            )
+            answer = _smart_truncate(
+                _plain_text(getattr(turn, "customer_answer", None) or ""), 200
+            ) or "—"
             key = str(getattr(turn, "answer_key", None) or "").strip()
-            lines.append(f"- Q: {_smart_truncate(prompt, 240)}")
-            answer_line = f"  A: {_smart_truncate(answer, 200)}" if answer else "  A: —"
+            answer_disp = answer
             if key and key.lower() != answer.lower():
-                answer_line += f" (key: {key})"
-            lines.append(answer_line)
-
-    intake = str(collected.get("intake_summary") or collected.get("intake_raw_message") or "").strip()
-    if intake:
-        lines.append("")
-        lines.append("Customer intake summary:")
-        lines.append(_smart_truncate(_plain_text(intake), 800))
+                answer_disp = f"{answer} (key: {key})"
+            qa_rows.append(
+                "<tr>"
+                f'<td style="padding:6px 8px 6px 0;vertical-align:top;'
+                f'color:#888;">{idx}.</td>'
+                f'<td style="padding:6px 0;vertical-align:top;">'
+                f"<div><b>Q:</b> {_h(prompt)}</div>"
+                f"<div><b>A:</b> {_h(answer_disp)}</div>"
+                "</td></tr>"
+            )
+        parts.append(
+            _html_section(
+                "Workflow answers",
+                '<table style="border-collapse:collapse;font-size:13px;'
+                'line-height:1.45;width:100%;">'
+                + "".join(qa_rows)
+                + "</table>",
+            )
+        )
 
     timeline = collected.get("chat_timeline")
     if isinstance(timeline, list) and timeline:
-        # Bot enrichment tips get re-appended by every re-render of a node, so
-        # dedupe on the cleaned text to keep this section tight and useful.
-        # Also filter tips that don't share keywords with the customer's
-        # intake / issue / model — Fred's remote case was polluted with
-        # unrelated footrest backorder chatter.
         context_keywords = _keywords(
             " ".join(
                 [
                     intake,
                     str(ticket.issue_type or ""),
                     str(ticket.model_name or ""),
-                    str(collected.get("error_code") or ""),
+                    error_code,
                 ]
             )
         )
         seen_notes: set[str] = set()
-        tip_lines: List[str] = []
+        tip_items: List[str] = []
         for event in list(timeline)[-24:]:
             if not isinstance(event, dict):
                 continue
@@ -371,8 +433,6 @@ def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
             body = _plain_text(str(event.get("text") or ""))
             if not body:
                 continue
-            # Customer side-questions always stay; bot enrichment tips must
-            # be on-topic for the case.
             if kind == "enrichment" and not _tip_relevant_to_case(
                 body, context_keywords=context_keywords
             ):
@@ -382,28 +442,51 @@ def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
                 continue
             seen_notes.add(fingerprint)
             label = _timeline_label(role, kind)
-            tip_lines.append(f"- {label}: {_smart_truncate(body, 260)}")
-            if len(tip_lines) >= 8:
+            tip_items.append(
+                f"<li style=\"margin:0 0 6px;\">"
+                f"<b>{_h(label)}:</b> {_h(_smart_truncate(body, 260))}"
+                "</li>"
+            )
+            if len(tip_items) >= 8:
                 break
-        if tip_lines:
-            lines.append("")
-            lines.append("Extra chat notes (bot tips / side questions):")
-            lines.extend(tip_lines)
+        if tip_items:
+            parts.append(
+                _html_section(
+                    "Bot / customer notes",
+                    '<ul style="margin:0;padding-left:18px;font-size:13px;'
+                    'line-height:1.45;">'
+                    + "".join(tip_items)
+                    + "</ul>",
+                )
+            )
 
     history = collected.get("troubleshooting_history")
     if isinstance(history, list) and history:
-        lines.append("")
-        lines.append("Troubleshooting outcomes:")
+        hist_items: List[str] = []
         for row in history[-6:]:
             if not isinstance(row, dict):
                 continue
-            outcome = str(row.get("outcome") or "")
-            node = str(row.get("terminal_node_id") or "")
-            lines.append(f"- {outcome}" + (f" @ {node}" if node else ""))
+            outcome = str(row.get("outcome") or "").strip()
+            if not outcome:
+                continue
+            node = str(row.get("terminal_node_id") or "").strip()
+            label = f"{outcome} @ {node}" if node else outcome
+            hist_items.append(f"<li>{_h(label)}</li>")
+        if hist_items:
+            parts.append(
+                _html_section(
+                    "Troubleshooting outcomes",
+                    '<ul style="margin:0;padding-left:18px;">'
+                    + "".join(hist_items)
+                    + "</ul>",
+                )
+            )
 
-    lines.append("")
-    lines.append("Review this case in the warranty admin portal.")
-    return "\n".join(lines)
+    parts.append(
+        '<p style="margin:16px 0 0;color:#666;font-size:12px;">'
+        "Review this case in the warranty admin portal.</p>"
+    )
+    return "".join(parts)
 
 
 def _default_freshdesk_status_id() -> int:

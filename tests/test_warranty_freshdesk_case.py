@@ -88,10 +88,13 @@ def test_case_description_strips_role_prefix_and_markdown_from_timeline():
 
     assert "[assistant/enrichment]" not in description
     assert "**" not in description
-    assert description.count("Bot shared tip:") == 1  # dedupe worked
-    assert "Customer asked side question: is the remote replaceable?" in description
-    assert "Extra chat notes (bot tips / side questions):" in description
-    # Section that used to leak markers to agents is gone.
+    # Freshdesk needs HTML or newlines collapse into a wall of text.
+    assert "<table" in description
+    assert "<h3" in description
+    assert "Case summary" in description
+    assert description.count("Bot shared tip") == 1  # dedupe worked
+    assert "is the remote replaceable?" in description
+    assert "Bot / customer notes" in description
     assert "Extra chat tips / side questions:" not in description
 
 
@@ -158,9 +161,44 @@ def test_case_description_strips_baked_in_role_prefix_and_drops_offtopic_tips():
     assert "[assistant/enrichment]" not in description
     assert "footrest" not in description.lower()
     assert "backordered" not in description.lower()
-    assert "Bot shared tip:" in description
+    assert "Bot shared tip" in description
     assert "remote" in description.lower()
-    assert "Customer asked side question: is the remote replaceable?" in description
+    assert "is the remote replaceable?" in description
+    assert "<table" in description
+    assert "Customer intake" in description
+
+
+def test_case_description_uses_html_sections_not_plain_newlines():
+    """Regression for Fred's wall-of-text ticket: Freshdesk renders HTML,
+    so the description must be structured HTML (table + headings), not a
+    single plain-text blob joined by ``\\n``."""
+    from warranty_freshdesk_case import _build_case_description  # noqa: WPS433
+
+    class _Turn:
+        node_prompt = "Which part of the chair is the problem?"
+        customer_answer = "Remote / controller"
+        answer_key = "remote"
+
+    ticket = _FakeTicket()
+    ticket.issue_type = "defect"
+    ticket.model_name = "Titan 3D Prestige"
+    ticket.collected_data = json.dumps(
+        {"intake_summary": "Remote / controller issue."}
+    )
+
+    description = _build_case_description(
+        ticket, case_ref="WR-20260731-EE75F8", turns=[_Turn()]
+    )
+
+    assert description.strip().startswith("<")
+    assert "Case summary" in description
+    assert "Workflow answers" in description
+    assert "Customer intake" in description
+    assert "WR-20260731-EE75F8" in description
+    assert "Titan 3D Prestige" in description
+    assert "Remote / controller" in description
+    # Must not be a newline-joined plain blob (Freshdesk collapses those).
+    assert "\nCase reference:" not in description
 
 
 def test_resolve_freshdesk_ticket_type_mapping(monkeypatch):
