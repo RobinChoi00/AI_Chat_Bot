@@ -36,6 +36,133 @@ def test_maybe_create_freshdesk_case_skips_when_disabled(monkeypatch):
     assert result["skipped"] is True
 
 
+def test_case_description_strips_role_prefix_and_markdown_from_timeline():
+    """Fred reported tickets like ``[assistant/enrichment] For your **Titan
+    3D Prestige**, **a remote where some blackberries do not respond**``.
+    The description helper must:
+      1. drop the raw ``[role/kind]`` prefix,
+      2. strip ``**bold**`` markdown, and
+      3. dedupe repeated enrichment tips.
+    """
+    from warranty_freshdesk_case import _build_case_description  # noqa: WPS433
+
+    ticket = _FakeTicket()
+    ticket.issue_type = "defect"
+    ticket.model_name = "Titan 3D Prestige"
+    ticket.current_node_id = "defect_remote_partial_terminal"
+    ticket.collected_data = json.dumps(
+        {
+            "intake_summary": "Remote / controller issue.",
+            "chat_timeline": [
+                {
+                    "role": "assistant",
+                    "kind": "enrichment",
+                    "text": (
+                        "For your **Titan 3D Prestige**, **a remote where "
+                        "some buttons do not respond** can often be improved "
+                        "by checking the **cable, fuse, and connections**."
+                    ),
+                    "node_id": "defect_remote_partial",
+                },
+                {
+                    "role": "assistant",
+                    "kind": "enrichment",
+                    "text": (
+                        "For your **Titan 3D Prestige**, **a remote where "
+                        "some buttons do not respond** can often be improved "
+                        "by checking the **cable, fuse, and connections**."
+                    ),
+                    "node_id": "defect_remote_partial",
+                },
+                {
+                    "role": "user",
+                    "kind": "side_question",
+                    "text": "is the remote replaceable?",
+                    "node_id": "defect_remote_partial",
+                },
+            ],
+        }
+    )
+
+    description = _build_case_description(ticket, case_ref="WR-TEST", turns=[])
+
+    assert "[assistant/enrichment]" not in description
+    assert "**" not in description
+    assert description.count("Bot shared tip:") == 1  # dedupe worked
+    assert "Customer asked side question: is the remote replaceable?" in description
+    assert "Extra chat notes (bot tips / side questions):" in description
+    # Section that used to leak markers to agents is gone.
+    assert "Extra chat tips / side questions:" not in description
+
+
+def test_case_description_truncation_stops_on_word_boundary():
+    """A message with a long tail must be trimmed on whitespace + ellipsis,
+    never mid-word (regression: ``blackberries`` came from a hard slice)."""
+    from warranty_freshdesk_case import _smart_truncate  # noqa: WPS433
+
+    text = (
+        "For your Titan 3D Prestige a remote where some buttons do not "
+        "respond can often be improved by checking the cable fuse and "
+        "connections and finally the main harness under the seat cover"
+    )
+    trimmed = _smart_truncate(text, 80)
+    assert trimmed.endswith("…")
+    assert " " in trimmed[-30:] or trimmed.endswith(" …") or trimmed[-2] != "r"
+    assert len(trimmed) <= 82
+    # Must never mid-cut a word: last non-ellipsis char is a full word.
+    tail = trimmed.rstrip("…").rstrip()
+    assert not tail.endswith("connectio")
+
+
+def test_case_description_strips_baked_in_role_prefix_and_drops_offtopic_tips():
+    """Fred's WR ticket had ``[assistant/enrichment]`` mid-body AND a
+    footrest-backorder tip on a remote/controller case. Both must be gone."""
+    from warranty_freshdesk_case import _build_case_description  # noqa: WPS433
+
+    ticket = _FakeTicket()
+    ticket.issue_type = "defect"
+    ticket.model_name = "Titan 3D Prestige"
+    ticket.current_node_id = "defect_remote_partial_terminal"
+    ticket.collected_data = json.dumps(
+        {
+            "intake_summary": "Remote / controller issue.",
+            "chat_timeline": [
+                {
+                    "role": "assistant",
+                    "kind": "enrichment",
+                    "text": (
+                        "[assistant/enrichment] For your Titan 3D Prestige, "
+                        "a remote where some buttons do not respond can often "
+                        "be improved by checking the cable, fuse, and connections."
+                    ),
+                },
+                {
+                    "role": "assistant",
+                    "kind": "enrichment",
+                    "text": (
+                        "Our parts department confirmed that the footrest part "
+                        "for this chair is currently very backordered."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "kind": "side_question",
+                    "text": "is the remote replaceable?",
+                },
+            ],
+        }
+    )
+
+    description = _build_case_description(ticket, case_ref="WR-TEST", turns=[])
+
+    assert "[assistant/enrichment]" not in description
+    assert "footrest" not in description.lower()
+    assert "backordered" not in description.lower()
+    assert "Bot shared tip:" in description
+    assert "remote" in description.lower()
+    assert "Customer asked side question: is the remote replaceable?" in description
+
+
 def test_resolve_freshdesk_ticket_type_mapping(monkeypatch):
     monkeypatch.delenv("FRESHDESK_WARRANTY_TYPE", raising=False)
     monkeypatch.delenv("FRESHDESK_WARRANTY_DEFAULT_TYPE", raising=False)

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -19,6 +20,129 @@ import requests
 from warranty_case_ref import case_reference_for_ticket
 
 logger = logging.getLogger(__name__)
+
+_MD_BOLD_RE = re.compile(r"\*{1,3}([^\n*]+?)\*{1,3}")
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((?:[^)]+)\)")
+_WS_RE = re.compile(r"\s+")
+# Defensive: older builds (or accidental double-formatting) may already have
+# ``[assistant/enrichment]`` baked into the stored text. Strip that prefix so
+# agents never see the internal marker again.
+_ROLE_KIND_PREFIX_RE = re.compile(
+    r"^\s*\[(?P<role>[a-z_]+)/(?P<kind>[a-z_]+)\]\s*",
+    re.IGNORECASE,
+)
+_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "for",
+        "with",
+        "your",
+        "you",
+        "our",
+        "this",
+        "that",
+        "from",
+        "into",
+        "about",
+        "can",
+        "often",
+        "be",
+        "by",
+        "to",
+        "of",
+        "in",
+        "on",
+        "is",
+        "are",
+        "was",
+        "were",
+        "it",
+        "its",
+        "some",
+        "any",
+        "please",
+        "help",
+        "issue",
+        "problem",
+        "chair",
+        "model",
+        "titan",
+        "osaki",
+    }
+)
+
+
+def _plain_text(text: str) -> str:
+    """Strip markdown emphasis and collapse whitespace for readable ticket copy."""
+    if not text:
+        return ""
+    out = _ROLE_KIND_PREFIX_RE.sub("", text)
+    out = _MD_LINK_RE.sub(r"\1", out)
+    out = _MD_BOLD_RE.sub(r"\1", out)
+    out = out.replace("**", "").replace("__", "")
+    return _WS_RE.sub(" ", out).strip()
+
+
+def _smart_truncate(text: str, limit: int) -> str:
+    """Trim at a word boundary and append ``…`` instead of cutting mid-word.
+
+    Fred reported ticket lines like *"where some blackberries do not
+    respond..."*; that was a hard ``[:240]`` slice through a word. Cutting on
+    whitespace keeps the message legible and avoids inventing new words.
+    """
+    if not text or len(text) <= limit:
+        return text
+    hard = text[: max(limit, 1)]
+    space = hard.rfind(" ")
+    if space >= limit - 40:  # only rewind if we're close to a real boundary
+        hard = hard[:space]
+    return hard.rstrip(" ,;:.-") + "…"
+
+
+def _keywords(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]{3,}", (text or "").lower())
+        if token not in _STOPWORDS
+    }
+
+
+def _tip_relevant_to_case(body: str, *, context_keywords: set[str]) -> bool:
+    """Drop enrichment tips that don't share tokens with the customer's issue.
+
+    Prevents Freshdesk tickets from stuffing a remote-controller case with
+    unrelated footrest/backorder chatter that agents then have to ignore.
+    """
+    if not context_keywords:
+        return True
+    tip_keys = _keywords(body)
+    if not tip_keys:
+        return True
+    return bool(tip_keys & context_keywords)
+
+
+_TIMELINE_LABELS: Dict[tuple[str, str], str] = {
+    ("assistant", "enrichment"): "Bot shared tip",
+    ("assistant", "side_question"): "Bot answered side question",
+    ("user", "side_question"): "Customer asked side question",
+    ("assistant", "paraphrase"): "Bot rephrased step",
+    ("assistant", "clarify"): "Bot asked for clarification",
+    ("assistant", "welcome"): "Bot greeted customer",
+}
+
+
+def _timeline_label(role: str, kind: str) -> str:
+    key = (role.strip().lower(), kind.strip().lower())
+    if key in _TIMELINE_LABELS:
+        return _TIMELINE_LABELS[key]
+    # Fall back to a readable label instead of ``[role/kind]``.
+    role_l = key[0] or "note"
+    kind_l = key[1].replace("_", " ") if key[1] else ""
+    return f"{role_l.title()} {kind_l}".strip()
 
 _FRESHDESK_ERROR_KEYS = (
     "freshdesk_create_error",
@@ -205,31 +329,66 @@ def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
         lines.append("")
         lines.append("Recent workflow answers:")
         for turn in list(turns)[-12:]:
-            prompt = (getattr(turn, "node_prompt", None) or "")[:160]
-            answer = getattr(turn, "customer_answer", None) or ""
-            key = getattr(turn, "answer_key", None) or ""
-            lines.append(f"- Q: {prompt}")
-            lines.append(f"  A: {answer}" + (f" (key: {key})" if key and key != answer else ""))
+            prompt = _plain_text(getattr(turn, "node_prompt", None) or "")
+            answer = _plain_text(getattr(turn, "customer_answer", None) or "")
+            key = str(getattr(turn, "answer_key", None) or "").strip()
+            lines.append(f"- Q: {_smart_truncate(prompt, 240)}")
+            answer_line = f"  A: {_smart_truncate(answer, 200)}" if answer else "  A: —"
+            if key and key.lower() != answer.lower():
+                answer_line += f" (key: {key})"
+            lines.append(answer_line)
 
     intake = str(collected.get("intake_summary") or collected.get("intake_raw_message") or "").strip()
     if intake:
         lines.append("")
         lines.append("Customer intake summary:")
-        lines.append(intake[:800])
+        lines.append(_smart_truncate(_plain_text(intake), 800))
 
     timeline = collected.get("chat_timeline")
     if isinstance(timeline, list) and timeline:
-        lines.append("")
-        lines.append("Extra chat tips / side questions:")
-        for event in timeline[-8:]:
+        # Bot enrichment tips get re-appended by every re-render of a node, so
+        # dedupe on the cleaned text to keep this section tight and useful.
+        # Also filter tips that don't share keywords with the customer's
+        # intake / issue / model — Fred's remote case was polluted with
+        # unrelated footrest backorder chatter.
+        context_keywords = _keywords(
+            " ".join(
+                [
+                    intake,
+                    str(ticket.issue_type or ""),
+                    str(ticket.model_name or ""),
+                    str(collected.get("error_code") or ""),
+                ]
+            )
+        )
+        seen_notes: set[str] = set()
+        tip_lines: List[str] = []
+        for event in list(timeline)[-24:]:
             if not isinstance(event, dict):
                 continue
-            role = str(event.get("role") or "?")
-            kind = str(event.get("kind") or "")
-            text = str(event.get("text") or "").strip()
-            if not text:
+            role = str(event.get("role") or "").strip().lower()
+            kind = str(event.get("kind") or "").strip().lower()
+            body = _plain_text(str(event.get("text") or ""))
+            if not body:
                 continue
-            lines.append(f"- [{role}/{kind}] {text[:240]}")
+            # Customer side-questions always stay; bot enrichment tips must
+            # be on-topic for the case.
+            if kind == "enrichment" and not _tip_relevant_to_case(
+                body, context_keywords=context_keywords
+            ):
+                continue
+            fingerprint = body[:200].lower()
+            if fingerprint in seen_notes:
+                continue
+            seen_notes.add(fingerprint)
+            label = _timeline_label(role, kind)
+            tip_lines.append(f"- {label}: {_smart_truncate(body, 260)}")
+            if len(tip_lines) >= 8:
+                break
+        if tip_lines:
+            lines.append("")
+            lines.append("Extra chat notes (bot tips / side questions):")
+            lines.extend(tip_lines)
 
     history = collected.get("troubleshooting_history")
     if isinstance(history, list) and history:
