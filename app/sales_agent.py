@@ -274,6 +274,15 @@ def _specs_reply(message: str) -> SalesReply:
     )
 
 
+_BUDGET_BAND_REPLIES = (
+    QuickReply(label="Under $2,000", payload="recommend:budget:2000"),
+    QuickReply(label="Around $3,000", payload="recommend:budget:3000"),
+    QuickReply(label="Around $5,000", payload="recommend:budget:5000"),
+    QuickReply(label="Around $6,000", payload="recommend:budget:6000"),
+    QuickReply(label="Around $8,000+", payload="recommend:budget:8000"),
+)
+
+
 def _recommend_reply(message: str) -> SalesReply:
     request = parse_recommendation_hints(message)
     has_hints = any(
@@ -286,21 +295,20 @@ def _recommend_reply(message: str) -> SalesReply:
     )
     picks = recommend(request, limit=3) if has_hints else []
     if not picks or not has_hints:
-        # No signal in the message — ask 2 short questions instead of guessing.
+        # No signal — lead with price bands (most shoppers start there),
+        # then offer body-focus shortcuts.
         return SalesReply(
             reply=(
-                "Happy to recommend a chair. Two quick questions so I can narrow it "
-                "down:\n\n"
-                "1. **Your height** (e.g. *6'2\"* or *175cm*)\n"
-                "2. **Main focus** — back, neck, feet, or full body?\n\n"
-                "Or tap **See all models** if you'd rather browse."
+                "Happy to recommend a chair. What's your **budget range**?\n\n"
+                "Tap a price band below, or type something like *around 6000* / "
+                "*under 3000*.\n\n"
+                "You can also share **height** (e.g. *6'2\"*) or a focus area "
+                "(back / neck / feet)."
             ),
             intent=INTENT_RECOMMEND,
             quick_replies=[
+                *_BUDGET_BAND_REPLIES,
                 QuickReply(label="Focus: back", payload="recommend:back"),
-                QuickReply(label="Focus: neck", payload="recommend:neck"),
-                QuickReply(label="Focus: feet", payload="recommend:feet"),
-                QuickReply(label="See all models", payload="list"),
                 QuickReply(label="Talk to a human", payload="human"),
             ],
             tools_used=["catalog.parse_hints"],
@@ -549,11 +557,26 @@ _PAYLOAD_ROUTES = {
 }
 
 
+def _recommend_message_from_payload(payload: str, message: str) -> str:
+    """Map recommend:* button payloads to text the hint parser understands."""
+    parts = [p.strip() for p in (payload or "").split(":") if p.strip()]
+    if len(parts) >= 3 and parts[1].lower() == "budget":
+        amount = parts[2].rstrip("+")
+        if amount.isdigit():
+            return f"budget around ${amount}"
+    if len(parts) >= 2 and parts[1].lower() in {"back", "neck", "feet"}:
+        return parts[1].lower()
+    return (message or payload or "recommend").strip()
+
+
 def _payload_reply(payload: str, message: str) -> Optional[SalesReply]:
-    root = (payload or "").split(":", 1)[0].strip().lower()
+    parts = (payload or "").split(":")
+    root = parts[0].strip().lower() if parts else ""
     factory = _PAYLOAD_ROUTES.get(root)
     if factory is None:
         return None
+    if root == "recommend":
+        return _recommend_reply(_recommend_message_from_payload(payload, message))
     return factory(message or payload)
 
 
