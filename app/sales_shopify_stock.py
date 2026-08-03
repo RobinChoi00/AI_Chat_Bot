@@ -20,14 +20,13 @@ from store_config import get_store_config
 
 logger = logging.getLogger(__name__)
 
+# Admin GraphQL: `availableForSale` is on ProductVariant, not Product.
 _PRODUCT_BY_HANDLE = """
 query ProductByHandle($handle: String!) {
   productByHandle(handle: $handle) {
     title
     status
-    availableForSale
     totalInventory
-    onlineStoreUrl
     variants(first: 25) {
       edges {
         node {
@@ -50,7 +49,6 @@ class LiveStockSnapshot:
     available_for_sale: bool
     total_inventory: Optional[int]
     source: str  # shopify | unavailable
-
 
 def _sales_store_domain() -> str:
     return (os.getenv("TIDIO_DOMAIN") or "osakiusa.com").strip() or "osakiusa.com"
@@ -101,11 +99,34 @@ def fetch_live_stock(handle: str, *, timeout: float = 8.0) -> Optional[LiveStock
     except (TypeError, ValueError):
         total_int = None
 
+    variant_edges = (((node.get("variants") or {}).get("edges")) or [])
+    variant_nodes = [(edge or {}).get("node") or {} for edge in variant_edges]
+    any_available = any(bool(v.get("availableForSale")) for v in variant_nodes)
+    if total_int is None and variant_nodes:
+        qty_sum = 0
+        saw_qty = False
+        for v in variant_nodes:
+            raw = v.get("inventoryQuantity")
+            if raw is None:
+                continue
+            try:
+                qty_sum += int(raw)
+                saw_qty = True
+            except (TypeError, ValueError):
+                continue
+        if saw_qty:
+            total_int = qty_sum
+    if not variant_nodes:
+        # No variant payload — treat ACTIVE + positive inventory as sellable.
+        any_available = str(node.get("status") or "").upper() == "ACTIVE" and (
+            total_int is None or total_int > 0
+        )
+
     return LiveStockSnapshot(
         handle=handle,
         title=str(node.get("title") or handle).strip(),
         status=str(node.get("status") or "").strip().lower(),
-        available_for_sale=bool(node.get("availableForSale")),
+        available_for_sale=any_available,
         total_inventory=total_int,
         source="shopify",
     )

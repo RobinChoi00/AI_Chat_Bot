@@ -35,8 +35,18 @@ def test_fetch_live_stock_parses_shopify_payload(monkeypatch):
             "productByHandle": {
                 "title": "Osaki Vibe 4D",
                 "status": "ACTIVE",
-                "availableForSale": True,
                 "totalInventory": 4,
+                "variants": {
+                    "edges": [
+                        {
+                            "node": {
+                                "title": "Default",
+                                "availableForSale": True,
+                                "inventoryQuantity": 4,
+                            }
+                        }
+                    ]
+                },
             }
         }
     }
