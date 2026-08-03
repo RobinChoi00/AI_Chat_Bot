@@ -86,6 +86,25 @@ def test_recommend_returns_ranked_matches_for_tall_back(catalog):
         assert product.status.lower() == "active"
 
 
+def test_parse_budget_accepts_trailing_dollar_sign():
+    req = parse_recommendation_hints("recommend 6000$ chair")
+    assert req.budget_usd == 6000
+
+
+def test_recommend_budget_prefers_near_target_not_cheapest(catalog):
+    """"$6,000 chair" must not surface $1–2k entry models as top picks."""
+    req = parse_recommendation_hints("recommend 6000$ chair")
+    assert req.budget_usd == 6000
+    picks = recommend(req, limit=3)
+    assert picks, "expected budget-targeted recommendations"
+    for product in picks:
+        assert product.price_usd is not None
+        # Stay within a sensible band of the stated budget.
+        assert 0.50 * 6000 <= product.price_usd <= 1.15 * 6000, product.display_name
+    # At least one pick should be close to the target (not all mid-band filler).
+    assert any(abs(p.price_usd - 6000) <= 1500 for p in picks)
+
+
 def test_recommend_empty_request_still_returns_reasonable_set(catalog):
     req = RecommendationRequest()
     picks = recommend(req, limit=3)

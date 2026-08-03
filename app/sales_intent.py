@@ -76,7 +76,7 @@ WARRANTY_ROUTE_INTENTS = frozenset(
 
 _GREETING_EN_RE = re.compile(
     r"^(hi|hello|hey|good\s+(morning|afternoon|evening)|howdy|"
-    r"thanks|thank\s+you|thx|bye|goodbye)[!.?\s]*$",
+    r"thanks|thank\s+you|thx|bye|goodbye|help)[!.?\s]*$",
     re.IGNORECASE,
 )
 # Korean greetings: word boundaries don't fire between CJK chars.
@@ -115,6 +115,8 @@ _PARTS_TECHNICIAN_RE = re.compile(
     r"\b("
     r"replacement\s+parts?|spare\s+parts?|need\s+(?:a\s+)?parts?|order\s+(?:a\s+)?parts?|"
     r"send\s+(?:me\s+)?(?:a\s+)?parts?|buy\s+(?:a\s+)?parts?|"
+    # Bare "part(s)" covers Tidio short triggers; longer phrases stay above.
+    r"parts?|"
     r"technician|repair\s+(?:tech|person|man|service)|service\s+call|on-?site\s+service|"
     r"send\s+someone|come\s+(?:and\s+)?fix|come\s+(?:out\s+)?to\s+(?:my|our)\s+(?:house|home)|"
     r"labor\s+visit"
@@ -142,10 +144,14 @@ _CANCEL_REFUND_RE = re.compile(
 _DISCOUNT_RE = re.compile(
     r"\b("
     r"discount|promo(?:tion)?|coupon(?:\s+code)?|promo\s*code|"
+    # Bare "sale"/"deal" for Tidio — not "sales" (as in sales team).
+    r"sale|deals?|"
     r"any\s+(?:deal|deals|sale|sales|offer|offers)|"
+    r"on\s+sale|clearance|"
     r"can\s+you\s+(?:do\s+)?(?:any\s+)?better|"
     r"best\s+price|lower\s+price|price\s+match|match\s+(?:a\s+)?price|"
     r"can\s+i\s+get\s+(?:it\s+)?cheaper|"
+    r"financing|monthly\s+payment|payment\s+plan|"
     r"할인|쿠폰|프로모"
     r")\b",
     re.IGNORECASE,
@@ -160,6 +166,8 @@ _ETA_SHIPPING_RE = re.compile(
     r"delivery\s+(?:date|time|eta|fee|cost|price|window)|"
     r"estimated\s+(?:delivery|arrival)|"
     r"lead\s+time|shipping\s+(?:time|cost|fee|rate|price|policy)|"
+    # Bare Tidio triggers: "shipping", "delivery", "arrive"
+    r"shipping|delivery|arrive|arrival|freight|"
     r"free\s+(?:shipping|delivery)|"
     r"(?:do\s+you|can\s+you|will\s+you)\s+(?:ship|deliver)\b|"
     r"(?:ship|deliver|shipping|delivery)\s+to\b|"
@@ -174,8 +182,11 @@ _ETA_SHIPPING_RE = re.compile(
 # --- Order status (post-purchase tracking) — route to order-status tool -----
 _ORDER_STATUS_RE = re.compile(
     r"\b("
-    r"track(?:ing)?\s+(?:number|my)|where(?:'?s|\s+is)\s+my\s+(?:order|package|chair|shipment)|"
-    r"tracking\s+#|order\s+(?:#|number)\s*[a-z0-9]|"
+    # Prefer "tracking" / "track my …" — bare "track" would steal "L-track"/"SL-Track".
+    r"tracking(?:\s+(?:number|my|#))?|"
+    r"track\s+(?:number|my|order|package|shipment|#)|"
+    r"where(?:'?s|\s+is)\s+my\s+(?:order|package|chair|shipment)|"
+    r"order\s+(?:#|number)\s*[a-z0-9]|"
     r"my\s+order\s+(?:status|update)|fedex|ups|usps|"
     r"in\s+transit"
     r")\b",
@@ -189,6 +200,8 @@ _HUMAN_RE = re.compile(
     r"speak\s+(?:with|to)\s+(?:a\s+)?(?:human|person|rep|agent|sales|someone)|"
     r"connect\s+me\s+(?:to|with)\s+(?:a\s+)?(?:human|person|rep|agent|sales)|"
     r"call\s+me|phone\s+me|human\s+please|real\s+person|"
+    # Bare Tidio triggers
+    r"agent|representative|human|"
     r"사람|상담원|담당자"
     r")\b",
     re.IGNORECASE,
@@ -216,8 +229,9 @@ _STOCK_RE = re.compile(
 _RECOMMEND_RE = re.compile(
     r"\b("
     r"recommend|suggestion|which\s+(?:chair|model)|what\s+(?:chair|model).*should|"
-    r"best\s+chair\s+for|good\s+chair\s+for|fit\s+for\s+me|good\s+for\s+(?:tall|short|back|neck)|"
+    r"best\s+chair(?:\s+for)?|good\s+chair\s+for|fit\s+for\s+me|good\s+for\s+(?:tall|short|back|neck)|"
     r"my\s+height|my\s+weight|i\s+am\s+\d+\s*(?:ft|feet|cm|kg|lb|lbs|pounds|inches|'|\"|tall)|"
+    r"budget|under\s+\$?\d{3,5}|around\s+\$?\d{3,5}|"
     r"추천"
     r")\b",
     re.IGNORECASE,
@@ -225,7 +239,7 @@ _RECOMMEND_RE = re.compile(
 
 _COMPARE_RE = re.compile(
     r"\b("
-    r"compare|comparison|difference\s+between|vs\.?|versus|"
+    r"compare|comparison|difference(?:\s+between)?|vs\.?|versus|"
     r"which\s+is\s+better|better\s+than|"
     r"비교|차이"
     r")\b",
@@ -235,7 +249,7 @@ _COMPARE_RE = re.compile(
 _SPECS_RE = re.compile(
     r"\b("
     r"spec(?:s|ification)?|features?|dimensions?|sizes?|weight\s+capacity|weight\s+limit|"
-    r"height\s+range|track\s+type|s-?track|l-?track|zero\s+gravity|"
+    r"height\s+range|track\s+type|s-?track|l-?track|sl-?track|zero\s+gravity|"
     r"3d|4d|airbags?|heating|foot\s+rollers?|calf\s+rollers?|bluetooth"
     r")\b",
     re.IGNORECASE,
@@ -415,7 +429,18 @@ def classify(text: str) -> SalesIntent:
             matched_terms=hits,
         )
 
-    # 5) ETA / delivery date promise → human handoff (region-based).
+    # 5) Order status (post-purchase tracking) — before bare shipping/delivery
+    #    triggers so "FedEx delivery for my order" stays order_status.
+    hits = _matched(_ORDER_STATUS_RE, raw)
+    if hits:
+        return SalesIntent(
+            label=INTENT_ORDER_STATUS,
+            confidence="high",
+            handoff=True,
+            matched_terms=hits,
+        )
+
+    # 6) ETA / delivery date promise → Warranty Department redirect.
     hits = _matched(_ETA_SHIPPING_RE, raw)
     if hits:
         return SalesIntent(
@@ -425,21 +450,11 @@ def classify(text: str) -> SalesIntent:
             matched_terms=hits,
         )
 
-    # 6) Explicit human request.
+    # 7) Explicit human request.
     hits = _matched(_HUMAN_RE, raw)
     if hits:
         return SalesIntent(
             label=INTENT_HUMAN,
-            confidence="high",
-            handoff=True,
-            matched_terms=hits,
-        )
-
-    # 7) Order status (post-purchase tracking) — Warranty chat, not sales.
-    hits = _matched(_ORDER_STATUS_RE, raw)
-    if hits:
-        return SalesIntent(
-            label=INTENT_ORDER_STATUS,
             confidence="high",
             handoff=True,
             matched_terms=hits,

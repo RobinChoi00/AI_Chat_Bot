@@ -314,7 +314,7 @@ def _recommend_reply(message: str) -> SalesReply:
     if request.focus_areas:
         header_bits.append("focus: " + ", ".join(request.focus_areas))
     if request.budget_usd:
-        header_bits.append(f"budget ≤ ${request.budget_usd:,}")
+        header_bits.append(f"budget around ${request.budget_usd:,}")
 
     header = (
         f"Based on {'; '.join(header_bits)}, here are my top picks:"

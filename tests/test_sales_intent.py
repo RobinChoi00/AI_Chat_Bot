@@ -318,7 +318,72 @@ def test_order_status_is_recognized():
         "where is my order",
         "tracking number for my chair",
         "FedEx delivery for my order",
+        "tracking",
     ]:
         intent = classify(text)
         assert intent.label == INTENT_ORDER_STATUS, text
         assert intent.is_handoff, text
+
+
+def test_tidio_short_triggers_are_classified():
+    """Every short phrase we put in Tidio 'Visitor says' must resolve to a
+    real intent — never fall through to unclear."""
+    expected = {
+        "hello": INTENT_GREETING,
+        "hi": INTENT_GREETING,
+        "hey": INTENT_GREETING,
+        "good morning": INTENT_GREETING,
+        "good afternoon": INTENT_GREETING,
+        "help": INTENT_GREETING,
+        "price": INTENT_PRICE,
+        "how much": INTENT_PRICE,
+        "cost": INTENT_PRICE,
+        "recommend": INTENT_RECOMMEND,
+        "which chair": INTENT_RECOMMEND,
+        "which model": INTENT_RECOMMEND,
+        "best chair": INTENT_RECOMMEND,
+        "budget": INTENT_RECOMMEND,
+        "under 3000": INTENT_RECOMMEND,
+        "under 6000": INTENT_RECOMMEND,
+        "tall": INTENT_RECOMMEND,
+        "petite": INTENT_RECOMMEND,
+        "back pain": INTENT_RECOMMEND,
+        "neck pain": INTENT_RECOMMEND,
+        "in stock": INTENT_STOCK,
+        "available": INTENT_STOCK,
+        "out of stock": INTENT_STOCK,
+        "compare": INTENT_COMPARE,
+        "vs": INTENT_COMPARE,
+        "difference": INTENT_COMPARE,
+        "specs": INTENT_SPECS,
+        "features": INTENT_SPECS,
+        "4D": INTENT_SPECS,
+        "3D": INTENT_SPECS,
+        "SL-Track": INTENT_SPECS,
+        "zero gravity": INTENT_SPECS,
+        "heating": INTENT_SPECS,
+        "massage intensity": INTENT_INTENSITY,
+        "discount": INTENT_DISCOUNT,
+        "coupon": INTENT_DISCOUNT,
+        "sale": INTENT_DISCOUNT,
+        "deal": INTENT_DISCOUNT,
+        "promo": INTENT_DISCOUNT,
+        "financing": INTENT_DISCOUNT,
+        "shipping": INTENT_ETA_SHIPPING,
+        "delivery": INTENT_ETA_SHIPPING,
+        "arrive": INTENT_ETA_SHIPPING,
+        "tracking": INTENT_ORDER_STATUS,
+        "warranty": INTENT_WARRANTY_REDIRECT,
+        "broken": INTENT_WARRANTY_REDIRECT,
+        "not working": INTENT_WARRANTY_REDIRECT,
+        "repair": INTENT_WARRANTY_REDIRECT,
+        "parts": INTENT_PARTS_TECHNICIAN,
+        "replacement parts": INTENT_PARTS_TECHNICIAN,
+        "technician": INTENT_PARTS_TECHNICIAN,
+        "talk to a human": INTENT_HUMAN,
+        "agent": INTENT_HUMAN,
+        "representative": INTENT_HUMAN,
+    }
+    for phrase, label in expected.items():
+        intent = classify(phrase)
+        assert intent.label == label, f"{phrase!r} -> {intent.label}, want {label}"

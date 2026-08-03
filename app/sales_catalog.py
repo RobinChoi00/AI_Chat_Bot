@@ -15,7 +15,8 @@ The Shopify export includes rich metafields we can safely surface:
     - Number of Massage Styles, Auto Program count
 
 Recommendation is intentionally rule-based (height/weight band → track type,
-budget → price band). We do not personalize beyond what the CSV supports.
+budget → near-target price band). We do not personalize beyond what the CSV
+supports.
 """
 
 from __future__ import annotations
@@ -233,7 +234,8 @@ _BACK_HINT_RE = re.compile(
 )
 _NECK_HINT_RE = re.compile(r"\b(neck|shoulder|shoulders|traps)\b", re.I)
 _FEET_HINT_RE = re.compile(r"\b(feet|foot|calf|calves|legs?)\b", re.I)
-_BUDGET_RE = re.compile(r"\$?\s*(\d{3,5})(?:\s*(?:k|,000))?\b", re.I)
+# Accept "$6000", "6000$", "6k", "$6,000".
+_BUDGET_RE = re.compile(r"\$?\s*(\d{3,5})\s*\$?(?:\s*(?:k|,000))?\b", re.I)
 
 
 @dataclass
@@ -328,10 +330,19 @@ def _score(product: ProductSpecs, req: RecommendationRequest) -> float:
         score += 1
 
     if req.budget_usd and product.price_usd:
-        if product.price_usd <= req.budget_usd:
+        # Treat a stated dollar amount as a *target*, not a hard ceiling that
+        # dumps every cheaper chair into the same bucket. "$6,000 chair" should
+        # surface ~$5–6k picks, not the $1,999 entry models.
+        ratio = product.price_usd / req.budget_usd
+        proximity = 1.0 - abs(product.price_usd - req.budget_usd) / req.budget_usd
+        if 0.70 <= ratio <= 1.05:
+            score += 3.0 + 2.0 * max(0.0, proximity)
+        elif 0.50 <= ratio < 0.70:
             score += 1.5
-        elif product.price_usd <= req.budget_usd * 1.15:
-            score += 0.5
+        elif 1.05 < ratio <= 1.15:
+            score += 1.0
+        elif ratio < 0.50:
+            score -= 1.5
         else:
             score -= 2.0
 
@@ -344,6 +355,19 @@ def _score(product: ProductSpecs, req: RecommendationRequest) -> float:
     return score
 
 
+def _recommend_sort_key(
+    pair: tuple[ProductSpecs, float],
+    req: RecommendationRequest,
+) -> tuple:
+    product, score = pair
+    price = product.price_usd if product.price_usd is not None else 1e9
+    if req.budget_usd:
+        # Closer to the stated budget wins ties.
+        return (-score, abs(price - req.budget_usd), price)
+    # No budget → cheaper first among equal scores (browse-friendly).
+    return (-score, price)
+
+
 def recommend(req: RecommendationRequest, limit: int = 3) -> list[ProductSpecs]:
     """Return up to ``limit`` best matches for a recommendation request."""
     ranked = [
@@ -351,9 +375,8 @@ def recommend(req: RecommendationRequest, limit: int = 3) -> list[ProductSpecs]:
         for product in load_product_index()
     ]
     ranked = [pair for pair in ranked if pair[1] > 0]
-    ranked.sort(key=lambda pair: (-pair[1], (pair[0].price_usd or 1e9)))
+    ranked.sort(key=lambda pair: _recommend_sort_key(pair, req))
     return [product for product, _ in ranked[: max(1, min(limit, 5))]]
-
 
 def compare(a_text: str, b_text: str) -> Optional[dict]:
     """Structured comparison between two models — deterministic, no LLM."""
