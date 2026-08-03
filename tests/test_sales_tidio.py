@@ -153,14 +153,13 @@ def test_tidio_turn_shipping_goes_to_warranty(client):
     assert body["handoff"] is True
     assert body["next_action"] == "warranty_redirect"
     assert body["is_warranty_route"] is True
-    assert "warranty" in body["reply"].lower()
-    assert "top of the page" in body["reply_plain"].lower()
+    assert "service@osakititan.com" in body["reply_plain"].lower()
+    assert "titanchair.freshdesk.com" in body["reply_plain"].lower()
 
 
 def test_tidio_turn_cancel_refund_uses_warranty_redirect(client):
-    """Cancel/refund must reuse the warranty-icon copy — not the old
-    ``I've sent your request to our warranty team`` line — and must set
-    ``is_warranty_route`` so Tidio ends the flow instead of assigning."""
+    """Cancel/refund must reuse the Warranty Department contact copy and
+    set ``is_warranty_route`` so Tidio ends the flow instead of assigning."""
     resp = client.post(
         "/api/v1/sales/tidio/turn",
         json={"message": "I want to cancel my order"},
@@ -170,7 +169,7 @@ def test_tidio_turn_cancel_refund_uses_warranty_redirect(client):
     assert body["intent"] == "cancel_refund"
     assert body["is_warranty_route"] is True
     assert body["next_action"] == "warranty_redirect"
-    assert "top of the page" in body["reply_plain"].lower()
+    assert "service@osakititan.com" in body["reply_plain"].lower()
     assert "follow up by email" not in body["reply_plain"].lower()
 
 

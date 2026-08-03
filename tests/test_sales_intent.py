@@ -76,14 +76,17 @@ def test_cancel_and_refund_route_to_warranty_team():
 def test_parts_and_technician_route_to_warranty_team():
     for text in [
         "I need a replacement part for my footrest",
+        "I need replacement parts for my chair",
         "can you send a technician to my house",
         "please dispatch a repair tech",
         "send someone to come fix it",
         "I need a spare part",
+        "I need parts for my OS-Pro",
     ]:
         intent = classify(text)
         assert intent.label == INTENT_PARTS_TECHNICIAN, text
         assert intent.is_handoff, text
+        assert "service@osakititan.com" in (handoff_message(intent) or "").lower()
 
 
 def test_discount_never_answered_directly():
@@ -269,9 +272,9 @@ def test_body_fit_hints_route_to_recommend_not_intensity():
         assert intent.label == INTENT_RECOMMEND, text
 
 
-def test_cancel_and_shipping_reuse_warranty_icon_copy():
-    """Every warranty-route intent must direct the visitor to the Warranty
-    chat icon at the top of the page — never invent its own follow-up."""
+def test_cancel_and_shipping_reuse_warranty_department_copy():
+    """Every warranty-route intent must reuse the Warranty Department
+    contact copy (email / phone / Freshdesk) — never invent its own."""
     from sales_intent import SalesIntent
 
     warranty_labels = (
@@ -285,7 +288,9 @@ def test_cancel_and_shipping_reuse_warranty_icon_copy():
         SalesIntent(label=INTENT_WARRANTY_REDIRECT, confidence="high", handoff=True)
     )
     assert baseline
-    assert "top of the page" in baseline.lower()
+    assert "service@osakititan.com" in baseline.lower()
+    assert "titanchair.freshdesk.com" in baseline.lower()
+    assert "1-888-848-2630" in baseline
     for label in warranty_labels:
         msg = handoff_message(SalesIntent(label=label, confidence="high", handoff=True))
         assert msg == baseline, f"{label} should reuse the shared warranty redirect copy"

@@ -113,8 +113,8 @@ _WARRANTY_REDIRECT_RE = re.compile(
 # --- Parts / technician (post-purchase service; must route to warranty team) ---
 _PARTS_TECHNICIAN_RE = re.compile(
     r"\b("
-    r"replacement\s+part|spare\s+part|need\s+(?:a\s+)?part|order\s+(?:a\s+)?part|"
-    r"send\s+(?:me\s+)?(?:a\s+)?part|buy\s+(?:a\s+)?part|"
+    r"replacement\s+parts?|spare\s+parts?|need\s+(?:a\s+)?parts?|order\s+(?:a\s+)?parts?|"
+    r"send\s+(?:me\s+)?(?:a\s+)?parts?|buy\s+(?:a\s+)?parts?|"
     r"technician|repair\s+(?:tech|person|man|service)|service\s+call|on-?site\s+service|"
     r"send\s+someone|come\s+(?:and\s+)?fix|come\s+(?:out\s+)?to\s+(?:my|our)\s+(?:house|home)|"
     r"labor\s+visit"
@@ -500,9 +500,24 @@ def classify(text: str) -> SalesIntent:
 
 
 _WARRANTY_CHAT_REDIRECT = (
-    "This one is best handled by our **Warranty team**.\n\n"
-    "Please tap the **Warranty chat icon at the top of the page** "
-    "(right next to this shopping chat) and they'll take it from there."
+    "Hi there\n"
+    "\n"
+    "Thank you for reaching out to us.\n"
+    "\n"
+    "Please forward your email to our Warranty Department to create a "
+    "service ticket promptly.\n"
+    "\n"
+    "Warranty Service Email: service@osakititan.com\n"
+    "\n"
+    "Phone: 1-888-848-2630 ext.3\n"
+    "\n"
+    "You can also submit ticket directly using below link:\n"
+    "\n"
+    "https://titanchair.freshdesk.com/support/home\n"
+    "\n"
+    "They are all in charge of technical supports and replacement parts.\n"
+    "\n"
+    "Thank you."
 )
 
 
@@ -512,8 +527,8 @@ def handoff_message(intent: SalesIntent) -> Optional[str]:
     OsakiUSA Sales (Tidio) policy:
       - Never explain discount or shipping policy in this chat.
       - Warranty / cancel / refund / return / shipping / tracking / delivery /
-        parts / technician requests all go to the **Warranty chat icon** —
-        the AI must never try to handle these itself.
+        parts / technician requests get the Warranty Department contact
+        (email / phone / Freshdesk) — the Sales AI must never handle these.
       - Discount / explicit human request → silent handoff to sales human
         (email capture, no policy talk).
     """
