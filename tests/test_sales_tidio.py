@@ -153,13 +153,12 @@ def test_tidio_turn_shipping_goes_to_warranty(client):
     assert body["handoff"] is True
     assert body["next_action"] == "warranty_redirect"
     assert body["is_warranty_route"] is True
-    assert "service@osakititan.com" in body["reply_plain"].lower()
-    assert "titanchair.freshdesk.com" in body["reply_plain"].lower()
+    assert "warranty chat icon" in body["reply_plain"].lower()
+    assert "service@osakititan.com" not in body["reply_plain"].lower()
 
 
-def test_tidio_turn_cancel_refund_uses_warranty_redirect(client):
-    """Cancel/refund must reuse the Warranty Department contact copy and
-    set ``is_warranty_route`` so Tidio ends the flow instead of assigning."""
+def test_tidio_turn_cancel_refund_transfers_to_agent(client):
+    """Cancel/refund must assign a sales agent — not the Warranty email path."""
     resp = client.post(
         "/api/v1/sales/tidio/turn",
         json={"message": "I want to cancel my order"},
@@ -167,10 +166,10 @@ def test_tidio_turn_cancel_refund_uses_warranty_redirect(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["intent"] == "cancel_refund"
-    assert body["is_warranty_route"] is True
-    assert body["next_action"] == "warranty_redirect"
-    assert "service@osakititan.com" in body["reply_plain"].lower()
-    assert "follow up by email" not in body["reply_plain"].lower()
+    assert body["is_warranty_route"] is False
+    assert body["next_action"] == "transfer_operator"
+    assert "agent" in body["reply_plain"].lower()
+    assert "service@osakititan.com" not in body["reply_plain"].lower()
 
 
 def test_tidio_turn_body_hints_recommend_not_intensity(client):

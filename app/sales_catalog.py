@@ -395,5 +395,8 @@ def compare(a_text: str, b_text: str) -> Optional[dict]:
             ),
             "mechanism": (left.massage_mechanism, right.massage_mechanism),
             "track": (left.track_type, right.track_type),
+            "zero_gravity": (left.zero_gravity, right.zero_gravity),
+            "heating": (left.heating, right.heating),
+            "foot_roller": (left.foot_roller, right.foot_roller),
         },
     }

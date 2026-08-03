@@ -118,15 +118,34 @@ def test_eta_and_delivery_promise_route_to_human():
         assert intent.is_handoff, text
 
 
-def test_shipping_and_tracking_handoff_copy_points_to_warranty():
+def test_shipping_handoff_points_to_warranty_icon():
     from sales_intent import SalesIntent, handoff_message
 
-    for label in (INTENT_ETA_SHIPPING, INTENT_ORDER_STATUS, INTENT_WARRANTY_REDIRECT):
+    for label in (INTENT_ETA_SHIPPING, INTENT_ORDER_STATUS):
         msg = handoff_message(SalesIntent(label=label, confidence="high", handoff=True))
         assert msg
-        assert "warranty" in msg.lower()
-        assert "zip" not in msg.lower()
-        assert "%" not in msg
+        assert "warranty chat icon" in msg.lower()
+        assert "service@osakititan.com" not in msg.lower()
+
+
+def test_parts_and_defect_handoff_uses_warranty_department_contact():
+    from sales_intent import SalesIntent, handoff_message
+
+    for label in (INTENT_WARRANTY_REDIRECT, INTENT_PARTS_TECHNICIAN):
+        msg = handoff_message(SalesIntent(label=label, confidence="high", handoff=True))
+        assert msg
+        assert "service@osakititan.com" in msg.lower()
+
+
+def test_cancel_handoff_connects_agent_not_warranty_email():
+    from sales_intent import SalesIntent, handoff_message
+
+    msg = handoff_message(
+        SalesIntent(label=INTENT_CANCEL_REFUND, confidence="high", handoff=True)
+    )
+    assert msg
+    assert "agent" in msg.lower()
+    assert "service@osakititan.com" not in msg.lower()
 
 
 def test_discount_handoff_does_not_explain_policy():
@@ -272,28 +291,17 @@ def test_body_fit_hints_route_to_recommend_not_intensity():
         assert intent.label == INTENT_RECOMMEND, text
 
 
-def test_cancel_and_shipping_reuse_warranty_department_copy():
-    """Every warranty-route intent must reuse the Warranty Department
-    contact copy (email / phone / Freshdesk) — never invent its own."""
+def test_defect_and_parts_share_warranty_department_copy():
     from sales_intent import SalesIntent
 
-    warranty_labels = (
-        INTENT_WARRANTY_REDIRECT,
-        INTENT_CANCEL_REFUND,
-        INTENT_PARTS_TECHNICIAN,
-        INTENT_ETA_SHIPPING,
-        INTENT_ORDER_STATUS,
-    )
-    baseline = handoff_message(
+    a = handoff_message(
         SalesIntent(label=INTENT_WARRANTY_REDIRECT, confidence="high", handoff=True)
     )
-    assert baseline
-    assert "service@osakititan.com" in baseline.lower()
-    assert "titanchair.freshdesk.com" in baseline.lower()
-    assert "1-888-848-2630" in baseline
-    for label in warranty_labels:
-        msg = handoff_message(SalesIntent(label=label, confidence="high", handoff=True))
-        assert msg == baseline, f"{label} should reuse the shared warranty redirect copy"
+    b = handoff_message(
+        SalesIntent(label=INTENT_PARTS_TECHNICIAN, confidence="high", handoff=True)
+    )
+    assert a == b
+    assert "service@osakititan.com" in (a or "").lower()
 
 
 def test_greeting_is_greeting():

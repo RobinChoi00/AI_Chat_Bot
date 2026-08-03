@@ -58,11 +58,11 @@ HANDOFF_INTENTS = frozenset(
     }
 )
 
-# Route to Warranty chat (not sales human). Discount stays with sales human.
+# Route to Warranty path in Tidio (end flow — not sales Inbox assign).
+# Cancel/refund goes to a sales agent instead (see handoff_message).
 WARRANTY_ROUTE_INTENTS = frozenset(
     {
         INTENT_WARRANTY_REDIRECT,
-        INTENT_CANCEL_REFUND,
         INTENT_PARTS_TECHNICIAN,
         INTENT_ETA_SHIPPING,
         INTENT_ORDER_STATUS,
@@ -514,7 +514,7 @@ def classify(text: str) -> SalesIntent:
 # ---------------------------------------------------------------------------
 
 
-_WARRANTY_CHAT_REDIRECT = (
+_WARRANTY_SERVICE_CONTACT = (
     "Hi there\n"
     "\n"
     "Thank you for reaching out to us.\n"
@@ -535,33 +535,42 @@ _WARRANTY_CHAT_REDIRECT = (
     "Thank you."
 )
 
+_WARRANTY_ICON_FOR_SHIPPING = (
+    "For **shipping, delivery, or order tracking** on a purchase you've "
+    "already made, please tap the **Warranty chat icon at the top of the "
+    "page** — our Warranty team can look that up for you."
+)
+
+_AGENT_CONNECT = (
+    "I'll connect you with our sales team. "
+    "Please share your **email** and they will follow up."
+)
+
+_AGENT_CONNECT_CANCEL = (
+    "I'll connect you with an agent for cancel / refund help. "
+    "Please share your **email** (and order number if you have it)."
+)
+
 
 def handoff_message(intent: SalesIntent) -> Optional[str]:
     """Return the safe, non-committal reply for a handoff intent.
 
     OsakiUSA Sales (Tidio) policy:
-      - Never explain discount or shipping policy in this chat.
-      - Warranty / cancel / refund / return / shipping / tracking / delivery /
-        parts / technician requests get the Warranty Department contact
-        (email / phone / Freshdesk) — the Sales AI must never handle these.
-      - Discount / explicit human request → silent handoff to sales human
-        (email capture, no policy talk).
+      - Never invent discount % or shipping ETAs in this chat.
+      - Defect / parts / technician → Warranty Department contact.
+      - Post-purchase shipping / tracking → Warranty chat icon.
+      - Cancel / refund / return → sales agent.
+      - Discount / explicit human request → sales agent (email capture).
     """
     label = intent.label
-    if label in (
-        INTENT_WARRANTY_REDIRECT,
-        INTENT_CANCEL_REFUND,
-        INTENT_PARTS_TECHNICIAN,
-        INTENT_ETA_SHIPPING,
-        INTENT_ORDER_STATUS,
-    ):
-        return _WARRANTY_CHAT_REDIRECT
+    if label in (INTENT_WARRANTY_REDIRECT, INTENT_PARTS_TECHNICIAN):
+        return _WARRANTY_SERVICE_CONTACT
+    if label in (INTENT_ETA_SHIPPING, INTENT_ORDER_STATUS):
+        return _WARRANTY_ICON_FOR_SHIPPING
+    if label == INTENT_CANCEL_REFUND:
+        return _AGENT_CONNECT_CANCEL
     if label == INTENT_DISCOUNT:
-        # No promo %, no "current offers" language — just connect a human.
-        return (
-            "I'll connect you with our sales team. "
-            "Please share your **email** and they will follow up."
-        )
+        return _AGENT_CONNECT
     if label == INTENT_HUMAN:
         return (
             "I'll connect you with our sales team. "

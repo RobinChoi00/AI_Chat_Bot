@@ -123,9 +123,9 @@ class TidioTurnResponse(BaseModel):
     #   warranty_redirect  → send reply_plain only (point to Warranty chat)
     next_action: str = "reply"
     # Boolean shortcut for Tidio Flows that can only branch on a single
-    # variable at a time. True whenever the intent belongs to the Warranty
-    # chat (warranty defect / cancel / refund / parts / shipping / tracking).
-    # Tidio should show ``reply_plain`` and END the flow (no sales handoff).
+    # variable at a time. True for Warranty-path intents (defect / parts /
+    # shipping / tracking). Cancel/refund is False → transfer to an agent.
+    # Tidio should show ``reply_plain`` and END the flow when True.
     is_warranty_route: bool = False
 
 

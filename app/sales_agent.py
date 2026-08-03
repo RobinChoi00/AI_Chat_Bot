@@ -24,12 +24,14 @@ from typing import Optional
 
 from sales_catalog import (
     ProductSpecs,
+    RecommendationRequest,
     compare,
     list_active_products,
     parse_recommendation_hints,
     recommend,
     resolve_product,
 )
+from sales_shopify_stock import fetch_live_stock
 from sales_intent import (
     INTENT_COMPARE,
     INTENT_GREETING,
@@ -107,8 +109,11 @@ def _menu_quick_replies() -> list[QuickReply]:
 _MENU_INTRO = (
     "Hi! I'm the Osaki shopping assistant. I can help with **model "
     "recommendations, pricing, specs, and availability**.\n\n"
-    "For **shipping, delivery, order tracking, or anything about a chair "
-    "you already own**, please use the **Warranty chat** icon on the site.\n\n"
+    "• Already ordered — **shipping / tracking**: tap the **Warranty chat "
+    "icon** at the top of the page\n"
+    "• **Parts, repair, or a chair you already own**: Warranty Department "
+    "(we'll share contact info)\n"
+    "• **Cancel / refund / discount**: I can connect you with an agent\n\n"
     "What would you like to do?"
 )
 
@@ -144,22 +149,45 @@ def _handoff_reply(intent: SalesIntent) -> SalesReply:
     )
 
 
+def _price_candidates(limit: int = 3) -> list[ProductSpecs]:
+    """A few mid-catalog anchors when the shopper didn't name a model."""
+    active = [p for p in list_active_products() if p.price_usd]
+    if not active:
+        return []
+    active.sort(key=lambda p: p.price_usd or 0)
+    # Pick around the 25th / 50th / 75th percentile so we don't dump only cheap chairs.
+    n = len(active)
+    idxs = sorted({max(0, min(n - 1, int(n * frac))) for frac in (0.25, 0.5, 0.75)})
+    picks: list[ProductSpecs] = []
+    for i in idxs[:limit]:
+        picks.append(active[i])
+    return picks
+
+
 def _price_reply(message: str) -> SalesReply:
     product = _guess_model_from_text(message)
     if product is None:
+        samples = _price_candidates()
+        lines = [
+            "Sure — which model are you asking about? Type the model name "
+            "(e.g. *Osaki OS-Pro Maestro LE*), or pick a budget band and I'll "
+            "recommend chairs first."
+        ]
+        if samples:
+            lines.append("\nPopular price points right now:")
+            for p in samples:
+                lines.append(f"- **{p.display_name}** — {_fmt_price(p.price_usd)}")
         return SalesReply(
-            reply=(
-                "Sure — which model are you asking about? You can type the "
-                "model name (e.g. *Osaki OS-Pro Maestro LE*) or tap "
-                "**Recommend a chair** and I'll narrow it down."
-            ),
+            reply="\n".join(lines),
             intent=INTENT_PRICE,
             quick_replies=[
                 QuickReply(label="Recommend a chair", payload="recommend"),
-                QuickReply(label="See all models", payload="list"),
+                QuickReply(label="Around $3,000", payload="recommend:budget:3000"),
+                QuickReply(label="Around $6,000", payload="recommend:budget:6000"),
                 QuickReply(label="Talk to a human", payload="human"),
             ],
             tools_used=["catalog.resolve_product"],
+            products=[p.as_public_dict() for p in samples],
         )
 
     price_txt = _fmt_price(product.price_usd)
@@ -192,8 +220,8 @@ def _stock_reply(message: str) -> SalesReply:
     if product is None:
         return SalesReply(
             reply=(
-                "Happy to check — which model? Type the name or tap "
-                "**See all models** and I'll list what's live in the catalog."
+                "Happy to check live inventory — which model? Type the name or "
+                "tap **See all models**."
             ),
             intent=INTENT_STOCK,
             quick_replies=[
@@ -204,12 +232,36 @@ def _stock_reply(message: str) -> SalesReply:
             tools_used=["catalog.resolve_product"],
         )
 
-    if product.status.lower() == "active":
+    live = fetch_live_stock(product.handle)
+    tools = ["catalog.resolve_product"]
+    if live is not None:
+        tools.append("shopify.inventory")
+        if live.available_for_sale and (live.total_inventory is None or live.total_inventory > 0):
+            qty = (
+                f" About **{live.total_inventory}** unit(s) show in inventory right now."
+                if live.total_inventory is not None
+                else ""
+            )
+            reply = (
+                f"**{product.display_name}** is **available to buy** right now.{qty}\n\n"
+                "Exact configuration (color/options) is confirmed at checkout."
+            )
+        elif live.total_inventory == 0 or not live.available_for_sale:
+            reply = (
+                f"**{product.display_name}** is **not available to buy right now** "
+                "(out of stock or not listed for sale). A rep can check restock — "
+                "I won't invent a date."
+            )
+        else:
+            reply = (
+                f"**{product.display_name}** inventory lookup came back unclear. "
+                "I can connect you with a rep for a live check."
+            )
+    elif product.status.lower() == "active":
         reply = (
-            f"**{product.display_name}** is **active in our catalog**. "
-            "For a live inventory count at the exact configuration you want, "
-            "checkout will show the final availability — or I can hand you off "
-            "to a rep for confirmation."
+            f"**{product.display_name}** is **active in our catalog**, but I "
+            "couldn't reach live inventory just now. Checkout will show the "
+            "final availability — or I can hand you to a rep."
         )
     else:
         reply = (
@@ -224,9 +276,28 @@ def _stock_reply(message: str) -> SalesReply:
             QuickReply(label="See similar models", payload="recommend"),
             QuickReply(label="Talk to a human", payload="human"),
         ],
-        tools_used=["catalog.resolve_product"],
+        tools_used=tools,
         products=[product.as_public_dict()],
     )
+
+
+_SPEC_QUESTION_PATTERNS: tuple[tuple[re.Pattern[str], str, str], ...] = (
+    (re.compile(r"\bzero[\s-]?grav", re.I), "zero_gravity", "Zero gravity"),
+    (re.compile(r"\bheat(?:ing|er)?\b", re.I), "heating", "Heating"),
+    (re.compile(r"\bairbags?\b", re.I), "airbag", "Airbags"),
+    (re.compile(r"\bfoot\s*rollers?\b|\bcalf\s*rollers?\b", re.I), "foot_roller", "Foot/calf roller"),
+    (re.compile(r"\b(?:sl|l|s)[\s-]?track\b|\btrack\s*type\b", re.I), "track_type", "Track"),
+    (re.compile(r"\b(?:2|3|4)\s*d\b|\bmechanism\b", re.I), "massage_mechanism", "Mechanism"),
+)
+
+
+def _yes_no_spec(value: str) -> str:
+    v = (value or "").strip().lower()
+    if not v or v in {"n/a", "na", "none", "-", "no", "false", "0"}:
+        return "No"
+    if v in {"yes", "true", "1", "y"}:
+        return "Yes"
+    return value.strip()
 
 
 def _specs_reply(message: str) -> SalesReply:
@@ -248,6 +319,22 @@ def _specs_reply(message: str) -> SalesReply:
 
     specs = product.as_public_dict()["specs"]
     lines = [f"**{product.display_name}** — {_fmt_price(product.price_usd)}"]
+
+    asked = [
+        (label, key)
+        for pattern, key, label in _SPEC_QUESTION_PATTERNS
+        if pattern.search(message or "")
+    ]
+    if asked:
+        lines.append("")
+        for label, key in asked:
+            val = str(specs.get(key) or "").strip()
+            if key in {"zero_gravity", "heating", "airbag", "foot_roller"}:
+                lines.append(f"- **{label}**: {_yes_no_spec(val)}")
+            else:
+                lines.append(f"- **{label}**: {val or '—'}")
+        lines.append("\nFull quick specs:")
+
     for label, key in (
         ("Mechanism", "massage_mechanism"),
         ("Track", "track_type"),
@@ -281,6 +368,29 @@ _BUDGET_BAND_REPLIES = (
     QuickReply(label="Around $6,000", payload="recommend:budget:6000"),
     QuickReply(label="Around $8,000+", payload="recommend:budget:8000"),
 )
+
+
+def _why_pick(product: ProductSpecs, request: RecommendationRequest) -> str:
+    """One short reason so recommendations don't feel like a random list."""
+    bits: list[str] = []
+    if request.budget_usd and product.price_usd is not None:
+        bits.append(f"near your ${request.budget_usd:,.0f} budget")
+    if request.height_in and request.height_in >= 74 and product.track_type in {
+        "L-Track",
+        "SL-Track",
+    }:
+        bits.append(f"{product.track_type} suits taller users")
+    if "back" in request.focus_areas and product.track_type in {"L-Track", "SL-Track"}:
+        bits.append("strong back / full-body track coverage")
+    if "neck" in request.focus_areas and product.massage_mechanism in {"3D", "4D"}:
+        bits.append(f"{product.massage_mechanism} depth for neck/shoulders")
+    if "feet" in request.focus_areas and "yes" in (product.foot_roller or "").lower():
+        bits.append("includes foot/calf rollers")
+    if product.massage_mechanism and not bits:
+        bits.append(f"{product.massage_mechanism} mechanism")
+    elif product.massage_mechanism and product.massage_mechanism not in " ".join(bits):
+        bits.append(product.massage_mechanism)
+    return "; ".join(bits[:2])
 
 
 def _recommend_reply(message: str) -> SalesReply:
@@ -344,10 +454,14 @@ def _recommend_reply(message: str) -> SalesReply:
                 if bit
             ]
         )
-        lines.append(
+        why = _why_pick(product, request)
+        line = (
             f"- **{product.display_name}** — {_fmt_price(product.price_usd)}"
             + (f"  ({detail})" if detail else "")
         )
+        if why:
+            line += f"\n  → {why}"
+        lines.append(line)
     lines.append(
         "\nWant specs on one of these, or should I hand you to a rep for a "
         "personal walkthrough?"
@@ -426,12 +540,39 @@ def _compare_reply(message: str) -> SalesReply:
         "",
         f"- **Mechanism**: {diff['mechanism'][0] or '—'} vs {diff['mechanism'][1] or '—'}",
         f"- **Track**: {diff['track'][0] or '—'} vs {diff['track'][1] or '—'}",
+        f"- **Zero gravity**: {diff['zero_gravity'][0] or '—'} vs {diff['zero_gravity'][1] or '—'}",
+        f"- **Heating**: {diff['heating'][0] or '—'} vs {diff['heating'][1] or '—'}",
+        f"- **Foot roller**: {diff['foot_roller'][0] or '—'} vs {diff['foot_roller'][1] or '—'}",
     ]
     if diff["price_delta_usd"] is not None:
         delta = diff["price_delta_usd"]
-        direction = "more" if delta > 0 else "less"
+        if abs(delta) < 1:
+            lines.append("- **Price gap**: same published price.")
+        else:
+            direction = "more" if delta > 0 else "less"
+            lines.append(
+                f"- **Price gap**: the second is about ${abs(delta):,.0f} {direction}."
+            )
+
+    differing = [
+        name
+        for name, key in (
+            ("mechanism", "mechanism"),
+            ("track", "track"),
+            ("zero gravity", "zero_gravity"),
+            ("heating", "heating"),
+            ("foot roller", "foot_roller"),
+        )
+        if (diff.get(key) or ("", ""))[0] != (diff.get(key) or ("", ""))[1]
+    ]
+    if not differing and abs(diff.get("price_delta_usd") or 0) < 1:
         lines.append(
-            f"- **Price gap**: the second is about ${abs(delta):,.0f} {direction}."
+            "\n**Bottom line:** These two sit in the same tier on published "
+            "specs/price — a rep can help you choose by feel/fit."
+        )
+    elif differing:
+        lines.append(
+            "\n**Biggest differences:** " + ", ".join(differing) + "."
         )
     return SalesReply(
         reply="\n".join(lines),
