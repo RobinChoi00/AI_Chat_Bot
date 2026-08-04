@@ -14,9 +14,9 @@ The Shopify export includes rich metafields we can safely surface:
     - Zero Gravity, Heating, Airbag, Foot/Calf Roller
     - Number of Massage Styles, Auto Program count
 
-Recommendation is intentionally rule-based (height/weight band → track type,
-budget → near-target price band). We do not personalize beyond what the CSV
-supports.
+Recommendation is intentionally rule-based (height/weight → track/mechanism
+fit, then one pick each from Value $2–3k / Mid $4–6k / Premium $8k+). We do
+not personalize beyond what the CSV supports.
 """
 
 from __future__ import annotations
@@ -368,15 +368,82 @@ def _recommend_sort_key(
     return (-score, price)
 
 
+# Sales recommendation default: one pick from each price tier.
+# Gaps ($3–4k, $6–8k) are intentional — keep the three shelves distinct.
+_PRICE_TIERS: tuple[tuple[str, int, Optional[int]], ...] = (
+    ("Value ($2–3k)", 2000, 3000),
+    ("Mid-range ($4–6k)", 4000, 6000),
+    ("Premium ($8k+)", 8000, None),
+)
+
+
+def price_tier_label(price_usd: Optional[float]) -> Optional[str]:
+    if price_usd is None:
+        return None
+    for label, lo, hi in _PRICE_TIERS:
+        if price_usd >= lo and (hi is None or price_usd <= hi):
+            return label
+    return None
+
+
+def _fit_request(req: RecommendationRequest) -> RecommendationRequest:
+    """Body-fit scoring only — budget must not collapse all tiers to one band."""
+    return RecommendationRequest(
+        height_in=req.height_in,
+        weight_lb=req.weight_lb,
+        focus_areas=list(req.focus_areas or []),
+        free_text=req.free_text,
+        budget_usd=None,
+    )
+
+
+def _recommend_across_tiers(req: RecommendationRequest) -> list[ProductSpecs]:
+    """Pick the best active chair in each Value / Mid / Premium price shelf."""
+    fit_req = _fit_request(req)
+    products = [
+        p
+        for p in load_product_index()
+        if p.status.lower() == "active" and p.price_usd is not None
+    ]
+    picked: list[ProductSpecs] = []
+    used: set[str] = set()
+    for _label, lo, hi in _PRICE_TIERS:
+        band = [
+            p
+            for p in products
+            if p.handle not in used
+            and p.price_usd is not None
+            and p.price_usd >= lo
+            and (hi is None or p.price_usd <= hi)
+        ]
+        if not band:
+            continue
+        band.sort(key=lambda p: (-_score(p, fit_req), p.price_usd or 0))
+        best = band[0]
+        picked.append(best)
+        used.add(best.handle)
+    return picked
+
+
 def recommend(req: RecommendationRequest, limit: int = 3) -> list[ProductSpecs]:
-    """Return up to ``limit`` best matches for a recommendation request."""
+    """Return up to ``limit`` best matches for a recommendation request.
+
+    Default (limit ≥ 3): one Value ($2–3k), one Mid ($4–6k), one Premium ($8k+)
+    pick so shoppers see a clear good / better / best spread.
+    """
+    limit = max(1, min(limit, 5))
+    if limit >= 3:
+        tiered = _recommend_across_tiers(req)
+        if tiered:
+            return tiered[:limit]
+
     ranked = [
         (product, _score(product, req))
         for product in load_product_index()
     ]
     ranked = [pair for pair in ranked if pair[1] > 0]
     ranked.sort(key=lambda pair: _recommend_sort_key(pair, req))
-    return [product for product, _ in ranked[: max(1, min(limit, 5))]]
+    return [product for product, _ in ranked[:limit]]
 
 def compare(a_text: str, b_text: str) -> Optional[dict]:
     """Structured comparison between two models — deterministic, no LLM."""

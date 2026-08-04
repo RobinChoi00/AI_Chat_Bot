@@ -535,12 +535,6 @@ _WARRANTY_SERVICE_CONTACT = (
     "Thank you."
 )
 
-_WARRANTY_ICON_FOR_SHIPPING = (
-    "For **shipping, delivery, or order tracking** on a purchase you've "
-    "already made, please tap the **Warranty chat icon at the top of the "
-    "page** — our Warranty team can look that up for you."
-)
-
 _AGENT_CONNECT = (
     "I'll connect you with our sales team. "
     "Please share your **email** and they will follow up."
@@ -557,16 +551,19 @@ def handoff_message(intent: SalesIntent) -> Optional[str]:
 
     OsakiUSA Sales (Tidio) policy:
       - Never invent discount % or shipping ETAs in this chat.
-      - Defect / parts / technician → Warranty Department contact.
-      - Post-purchase shipping / tracking → Warranty chat icon.
+      - Defect / parts / technician / shipping / tracking → Warranty
+        Department contact (email / phone / Freshdesk) immediately.
       - Cancel / refund / return → sales agent.
       - Discount / explicit human request → sales agent (email capture).
     """
     label = intent.label
-    if label in (INTENT_WARRANTY_REDIRECT, INTENT_PARTS_TECHNICIAN):
+    if label in (
+        INTENT_WARRANTY_REDIRECT,
+        INTENT_PARTS_TECHNICIAN,
+        INTENT_ETA_SHIPPING,
+        INTENT_ORDER_STATUS,
+    ):
         return _WARRANTY_SERVICE_CONTACT
-    if label in (INTENT_ETA_SHIPPING, INTENT_ORDER_STATUS):
-        return _WARRANTY_ICON_FOR_SHIPPING
     if label == INTENT_CANCEL_REFUND:
         return _AGENT_CONNECT_CANCEL
     if label == INTENT_DISCOUNT:

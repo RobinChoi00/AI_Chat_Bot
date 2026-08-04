@@ -127,7 +127,7 @@ def test_unclear_returns_menu_not_a_guess(client):
     assert any(q["payload"] == "human" for q in body["quick_replies"])
 
 
-def test_recommend_without_hints_offers_budget_bands(client):
+def test_recommend_without_hints_returns_price_tiers(client):
     resp = client.post(
         "/api/v1/sales/chat",
         json={"session_id": "s-r", "message": "can you recommend a chair"},
@@ -136,13 +136,15 @@ def test_recommend_without_hints_offers_budget_bands(client):
     body = resp.json()
     assert body["intent"] == "recommend"
     assert body["handoff"] is False
-    assert "budget" in body["reply"].lower()
+    reply = body["reply"].lower()
+    assert "price tier" in reply or "$2" in reply or "value" in reply
+    assert "$" in body["reply"]
     payloads = {q["payload"] for q in body["quick_replies"]}
-    assert "recommend:budget:6000" in payloads
     assert "recommend:budget:2000" in payloads
+    assert any(p.startswith("recommend:budget:") for p in payloads)
 
 
-def test_recommend_budget_band_payload_returns_near_target_picks(client):
+def test_recommend_budget_band_payload_returns_tiered_picks(client):
     resp = client.post(
         "/api/v1/sales/chat",
         json={
@@ -155,9 +157,10 @@ def test_recommend_budget_band_payload_returns_near_target_picks(client):
     body = resp.json()
     assert body["intent"] == "recommend"
     assert "around $6,000" in body["reply"]
-    # Should list priced picks, not the "what's your budget" prompt.
+    # Should list priced picks across tiers, not the "what's your budget" prompt.
     assert "budget range" not in body["reply"].lower()
     assert "$" in body["reply"]
+    assert "mid-range" in body["reply"].lower() or "premium" in body["reply"].lower()
 
 
 def test_menu_button_payload_returns_menu(client):

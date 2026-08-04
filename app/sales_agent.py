@@ -28,6 +28,7 @@ from sales_catalog import (
     compare,
     list_active_products,
     parse_recommendation_hints,
+    price_tier_label,
     recommend,
     resolve_product,
 )
@@ -109,10 +110,8 @@ def _menu_quick_replies() -> list[QuickReply]:
 _MENU_INTRO = (
     "Hi! I'm the Osaki shopping assistant. I can help with **model "
     "recommendations, pricing, specs, and availability**.\n\n"
-    "• Already ordered — **shipping / tracking**: tap the **Warranty chat "
-    "icon** at the top of the page\n"
-    "• **Parts, repair, or a chair you already own**: Warranty Department "
-    "(we'll share contact info)\n"
+    "• Already ordered — **shipping / tracking / parts / repair**: "
+    "I'll share Warranty Department contact info\n"
     "• **Cancel / refund / discount**: I can connect you with an agent\n\n"
     "What would you like to do?"
 )
@@ -403,10 +402,8 @@ def _recommend_reply(message: str) -> SalesReply:
             request.focus_areas,
         ]
     )
-    picks = recommend(request, limit=3) if has_hints else []
-    if not picks or not has_hints:
-        # No signal — lead with price bands (most shoppers start there),
-        # then offer body-focus shortcuts.
+    picks = recommend(request, limit=3)
+    if not picks:
         return SalesReply(
             reply=(
                 "Happy to recommend a chair. What's your **budget range**?\n\n"
@@ -434,11 +431,16 @@ def _recommend_reply(message: str) -> SalesReply:
     if request.budget_usd:
         header_bits.append(f"budget around ${request.budget_usd:,}")
 
-    header = (
-        f"Based on {'; '.join(header_bits)}, here are my top picks:"
-        if header_bits
-        else "Here are strong matches from the current catalog:"
-    )
+    if header_bits:
+        header = (
+            f"Based on {'; '.join(header_bits)}, here are three options "
+            "across price tiers:"
+        )
+    else:
+        header = (
+            "Here are three strong options across price tiers — "
+            "**Value ($2–3k)**, **Mid-range ($4–6k)**, and **Premium ($8k+)**:"
+        )
 
     lines = [header]
     for product in picks:
@@ -454,17 +456,19 @@ def _recommend_reply(message: str) -> SalesReply:
                 if bit
             ]
         )
+        tier = price_tier_label(product.price_usd)
         why = _why_pick(product, request)
+        prefix = f"**{tier}** — " if tier else ""
         line = (
-            f"- **{product.display_name}** — {_fmt_price(product.price_usd)}"
+            f"- {prefix}**{product.display_name}** — {_fmt_price(product.price_usd)}"
             + (f"  ({detail})" if detail else "")
         )
         if why:
             line += f"\n  → {why}"
         lines.append(line)
     lines.append(
-        "\nWant specs on one of these, or should I hand you to a rep for a "
-        "personal walkthrough?"
+        "\nWant specs on one of these, a different budget band, or should I "
+        "connect you with a sales specialist?"
     )
 
     return SalesReply(
@@ -475,9 +479,11 @@ def _recommend_reply(message: str) -> SalesReply:
                 QuickReply(label=f"Specs for {p.display_name}", payload=f"specs:{p.handle}")
                 for p in picks[:3]
             ],
+            *_BUDGET_BAND_REPLIES[:3],
             QuickReply(label="Talk to a human", payload="human"),
         ],
-        tools_used=["catalog.recommend"],
+        tools_used=["catalog.recommend"]
+        + (["catalog.parse_hints"] if has_hints else []),
         products=[p.as_public_dict() for p in picks],
     )
 

@@ -153,8 +153,8 @@ def test_tidio_turn_shipping_goes_to_warranty(client):
     assert body["handoff"] is True
     assert body["next_action"] == "warranty_redirect"
     assert body["is_warranty_route"] is True
-    assert "warranty chat icon" in body["reply_plain"].lower()
-    assert "service@osakititan.com" not in body["reply_plain"].lower()
+    assert "service@osakititan.com" in body["reply_plain"].lower()
+    assert "warranty chat icon" not in body["reply_plain"].lower()
 
 
 def test_tidio_turn_cancel_refund_transfers_to_agent(client):

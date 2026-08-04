@@ -118,23 +118,20 @@ def test_eta_and_delivery_promise_route_to_human():
         assert intent.is_handoff, text
 
 
-def test_shipping_handoff_points_to_warranty_icon():
+def test_shipping_and_warranty_handoffs_use_warranty_department_contact():
     from sales_intent import SalesIntent, handoff_message
 
-    for label in (INTENT_ETA_SHIPPING, INTENT_ORDER_STATUS):
-        msg = handoff_message(SalesIntent(label=label, confidence="high", handoff=True))
-        assert msg
-        assert "warranty chat icon" in msg.lower()
-        assert "service@osakititan.com" not in msg.lower()
-
-
-def test_parts_and_defect_handoff_uses_warranty_department_contact():
-    from sales_intent import SalesIntent, handoff_message
-
-    for label in (INTENT_WARRANTY_REDIRECT, INTENT_PARTS_TECHNICIAN):
+    for label in (
+        INTENT_ETA_SHIPPING,
+        INTENT_ORDER_STATUS,
+        INTENT_WARRANTY_REDIRECT,
+        INTENT_PARTS_TECHNICIAN,
+    ):
         msg = handoff_message(SalesIntent(label=label, confidence="high", handoff=True))
         assert msg
         assert "service@osakititan.com" in msg.lower()
+        assert "warranty chat icon" not in msg.lower()
+        assert "freshdesk.com" in msg.lower()
 
 
 def test_cancel_handoff_connects_agent_not_warranty_email():
