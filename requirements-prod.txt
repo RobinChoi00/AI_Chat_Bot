@@ -52,4 +52,4 @@ cachetools==7.0.5
 
 # --- RingCentral JWT (phone IVR) ---
 PyJWT==2.13.0
-cryptography==48.0.1
+cryptography==50.0.0
