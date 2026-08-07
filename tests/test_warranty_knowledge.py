@@ -207,3 +207,61 @@ def test_search_rejects_entry_that_explicitly_names_another_model(monkeypatch):
 
     assert generic in results
     assert wrong_model not in results
+
+
+def test_entry_allowed_for_category_blocks_other_defect_families():
+    air = wk.KnowledgeEntry(
+        source="freshdesk",
+        category="air",
+        title="Air compression suddenly stopping",
+        diagnostic="Airbags stop mid-session on Maxim LE.",
+        customer_steps=("Check air hose connections under the seat.",),
+    )
+    remote = wk.KnowledgeEntry(
+        source="qa_csv",
+        category="remote",
+        title="Remote not responding",
+        diagnostic="Controller buttons do nothing.",
+        customer_steps=("Reseat the remote cable at both ends.",),
+    )
+    general_airish = wk.KnowledgeEntry(
+        source="freshdesk",
+        category="general",
+        title="Maxim LE common issue",
+        diagnostic="Customers report air compression suddenly stopping.",
+        customer_steps=("Inspect the air compressor hose for kinks.",),
+    )
+
+    assert wk.entry_allowed_for_category(remote, "remote") is True
+    assert wk.entry_allowed_for_category(air, "remote") is False
+    assert wk.entry_allowed_for_category(general_airish, "remote") is False
+    assert wk.entry_allowed_for_category(air, "air") is True
+
+
+def test_search_knowledge_hard_filters_off_topic_category(monkeypatch):
+    air = wk.KnowledgeEntry(
+        source="freshdesk",
+        category="air",
+        title="Air compression suddenly stopping Maxim LE",
+        diagnostic="Airbags stop mid-session.",
+        customer_steps=("Check all air hose connections carefully under the chair.",),
+    )
+    remote = wk.KnowledgeEntry(
+        source="qa_csv",
+        category="remote",
+        title="Remote screen blank Maxim LE",
+        diagnostic="Remote controller has no display.",
+        customer_steps=("Reseat the remote cable and power-cycle the chair.",),
+    )
+    monkeypatch.setattr(wk, "load_knowledge_entries", lambda: (air, remote))
+    monkeypatch.setattr(wk, "_semantic_enabled", lambda: False)
+
+    results = wk.search_knowledge(
+        path_text="Maxim LE remote controller not working",
+        defect_category="remote",
+        model_name="Maxim LE",
+        limit=5,
+    )
+    assert remote in results
+    assert air not in results
+    assert all(r.category == "remote" for r in results)

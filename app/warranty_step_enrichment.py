@@ -26,7 +26,13 @@ import re
 from typing import Any, Optional
 
 from warranty_intake_context import enrich_path_text, intake_aware_step_summary
-from warranty_knowledge import KnowledgeEntry, contextual_search_knowledge, is_presentable_match_title
+from warranty_knowledge import (
+    KnowledgeEntry,
+    contextual_search_knowledge,
+    entry_allowed_for_category,
+    is_presentable_match_title,
+    map_workflow_defect_category,
+)
 from warranty_self_help import (
     _collect_fallback_hints,
     _friendly_match_summary,
@@ -408,6 +414,16 @@ def build_step_enrichment(
         matches = [fonz_entry] + [m for m in matches if m.title != fonz_entry.title]
         matches = matches[:4]
 
+    # Defense in depth: never tip from a different defect family than the
+    # customer's selected topic (e.g. air tips on a remote path).
+    if defect_category:
+        kb_category = map_workflow_defect_category(defect_category)
+        matches = [
+            entry
+            for entry in matches
+            if entry_allowed_for_category(entry, kb_category)
+        ]
+
     similar_freshdesk = _freshdesk_similarity_leader(
         matches,
         path_text=path_text,
@@ -470,6 +486,7 @@ def build_step_enrichment(
         model_name=model_name,
         node_id=node_id,
         options=list(node.get("options") or []),
+        defect_category=defect_category,
     )
 
     lead_sources = []

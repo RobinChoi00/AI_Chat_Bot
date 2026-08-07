@@ -46,6 +46,64 @@ _CUSTOMER_FORBIDDEN_REFERENCE_MARKERS = (
     "freshdesk",
 )
 
+# If paraphrase invents a defect topic that was not in the draft, reject it.
+# Keys are workflow answer_keys; values are distinctive phrases for that topic.
+_TOPIC_MARKER_PHRASES: dict[str, tuple[str, ...]] = {
+    "air": (
+        "air compression",
+        "airbag",
+        "air bags",
+        "inflate",
+        "inflating",
+        "hissing",
+        "air hose",
+        "no air",
+        "compressor",
+    ),
+    "remote": (
+        "remote control",
+        "hand controller",
+        "tablet remote",
+        "controller cable",
+    ),
+    "power": (
+        "wall outlet",
+        "power cord",
+        "back switch",
+        "won't turn on",
+        "will not turn on",
+    ),
+    "footrest": (
+        "footrest",
+        "legrest",
+        "leg rest",
+        "calf roller",
+    ),
+    "heat": (
+        "heating",
+        "heater",
+        "won't heat",
+        "not heating",
+    ),
+    "voice": (
+        "voice control",
+        "voice command",
+        "microphone",
+        "false trigger",
+    ),
+    "rolling": (
+        "massage rollers",
+        "roller mechanism",
+        "kneading motor",
+        "rolling noise",
+    ),
+    "recline": (
+        "recline",
+        "zero gravity",
+        "won't recline",
+    ),
+}
+
 
 def _paraphrase_enabled() -> bool:
     return _ENABLED and bool(os.environ.get("OPENAI_API_KEY"))
@@ -105,6 +163,32 @@ def _contains_internal_reference(output: str) -> bool:
     return any(marker in normalized for marker in _CUSTOMER_FORBIDDEN_REFERENCE_MARKERS)
 
 
+def _introduced_off_topic_claim(
+    output: str,
+    draft: str,
+    *,
+    defect_category: Optional[str] = None,
+) -> bool:
+    """
+    True when the rewrite adds a defect-topic phrase that was not in the draft.
+
+    Example: remote-path draft gets paraphrased into “air compression suddenly
+    stopping” — reject and keep the safer draft.
+    """
+    out = _normalize(output)
+    src = _normalize(draft)
+    selected = (defect_category or "").strip().lower()
+    for topic, phrases in _TOPIC_MARKER_PHRASES.items():
+        if selected and topic == selected:
+            continue
+        # rolling/recline both map to mech tips; still block inventing them
+        # on an unrelated selected topic.
+        for phrase in phrases:
+            if phrase in out and phrase not in src:
+                return True
+    return False
+
+
 def _format_options_hint(options: list[dict[str, Any]]) -> str:
     labels = [
         str(opt.get("label") or "").strip()
@@ -130,6 +214,8 @@ def build_paraphrase_system_prompt(*, base_prompt: str) -> str:
         "knowledge-base sources, internal references, or manual page references.\n"
         "- Soft wording like \"symptoms like yours\" or \"often help\" is OK when "
         "already present in the draft — do not invent ticket subjects or case IDs.\n"
+        "- Do NOT invent a different problem type than the draft (e.g. do not "
+        "turn a remote issue into air compression / airbags / rollers).\n"
         "- Do NOT add new questions beyond the one provided.\n"
         "- The message MUST end with this exact workflow question copied verbatim "
         f"(same punctuation):\n{base_prompt.strip()}\n"
@@ -160,6 +246,7 @@ def paraphrase_step_message(
     model_name: str = "",
     node_id: str = "",
     options: Optional[list[dict[str, Any]]] = None,
+    defect_category: Optional[str] = None,
 ) -> tuple[str, bool]:
     """
     Rewrite ``draft`` with a small LLM, or return it unchanged.
@@ -180,6 +267,11 @@ def paraphrase_step_message(
         user_parts.append(f"Chair model: {model_name}")
     if node_id:
         user_parts.append(f"Workflow node: {node_id}")
+    if defect_category:
+        user_parts.append(
+            f"Customer-selected defect topic: {defect_category}. "
+            "Do not rewrite this into a different problem type."
+        )
     opt_hint = _format_options_hint(list(options or []))
     if opt_hint:
         user_parts.append(opt_hint)
@@ -207,6 +299,9 @@ def paraphrase_step_message(
         or not _question_preserved(text, base_prompt)
         or _introduced_error_code_claim(text, draft)
         or _contains_internal_reference(text)
+        or _introduced_off_topic_claim(
+            text, draft, defect_category=defect_category
+        )
     ):
         logger.info(
             "Step paraphrase rejected — invariant failed (node=%s)",

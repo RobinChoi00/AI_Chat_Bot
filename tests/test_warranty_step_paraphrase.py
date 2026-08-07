@@ -154,3 +154,31 @@ def test_normalize_step_draft_dedupes_repeated_prompt():
     assert out.count(base) == 1
     assert out.startswith("Summary")
 
+
+def test_paraphrase_rejects_invented_air_topic_on_remote_path(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(paraphrase, "_ENABLED", True)
+    base = "Does the remote control have power?"
+    draft = (
+        "Based on your answers, this looks like a remote / controller issue "
+        f"with your Maxim LE.\n\n{base}"
+    )
+    rewritten = (
+        "Thank you for reaching out about your Maxim LE. A common issue some "
+        "users experience is the air compression suddenly stopping.\n\n"
+        f"{base}"
+    )
+    monkeypatch.setattr(
+        paraphrase,
+        "_openai_client",
+        lambda: _FakeOpenAI(rewritten),
+    )
+
+    out, ok = paraphrase.paraphrase_step_message(
+        draft,
+        base_prompt=base,
+        defect_category="remote",
+    )
+    assert ok is False
+    assert out == draft
+

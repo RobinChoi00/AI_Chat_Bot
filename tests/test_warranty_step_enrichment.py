@@ -166,6 +166,56 @@ def test_build_step_enrichment_boosts_similar_freshdesk(monkeypatch):
     assert result.get("top_match") is None
 
 
+def test_build_step_enrichment_drops_off_topic_air_tips_on_remote(monkeypatch):
+    air = KnowledgeEntry(
+        source="freshdesk",
+        category="air",
+        title="Air compression suddenly stopping",
+        diagnostic="Airbags stop mid-session.",
+        customer_steps=("Check air hose connections under the seat carefully.",),
+    )
+    remote = KnowledgeEntry(
+        source="qa_csv",
+        category="remote",
+        title="Remote not responding",
+        diagnostic="Controller buttons do nothing.",
+        customer_steps=("Reseat the remote cable at both ends firmly.",),
+    )
+    monkeypatch.setattr(
+        step_enrich,
+        "contextual_search_knowledge",
+        lambda **kwargs: [air, remote],
+    )
+    monkeypatch.setattr(
+        step_enrich,
+        "paraphrase_step_message",
+        lambda message, **kwargs: (message, False),
+    )
+
+    ticket = SimpleNamespace(ticket_id="t-remote", issue_type="defect", model_name="Maxim LE")
+    ticket.get_collected = lambda: {}
+    ticket.set_collected = lambda key, value: None
+    engine = _FakeEngine(
+        [
+            _turn("warranty", node_id="root"),
+            _turn("defect", node_id="issue_type"),
+            _turn("remote", node_id="defect_category"),
+        ]
+    )
+    node = {
+        "node_id": "defect_remote_power",
+        "type": "question",
+        "prompt": "Does the remote control have power?",
+        "options": [],
+    }
+    result = step_enrich.build_step_enrichment(engine, ticket, node)
+    assert result is not None
+    message = result["message"].lower()
+    assert "air compression" not in message
+    assert "air hose" not in message
+    assert "remote cable" in message
+
+
 def test_pick_step_tips_prefers_freshdesk_when_flagged():
     qa = KnowledgeEntry(
         source="qa_csv",

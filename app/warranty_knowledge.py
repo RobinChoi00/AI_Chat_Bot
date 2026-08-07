@@ -283,6 +283,38 @@ def map_workflow_defect_category(defect_category: Optional[str]) -> Optional[str
     return _DEFECT_CATEGORY_MAP.get(defect_category.lower(), defect_category)
 
 
+# Categories that must not leak across defect paths (remote tips ≠ air tips).
+_SCOPED_DEFECT_CATEGORIES = frozenset(_CATEGORY_KEYWORDS.keys())
+
+
+def entry_allowed_for_category(
+    entry: KnowledgeEntry,
+    category: Optional[str],
+) -> bool:
+    """
+    Hard gate for defect-scoped search/enrichment.
+
+    When the customer picked a topic (e.g. remote), drop rows tagged as a
+    different defect family (e.g. air). ``general`` rows are kept only when
+    their text does not clearly belong to another scoped category.
+    """
+    if not category:
+        return True
+    wanted = (category or "").strip().lower()
+    entry_cat = (entry.category or "").strip().lower() or "general"
+    if entry_cat == wanted:
+        return True
+    if entry_cat in _SCOPED_DEFECT_CATEGORIES:
+        return False
+    if entry_cat == "general":
+        blob = f"{entry.title} {entry.diagnostic} {' '.join(entry.customer_steps)}"
+        inferred = _infer_category(blob)
+        if inferred in _SCOPED_DEFECT_CATEGORIES and inferred != wanted:
+            return False
+        return True
+    return False
+
+
 def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").lower()).strip()
 
@@ -877,14 +909,17 @@ def search_knowledge(
     combined: list[tuple[float, KnowledgeEntry]] = []
     candidate_ids = set(keyword_scores.keys()) | set(semantic_scores.keys())
     for idx in candidate_ids:
-        if not _entry_matches_requested_model(entries[idx], model_name):
+        entry = entries[idx]
+        if not _entry_matches_requested_model(entry, model_name):
+            continue
+        if category and not entry_allowed_for_category(entry, category):
             continue
         kw = keyword_scores.get(idx, 0.0)
         sem = semantic_scores.get(idx, 0.0)
         score = kw + sem * _HYBRID_SEMANTIC_WEIGHT
         if score < 2.0 and sem < 0.35:
             continue
-        combined.append((score, entries[idx]))
+        combined.append((score, entry))
 
     combined.sort(key=lambda x: x[0], reverse=True)
     seen_titles: set[str] = set()

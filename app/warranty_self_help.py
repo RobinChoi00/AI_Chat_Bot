@@ -550,11 +550,13 @@ _POWER_SUMMARY_LABELS: dict[str, str] = {
 
 
 def infer_defect_category_from_turns(turns) -> Optional[str]:
+    """Return the latest defect-topic key the customer chose (not the first)."""
+    found: Optional[str] = None
     for turn in turns:
         key = str(getattr(turn, "answer_key", "") or "")
         if key in _DEFECT_CATEGORY_KEYS:
-            return key
-    return None
+            found = key
+    return found
 
 
 def build_path_text(turns) -> str:

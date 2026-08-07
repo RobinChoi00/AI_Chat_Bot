@@ -88,6 +88,14 @@ def test_infer_defect_category_from_turns():
     assert infer_defect_category_from_turns(turns) == "power"
 
 
+def test_infer_defect_category_uses_latest_topic():
+    turns = [
+        _Turn(answer_key="air"),
+        _Turn(answer_key="remote"),
+    ]
+    assert infer_defect_category_from_turns(turns) == "remote"
+
+
 def test_build_install_air_hose_diagnosis_includes_core_steps():
     from warranty_self_help import build_install_air_hose_diagnosis
 
