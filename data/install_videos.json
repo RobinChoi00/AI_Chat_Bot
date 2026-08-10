@@ -1,6 +1,6 @@
 {
-  "version": "1.3",
-  "updated": "2026-07-24",
+  "version": "1.4",
+  "updated": "2026-08-10",
   "description": "Model → installation YouTube URLs (watch links). Keys match product_catalog normalization.",
   "default": {
     "url": "https://www.otasupport.com",
@@ -54,6 +54,14 @@
     "quantum": {
       "url": "https://youtu.be/AUbHOnm4i_k",
       "label": "3D Quantum installation"
+    },
+    "nido": {
+      "url": "https://youtu.be/LJxo6VbJLPc",
+      "label": "Titan Nido 3D installation"
+    },
+    "tesoro": {
+      "url": "https://youtu.be/oR-3uGNfX4w",
+      "label": "Titan Tesoro installation"
     }
   },
   "models": {
@@ -173,9 +181,25 @@
       "url": "https://youtu.be/AUbHOnm4i_k",
       "label": "3D Quantum installation"
     },
+    "titan-nido": {
+      "url": "https://youtu.be/LJxo6VbJLPc",
+      "label": "Titan Nido 3D installation"
+    },
+    "titan-nido-3d": {
+      "url": "https://youtu.be/LJxo6VbJLPc",
+      "label": "Titan Nido 3D installation"
+    },
     "titan-pro-vigor-4d": {
       "url": "https://youtu.be/4aFBi-pvKUc",
       "label": "Pro-Vigor 4D installation"
+    },
+    "titan-tesoro": {
+      "url": "https://youtu.be/oR-3uGNfX4w",
+      "label": "Titan Tesoro installation"
+    },
+    "tesoro-3d": {
+      "url": "https://youtu.be/oR-3uGNfX4w",
+      "label": "Titan Tesoro installation"
     },
     "vivo-4d-2d": {
       "url": "https://youtu.be/iEjUUVLyuUM",
