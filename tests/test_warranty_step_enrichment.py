@@ -240,6 +240,54 @@ def test_pick_step_tips_prefers_freshdesk_when_flagged():
     assert "Toggle the back power switch" in tips[0]
 
 
+def test_pick_step_tips_prefers_freshdesk_kb_over_qa_by_default():
+    qa = KnowledgeEntry(
+        source="qa_csv",
+        category="power",
+        title="QA power",
+        diagnostic="qa",
+        customer_steps=("Confirm the power cord and outlet are working before follow-up.",),
+    )
+    kb = KnowledgeEntry(
+        source="freshdesk_kb",
+        category="power",
+        title="KB power reset",
+        diagnostic="kb",
+        customer_steps=("Unplug the chair for 30 seconds, then plug it back in.",),
+    )
+    tips = step_enrich._pick_step_tips([qa, kb], ())
+    assert tips
+    assert "Unplug the chair" in tips[0]
+
+
+def test_freshdesk_kb_leads_at_softer_similarity(monkeypatch):
+    kb = KnowledgeEntry(
+        source="freshdesk_kb",
+        category="power",
+        title="Chair will not power on",
+        diagnostic="Power reset guide",
+        customer_steps=("Toggle the back power switch OFF for 10 seconds, then ON.",),
+    )
+    qa = KnowledgeEntry(
+        source="qa_csv",
+        category="power",
+        title="Generic power tip",
+        diagnostic="General power note",
+        customer_steps=("Confirm the power cord and outlet are working before follow-up.",),
+    )
+    monkeypatch.setattr(
+        step_enrich,
+        "_entry_relevance",
+        lambda entry, path_text, category: 3.5 if entry.source == "freshdesk_kb" else 1.0,
+    )
+    leader = step_enrich._freshdesk_similarity_leader(
+        [qa, kb],
+        path_text="chair will not power on",
+        defect_category="power",
+    )
+    assert leader is kb
+
+
 def test_build_step_enrichment_uses_intake_summary_in_search(monkeypatch):
     captured: dict = {}
 

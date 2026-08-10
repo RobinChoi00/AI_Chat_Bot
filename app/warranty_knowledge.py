@@ -194,6 +194,7 @@ _CUSTOMER_ACTION_WORDS = (
     "reseat",
     "unplug",
     "plug",
+    "plug in",
     "toggle",
     "test",
     "remove",
@@ -213,6 +214,25 @@ _CUSTOMER_ACTION_WORDS = (
     "tighten",
     "adjust",
     "detect",
+    "turn off",
+    "turn on",
+    "switch",
+    "wait",
+    "leave",
+    "cycle",
+    "restart",
+    "reboot",
+    "open",
+    "close",
+    "slide",
+    "lift",
+    "push",
+    "pull",
+    "allow",
+    "sit",
+    "recline",
+    "inflate",
+    "deflate",
 )
 
 
@@ -421,15 +441,20 @@ def _split_step_chunks(blob: str) -> list[str]:
     for chunk in re.split(r"[\n;]+", text):
         chunk = chunk.strip()
         chunk = re.sub(r"^\d+[\).\]]\s*", "", chunk)
-        if chunk:
-            # Keep period-separated clauses only when they look like actions.
-            if ". " in chunk and any(w in chunk.lower() for w in _CUSTOMER_ACTION_WORDS):
-                for piece in re.split(r"(?<=[a-z0-9\)])\.\s+", chunk):
-                    piece = piece.strip()
-                    if piece:
-                        chunks.append(piece)
-            else:
-                chunks.append(chunk)
+        if not chunk:
+            continue
+        # Split long prose on sentence boundaries so safety filters can keep
+        # individual DIY clauses instead of rejecting the whole paragraph.
+        if ". " in chunk and (
+            len(chunk) > _MAX_CUSTOMER_STEP_LEN
+            or any(w in chunk.lower() for w in _CUSTOMER_ACTION_WORDS)
+        ):
+            for piece in re.split(r"(?<=[a-z0-9\)])\.\s+", chunk):
+                piece = piece.strip()
+                if piece:
+                    chunks.append(piece)
+        else:
+            chunks.append(chunk)
     return chunks
 
 
@@ -693,13 +718,41 @@ def _load_fault_judgment_entries() -> list[KnowledgeEntry]:
     return entries
 
 
+def _extract_kb_customer_steps(description: str) -> tuple[str, ...]:
+    """
+    Normalize a Solutions article into short customer-safe DIY bullets.
+
+    KB prose is often paragraph-shaped; extract numbered/imperative steps first,
+    then fall back to sentence splits. Never keep a raw multi-sentence blob that
+    would later fail ``_is_customer_safe_step`` in mid-flow enrichment.
+    """
+    steps = list(_extract_customer_steps(description))
+    if len(steps) >= 2:
+        return tuple(steps[:4])
+
+    seen = {_normalize(s) for s in steps}
+    prose = _normalize_manual_text(description)
+    for chunk in re.split(r"(?<=[.!?])\s+|\n+", prose):
+        chunk = chunk.strip().strip("-•*")
+        chunk = re.sub(r"^\d+[\).\]]\s*", "", chunk)
+        if not _is_customer_safe_step(chunk):
+            continue
+        key = _normalize(chunk)
+        if key in seen:
+            continue
+        seen.add(key)
+        steps.append(_format_step(chunk))
+        if len(steps) >= 4:
+            break
+    return tuple(steps[:4])
+
+
 def _load_freshdesk_kb_entries() -> list[KnowledgeEntry]:
     """
     Load Freshdesk Solutions (Knowledge Base) articles as knowledge entries.
 
-    KB articles are typically already customer-facing and structured, so we
-    accept the whole description as a single "step blob" and let the same
-    ``_extract_customer_steps`` guard turn it into safe bullets.
+    Only articles that yield at least one customer-safe DIY step are kept for
+    workflow enrichment. Raw FAQ prose without actionable checks is skipped.
     """
     if not _FRESHDESK_KB_PATH.is_file():
         return []
@@ -716,14 +769,9 @@ def _load_freshdesk_kb_entries() -> list[KnowledgeEntry]:
         description = str(article.get("description_text") or "").strip()
         if not title or not description:
             continue
-        steps = _extract_customer_steps(description)
+        steps = _extract_kb_customer_steps(description)
         if not steps:
-            # KB article without imperative bullets — keep the description as
-            # a single-step diagnostic so semantic search can still find it.
-            trimmed = re.sub(r"\s+", " ", description)[:_MAX_CUSTOMER_STEP_LEN]
-            if not trimmed:
-                continue
-            steps = (trimmed,)
+            continue
         blob = f"{title} {description[:400]}"
         entries.append(
             KnowledgeEntry(

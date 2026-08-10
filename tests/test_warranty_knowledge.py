@@ -142,6 +142,28 @@ def test_extract_customer_steps_filters_logistics_followups():
     assert steps == ()
 
 
+def test_extract_customer_steps_splits_long_prose_paragraph():
+    steps = wk._extract_customer_steps(
+        "Please turn off the chair at the back switch and wait 30 seconds. "
+        "Then turn on the switch and confirm the remote lights up. "
+        "We will dispatch a technician if that fails."
+    )
+    assert len(steps) >= 2
+    assert any("turn off" in s.lower() or "wait" in s.lower() for s in steps)
+    assert all("dispatch" not in s.lower() for s in steps)
+
+
+def test_extract_kb_customer_steps_normalizes_prose():
+    steps = wk._extract_kb_customer_steps(
+        "If the chair will not power on, unplug it from the wall for one minute. "
+        "Plug the cord back in firmly and toggle the back power switch. "
+        "Our technician will schedule a visit if power still fails."
+    )
+    assert steps
+    assert all(wk._is_customer_safe_step(s) for s in steps)
+    assert all("technician" not in s.lower() for s in steps)
+
+
 def test_is_presentable_match_title_rejects_intake_form_subjects():
     assert wk.is_presentable_match_title("Power issue") is True
     assert wk.is_presentable_match_title(

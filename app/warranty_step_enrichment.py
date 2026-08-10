@@ -116,13 +116,14 @@ def _fonz_match_from_turns(model_name: str, turns: list) -> Optional[KnowledgeEn
 
 # Prefer curated sources over raw Freshdesk ticket threads in mid-flow tips,
 # unless a Freshdesk hit is strongly similar to what the customer described.
+# Solutions (KB) sit above generic Q&A so published DIY guides surface first.
 _STEP_SOURCE_PRIORITY: dict[str, int] = {
     "fonz_error_code": 0,
-    "qa_csv": 1,
-    "auto_check": 2,
-    "fault_judgment": 2,
-    "freshdesk_kb": 3,
-    "freshdesk_qa": 3,
+    "freshdesk_kb": 1,
+    "freshdesk_qa": 1,
+    "qa_csv": 2,
+    "auto_check": 3,
+    "fault_judgment": 3,
     "freshdesk": 5,
 }
 
@@ -133,9 +134,12 @@ _SIMILAR_SYMPTOM_SUMMARY = (
 _SIMILAR_SYMPTOM_TIP_HEADING = "**What often helps for symptoms like yours:**"
 _DEFAULT_TIP_HEADING = "**What you can try:**"
 _FRESHDESK_SIMILAR_SOURCES = frozenset({"freshdesk", "freshdesk_kb", "freshdesk_qa"})
+_FRESHDESK_KB_SOURCES = frozenset({"freshdesk_kb", "freshdesk_qa"})
 # Keyword overlap score from warranty_knowledge._score_entry; above this we
 # treat a Freshdesk hit as "close enough" to lead the tip block.
+# Published KB can lead at a softer overlap; raw ticket threads stay stricter.
 _FRESHDESK_SIMILARITY_THRESHOLD = 5.0
+_FRESHDESK_KB_SIMILARITY_THRESHOLD = 3.0
 
 
 def _step_source_rank(entry: KnowledgeEntry) -> int:
@@ -155,20 +159,28 @@ def _freshdesk_similarity_leader(
     defect_category: Optional[str],
 ) -> Optional[KnowledgeEntry]:
     """Return the best Freshdesk/KB hit when it clearly overlaps the customer path."""
-    best: Optional[KnowledgeEntry] = None
-    best_score = 0.0
+    best_kb: Optional[KnowledgeEntry] = None
+    best_kb_score = 0.0
+    best_ticket: Optional[KnowledgeEntry] = None
+    best_ticket_score = 0.0
     for entry in matches:
         if entry.source not in _FRESHDESK_SIMILAR_SOURCES:
             continue
         if not entry.customer_steps:
             continue
         score = _entry_relevance(entry, path_text, defect_category)
-        if score > best_score:
-            best = entry
-            best_score = score
-    if best is None or best_score < _FRESHDESK_SIMILARITY_THRESHOLD:
-        return None
-    return best
+        if entry.source in _FRESHDESK_KB_SOURCES:
+            if score > best_kb_score:
+                best_kb = entry
+                best_kb_score = score
+        elif score > best_ticket_score:
+            best_ticket = entry
+            best_ticket_score = score
+    if best_kb is not None and best_kb_score >= _FRESHDESK_KB_SIMILARITY_THRESHOLD:
+        return best_kb
+    if best_ticket is not None and best_ticket_score >= _FRESHDESK_SIMILARITY_THRESHOLD:
+        return best_ticket
+    return None
 
 
 def _usable_step_text(text: str) -> bool:

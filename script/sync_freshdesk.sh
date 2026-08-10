@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Weekly Freshdesk → warranty knowledge sync (run from project root on EC2).
 #
-# Calls sync helpers inside the backend container, then invalidates caches.
+# Calls sync helpers inside the backend container, then:
+#   1) LLM-rescues tickets with no regex DIY steps (when OPENAI is set)
+#   2) Invalidates knowledge caches
+#   3) Rebuilds the freshdesk_qa FAISS slice
+#
 # On failure, sends an ops alert email (same path as Shopify sync).
 #
 # Cron example (Sundays 2:30 AM, before Shopify):
@@ -10,14 +14,18 @@
 # Override via env:
 #   FRESHDESK_SYNC_NO_ALERT=1 ./script/sync_freshdesk.sh
 #   FRESHDESK_SYNC_MONTHS=6 ./script/sync_freshdesk.sh
+#   FRESHDESK_SYNC_LLM_RESCUE=0 ./script/sync_freshdesk.sh
+#   FRESHDESK_SYNC_REBUILD_FAISS=0 ./script/sync_freshdesk.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 NO_ALERT="${FRESHDESK_SYNC_NO_ALERT:-0}"
-MONTHS="${FRESHDESK_SYNC_MONTHS:-6}"
-PAGES="${FRESHDESK_SYNC_PAGES:-20}"
+MONTHS="${FRESHDESK_SYNC_MONTHS:-12}"
+PAGES="${FRESHDESK_SYNC_PAGES:-30}"
+LLM_RESCUE="${FRESHDESK_SYNC_LLM_RESCUE:-1}"
+REBUILD_FAISS="${FRESHDESK_SYNC_REBUILD_FAISS:-1}"
 
 mkdir -p "$ROOT/logs"
 LOG="$ROOT/logs/freshdesk_sync.log"
@@ -36,12 +44,16 @@ _notify_failure() {
 }
 
 {
-  echo "$(date -Is) Starting Freshdesk knowledge sync (months=${MONTHS}, pages=${PAGES})"
+  echo "$(date -Is) Starting Freshdesk knowledge sync (months=${MONTHS}, pages=${PAGES}, llm_rescue=${LLM_RESCUE}, rebuild_faiss=${REBUILD_FAISS})"
 
   FRESHDESK_SYNC_MONTHS="${MONTHS}" FRESHDESK_SYNC_PAGES="${PAGES}" \
+  FRESHDESK_SYNC_LLM_RESCUE="${LLM_RESCUE}" \
+  FRESHDESK_SYNC_REBUILD_FAISS="${REBUILD_FAISS}" \
     docker compose exec -T \
       -e "FRESHDESK_SYNC_MONTHS=${MONTHS}" \
       -e "FRESHDESK_SYNC_PAGES=${PAGES}" \
+      -e "FRESHDESK_SYNC_LLM_RESCUE=${LLM_RESCUE}" \
+      -e "FRESHDESK_SYNC_REBUILD_FAISS=${REBUILD_FAISS}" \
       backend python - <<'PY'
 import os
 import sys
@@ -55,10 +67,22 @@ from freshdesk_knowledge_refresh import (
     invalidate_warranty_knowledge_caches,
     log_kb_sync_yield,
     log_ticket_sync_yield,
+    rebuild_faiss_sync,
+    run_llm_ticket_rescue,
 )
 
-months = int(os.environ.get("FRESHDESK_SYNC_MONTHS", "6"))
-pages = int(os.environ.get("FRESHDESK_SYNC_PAGES", "20"))
+months = int(os.environ.get("FRESHDESK_SYNC_MONTHS", "12"))
+pages = int(os.environ.get("FRESHDESK_SYNC_PAGES", "30"))
+llm_rescue = os.environ.get("FRESHDESK_SYNC_LLM_RESCUE", "1").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+rebuild_faiss = os.environ.get("FRESHDESK_SYNC_REBUILD_FAISS", "1").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 ticket_result = sync_freshdesk_knowledge(max_pages=pages, months_back=months)
 print("tickets:", ticket_result)
@@ -81,6 +105,17 @@ log_ticket_sync_yield(
     stats=stats,
 )
 
+rescue_stats = None
+if llm_rescue and ticket_ok:
+    rescue_stats = run_llm_ticket_rescue()
+    print("llm_rescue:", rescue_stats)
+    # Recompute yield after rescue cache is written.
+    stats = build_knowledge_yield_stats(
+        synced_ticket_rows=ticket_count,
+        resolved_scanned=resolved_scanned,
+    )
+    print("knowledge_after_rescue:", stats)
+
 kb_result = sync_freshdesk_solutions(max_articles=500)
 print("kb:", kb_result)
 kb_ok = bool(kb_result.get("ok", True))
@@ -93,6 +128,13 @@ if not ticket_ok:
     raise SystemExit(f"ticket sync failed: {ticket_result}")
 if not kb_ok:
     raise SystemExit(f"kb sync failed: {kb_result}")
+
+if rebuild_faiss:
+    faiss_status = rebuild_faiss_sync()
+    print("faiss:", faiss_status)
+    if faiss_status.get("ok") is False and faiss_status.get("reason") != "already_running":
+        raise SystemExit(f"faiss rebuild failed: {faiss_status}")
+
 print("knowledge caches invalidated")
 PY
 

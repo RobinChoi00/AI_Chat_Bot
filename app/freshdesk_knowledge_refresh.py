@@ -8,10 +8,15 @@ keyword caches, semantic embedding indexes, and (for general chat) the
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_TICKETS_PATH = _PROJECT_ROOT / "data" / "freshdesk_tickets.json"
 
 
 def invalidate_warranty_knowledge_caches() -> None:
@@ -99,6 +104,76 @@ def schedule_faiss_rebuild(
 
     background_tasks.add_task(rebuild_freshdesk_qa_index)
     return {"faiss_rebuild_scheduled": True}
+
+
+def run_llm_ticket_rescue(
+    tickets_path: Optional[Path] = None,
+) -> dict[str, Any]:
+    """
+    LLM-rescue tickets whose agent replies have no regex-extractable DIY steps.
+
+    Used by the weekly cron path (admin sync already does this inline).
+    No-ops cleanly when OpenAI is unset.
+    """
+    try:
+        from freshdesk_ticket_summarizer import (  # noqa: WPS433
+            is_enabled as summarizer_enabled,
+            summarize_missing_tickets,
+        )
+    except ImportError:
+        from app.freshdesk_ticket_summarizer import (  # type: ignore  # noqa: WPS433
+            is_enabled as summarizer_enabled,
+            summarize_missing_tickets,
+        )
+
+    if not summarizer_enabled():
+        return {"enabled": False, "skipped": True, "reason": "summarizer_disabled"}
+
+    path = tickets_path or _TICKETS_PATH
+    if not path.is_file():
+        return {"enabled": True, "skipped": True, "reason": "tickets_file_missing"}
+
+    try:
+        with path.open(encoding="utf-8") as handle:
+            raw_tickets = json.load(handle)
+    except (OSError, ValueError) as exc:
+        return {"enabled": True, "ok": False, "error": str(exc)}
+
+    if not raw_tickets:
+        return {"enabled": True, "skipped": True, "reason": "no_tickets"}
+
+    try:
+        stats = summarize_missing_tickets(raw_tickets)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Freshdesk LLM rescue failed: %s", exc)
+        return {"enabled": True, "ok": False, "error": str(exc)}
+
+    invalidate_warranty_knowledge_caches()
+    return {"enabled": True, "ok": True, **stats}
+
+
+def rebuild_faiss_sync() -> dict[str, Any]:
+    """Run ``freshdesk_qa`` FAISS rebuild in-process (for cron / CLI)."""
+    try:
+        from warranty_faiss_rebuilder import (  # noqa: WPS433
+            get_status as faiss_status,
+            rebuild_freshdesk_qa_index,
+        )
+    except ImportError:
+        from app.warranty_faiss_rebuilder import (  # type: ignore  # noqa: WPS433
+            get_status as faiss_status,
+            rebuild_freshdesk_qa_index,
+        )
+
+    if faiss_status().get("running"):
+        return {"ok": True, "reason": "already_running"}
+
+    status = rebuild_freshdesk_qa_index()
+    if not isinstance(status, dict):
+        return {"ok": True, "status": str(status)}
+    if status.get("already_running"):
+        return {"ok": True, "reason": "already_running", **status}
+    return status
 
 
 def log_ticket_sync_yield(

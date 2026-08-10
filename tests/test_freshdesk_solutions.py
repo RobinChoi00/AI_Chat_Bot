@@ -186,6 +186,35 @@ def test_knowledge_loader_ingests_kb_articles(tmp_path, monkeypatch):
     assert kb_entries, "KB article should surface at least one knowledge entry"
     assert kb_entries[0].category == "power"
     assert any("back power switch" in " ".join(e.customer_steps).lower() for e in kb_entries)
+    assert all(wk._is_customer_safe_step(s) for s in kb_entries[0].customer_steps)
+
+
+def test_knowledge_loader_skips_kb_without_diy_steps(tmp_path, monkeypatch):
+    kb_path = tmp_path / "solutions.json"
+    kb_path.write_text(
+        json.dumps(
+            [
+                {
+                    "article_id": 9,
+                    "category": "Policy",
+                    "folder": "Warranty",
+                    "title": "Warranty coverage overview",
+                    "description_text": (
+                        "This policy document explains coverage terms for massage chairs "
+                        "purchased through authorized dealers in the United States."
+                    ),
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wk, "_FRESHDESK_KB_PATH", kb_path)
+    monkeypatch.setattr(wk, "_FRESHDESK_PATH", tmp_path / "missing.json")
+    monkeypatch.setattr(wk, "_QA_PATH", tmp_path / "qa.csv")
+    monkeypatch.setattr(wk, "_AUTOCHECK_PATH", tmp_path / "ac.csv")
+    wk.load_knowledge_entries.cache_clear()
+    kb_entries = [e for e in wk.load_knowledge_entries() if e.source == "freshdesk_kb"]
+    assert kb_entries == []
 
 
 def test_kb_entries_are_returned_by_search(tmp_path, monkeypatch):
