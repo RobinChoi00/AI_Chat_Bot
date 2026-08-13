@@ -112,3 +112,48 @@ class TestLlmFallback:
             lambda _prompt, **kwargs: {"answer_key": "yes_box_damage", "confidence": "low"},
         )
         assert nlp.interpret_warranty_answer(node, "maybe sort of") is None
+
+
+class TestTroubleshootingOutcome:
+    def test_review_stage_maps_tried_steps(self):
+        assert (
+            nlp.interpret_troubleshooting_outcome("I've tried all the steps")
+            == "steps_completed"
+        )
+
+    def test_review_stage_maps_send_technician(self):
+        assert (
+            nlp.interpret_troubleshooting_outcome("please send a technician")
+            == "unable_to_attempt"
+        )
+
+    def test_bare_yes_is_not_mapped(self):
+        assert nlp.interpret_troubleshooting_outcome("yes") is None
+        assert (
+            nlp.interpret_troubleshooting_outcome(
+                "yes",
+                previous_outcome="steps_completed",
+                issue_type="defect",
+            )
+            is None
+        )
+
+    def test_outcome_stage_maps_still_broken(self):
+        assert (
+            nlp.interpret_troubleshooting_outcome(
+                "it's still not working",
+                previous_outcome="steps_completed",
+                issue_type="defect",
+            )
+            == "unresolved"
+        )
+
+    def test_outcome_stage_maps_working_now(self):
+        assert (
+            nlp.interpret_troubleshooting_outcome(
+                "it's working now",
+                previous_outcome="steps_completed",
+                issue_type="defect",
+            )
+            == "resolved"
+        )

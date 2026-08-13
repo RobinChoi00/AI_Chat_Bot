@@ -172,6 +172,7 @@ export default function WarrantyChat({
   const [emailPanelCollapsed, setEmailPanelCollapsed] = useState(false);
   const [pendingDefectStart, setPendingDefectStart] = useState<string | null>(null);
   const [suggestedIssueType, setSuggestedIssueType] = useState<string | null>(null);
+  const [suggestedOption, setSuggestedOption] = useState<AnswerOption | null>(null);
   const [chatConsentAccepted, setChatConsentAccepted] = useState(() => {
     if (typeof window === "undefined") return false;
     return sessionStorage.getItem(CHAT_CONSENT_STORAGE_KEY) === "1";
@@ -258,6 +259,11 @@ export default function WarrantyChat({
   const applySessionResponse = useCallback((resp: WarrantySessionResponse) => {
     setWarrantyState(resp.ticket);
     setTerminalEnrichment(resp.terminal_enrichment ?? null);
+    if (resp.suggested_option?.answer_key) {
+      setSuggestedOption(resp.suggested_option);
+    } else if (!resp.side_question) {
+      setSuggestedOption(null);
+    }
     if (resp.terminal_enrichment?.phase === "awaiting_help_consent") {
       const outcome = resp.ticket?.troubleshooting_outcome;
       if (outcome === "steps_completed") {
@@ -310,6 +316,7 @@ export default function WarrantyChat({
       setTerminalEnrichment(null);
       setSuggestedIssueType(null);
       setPendingDefectStart(null);
+      setSuggestedOption(null);
       setHelpConsent(null);
       setResolutionStage("review");
       setContactSubmitted(false);
@@ -490,14 +497,14 @@ export default function WarrantyChat({
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
-      if (workflowOptionCount >= 6) {
+      if (suggestedOption?.answer_key || workflowOptionCount >= 6) {
         setOptionsPanelExpanded(false);
       } else if (workflowOptionCount > 0) {
         setOptionsPanelExpanded(true);
       }
     }, 0);
     return () => window.clearTimeout(handle);
-  }, [workflowNodeId, workflowOptionCount]);
+  }, [workflowNodeId, workflowOptionCount, suggestedOption?.answer_key]);
 
   const appendAssistantFromResponse = useCallback(
     async (
@@ -774,6 +781,69 @@ export default function WarrantyChat({
     [loading, warrantyState?.ticket_id]
   );
 
+  const handleResolutionOutcome = useCallback(
+    async (outcome: TroubleshootingOutcome | string, label?: string) => {
+      const ticketId = warrantyState?.ticket_id;
+      if (!ticketId || loading) return false;
+
+      setError(null);
+      setLoading(true);
+      try {
+        const resp = await submitTroubleshootingOutcome(ticketId, outcome);
+        const recorded = resp.outcome;
+        setWarrantyState((previous) => {
+          if (!previous) return previous;
+          return {
+            ...previous,
+            status: recorded === "resolved" ? "resolved" : previous.status,
+            admin_decision:
+              recorded === "resolved" ? "self_resolved" : previous.admin_decision,
+            troubleshooting_outcome: recorded,
+          };
+        });
+
+        if (label) {
+          setMessages((previous) => [...previous, { role: "user", content: label }]);
+        }
+        if (recorded === "steps_completed") {
+          setResolutionStage("outcome");
+          return true;
+        }
+
+        if (recorded === "resolved") {
+          setHelpConsent("no");
+          setMessages((previous) => [
+            ...previous,
+            assistantMessage(selfHelpClosing(warrantyState?.issue_type)),
+          ]);
+          return true;
+        }
+
+        setHelpConsent("yes");
+        const hasIntakeEmail = /^[\w.+-]+@[\w.-]+\.\w+$/.test(intakeContactEmail.trim());
+        setMessages((previous) => [
+          ...previous,
+          assistantMessage(
+            recorded === "unable_to_attempt"
+              ? hasIntakeEmail
+                ? "Understood — please don’t attempt anything that feels unsafe. We already have your email — confirm below if you’d like us to send this case to our warranty team. Photos or videos are optional."
+                : "Understood — please don’t attempt anything that feels unsafe. Share your email below and our warranty team will review the next step. Photos or videos are optional."
+              : hasIntakeEmail
+                ? "Thanks for trying those steps. Since the issue is still there, we already have your email — confirm below to send this case to our warranty team. Photos or videos are optional."
+                : "Thanks for trying those steps. Since the issue is still there, share your email below and our warranty team will review the next step. Photos or videos are optional."
+          ),
+        ]);
+        return true;
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Could not save your progress.");
+        return false;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [loading, warrantyState?.ticket_id, warrantyState?.issue_type, intakeContactEmail]
+  );
+
   const sendMessage = useCallback(
     async (text: string) => {
       if (!text.trim() || loading || !chatConsentAccepted || !emailGateDone) return;
@@ -870,8 +940,8 @@ export default function WarrantyChat({
       }
 
       if (atIssueTypeNode && warrantyState?.model_name) {
-        // Issue menu is buttons-only — do not route from free text.
-        setError("Please choose an option below.");
+        await advanceWarranty(trimmed, trimmed);
+        setInput("");
         return;
       }
 
@@ -885,24 +955,21 @@ export default function WarrantyChat({
       if (
         warrantyState?.ticket_id &&
         !warrantyState.current_node?.is_terminal &&
-        (isTextCapture || gateAllowsTyping)
+        (isTextCapture || gateAllowsTyping || optionCount > 0)
       ) {
         await advanceWarranty(trimmed, trimmed);
         setInput("");
         return;
       }
 
-      if (warrantyState?.ticket_id && optionCount > 0) {
-        setError("Please tap one of the options below to continue.");
-        return;
-      }
-
       if (
         warrantyState?.current_node?.is_terminal &&
         helpConsent === null &&
-        !warrantyState?.needs_customer_reply
+        !warrantyState?.needs_customer_reply &&
+        warrantyState?.ticket_id
       ) {
-        setError("Please tap Yes or No below so we know how to help next.");
+        const ok = await handleResolutionOutcome(trimmed, trimmed);
+        if (ok) setInput("");
         return;
       }
     },
@@ -924,6 +991,7 @@ export default function WarrantyChat({
       storeDomain,
       applySessionResponse,
       workflowNodeId,
+      handleResolutionOutcome,
     ]
   );
 
@@ -955,66 +1023,6 @@ export default function WarrantyChat({
     }
     advanceWarranty(answerKey, label);
   }
-
-  const handleResolutionOutcome = useCallback(
-    async (outcome: TroubleshootingOutcome, label?: string) => {
-      const ticketId = warrantyState?.ticket_id;
-      if (!ticketId || loading) return;
-
-      setError(null);
-      setLoading(true);
-      try {
-        await submitTroubleshootingOutcome(ticketId, outcome);
-        setWarrantyState((previous) => {
-          if (!previous) return previous;
-          return {
-            ...previous,
-            status: outcome === "resolved" ? "resolved" : previous.status,
-            admin_decision:
-              outcome === "resolved" ? "self_resolved" : previous.admin_decision,
-            troubleshooting_outcome: outcome,
-          };
-        });
-
-        if (outcome === "steps_completed") {
-          setResolutionStage("outcome");
-          return;
-        }
-
-        if (label) {
-          setMessages((previous) => [...previous, { role: "user", content: label }]);
-        }
-        if (outcome === "resolved") {
-          setHelpConsent("no");
-          setMessages((previous) => [
-            ...previous,
-            assistantMessage(selfHelpClosing(warrantyState?.issue_type)),
-          ]);
-          return;
-        }
-
-        setHelpConsent("yes");
-        const hasIntakeEmail = /^[\w.+-]+@[\w.-]+\.\w+$/.test(intakeContactEmail.trim());
-        setMessages((previous) => [
-          ...previous,
-          assistantMessage(
-            outcome === "unable_to_attempt"
-              ? hasIntakeEmail
-                ? "Understood — please don’t attempt anything that feels unsafe. We already have your email — confirm below if you’d like us to send this case to our warranty team. Photos or videos are optional."
-                : "Understood — please don’t attempt anything that feels unsafe. Share your email below and our warranty team will review the next step. Photos or videos are optional."
-              : hasIntakeEmail
-                ? "Thanks for trying those steps. Since the issue is still there, we already have your email — confirm below to send this case to our warranty team. Photos or videos are optional."
-                : "Thanks for trying those steps. Since the issue is still there, share your email below and our warranty team will review the next step. Photos or videos are optional."
-          ),
-        ]);
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Could not save your progress.");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [loading, warrantyState?.ticket_id, warrantyState?.issue_type, intakeContactEmail]
-  );
 
   const isAwaitingAdmin =
     warrantyState?.status === "awaiting_admin_review" ||
@@ -1090,24 +1098,13 @@ export default function WarrantyChat({
   const atIssueTypeWithoutModel =
     atIssueTypeNode && !warrantyState?.model_name?.trim();
 
-  // Menus are buttons-only. Free text only for intake, model, text-capture,
-  // error-code gate typing, and follow-up notes.
+  // Keep the composer visible for the whole claim chat: buttons still work,
+  // and free text can map to an option when the meaning is clear.
+  const chatFinished = contactSubmitted || helpConsent === "no";
   const showInputBar =
     chatConsentAccepted &&
     emailGateDone &&
-    (needsCustomerReply ||
-      needsFirstIntake ||
-      needsModelConfirmation ||
-      Boolean(pendingDefectStart) ||
-      atIssueTypeWithoutModel ||
-      isTextCaptureNode ||
-      isErrorCodeGateNode ||
-      inEmailStep ||
-      (isTerminal &&
-        helpConsent === null &&
-        !contactSubmitted &&
-        !showResolutionGate &&
-        !showIssueTypeOptions));
+    !chatFinished;
 
   const interactionsLocked = !chatConsentAccepted || !emailGateDone;
 
@@ -1121,10 +1118,12 @@ export default function WarrantyChat({
     ? "Model + issue (e.g. OS-4000T footrest air not inflating)…"
       : inEmailStep
         ? "Anything else our team should know? Type here…"
-        : isErrorCodeGateNode
+            : isErrorCodeGateNode
           ? "Type yes/no, or enter the error code (e.g. C6)…"
           : isTextCaptureNode
             ? "Type your answer…"
+            : atIssueTypeNode || hasWorkflowOptions || showResolutionGate
+              ? "Or type your answer…"
             : "Enter your chair model…";
 
   return (
@@ -1375,9 +1374,25 @@ export default function WarrantyChat({
 
       {hasWorkflowOptions && !isTerminal && (
         <div className="shrink-0 border-t border-gray-100 bg-white px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-3 sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          {suggestedOption && (
+            <button
+              type="button"
+              onClick={() =>
+                handleOptionSelect(suggestedOption.answer_key, suggestedOption.label)
+              }
+              disabled={loading || interactionsLocked}
+              className="mb-2 min-h-[48px] w-full rounded-xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Yes — {suggestedOption.label}
+            </button>
+          )}
           <CollapsibleOptionPanel
-            title="Choose an option"
-            hint="Tap an option to continue"
+            title={suggestedOption ? "Other options" : "Choose an option"}
+            hint={
+              suggestedOption
+                ? "Tap Yes above, or choose a different option"
+                : "Tap an option, or type your answer"
+            }
             optionCount={workflowOptionCount}
             expanded={optionsPanelExpanded}
             onToggle={() => setOptionsPanelExpanded((open) => !open)}
@@ -1388,6 +1403,7 @@ export default function WarrantyChat({
               onSelect={handleOptionSelect}
               disabled={loading || interactionsLocked}
               variant="stack"
+              highlightedKey={suggestedOption?.answer_key ?? null}
             />
           </CollapsibleOptionPanel>
         </div>

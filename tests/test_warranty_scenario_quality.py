@@ -161,24 +161,54 @@ def test_shoulders_free_text_maps_to_option(warranty_client):
     )
     tid = payload["ticket"]["ticket_id"]
     _post(warranty_client, f"/api/v1/warranty/{tid}/answer", {"answer": "air"})
-    stuck = _post(
+    mapped = _post(
         warranty_client,
         f"/api/v1/warranty/{tid}/answer",
         {"answer": "my shoulders"},
     )
-    # Menu free text is buttons-only — do not interpret or advance.
-    assert stuck.get("side_question") is True
-    assert stuck["ticket"]["current_node"]["node_id"] == "defect_air_location"
-    assert "tap" in _customer_message(stuck).lower()
-    assert "confirm" not in _customer_message(stuck).lower()
+    assert mapped.get("side_question") is not True
+    assert mapped["ticket"]["current_node"]["node_id"] == "defect_air_shoulders_hissing_q"
+    assert "Got it" in (mapped.get("assistant_message") or "")
+    assert "Shoulders" in (mapped.get("interpreted_option") or {}).get("label", "")
 
+
+def test_near_miss_suggests_option_and_yes_confirms(warranty_client, monkeypatch):
+    import warranty_nlp as nlp
+
+    monkeypatch.setattr(nlp, "_llm_json", lambda *_args, **_kwargs: None)
+    sid = str(uuid.uuid4())
+    _post(
+        warranty_client,
+        f"/api/v1/warranty/session/{sid}/register-model",
+        {"model": "3D LTX", "domain": DOMAIN},
+    )
     payload = _post(
         warranty_client,
-        f"/api/v1/warranty/{tid}/answer",
-        {"answer": "shoulders_hips"},
+        f"/api/v1/warranty/session/{sid}/quick-start",
+        {"issue_type": "defect", "domain": DOMAIN},
     )
-    # Exact answer_key tap still advances.
-    assert payload["ticket"]["current_node"]["node_id"] == "defect_air_shoulders_hissing_q"
+    tid = payload["ticket"]["ticket_id"]
+    _post(warranty_client, f"/api/v1/warranty/{tid}/answer", {"answer": "air"})
+    suggested = _post(
+        warranty_client,
+        f"/api/v1/warranty/{tid}/answer",
+        {"answer": "hips"},
+    )
+    assert suggested.get("side_question") is True
+    assert suggested.get("suggested_option", {}).get("answer_key") == "shoulders_hips"
+    text = _customer_message(suggested)
+    assert "did you mean" in text.lower()
+    assert "feet / calves" not in text.lower()
+
+    confirmed = _post(
+        warranty_client,
+        f"/api/v1/warranty/{tid}/answer",
+        {"answer": "yes"},
+    )
+    assert confirmed.get("side_question") is not True
+    assert confirmed["ticket"]["current_node"]["node_id"] == "defect_air_shoulders_hissing_q"
+    assert confirmed.get("nlp_interpreted") is True
+    assert "Got it" in (confirmed.get("assistant_message") or "")
 
 
 def test_clarifying_message_when_answer_is_ambiguous(warranty_client):

@@ -642,7 +642,7 @@ export async function submitCustomerNote(
 /** Persist progress through the resolution-first troubleshooting gate. */
 export async function submitTroubleshootingOutcome(
   ticketId: string,
-  outcome: TroubleshootingOutcome
+  outcome: TroubleshootingOutcome | string
 ): Promise<{
   ticket_id: string;
   outcome: TroubleshootingOutcome;

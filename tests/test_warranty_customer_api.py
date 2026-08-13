@@ -549,7 +549,7 @@ def test_natural_start_maps_issue_type(client, monkeypatch):
 
 
 def test_submit_answer_nlp_maps_natural_language(client):
-    """Menu nodes are buttons-only — free text must not advance or 'confirm' a guess."""
+    """Clear free text on a menu node maps to the matching option and advances."""
     session_id = "cust-api-nlp-answer"
     _register_model(client, session_id)
     start = client.post(
@@ -562,8 +562,6 @@ def test_submit_answer_nlp_maps_natural_language(client):
         f"/api/v1/warranty/{ticket_id}/answer",
         json={"answer": "damage_issue"},
     )
-    before = client.get(f"/api/v1/warranty/session/{session_id}").json()
-    stuck_node = before["ticket"]["current_node"]["node_id"]
 
     resp = client.post(
         f"/api/v1/warranty/{ticket_id}/answer",
@@ -571,11 +569,12 @@ def test_submit_answer_nlp_maps_natural_language(client):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data.get("side_question") is True
-    assert data.get("nlp_interpreted") is not True
-    assert "tap" in data["assistant_message"].lower()
-    assert "confirm" not in data["assistant_message"].lower()
-    assert data["ticket"]["current_node"]["node_id"] == stuck_node
+    assert data.get("side_question") is not True
+    assert data.get("nlp_interpreted") is True
+    assert data["ticket"]["current_node"]["node_id"] == "delivery_get_name"
+    assert data.get("interpreted_option", {}).get("answer_key") == "no_tracking"
+    assert "Got it" in (data.get("assistant_message") or "")
+    assert "tracking" in (data.get("interpreted_option") or {}).get("label", "").lower()
 
 
 def test_register_model_rejects_issue_description(client):
@@ -760,6 +759,31 @@ def test_troubleshooting_progress_persists_before_team_review(client):
             "steps_completed",
             "unresolved",
         ]
+
+
+def test_troubleshooting_outcome_maps_clear_free_text(client):
+    session_id = "cust-api-troubleshooting-freetext"
+    ticket_id = _start_installation_terminal(client, session_id)
+
+    completed = client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "I've tried all the steps"},
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["outcome"] == "steps_completed"
+
+    still_need_help = client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "I still need help"},
+    )
+    assert still_need_help.status_code == 200, still_need_help.text
+    assert still_need_help.json()["outcome"] == "unresolved"
+
+    unclear = client.post(
+        f"/api/v1/warranty/{_start_installation_terminal(client, session_id + '-b')}/troubleshooting-outcome",
+        json={"outcome": "yes"},
+    )
+    assert unclear.status_code == 422
 
 
 def test_contact_step_back_restores_outcome_choice(client):

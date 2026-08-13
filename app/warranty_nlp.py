@@ -78,6 +78,61 @@ _NO_RE = re.compile(
     r"\b(no|nope|nah|negative|i don't|i dont|don't have|dont have|never|not really)\b",
     re.I,
 )
+_SUGGEST_CONFIRM_RE = re.compile(
+    r"^\s*(yes|yeah|yep|yup|correct|right|exactly|yes please|"
+    r"that'?s (it|the one|right|correct)|yes that'?s (it|right))\s*[.!]?\s*$",
+    re.I,
+)
+_SUGGEST_REJECT_RE = re.compile(
+    r"^\s*(no|nope|nah|not that|wrong|neither)\s*[.!]?\s*$",
+    re.I,
+)
+_STEPS_DONE_RE = re.compile(
+    r"\b(tried (all )?(the )?steps|i('ve| have) tried|watched the (guide|video)|"
+    r"completed (the )?(prep|steps|setup|guide)|done with (the )?steps|"
+    r"all the steps|i('ve| have) (watched|done|finished))\b",
+    re.I,
+)
+_UNABLE_RE = re.compile(
+    r"\b(can'?t (safely )?(do|complete|try)|cannot (safely )?(do|complete)|"
+    r"unable to|too unsafe|don'?t have (the )?(photos|paperwork|video))\b",
+    re.I,
+)
+_NEED_TEAM_RE = re.compile(
+    r"\b(need help|please help|send (a )?(tech|technician)|warranty team|"
+    r"call me|contact me|submit (my )?(case|claim)|file a claim)\b",
+    re.I,
+)
+_STILL_BROKEN_RE = re.compile(
+    r"\b(still (broken|there|not working|happening)|not (fixed|working)|"
+    r"didn'?t work|doesn'?t work|issue is still)\b",
+    re.I,
+)
+_WORKING_NOW_RE = re.compile(
+    r"\b(working now|it'?s working|it'?s fixed|fixed now|"
+    r"problem (is )?gone|resolved)\b",
+    re.I,
+)
+_SETUP_DONE_RE = re.compile(
+    r"\b(set up now|all set up|assembled|"
+    r"install(ation)? (is )?(done|complete)|chair is (ready|set up))\b",
+    re.I,
+)
+_ALL_SET_RE = re.compile(
+    r"\b(all set|no (more )?help needed|i'?m good|no thanks)\b",
+    re.I,
+)
+_COME_BACK_RE = re.compile(
+    r"\b(come back|not yet|later|i'?ll wait)\b",
+    re.I,
+)
+_DELIVERY_SUBMIT_RE = re.compile(
+    r"\b(submit|send (the|this|my)? ?case|file (the |a )?(claim|case))\b",
+    re.I,
+)
+
+PENDING_SUGGESTED_KEY = "pending_suggested_answer_key"
+PENDING_SUGGESTED_LABEL = "pending_suggested_label"
 
 
 def _normalize(text: str) -> str:
@@ -269,16 +324,58 @@ def suggest_closest_option(options: list[dict], text: str) -> Optional[dict]:
             best_score = score
             best = opt
 
-    if best_score >= 3:
+    if best_score >= 2:
         return best
     return None
 
 
-def build_clarifying_workflow_message(node: dict, user_text: str) -> str:
+def option_label_for(node: dict, answer_key: str) -> str:
+    key = str(answer_key or "").strip()
+    for opt in node.get("options") or []:
+        if str(opt.get("answer_key") or "") == key:
+            return str(opt.get("label") or key).strip() or key
+    return key
+
+
+def public_option(opt: dict) -> dict[str, str]:
+    key = str(opt.get("answer_key") or "").strip()
+    label = str(opt.get("label") or key).strip() or key
+    return {"answer_key": key, "label": label}
+
+
+def node_has_yes_no_options(node: dict) -> bool:
+    keys = [str(o.get("answer_key") or "") for o in (node.get("options") or [])]
+    has_yes = any(k == "yes" or k.startswith("yes") for k in keys)
+    has_no = any(k == "no" or k.startswith("no") for k in keys)
+    return has_yes and has_no
+
+
+def is_suggestion_confirmation(text: str) -> bool:
+    return bool(_SUGGEST_CONFIRM_RE.match((text or "").strip()))
+
+
+def is_suggestion_rejection(text: str) -> bool:
+    return bool(_SUGGEST_REJECT_RE.match((text or "").strip()))
+
+
+def build_mapped_ack(label: str) -> str:
+    pretty = str(label or "").strip()
+    if not pretty:
+        return "Got it."
+    return f"Got it — **{pretty}**."
+
+
+def build_clarifying_workflow_message(
+    node: dict,
+    user_text: str,
+    *,
+    closest: Optional[dict] = None,
+) -> str:
     """Customer-facing re-prompt when free text did not map to a menu option."""
     prompt = str(node.get("prompt") or "").strip()
     options = list(node.get("options") or [])
     trimmed = (user_text or "").strip()
+    suggested = closest if closest is not None else suggest_closest_option(options, trimmed)
 
     if trimmed:
         lead = (
@@ -288,16 +385,18 @@ def build_clarifying_workflow_message(node: dict, user_text: str) -> str:
         lead = "I want to make sure I pick the right next step for you."
 
     parts = [lead]
-    closest = suggest_closest_option(options, trimmed)
-    if closest:
-        label = str(closest.get("label") or closest.get("answer_key") or "").strip()
+    if suggested:
+        label = str(suggested.get("label") or suggested.get("answer_key") or "").strip()
         if label:
-            parts.append(f'Did you mean **{label}**? Tap that option below, or rephrase.')
+            parts.append(
+                f"Did you mean **{label}**? Tap **Yes — {label}** below, "
+                "or type **yes** to confirm."
+            )
+            parts.append("If that’s not it, pick a different option or rephrase.")
+            return "\n\n".join(parts)
 
-    bullets = _format_option_bullets(options)
-    if bullets:
-        parts.append("Please tap one of these, or rephrase to match one of them:")
-        parts.append(bullets)
+    if options:
+        parts.append("Please tap one of the options below, or rephrase to match one of them.")
     elif prompt:
         parts.append("Please answer the question below.")
     if prompt:
@@ -469,3 +568,51 @@ def interpret_warranty_answer(node: dict, user_text: str) -> Optional[str]:
         return None
 
     return _accept_llm_choice(parsed, "answer_key", valid_keys)
+
+
+def interpret_troubleshooting_outcome(
+    user_text: str,
+    *,
+    issue_type: str = "",
+    previous_outcome: str = "",
+) -> Optional[str]:
+    """
+    Map clear free text to a terminal troubleshooting outcome.
+
+    Bare yes/no is never mapped — those conflict across install/delivery/defect.
+    """
+    text = _normalize(user_text)
+    if not text:
+        return None
+    if text in {"yes", "yeah", "yep", "yup", "no", "nope", "nah"}:
+        return None
+
+    at_outcome = (previous_outcome or "").strip().lower() == "steps_completed"
+    issue = (issue_type or "").strip().lower()
+
+    if not at_outcome:
+        if _UNABLE_RE.search(text) or _NEED_TEAM_RE.search(text):
+            return "unable_to_attempt"
+        if _STEPS_DONE_RE.search(text):
+            return "steps_completed"
+        return None
+
+    if issue == "delivery":
+        if _DELIVERY_SUBMIT_RE.search(text) or _NEED_TEAM_RE.search(text):
+            return "unresolved"
+        if _COME_BACK_RE.search(text) or _ALL_SET_RE.search(text):
+            return "resolved"
+        return None
+
+    if issue == "installation":
+        if _NEED_TEAM_RE.search(text) or _STILL_BROKEN_RE.search(text):
+            return "unresolved"
+        if _SETUP_DONE_RE.search(text) or _ALL_SET_RE.search(text):
+            return "resolved"
+        return None
+
+    if _NEED_TEAM_RE.search(text) or _STILL_BROKEN_RE.search(text):
+        return "unresolved"
+    if _WORKING_NOW_RE.search(text) or _ALL_SET_RE.search(text):
+        return "resolved"
+    return None

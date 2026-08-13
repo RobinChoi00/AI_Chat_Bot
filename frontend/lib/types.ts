@@ -134,6 +134,8 @@ export interface WarrantySessionResponse {
   tracking_summary?: TrackingSummary | null;
   email_notified?: boolean;
   nlp_interpreted?: boolean;
+  interpreted_option?: AnswerOption;
+  suggested_option?: AnswerOption;
   interpreted_issue_type?: string;
   suggested_issue_type?: string;
   intent_confirmation_required?: boolean;

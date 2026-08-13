@@ -835,17 +835,14 @@ def _submit_warranty_answer_with_fallback(
         if not mapped:
             raise
 
-        # Text-capture nodes may normalize typed input. Option menus do not
-        # auto-advance from free-text guesses — same contract as the web API.
+        # Text-capture nodes may normalize typed input. Option menus advance
+        # only when NLP/heuristics find a unique valid answer_key.
         if node.get("type") == "question_text":
             return engine.submit_answer(
                 ticket_id,
                 mapped,
                 customer_display=raw,
             )
-
-        if node.get("options"):
-            raise
 
         if mapped == answer_key:
             raise

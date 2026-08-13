@@ -33,3 +33,12 @@ def test_clarifying_includes_did_you_mean():
     msg = nlp.build_clarifying_workflow_message(node, "inflation not working")
     assert "Did you mean" in msg
     assert "Air / Inflation" in msg
+    assert "Yes — Air / Inflation" in msg
+    assert "Power issue" not in msg
+
+
+def test_suggestion_confirmation_phrases():
+    assert nlp.is_suggestion_confirmation("yes")
+    assert nlp.is_suggestion_confirmation("that's it")
+    assert nlp.is_suggestion_rejection("nope")
+    assert not nlp.is_suggestion_confirmation("yes the box was damaged")

@@ -585,7 +585,31 @@ async def record_troubleshooting_outcome(
     """
     from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
 
-    outcome = (body.outcome or "").strip().lower()
+    outcome = (body.outcome or "").strip()
+    outcome_key = outcome.lower()
+    if outcome_key not in _TROUBLESHOOTING_OUTCOMES:
+        from warranty_nlp import interpret_troubleshooting_outcome  # noqa: WPS433
+
+        engine = _lazy_engine()
+        ticket = engine.get_ticket(ticket_id)
+        if ticket is None:
+            raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+        previous_for_map = str(
+            ticket.get_collected().get("troubleshooting_outcome") or ""
+        ).strip().lower()
+        mapped = interpret_troubleshooting_outcome(
+            outcome,
+            issue_type=str(ticket.issue_type or ""),
+            previous_outcome=previous_for_map,
+        )
+        if not mapped:
+            raise HTTPException(
+                status_code=422,
+                detail="Please tap one of the buttons below so we know how to help next.",
+            )
+        outcome_key = mapped
+
+    outcome = outcome_key
     if outcome not in _TROUBLESHOOTING_OUTCOMES:
         raise HTTPException(
             status_code=422,
@@ -1222,12 +1246,55 @@ def _maybe_side_question_message(engine, ticket_id: str, answer: str) -> Optiona
     return try_side_question_for_ticket(engine, ticket_id, answer)
 
 
+def _pending_suggestion_from_ticket(ticket) -> Optional[Dict[str, str]]:
+    from warranty_nlp import PENDING_SUGGESTED_KEY, PENDING_SUGGESTED_LABEL  # noqa: WPS433
+
+    if ticket is None:
+        return None
+    collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
+    key = str(collected.get(PENDING_SUGGESTED_KEY) or "").strip()
+    if not key:
+        return None
+    label = str(collected.get(PENDING_SUGGESTED_LABEL) or key).strip() or key
+    return {"answer_key": key, "label": label}
+
+
+def _write_pending_suggestion(engine, ticket_id: str, option: Optional[dict]) -> None:
+    import json as _json  # noqa: WPS433
+
+    from warranty_nlp import PENDING_SUGGESTED_KEY, PENDING_SUGGESTED_LABEL  # noqa: WPS433
+
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        return
+    collected = ticket.get_collected()
+    if option and str(option.get("answer_key") or "").strip():
+        collected[PENDING_SUGGESTED_KEY] = str(option.get("answer_key") or "").strip()
+        collected[PENDING_SUGGESTED_LABEL] = str(
+            option.get("label") or option.get("answer_key") or ""
+        ).strip()
+    else:
+        collected.pop(PENDING_SUGGESTED_KEY, None)
+        collected.pop(PENDING_SUGGESTED_LABEL, None)
+    engine.persist_collected_data(ticket_id, _json.dumps(collected))
+
+
+def _interpreted_option_payload(node: dict, mapped_key: str, fallback_label: str) -> Dict[str, str]:
+    from warranty_nlp import option_label_for  # noqa: WPS433
+
+    label = option_label_for(node, mapped_key) if node else ""
+    if not label or label == mapped_key:
+        label = (fallback_label or mapped_key).strip()[:80] or mapped_key
+    return {"answer_key": mapped_key, "label": label}
+
+
 def _build_side_question_response(
     engine,
     ticket_id: str,
     message: str,
     *,
     customer_text: str = "",
+    suggested_option: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     ticket = engine.get_ticket(ticket_id)
     node = engine.get_current_node(ticket_id)
@@ -1259,22 +1326,98 @@ def _build_side_question_response(
     payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
     payload["side_question"] = True
     payload["assistant_message"] = message
+    suggestion = suggested_option or _pending_suggestion_from_ticket(ticket)
+    if suggestion:
+        payload["suggested_option"] = suggestion
     return payload
+
+
+def _submit_mapped_answer(
+    engine,
+    ticket_id: str,
+    mapped: str,
+    answer: str,
+    node: dict,
+) -> tuple[dict, bool, None, Dict[str, str]]:
+    _write_pending_suggestion(engine, ticket_id, None)
+    result = engine.submit_answer(
+        ticket_id,
+        mapped,
+        customer_display=answer,
+    )
+    return (
+        result,
+        True,
+        None,
+        _interpreted_option_payload(node, mapped, answer),
+    )
+
+
+def _clarify_menu_answer(
+    engine,
+    ticket_id: str,
+    node: dict,
+    answer: str,
+) -> tuple[None, bool, str, None]:
+    from warranty_nlp import (  # noqa: WPS433
+        build_clarifying_workflow_message,
+        is_suggestion_confirmation,
+        is_suggestion_rejection,
+        node_has_yes_no_options,
+        public_option,
+        suggest_closest_option,
+    )
+
+    ticket = engine.get_ticket(ticket_id)
+    pending = _pending_suggestion_from_ticket(ticket)
+    valid = {
+        str(opt.get("answer_key") or "")
+        for opt in node.get("options") or []
+        if str(opt.get("answer_key") or "")
+    }
+    pending_key = str((pending or {}).get("answer_key") or "")
+    if pending_key and pending_key in valid and not node_has_yes_no_options(node):
+        if is_suggestion_confirmation(answer):
+            return _submit_mapped_answer(engine, ticket_id, pending_key, answer, node)
+        if is_suggestion_rejection(answer):
+            _write_pending_suggestion(engine, ticket_id, None)
+            return (
+                None,
+                False,
+                "No problem — please tap one of the options below, or rephrase.",
+                None,
+            )
+
+    closest = suggest_closest_option(list(node.get("options") or []), answer)
+    if closest and str(closest.get("answer_key") or "") in valid:
+        suggestion = public_option(closest)
+        _write_pending_suggestion(engine, ticket_id, suggestion)
+        return (
+            None,
+            False,
+            build_clarifying_workflow_message(node, answer, closest=closest),
+            None,
+        )
+
+    _write_pending_suggestion(engine, ticket_id, None)
+    return None, False, build_clarifying_workflow_message(node, answer), None
 
 
 def _submit_answer_with_nlp(
     engine,
     ticket_id: str,
     answer: str,
-) -> tuple[Optional[dict], bool, Optional[str]]:
+) -> tuple[Optional[dict], bool, Optional[str], Optional[Dict[str, str]]]:
     """
     Submit a workflow answer.
 
-    Menu nodes (options) are buttons-only: free text that is not an exact
-    answer_key/label does not advance. Text-capture nodes and error-code
-    gates still accept typed answers.
+    Exact answer_key / option label still advances immediately. Free text on
+    menu nodes is mapped with heuristics + high-confidence NLP; a unique
+    match advances, otherwise the customer is asked to tap or rephrase.
+    A near-miss stores one suggested option so "yes" can confirm it.
+    Text-capture nodes and error-code gates still accept typed answers.
 
-    Returns (submit_result, nlp_interpreted, clarifying_message).
+    Returns (submit_result, nlp_interpreted, clarifying_message, interpreted_option).
     When clarifying_message is set, the workflow does not advance.
     """
     _validate_text_before_submit(engine, ticket_id, answer)
@@ -1283,25 +1426,14 @@ def _submit_answer_with_nlp(
     node_id = str(node.get("node_id") or "") if node else ""
 
     from warranty_error_code_gate import is_gate_node, map_gate_free_text  # noqa: WPS433
-    from warranty_nlp import (  # noqa: WPS433
-        build_clarifying_workflow_message,
-        interpret_warranty_answer,
-    )
+    from warranty_nlp import interpret_warranty_answer  # noqa: WPS433
 
     if node and is_gate_node(node_id):
         mapped = map_gate_free_text(node_id, answer)
         if mapped:
-            return (
-                engine.submit_answer(
-                    ticket_id,
-                    mapped,
-                    customer_display=answer,
-                ),
-                True,
-                None,
-            )
+            return _submit_mapped_answer(engine, ticket_id, mapped, answer, node)
         try:
-            return engine.submit_answer(ticket_id, answer), False, None
+            return engine.submit_answer(ticket_id, answer), False, None, None
         except ValueError as exc:
             if "did not match any option" not in str(exc):
                 raise
@@ -1312,10 +1444,13 @@ def _submit_answer_with_nlp(
                     "Please tap one of the buttons above, type **yes** or **no**, "
                     "or enter the error code exactly as shown (for example: C6, E5)."
                 ),
+                None,
             )
 
     try:
-        return engine.submit_answer(ticket_id, answer), False, None
+        result = engine.submit_answer(ticket_id, answer)
+        _write_pending_suggestion(engine, ticket_id, None)
+        return result, False, None, None
     except ValueError as exc:
         msg = str(exc)
         if "did not match any option" not in msg:
@@ -1329,26 +1464,38 @@ def _submit_answer_with_nlp(
         if node.get("type") == "question_text":
             mapped = interpret_warranty_answer(node, answer)
             if mapped and mapped != answer:
-                return (
-                    engine.submit_answer(
-                        ticket_id,
-                        mapped,
-                        customer_display=answer,
-                    ),
-                    True,
-                    None,
-                )
-            return None, False, build_clarifying_workflow_message(node, answer)
+                return _submit_mapped_answer(engine, ticket_id, mapped, answer, node)
+            return None, False, build_clarifying_workflow_message_safe(node, answer), None
 
-        # Menu / instruction nodes: buttons only — do not interpret free text.
         if node.get("options"):
-            return (
-                None,
-                False,
-                "Please tap one of the options below to continue.",
-            )
+            mapped = interpret_warranty_answer(node, answer)
+            if not mapped and str(node.get("node_id") or "") == "issue_type":
+                from warranty_nlp import interpret_issue_type  # noqa: WPS433
 
-        return None, False, build_clarifying_workflow_message(node, answer)
+                guessed = interpret_issue_type(answer)
+                valid = {
+                    str(opt.get("answer_key") or "")
+                    for opt in node.get("options") or []
+                }
+                if guessed in valid:
+                    mapped = guessed
+            if mapped:
+                return _submit_mapped_answer(engine, ticket_id, mapped, answer, node)
+            return _clarify_menu_answer(engine, ticket_id, node, answer)
+
+        return None, False, build_clarifying_workflow_message_safe(node, answer), None
+
+
+def build_clarifying_workflow_message_safe(node: dict, answer: str) -> str:
+    from warranty_nlp import build_clarifying_workflow_message  # noqa: WPS433
+
+    return build_clarifying_workflow_message(node, answer)
+
+
+def build_mapped_ack_safe(label: str) -> str:
+    from warranty_nlp import build_mapped_ack  # noqa: WPS433
+
+    return build_mapped_ack(label)
 
 
 def _finalize_answer_response(
@@ -1358,6 +1505,7 @@ def _finalize_answer_response(
     result: dict,
     *,
     nlp_interpreted: bool = False,
+    interpreted_option: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Build the browser payload after a successful submit_answer."""
     tracking_summary: Optional[Dict[str, Any]] = None
@@ -1453,6 +1601,11 @@ def _finalize_answer_response(
         payload["email_notified"] = True
     if nlp_interpreted:
         payload["nlp_interpreted"] = True
+    if interpreted_option and interpreted_option.get("label"):
+        payload["interpreted_option"] = interpreted_option
+        ack = build_mapped_ack_safe(str(interpreted_option.get("label") or ""))
+        existing = str(payload.get("assistant_message") or "").strip()
+        payload["assistant_message"] = f"{ack}\n\n{existing}" if existing else ack
 
     if result.get("is_terminal") or str(ticket.status) in (
         "awaiting_admin_review",
@@ -1635,6 +1788,9 @@ def _serialize_ticket_state(
         payload["terminal_enrichment"] = public_terminal_enrichment
     if assistant_message:
         payload["assistant_message"] = assistant_message
+    suggestion = _pending_suggestion_from_ticket(ticket)
+    if suggestion:
+        payload["suggested_option"] = suggestion
     return payload
 
 
@@ -2186,7 +2342,7 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
         )
 
     try:
-        result, nlp_interpreted, clarify = _submit_answer_with_nlp(
+        result, nlp_interpreted, clarify, interpreted_option = _submit_answer_with_nlp(
             engine,
             ticket_id,
             answer,
@@ -2208,6 +2364,7 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
         answer,
         result,
         nlp_interpreted=nlp_interpreted,
+        interpreted_option=interpreted_option,
     )
 
 
