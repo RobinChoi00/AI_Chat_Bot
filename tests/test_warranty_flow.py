@@ -821,6 +821,31 @@ class TestWarrantyTools:
         assert "WARRANTY_ANSWER_MISMATCH" in result
         assert "VALID OPTIONS" in result
 
+    def test_tool_answer_does_not_nlp_advance_menu_from_free_text(self):
+        """Option menus stay put when the model guesses a nearby answer_key."""
+        from agent_tools import tool_start_warranty_workflow, tool_answer_warranty_question
+        from warranty_workflow import WarrantyEngine
+
+        start_result = tool_start_warranty_workflow(
+            session_id="no-nlp-advance",
+            domain="osaki.com",
+        )
+        ticket_id = None
+        for line in start_result.splitlines():
+            if line.startswith("TICKET_ID:"):
+                ticket_id = line.split(":", 1)[1].strip()
+                break
+        assert ticket_id is not None
+        before = WarrantyEngine.get_current_node(ticket_id)["node_id"]
+        result = tool_answer_warranty_question(
+            ticket_id=ticket_id,
+            answer_key="not_a_real_key",
+            customer_text="asdf qwerty not an option",
+        )
+        after = WarrantyEngine.get_current_node(ticket_id)["node_id"]
+        assert after == before
+        assert "WARRANTY_ANSWER_MISMATCH" in result
+
     def test_tool_attach_warranty_evidence_records_metadata(self):
         """attach_warranty_evidence records metadata for a valid ticket."""
         from agent_tools import tool_start_warranty_workflow, tool_attach_warranty_evidence

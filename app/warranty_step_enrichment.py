@@ -1,19 +1,16 @@
 """
 warranty_step_enrichment.py
 ===========================
-Freshdesk / Q&A context for *non-terminal* workflow steps.
+Verified copy for *non-terminal* workflow steps.
 
-Terminal nodes already get rich diagnosis via ``build_terminal_enrichment``.
-Customers who click answer buttons previously saw only the raw flowchart
-``prompt`` until the final step — this module adds a short, knowledge-backed
-intro (summary + 1–2 tips) before the next question so button-driven flows
-feel as informed as free-text intake.
+Terminal nodes already get diagnosis via ``build_terminal_enrichment``.
+Mid-flow customer text is the flowchart prompt plus node-locked hints
+(and an exact error-code hit when the customer provided a code).
 
 Design contract
 ---------------
-- Knowledge from ``warranty_self_help`` (Freshdesk JSON, Q&A CSV, Auto-Check).
-- Optional LLM paraphrase via ``warranty_step_paraphrase`` when OPENAI_API_KEY
-  is set (warmer tone; workflow question kept verbatim).
+- Do not put fuzzy Freshdesk / Q&A “similar case” tips in the customer message.
+- Do not LLM-paraphrase customer copy (facts stay as drafted).
 - Never promise replacement, dispatch, or approval on intermediate steps.
 - Always preserve the original workflow ``prompt`` verbatim at the end so
   branching logic stays deterministic.
@@ -21,28 +18,20 @@ Design contract
 
 from __future__ import annotations
 
-import logging
 import re
 from typing import Any, Optional
 
-from warranty_intake_context import enrich_path_text, intake_aware_step_summary
+from warranty_intake_context import intake_aware_step_summary
 from warranty_knowledge import (
     KnowledgeEntry,
-    contextual_search_knowledge,
-    entry_allowed_for_category,
     is_presentable_match_title,
-    map_workflow_defect_category,
 )
 from warranty_self_help import (
     _collect_fallback_hints,
     _friendly_match_summary,
-    build_path_text,
     category_fallback_hints,
     infer_defect_category_from_turns,
 )
-from warranty_step_paraphrase import paraphrase_step_message
-
-logger = logging.getLogger(__name__)
 
 # First menu — no prior answers to contextualise yet.
 _SKIP_NODE_IDS = frozenset({"root"})
@@ -127,11 +116,6 @@ _STEP_SOURCE_PRIORITY: dict[str, int] = {
     "freshdesk": 5,
 }
 
-# Soft customer framing — never cite ticket IDs / subjects / "past cases".
-_SIMILAR_SYMPTOM_SUMMARY = (
-    "For symptoms like yours, these checks often help before the next question."
-)
-_SIMILAR_SYMPTOM_TIP_HEADING = "**What often helps for symptoms like yours:**"
 _DEFAULT_TIP_HEADING = "**What you can try:**"
 _FRESHDESK_SIMILAR_SOURCES = frozenset({"freshdesk", "freshdesk_kb", "freshdesk_qa"})
 _FRESHDESK_KB_SOURCES = frozenset({"freshdesk_kb", "freshdesk_qa"})
@@ -404,65 +388,25 @@ def build_step_enrichment(
         return None
 
     model_name = str(getattr(ticket, "model_name", "") or "")
-    path_text = enrich_path_text(build_path_text(turns), ticket)
     defect_category = infer_defect_category_from_turns(turns)
 
+    # Only an exact customer-provided error code may add KB steps. Fuzzy
+    # Freshdesk / Q&A hits stay out of the customer message.
     fonz_entry = _fonz_match_from_ticket(ticket, model_name) or _fonz_match_from_turns(
         model_name,
         turns,
     )
-
-    matches = contextual_search_knowledge(
-        path_text=path_text,
-        issue_type=issue_type,
-        defect_category=defect_category,
-        model_name=model_name,
-        limit=4,
-    )
-    # Do not show a model/category-similar error-code row until the customer
-    # actually provides a code. Exact captured codes are re-added below.
-    matches = [entry for entry in matches if entry.source != "fonz_error_code"]
-    if fonz_entry:
-        matches = [fonz_entry] + [m for m in matches if m.title != fonz_entry.title]
-        matches = matches[:4]
-
-    # Defense in depth: never tip from a different defect family than the
-    # customer's selected topic (e.g. air tips on a remote path).
-    if defect_category:
-        kb_category = map_workflow_defect_category(defect_category)
-        matches = [
-            entry
-            for entry in matches
-            if entry_allowed_for_category(entry, kb_category)
-        ]
-
-    similar_freshdesk = _freshdesk_similarity_leader(
-        matches,
-        path_text=path_text,
-        defect_category=defect_category,
-    )
-    prefer_freshdesk = similar_freshdesk is not None
+    matches = [fonz_entry] if fonz_entry else []
 
     fallback = _collect_fallback_hints(turns, node_id)
     if not fallback and defect_category:
         fallback = category_fallback_hints(defect_category)
-    tips = _pick_step_tips(
-        matches,
-        fallback,
-        prefer_freshdesk=prefer_freshdesk,
-    )
+    tips = _pick_step_tips(matches, fallback, prefer_freshdesk=False)
 
-    presentable_matches = [
-        m for m in matches if is_presentable_match_title(m.title)
-    ]
-    if not tips and not presentable_matches:
+    if not tips:
         return None
 
-    tip_heading = _DEFAULT_TIP_HEADING
-    if prefer_freshdesk and tips:
-        summary = _SIMILAR_SYMPTOM_SUMMARY
-        tip_heading = _SIMILAR_SYMPTOM_TIP_HEADING
-    elif presentable_matches:
+    if fonz_entry:
         summary = _step_enrichment_summary(
             matches,
             defect_category=defect_category,
@@ -470,14 +414,12 @@ def build_step_enrichment(
             issue_type=issue_type,
             turns=turns,
         )
-    elif tips:
+    else:
         model_display = (model_name or "your chair").strip()
         summary = (
             f"Based on what you've told us about your **{model_display}**, "
             "here is a quick note before the next question."
         )
-    else:
-        return None
 
     summary = intake_aware_step_summary(
         ticket=ticket,
@@ -489,36 +431,15 @@ def build_step_enrichment(
         base_prompt=base_prompt,
         summary=summary,
         tips=tips,
-        tip_heading=tip_heading,
+        tip_heading=_DEFAULT_TIP_HEADING,
     )
-
-    message, paraphrased = paraphrase_step_message(
-        message,
-        base_prompt=base_prompt,
-        model_name=model_name,
-        node_id=node_id,
-        options=list(node.get("options") or []),
-        defect_category=defect_category,
-    )
-
-    lead_sources = []
-    if prefer_freshdesk and similar_freshdesk is not None:
-        lead_sources.append(similar_freshdesk.source)
-    lead_sources.extend(
-        entry.source for entry in (presentable_matches or matches)[:2]
-    )
-    sources = list(dict.fromkeys(lead_sources))
 
     return {
         "message": message,
         "phase": "workflow_step",
-        "sources": sources,
-        "top_match": (
-            presentable_matches[0].title
-            if presentable_matches and not prefer_freshdesk
-            else None
-        ),
+        "sources": [fonz_entry.source] if fonz_entry else [],
+        "top_match": None,
         "tips": tips,
-        "paraphrased": paraphrased,
-        "similar_symptom_match": prefer_freshdesk,
+        "paraphrased": False,
+        "similar_symptom_match": False,
     }

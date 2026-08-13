@@ -8,6 +8,28 @@ sys.path.insert(0, str(APP_DIR))
 
 from answer_guard import sanitize_agent_response
 
+def test_warranty_tool_uses_engine_customer_message_not_llm_rewrite():
+    tool = (
+        "WARRANTY_CONTINUE\n"
+        "TICKET_ID: WR-1\n"
+        "PROMPT: When you toggle the back switch, do you hear a click?\n"
+        "CUSTOMER_MESSAGE:\n"
+        "Based on what you've told us about your **OS-4000T**, here is a quick note.\n\n"
+        "**What you can try:**\n"
+        "1. Toggle the back power switch OFF, wait 10 seconds, then ON.\n\n"
+        "When you toggle the back switch, do you hear a click?\n"
+        "INSTRUCTION: Deliver CUSTOMER_MESSAGE to the customer verbatim."
+    )
+    out = sanitize_agent_response(
+        "Sounds like a compressor failure — we'll send a technician tomorrow.",
+        tools_called=["answer_warranty_question"],
+        user_query="no click",
+        tool_results=[tool],
+    )
+    assert "technician" not in out.lower()
+    assert "Toggle the back power switch" in out
+    assert out.rstrip().endswith("do you hear a click?")
+
 
 def test_blocks_price_without_catalog_tool():
     out = sanitize_agent_response(

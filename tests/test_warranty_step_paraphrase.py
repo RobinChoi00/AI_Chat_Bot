@@ -35,6 +35,10 @@ class _FakeOpenAI:
         )
 
 
+def test_paraphrase_off_by_default():
+    assert paraphrase._ENABLED is False
+
+
 def test_paraphrase_disabled_without_api_key(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     draft = "Tip\n\nDo you hear a click?"

@@ -1977,16 +1977,14 @@ async def smart_start_warranty(
     """
     Multi-step free-text intake.
 
-    LLM reads the customer's one-line description and produces an ordered
-    sequence of valid flowchart answer_keys. We auto-submit those keys so the
-    customer can skip 2~6 multiple-choice questions when their description is
-    clear (e.g. "OS-4000T footrest air not inflating" → defect → air →
-    footrest → terminal).
+    LLM reads the customer's one-line description and may *suggest* an issue
+    type. We only auto-submit ``warranty`` (open the menu). Deep flowchart
+    keys are never applied until the customer taps a confirmed option.
 
     Behavior:
       - On failure / low confidence: advances only to the issue-type menu (never
         silently defaults to defect).
-      - Only auto-submits answer_keys that match the live flowchart options.
+      - Deep answer_keys stay in ``skipped_keys`` until the customer confirms.
       - Returns the same ticket-state payload as other warranty endpoints, plus
         `smart_start` metadata explaining what was inferred.
     """

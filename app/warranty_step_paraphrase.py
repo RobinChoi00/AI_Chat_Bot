@@ -24,7 +24,8 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-_ENABLED = os.getenv("WARRANTY_STEP_PARAPHRASE", "1").strip().lower() not in {
+# Off by default: customer copy must stay on the drafted facts.
+_ENABLED = os.getenv("WARRANTY_STEP_PARAPHRASE", "0").strip().lower() not in {
     "0",
     "false",
     "no",

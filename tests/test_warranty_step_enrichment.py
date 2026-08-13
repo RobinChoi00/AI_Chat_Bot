@@ -61,7 +61,7 @@ def test_build_step_enrichment_skips_before_issue_type_selected():
     assert step_enrich.build_step_enrichment(engine, ticket, node) is None
 
 
-def test_build_step_enrichment_uses_freshdesk_tips(monkeypatch):
+def test_build_step_enrichment_ignores_fuzzy_freshdesk_tips(monkeypatch):
     fake_matches = [
         KnowledgeEntry(
             source="freshdesk",
@@ -75,11 +75,11 @@ def test_build_step_enrichment_uses_freshdesk_tips(monkeypatch):
         )
     ]
 
-    monkeypatch.setattr(step_enrich, "contextual_search_knowledge", lambda **kwargs: fake_matches)
     monkeypatch.setattr(
         step_enrich,
-        "paraphrase_step_message",
-        lambda message, **kwargs: (message, False),
+        "contextual_search_knowledge",
+        lambda **kwargs: fake_matches,
+        raising=False,
     )
 
     engine = _FakeEngine(
@@ -99,15 +99,15 @@ def test_build_step_enrichment_uses_freshdesk_tips(monkeypatch):
     result = step_enrich.build_step_enrichment(engine, ticket, node)
     assert result is not None
     assert result["phase"] == "workflow_step"
-    assert result["sources"] == ["freshdesk"]
-    assert "What you can try" in result["message"] or "symptoms like yours" in result["message"].lower()
-    assert "support cases" not in result["message"].lower()
-    assert "Toggle the back power switch" in result["message"]
+    assert result["paraphrased"] is False
+    assert result["similar_symptom_match"] is False
+    assert "freshdesk" not in result["sources"]
+    assert "Try a different wall outlet" not in result["message"]
     assert result["message"].rstrip().endswith("do you hear a click?")
 
 
-def test_build_step_enrichment_boosts_similar_freshdesk(monkeypatch):
-    """High-overlap Freshdesk tips should lead, with soft similar-symptom framing."""
+def test_build_step_enrichment_does_not_lead_with_similar_freshdesk(monkeypatch):
+    """Fuzzy Freshdesk overlap must not become customer-facing copy."""
     qa = KnowledgeEntry(
         source="qa_csv",
         category="power",
@@ -129,11 +129,7 @@ def test_build_step_enrichment_boosts_similar_freshdesk(monkeypatch):
         step_enrich,
         "contextual_search_knowledge",
         lambda **kwargs: [qa, freshdesk],
-    )
-    monkeypatch.setattr(
-        step_enrich,
-        "paraphrase_step_message",
-        lambda message, **kwargs: (message, False),
+        raising=False,
     )
 
     ticket = SimpleNamespace(ticket_id="t1", issue_type="defect", model_name="OS-4000T")
@@ -157,10 +153,11 @@ def test_build_step_enrichment_boosts_similar_freshdesk(monkeypatch):
 
     result = step_enrich.build_step_enrichment(engine, ticket, node)
     assert result is not None
-    assert result.get("similar_symptom_match") is True
-    assert result["sources"][0] == "freshdesk"
-    assert "symptoms like yours" in result["message"].lower()
-    assert "Toggle the back power switch" in result["message"]
+    assert result.get("similar_symptom_match") is False
+    assert result["paraphrased"] is False
+    assert "freshdesk" not in result["sources"]
+    assert "symptoms like yours" not in result["message"].lower()
+    assert "Try a different wall outlet and verify the cord is seated." not in result["message"]
     assert "support cases" not in result["message"].lower()
     assert "ticket #" not in result["message"].lower()
     assert result.get("top_match") is None
@@ -185,11 +182,7 @@ def test_build_step_enrichment_drops_off_topic_air_tips_on_remote(monkeypatch):
         step_enrich,
         "contextual_search_knowledge",
         lambda **kwargs: [air, remote],
-    )
-    monkeypatch.setattr(
-        step_enrich,
-        "paraphrase_step_message",
-        lambda message, **kwargs: (message, False),
+        raising=False,
     )
 
     ticket = SimpleNamespace(ticket_id="t-remote", issue_type="defect", model_name="Maxim LE")
@@ -288,15 +281,7 @@ def test_freshdesk_kb_leads_at_softer_similarity(monkeypatch):
     assert leader is kb
 
 
-def test_build_step_enrichment_uses_intake_summary_in_search(monkeypatch):
-    captured: dict = {}
-
-    def _fake_search(**kwargs):
-        captured.update(kwargs)
-        return []
-
-    monkeypatch.setattr(step_enrich, "contextual_search_knowledge", _fake_search)
-
+def test_build_step_enrichment_uses_intake_summary(monkeypatch):
     ticket = SimpleNamespace(ticket_id="t1", issue_type="defect", model_name="OS-4000T")
     ticket.get_collected = lambda: {"intake_summary": "Footrest air not inflating."}
     ticket.set_collected = lambda key, value: None
@@ -319,8 +304,9 @@ def test_build_step_enrichment_uses_intake_summary_in_search(monkeypatch):
     assert result["phase"] == "workflow_step"
     assert result.get("top_match") is None
     assert result.get("tips")
-    assert "Footrest air not inflating" in captured.get("path_text", "")
+    assert result["paraphrased"] is False
     assert "You mentioned" in result["message"]
+    assert "Footrest air not inflating" in result["message"]
 
 
 def test_build_step_enrichment_skips_delivery_path(monkeypatch):
@@ -336,7 +322,12 @@ def test_build_step_enrichment_skips_delivery_path(monkeypatch):
             ),
         )
     ]
-    monkeypatch.setattr(step_enrich, "contextual_search_knowledge", lambda **kwargs: fake_matches)
+    monkeypatch.setattr(
+        step_enrich,
+        "contextual_search_knowledge",
+        lambda **kwargs: fake_matches,
+        raising=False,
+    )
 
     engine = _FakeEngine(
         [
@@ -535,7 +526,12 @@ def test_build_step_enrichment_hides_unhelpful_top_match(monkeypatch):
             ),
         )
     ]
-    monkeypatch.setattr(step_enrich, "contextual_search_knowledge", lambda **kwargs: fake_matches)
+    monkeypatch.setattr(
+        step_enrich,
+        "contextual_search_knowledge",
+        lambda **kwargs: fake_matches,
+        raising=False,
+    )
 
     engine = _FakeEngine(
         [
@@ -574,6 +570,7 @@ def test_step_enrichment_hides_unconfirmed_error_code_rows(monkeypatch):
         step_enrich,
         "contextual_search_knowledge",
         lambda **kwargs: [error_row],
+        raising=False,
     )
 
     engine = _FakeEngine(
@@ -615,11 +612,11 @@ def test_build_step_enrichment_avoids_ungrounded_qa_title(monkeypatch):
             ),
         )
     ]
-    monkeypatch.setattr(step_enrich, "contextual_search_knowledge", lambda **kwargs: fake_matches)
     monkeypatch.setattr(
         step_enrich,
-        "paraphrase_step_message",
-        lambda message, **kwargs: (message, False),
+        "contextual_search_knowledge",
+        lambda **kwargs: fake_matches,
+        raising=False,
     )
 
     engine = _FakeEngine(

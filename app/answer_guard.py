@@ -31,6 +31,12 @@ _SPEC_NUMBER_REV_RE = re.compile(
     re.IGNORECASE,
 )
 
+_WARRANTY_TOOLS = frozenset({
+    "start_warranty_workflow",
+    "answer_warranty_question",
+    "warranty_start",
+    "warranty_answer",
+})
 _REPAIR_BLOCK_TOOLS = frozenset({"get_repair_help", "escalate_to_human"})
 _PRICE_BLOCK_TOOLS = frozenset({"search_chair_specs", "recommend_chairs"})
 _TRACKING_BLOCK_TOOLS = frozenset({"lookup_order_status"})
@@ -97,6 +103,23 @@ def _message(key: str, user_query: str) -> str:
 
 def _tool_blob(tool_results: Sequence[str]) -> str:
     return "\n".join(tool_results or [])
+
+
+def _warranty_locked_message(blob: str) -> str:
+    """Return the engine's customer copy from a warranty tool result, if any."""
+    if "CUSTOMER_MESSAGE:" in blob:
+        after = blob.split("CUSTOMER_MESSAGE:", 1)[1]
+        if "INSTRUCTION:" in after:
+            after = after.split("INSTRUCTION:", 1)[0]
+        text = after.strip()
+        if text and not text.lower().startswith("(none"):
+            return text
+    for line in blob.splitlines():
+        if line.startswith("PROMPT:"):
+            prompt = line.split("PROMPT:", 1)[1].strip()
+            if prompt:
+                return prompt
+    return ""
 
 
 def _prices_in_text(text: str) -> set[str]:
@@ -207,12 +230,18 @@ def sanitize_agent_response(
     Returns the (possibly modified) customer-facing string.
     """
     text = (response or "").strip()
-    if not text:
-        return text
-
     called = set(tools_called or [])
     blob = _tool_blob(tool_results or [])
     blob_lower = blob.lower()
+
+    if called.intersection(_WARRANTY_TOOLS):
+        locked = _warranty_locked_message(blob)
+        if locked:
+            return locked
+
+    if not text:
+        return text
+
     lower = text.lower()
 
     if "tool_error:" in blob_lower:

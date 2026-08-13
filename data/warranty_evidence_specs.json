@@ -76,6 +76,7 @@
     "delivery_never_arrived_terminal":         { "required": [],                                                             "optional": [] },
     "delivery_late_terminal":                  { "required": [],                                                             "optional": [] },
     "delivery_other_problem_terminal":         { "required": [],                                                             "optional": [] },
+    "delivery_status_terminal":                { "required": [],                                                             "optional": [] },
     "delivery_signed_cleared_terminal":        { "required": ["damage_photos"],                                              "optional": [] },
     "delivery_replace_claim_terminal":         { "required": ["damage_photos", "box_photos"],                                "optional": ["signed_delivery_receipt"] },
     "delivery_minor_comp_terminal":            { "required": ["damage_photos"],                                              "optional": [] },
