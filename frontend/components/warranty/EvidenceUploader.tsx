@@ -7,6 +7,7 @@ import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 
 interface Props {
   ticketId: string;
+  issueType?: string;
   evidenceRequired?: string[];
   /** Email already collected at intake — skip re-asking when valid. */
   initialCustomerEmail?: string;
@@ -46,6 +47,7 @@ function isValidEmail(value: string): boolean {
 
 export default function EvidenceUploader({
   ticketId,
+  issueType,
   evidenceRequired = [],
   initialCustomerEmail = "",
   onContactSuccess,
@@ -202,9 +204,21 @@ export default function EvidenceUploader({
     );
   }
 
-  const title = hasKnownEmail
-    ? "Final step — send to our warranty team?"
-    : "Final step — how can we reach you?";
+  const title =
+    issueType === "installation"
+      ? "Final step — send this install case to our team?"
+      : issueType === "delivery"
+        ? "Final step — send this delivery case to our team?"
+        : hasKnownEmail
+          ? "Final step — send to our warranty team?"
+          : "Final step — how can we reach you?";
+
+  const reachBlurb =
+    issueType === "installation"
+      ? "Ready to send this setup case to our team? They’ll follow up with installation support within 24 hours."
+      : issueType === "delivery"
+        ? "Ready to send this delivery case? They’ll review damage, missing parts, or tracking and follow up within 24 hours."
+        : "Ready to send it to our warranty team? They’ll follow up within 24 hours with repair or next steps.";
 
   const submitLabel = submitting
     ? "Submitting…"
@@ -253,8 +267,7 @@ export default function EvidenceUploader({
         <div className="mb-3 space-y-2">
           <p className="text-xs text-gray-600">
             We already have <strong className="text-gray-900">{knownEmail}</strong> for
-            this case. Ready to send it to our warranty team? They&apos;ll follow up
-            within 24 hours. Photos and videos are optional.
+            this case. {reachBlurb} Photos and videos are optional.
           </p>
           <button
             type="button"
@@ -271,7 +284,11 @@ export default function EvidenceUploader({
       ) : (
         <>
           <p className="mb-3 text-xs text-gray-500">
-            Enter your email so our warranty team can follow up within 24 hours.{" "}
+            {issueType === "installation"
+              ? "Enter your email so our team can follow up with installation support within 24 hours. "
+              : issueType === "delivery"
+                ? "Enter your email so our team can follow up on this delivery case within 24 hours. "
+                : "Enter your email so our warranty team can follow up within 24 hours. "}
             Photos and videos are optional.
           </p>
           <div className="mb-3">

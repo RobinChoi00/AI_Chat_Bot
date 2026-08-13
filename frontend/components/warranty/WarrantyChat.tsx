@@ -38,7 +38,7 @@ import EvidenceUploader from "./EvidenceUploader";
 import SaveProgressButton from "./SaveProgressButton";
 import SerialPhotoButton from "./SerialPhotoButton";
 import TicketStatusBadge from "./TicketStatusBadge";
-import TroubleshootingGate from "./TroubleshootingGate";
+import TroubleshootingGate, { resolutionGateLabels } from "./TroubleshootingGate";
 import { WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
 import {
   CHAT_CONSENT_STORAGE_KEY,
@@ -67,6 +67,32 @@ const EMAIL_THANK_YOU =
 const SELF_HELP_CLOSING =
   "Great — this request is now closed as self-resolved. If you still need us, you can start a new case anytime. " +
   "Our warranty team is also available by phone during business hours.";
+
+function selfHelpClosing(issueType?: string | null): string {
+  if (issueType === "installation") {
+    return (
+      "Great — glad the chair is set up. If you still need install help, you can start a new case anytime. " +
+      "Our warranty team is also available by phone during business hours."
+    );
+  }
+  if (issueType === "delivery") {
+    return (
+      "No problem — come back anytime when you have the photos or delivery paperwork. " +
+      "Our warranty team is also available by phone during business hours."
+    );
+  }
+  return SELF_HELP_CLOSING;
+}
+
+function teamFollowUpThankYou(issueType?: string | null): string {
+  if (issueType === "installation") {
+    return "Thank you — our team will follow up with installation support within 24 hours.";
+  }
+  if (issueType === "delivery") {
+    return "Thank you — our team will review this delivery case (damage, missing parts, or tracking) and follow up within 24 hours.";
+  }
+  return "Thank you — our team will review this product issue and follow up within 24 hours.";
+}
 
 const DEFECT_MODEL_PROMPT =
   "To troubleshoot warranty defects accurately, please **enter your chair model** in the box below (for example OS-4000T or 3D LTX). I'll continue with the defect questions right after.";
@@ -962,7 +988,7 @@ export default function WarrantyChat({
           setHelpConsent("no");
           setMessages((previous) => [
             ...previous,
-            assistantMessage(SELF_HELP_CLOSING),
+            assistantMessage(selfHelpClosing(warrantyState?.issue_type)),
           ]);
           return;
         }
@@ -987,7 +1013,7 @@ export default function WarrantyChat({
         setLoading(false);
       }
     },
-    [loading, warrantyState?.ticket_id, intakeContactEmail]
+    [loading, warrantyState?.ticket_id, warrantyState?.issue_type, intakeContactEmail]
   );
 
   const isAwaitingAdmin =
@@ -1194,15 +1220,26 @@ export default function WarrantyChat({
 
       {isAwaitingAdmin && (
         <div className="mx-4 mt-3 shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-          <p className="text-sm font-medium text-amber-800">Under Support Review</p>
+          <p className="text-sm font-medium text-amber-800">
+            {warrantyState?.issue_type === "installation"
+              ? "Install Support Review"
+              : warrantyState?.issue_type === "delivery"
+                ? "Delivery Case Review"
+                : "Under Support Review"}
+          </p>
           <p className="mt-0.5 text-xs text-amber-700">
+            {warrantyState?.issue_type === "installation"
+              ? "We'll help you finish setup."
+              : warrantyState?.issue_type === "delivery"
+                ? "Your delivery case is with our team."
+                : null}{" "}
             {caseReference ? (
               <>
-                Your case reference is <strong>{caseReference}</strong>.
-                {" "}Save this number — our team will follow up within 24 hours.
+                Your case reference is <strong>{caseReference}</strong>. Save this
+                number — our team will follow up within 24 hours.
               </>
             ) : (
-              "Your case has been prepared for support team review."
+              "Our team will follow up within 24 hours."
             )}
           </p>
         </div>
@@ -1360,6 +1397,9 @@ export default function WarrantyChat({
         <div className="shrink-0 border-t border-gray-100 bg-white px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-4 sm:pb-[max(1rem,env(safe-area-inset-bottom))]">
           <TroubleshootingGate
             mode={terminalEnrichment?.interaction_mode ?? "troubleshooting"}
+            issueType={
+              terminalEnrichment?.issue_type || warrantyState?.issue_type
+            }
             stage={resolutionStage}
             stepCount={terminalEnrichment?.diagnosis?.steps?.length ?? 0}
             disabled={loading || interactionsLocked}
@@ -1369,23 +1409,28 @@ export default function WarrantyChat({
             onResolved={() =>
               handleResolutionOutcome(
                 "resolved",
-                terminalEnrichment?.interaction_mode === "preparation"
-                  ? "No — I’m all set"
-                  : "Yes — it’s working now"
+                resolutionGateLabels(
+                  terminalEnrichment?.issue_type || warrantyState?.issue_type,
+                  terminalEnrichment?.interaction_mode ?? "troubleshooting"
+                ).resolved
               )
             }
             onUnresolved={() =>
               handleResolutionOutcome(
                 "unresolved",
-                terminalEnrichment?.interaction_mode === "preparation"
-                  ? "Yes — continue to team review"
-                  : "No — the issue is still there"
+                resolutionGateLabels(
+                  terminalEnrichment?.issue_type || warrantyState?.issue_type,
+                  terminalEnrichment?.interaction_mode ?? "troubleshooting"
+                ).unresolved
               )
             }
             onUnableToAttempt={() =>
               handleResolutionOutcome(
                 "unable_to_attempt",
-                "I can’t safely complete these steps"
+                resolutionGateLabels(
+                  terminalEnrichment?.issue_type || warrantyState?.issue_type,
+                  terminalEnrichment?.interaction_mode ?? "troubleshooting"
+                ).unable
               )
             }
           />
@@ -1396,6 +1441,7 @@ export default function WarrantyChat({
         <div className="shrink-0 border-t border-gray-100 bg-white p-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:p-4">
           <EvidenceUploader
             ticketId={warrantyState!.ticket_id}
+            issueType={warrantyState?.issue_type}
             evidenceRequired={warrantyState!.current_node?.evidence_required}
             initialCustomerEmail={intakeContactEmail}
             collapsed={emailPanelCollapsed}
@@ -1406,11 +1452,7 @@ export default function WarrantyChat({
               setContactSubmitted(true);
               setMessages((prev) => [
                 ...prev,
-                assistantMessage(
-                  intakeContactEmail.trim()
-                    ? "Thank you — we’ve notified our warranty team using your email. They will follow up within 24 hours."
-                    : "Thank you — your email has been received. Our warranty team will follow up within 24 hours."
-                ),
+                assistantMessage(teamFollowUpThankYou(warrantyState?.issue_type)),
               ]);
             }}
             onUploadSuccess={(filename) => {
@@ -1418,7 +1460,7 @@ export default function WarrantyChat({
               setMessages((prev) => [
                 ...prev,
                 assistantMessage(
-                  `Thank you — "${filename}" has been received. Our team will review it shortly.`
+                  `Thank you — "${filename}" has been received. ${teamFollowUpThankYou(warrantyState?.issue_type)}`
                 ),
               ]);
             }}

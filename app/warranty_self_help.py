@@ -135,6 +135,85 @@ HELP_OFFER_OPTIONS: tuple[dict[str, str], ...] = (
     {"answer_key": "yes_team_help", "label": "I tried the steps — I still need help"},
 )
 
+_GENERIC_CLOSINGS: tuple[str, ...] = (
+    "**Please watch the guide and try the setup checks first. Then use the check below to tell us whether the issue is resolved.**",
+    "**Try the steps above first. When you're finished, use the check below to tell us whether the issue is resolved.**",
+    "**Please complete the preparation above first. Then use the check below if you still need warranty team review.**",
+)
+
+_CLOSING_CTA = {
+    "installation": (
+        "**Please watch the install guide and try the setup checks first. "
+        "Then use the check below to tell us whether the chair is set up correctly.**"
+    ),
+    "delivery": (
+        "**Please gather the photos and delivery paperwork above. "
+        "Then use the check below to send this delivery case to our team.**"
+    ),
+    "defect": (
+        "**Try the steps above first. When you're finished, use the check below "
+        "to tell us whether the product issue is resolved.**"
+    ),
+}
+
+_CLOSING_CTA_PREP = {
+    "installation": _CLOSING_CTA["installation"],
+    "delivery": _CLOSING_CTA["delivery"],
+    "defect": (
+        "**Please complete the preparation above first. Then use the check below "
+        "if you still need warranty team review for this product issue.**"
+    ),
+}
+
+
+def normalize_issue_type(issue_type: str) -> str:
+    key = (issue_type or "").strip().lower()
+    if key in ("installation", "delivery", "defect"):
+        return key
+    return "defect"
+
+
+def closing_cta(issue_type: str, *, preparation: bool = False) -> str:
+    key = normalize_issue_type(issue_type)
+    if preparation:
+        return _CLOSING_CTA_PREP[key]
+    return _CLOSING_CTA[key]
+
+
+def apply_issue_closing(message: str, issue_type: str) -> str:
+    """Replace the shared terminal CTA with install / delivery / defect copy."""
+    key = normalize_issue_type(issue_type)
+    text = message or ""
+    preparation = (
+        "What to prepare" in text
+        or _GENERIC_CLOSINGS[2] in text
+        or key == "delivery"
+    )
+    new = closing_cta(key, preparation=preparation)
+    replaced = False
+    for old in _GENERIC_CLOSINGS:
+        if old in text:
+            text = text.replace(old, new)
+            replaced = True
+    if not replaced:
+        text = text.rstrip() + "\n\n" + new
+    return text
+
+
+def help_offer_options_for(issue_type: str) -> tuple[dict[str, str], ...]:
+    key = normalize_issue_type(issue_type)
+    if key == "installation":
+        return (
+            {"answer_key": "no_self_help", "label": "Yes — the chair is set up now"},
+            {"answer_key": "yes_team_help", "label": "No — I still need install help"},
+        )
+    if key == "delivery":
+        return (
+            {"answer_key": "no_self_help", "label": "Not yet — I’ll come back"},
+            {"answer_key": "yes_team_help", "label": "Yes — submit my delivery case"},
+        )
+    return HELP_OFFER_OPTIONS
+
 
 def category_fallback_hints(defect_category: str, *, limit: int = 2) -> tuple[str, ...]:
     """Short category-only tips when the chair model is not yet known."""

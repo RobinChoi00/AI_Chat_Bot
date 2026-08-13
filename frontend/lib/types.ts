@@ -98,6 +98,7 @@ export interface TerminalEnrichment {
   } | null;
   phase?: "awaiting_help_consent" | "contact";
   interaction_mode?: "troubleshooting" | "preparation";
+  issue_type?: "installation" | "delivery" | "defect" | string;
   help_offer_options?: AnswerOption[];
   show_contact_form?: boolean;
   defer_email?: boolean;

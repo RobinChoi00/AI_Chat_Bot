@@ -15,6 +15,7 @@ from config import REPAIR_MANUAL_URL, WARRANTY_BUSINESS_HOURS, WARRANTY_PHONE, W
 from install_videos import lookup_install_video
 from warranty_self_help import (
     HELP_OFFER_OPTIONS,
+    apply_issue_closing,
     build_admin_review_diagnosis,
     build_air_diagnosis,
     build_cosmetic_diagnosis,
@@ -42,6 +43,7 @@ from warranty_self_help import (
     format_remote_self_help_message,
     format_rolling_noise_self_help_message,
     format_voice_self_help_message,
+    help_offer_options_for,
     infer_air_symptom_from_turns,
     infer_cosmetic_symptom_from_turns,
     infer_defect_category_from_turns,
@@ -53,6 +55,7 @@ from warranty_self_help import (
     infer_remote_symptom_from_turns,
     infer_rolling_noise_type_from_turns,
     infer_voice_symptom_from_turns,
+    normalize_issue_type,
 )
 
 _ROLLING_NOISE_TERMINALS = frozenset({
@@ -159,6 +162,26 @@ def _help_offer_enrichment(
         "show_contact_form": False,
         "defer_email": True,
     }
+
+
+def _finalize_issue_copy(result: dict[str, Any], issue_type: str) -> dict[str, Any]:
+    issue = normalize_issue_type(issue_type)
+    footer = _contact_footer()
+    raw = str(result.get("message") or "")
+    body = raw
+    suffix = f"\n\n{footer}"
+    if body.endswith(suffix):
+        body = body[: -len(suffix)]
+    elif body.endswith(footer):
+        body = body[: -len(footer)].rstrip()
+    result["message"] = f"{apply_issue_closing(body, issue)}\n\n{footer}"
+    result["issue_type"] = issue
+    result["help_offer_options"] = list(help_offer_options_for(issue))
+    if issue == "delivery":
+        result["interaction_mode"] = "preparation"
+    elif issue == "installation" and result.get("interaction_mode") != "preparation":
+        result["interaction_mode"] = "troubleshooting"
+    return result
 
 
 def _install_message(model_name: str, base_prompt: str) -> dict[str, Any]:
@@ -477,6 +500,8 @@ def build_terminal_enrichment(
         result = _admin_review_terminal_message(engine, ticket_id, ticket, node)
     else:
         result = _workflow_end_message(engine, ticket_id, ticket, node)
+
+    result = _finalize_issue_copy(result, issue_type) if result else result
 
     from warranty_error_code_gate import append_fonz_to_terminal_enrichment  # noqa: WPS433
 

@@ -64,6 +64,9 @@ def test_install_terminal_includes_video_and_help_offer():
     assert len(result["help_offer_options"]) == 2
     assert result["help_offer_options"][0]["answer_key"] == "no_self_help"
     assert result["interaction_mode"] == "troubleshooting"
+    assert result["issue_type"] == "installation"
+    assert "set up correctly" in result["message"]
+    assert result["help_offer_options"][1]["label"] == "No — I still need install help"
 
 
 def test_install_air_hose_terminal_includes_diy_steps_and_video():
@@ -251,6 +254,8 @@ def test_defect_terminal_diagnosis_and_help_offer():
     assert result["defer_email"] is True
     assert "PCB repair or replacement" not in result["message"]
     assert "Try the steps above first" in result["message"]
+    assert "product issue" in result["message"]
+    assert result["issue_type"] == "defect"
     assert "What you can try" in result["message"]
     assert result["diagnosis"]["steps"]
 
@@ -501,6 +506,9 @@ def test_delivery_replace_claim_terminal_includes_diy_prep():
     )
     assert result["phase"] == "awaiting_help_consent"
     assert result["interaction_mode"] == "preparation"
+    assert result["issue_type"] == "delivery"
+    assert "delivery case" in result["message"].lower()
+    assert result["help_offer_options"][1]["label"] == "Yes — submit my delivery case"
 
 
 def test_delivery_signed_cleared_terminal_warns_compensation_difficulty():
