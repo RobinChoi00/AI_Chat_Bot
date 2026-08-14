@@ -28,9 +28,11 @@ _ISSUE_KEYWORDS: dict[str, tuple[str, ...]] = {
         "fedex",
         "ups",
         "usps",
-        "box",
         "carrier",
         "arrived damaged",
+        "box is broken",
+        "box was crushed",
+        "box was damaged",
     ),
     "installation": (
         "install",
@@ -56,10 +58,9 @@ _ISSUE_KEYWORDS: dict[str, tuple[str, ...]] = {
         "remote",
         "power",
         "recline",
-        "massage",
-        "air",
         "inflate",
         "airbag",
+        "air bag",
         "footrest",
         "foot rest",
         "not inflating",
@@ -71,11 +72,21 @@ _ISSUE_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 _YES_RE = re.compile(
-    r"\b(yes|yeah|yep|yup|sure|correct|affirmative|i do|i have|it was|it is)\b",
+    r"\b(yes|yeah|yep|yup|sure|correct|affirmative|i do|i have)\b",
     re.I,
 )
 _NO_RE = re.compile(
-    r"\b(no|nope|nah|negative|i don't|i dont|don't have|dont have|never|not really)\b",
+    r"\b(no|nope|nah|negative|i don't|i dont|don't have|dont have)\b",
+    re.I,
+)
+# Generic yes/no must be the whole message. Otherwise "no power" / "never came"
+# / "I have tracking" steal the no/yes option on unrelated questions.
+_BARE_YES_RE = re.compile(
+    r"^(yes|yeah|yep|yup|sure|correct|affirmative)( please| it (is|was|did))?$",
+    re.I,
+)
+_BARE_NO_RE = re.compile(
+    r"^(no|nope|nah|negative|not really)$",
     re.I,
 )
 _SUGGEST_CONFIRM_RE = re.compile(
@@ -90,7 +101,8 @@ _SUGGEST_REJECT_RE = re.compile(
 _STEPS_DONE_RE = re.compile(
     r"\b(tried (all )?(the )?steps|i('ve| have) tried|watched the (guide|video)|"
     r"completed (the )?(prep|steps|setup|guide)|done with (the )?steps|"
-    r"all the steps|i('ve| have) (watched|done|finished))\b",
+    r"all the steps|i('ve| have) (watched|done|finished)|"
+    r"i did (that|it|them)|tried it|\bdone\b)\b",
     re.I,
 )
 _UNABLE_RE = re.compile(
@@ -99,7 +111,8 @@ _UNABLE_RE = re.compile(
     re.I,
 )
 _NEED_TEAM_RE = re.compile(
-    r"\b(need help|please help|send (a )?(tech|technician)|warranty team|"
+    r"\b(need help|please help|send (a )?(tech|technician|someone)|"
+    r"send someone( out)?|come out|warranty team|"
     r"call me|contact me|submit (my )?(case|claim)|file a claim)\b",
     re.I,
 )
@@ -134,6 +147,406 @@ _DELIVERY_SUBMIT_RE = re.compile(
 PENDING_SUGGESTED_KEY = "pending_suggested_answer_key"
 PENDING_SUGGESTED_LABEL = "pending_suggested_label"
 
+# Words that appear in many labels and must not unique-match an option.
+_WEAK_WORDS = frozenset(
+    {
+        "won't",
+        "wont",
+        "doesn't",
+        "doesnt",
+        "don't",
+        "dont",
+        "coming",
+        "working",
+        "issue",
+        "chair",
+        "problem",
+        "still",
+        "there",
+        "from",
+        "something",
+        "other",
+        "about",
+        "please",
+        "help",
+        "with",
+        "that",
+        "this",
+        "have",
+        "been",
+        "not",
+        "the",
+        "and",
+        "for",
+        "are",
+        "was",
+        "has",
+        "your",
+        "my",
+        "any",
+        "all",
+        "look",
+        "looks",
+        "looked",
+        "fine",
+        "area",
+        "part",
+        "massage",
+        "warm",
+        "here",
+        "sound",
+        "move",
+        "moves",
+        "back",
+        "opened",
+        "down",
+        "turn",
+        "turns",
+    }
+)
+
+# Phrases → answer_key. Applied only when that key is on the current node,
+# and only when exactly one current option hits.
+_OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "power": (
+        "won't turn on",
+        "wont turn on",
+        "doesn't turn on",
+        "not turning on",
+        "no power",
+        "won't power on",
+    ),
+    "air": (
+        "airbag",
+        "air bag",
+        "not inflating",
+        "won't inflate",
+        "wont inflate",
+        "inflation",
+        "air not working",
+    ),
+    "cosmetic": (
+        "scratch",
+        "scratched",
+        "crack",
+        "cracked",
+        "dent",
+        "scuff",
+        "appearance",
+        "looks damaged",
+        "cosmetic",
+    ),
+    "remote": (
+        "controller",
+        "remote",
+        "remote is dead",
+        "remote dead",
+        "blank screen",
+    ),
+    "rolling": (
+        "rollers not moving",
+        "roller",
+        "kneading",
+        "massage head",
+        "massage mechanism",
+        "rollers",
+    ),
+    "recline": (
+        "won't recline",
+        "wont recline",
+        "not reclining",
+        "lay back",
+        "zero gravity",
+        "recline",
+    ),
+    "heat": (
+        "heater",
+        "heating",
+        "not warm",
+        "no heat",
+        "too hot",
+        "temperature",
+        "doesn't heat",
+        "not getting warm",
+    ),
+    "voice": ("alexa", "voice control", "hey osaki", "voice command", "voice"),
+    "footrest": (
+        "ottoman",
+        "legrest",
+        "leg rest",
+        "foot rest",
+        "footrest",
+        "foot roller",
+        "foot rollers",
+        "calf roller",
+        "calf rollers",
+    ),
+    "feet_calves": ("calves", "calf", "feet", "foot", "legs", "ankles"),
+    "shoulders_hips": (
+        "shoulders",
+        "shoulder",
+        "hips",
+        "hip",
+        "lumbar",
+        "upper back",
+    ),
+    "arms": ("armrest", "arms", "arm"),
+    "side_panel": ("side panel", "side panels"),
+    "base": ("bottom of the chair", "under the chair", "the base"),
+    "status_check": (
+        "where's my order",
+        "where is my order",
+        "where is my package",
+        "track my",
+        "tracking status",
+        "shipment status",
+    ),
+    "damage_issue": (
+        "arrived damaged",
+        "box damaged",
+        "damaged on arrival",
+        "crushed",
+        "box was crushed",
+        "missing parts",
+        "never came",
+        "never showed",
+    ),
+    "damaged_in_transit": (
+        "box crushed",
+        "arrived damaged",
+        "damaged in transit",
+        "chair damaged",
+        "box was crushed",
+        "box is broken",
+        "the box is broken",
+        "box broken",
+        "box damaged",
+    ),
+    "missing_parts": (
+        "missing parts",
+        "incomplete",
+        "missing pieces",
+        "parts missing",
+        "parts are missing",
+    ),
+    "wrong_item": ("wrong chair", "wrong model", "wrong item", "sent the wrong"),
+    "never_arrived": (
+        "never came",
+        "never showed",
+        "never arrived",
+        "marked delivered",
+        "stolen",
+    ),
+    "late_delivery": ("was late", "delayed", "still hasn't arrived", "running late"),
+    "no_tracking": (
+        "don't have tracking",
+        "dont have tracking",
+        "no tracking",
+        "don't have a tracking",
+    ),
+    "has_tracking": (
+        "i have tracking",
+        "here's my tracking",
+        "have my tracking",
+        "tracking number is",
+    ),
+    "yes_worked": (
+        "used to work",
+        "worked before",
+        "it worked then stopped",
+        "stopped working",
+        "worked then",
+    ),
+    "never_worked": (
+        "never worked",
+        "never has",
+        "from day one",
+        "out of the box it didn't",
+        "never worked out of the box",
+    ),
+    "air_blowing": (
+        "air is coming out",
+        "air coming out",
+        "i feel air",
+        "air is blowing",
+        "yes air",
+        "air blowing",
+    ),
+    "no_air": ("no air coming", "nothing coming out", "no air at all", "no air"),
+    "yes_hissing": ("hissing", "i hear air", "hear hissing", "hear air"),
+    "no_hissing": ("no sound", "silent", "no hiss", "no sound at all"),
+    "hose_issue": ("kinked", "disconnected hose", "hose disconnected", "pinched"),
+    "hoses_ok": ("hoses look fine", "hose is fine", "hoses are fine"),
+    "yes_white_glove": ("white glove", "white-glove"),
+    "no_white_glove": ("standard delivery", "left at the door"),
+    "signed_cleared": ("signed as cleared", "signed clear", "signed cleared"),
+    "signed_damaged": ("signed as damaged", "signed damaged"),
+    "visible_at_unboxing": ("when i opened", "unboxing", "opened the box"),
+    "noticed_later": ("noticed later", "after a few days", "found it later"),
+    "installation": (
+        "assemble",
+        "assembling",
+        "assembly",
+        "set up",
+        "set it up",
+        "setup",
+        "put together",
+        "install",
+    ),
+    "delivery": (
+        "package",
+        "shipping",
+        "tracking",
+        "delivery",
+        "fedex",
+        "ups",
+        "box is broken",
+        "box was crushed",
+        "box was damaged",
+    ),
+    "defect": ("broken", "won't turn on", "not working", "defect", "malfunction"),
+    "general_setup": (
+        "put together",
+        "how do i assemble",
+        "set it up",
+        "setup video",
+        "how to install",
+        "assembly",
+        "assemble",
+        "assembling",
+        "setup",
+        "install",
+    ),
+    "footrest_or_no_air": (
+        "no air anywhere",
+        "footrest air",
+        "footrest",
+        "foot roller",
+        "no air",
+    ),
+    "yes_box_damage": ("box was crushed", "box damaged", "box was damaged"),
+    "no_box_damage": (
+        "box looked fine",
+        "box was fine",
+        "box was ok",
+        "looked fine",
+        "appeared fine",
+        "it looked fine",
+    ),
+    "warranty": ("warranty", "claim"),
+    "too_hot": ("too hot", "too warm", "uneven heat", "burns"),
+    "not_heating": (
+        "doesn't heat",
+        "doesnt heat",
+        "no warmth",
+        "not heating",
+        "won't heat",
+        "wont heat",
+        "doesn't warm",
+    ),
+    "voice_no_response": (
+        "doesn't listen",
+        "doesnt listen",
+        "won't respond",
+        "doesn't respond",
+        "no response",
+        "ignores me",
+    ),
+    "false_triggers": (
+        "random commands",
+        "false trigger",
+        "picks up random",
+        "picks up commands",
+        "randomly turns",
+        "false triggers",
+    ),
+    "heads_not_moving": (
+        "heads don't move",
+        "heads dont move",
+        "heads not moving",
+        "massage heads not moving",
+    ),
+    "legrest_not_lowering": (
+        "won't go down",
+        "wont go down",
+        "not lowering",
+        "won't lower",
+        "won't retract",
+        "won't raise",
+        "wont raise",
+        "not raising",
+    ),
+    "legrest_not_extend": (
+        "won't extend",
+        "wont extend",
+        "won't come out",
+        "won't go out",
+        "does not extend",
+        "not extending",
+    ),
+    "foot_rollers": ("foot roller", "foot rollers", "foot rolling"),
+    "calf_roller": ("calf roller", "calf rollers"),
+    "air_not_inflating": (
+        "airbag",
+        "air bag",
+        "not inflating",
+        "won't inflate",
+        "wont inflate",
+        "no air in the footrest",
+    ),
+    "zero_gravity": ("zero gravity", "zg", "zero-g", "zero g"),
+    "fuse_broken": ("fuse blown", "fuse is blown", "blown fuse", "fuse is broken"),
+    "fuse_blown": ("fuse blown", "fuse is blown", "blown fuse", "fuse is broken"),
+    "stays_stuck": ("stuck", "stays stuck", "doesn't move back", "doesnt move back"),
+    "moves_on_off": (
+        "moves back",
+        "returns to default",
+        "goes back to default",
+        "moves to default",
+    ),
+    "clicking_sound": ("clicking", "clicking sound", "i heard a click", "heard a click"),
+    "blank_screen_commands_ok": (
+        "blank screen",
+        "screen is blank",
+        "screen blank",
+    ),
+    "cable_damaged": (
+        "cable damaged",
+        "cable is cut",
+        "cut cable",
+        "damaged cable",
+        "cable looks cut",
+    ),
+    "worked_before_stopped": (
+        "used to work",
+        "worked before",
+        "stopped working",
+        "worked then stopped",
+    ),
+    "pump_running": (
+        "hissing",
+        "hear the pump",
+        "pump is running",
+        "i hear the pump",
+        "pump running",
+    ),
+    "no_movement": (
+        "don't move at all",
+        "dont move at all",
+        "no movement",
+        "heads do not move",
+    ),
+    "footrest_recline": ("footrest", "foot rest", "footrest recline", "legrest recline"),
+    "intermittent": (
+        "intermittent",
+        "on and off",
+        "sometimes works",
+        "works sometimes",
+        "works intermittently",
+    ),
+    "pops": ("pops", "popping", "clicks during", "clicking during massage"),
+}
+
 
 def _normalize(text: str) -> str:
     return " ".join(text.strip().lower().split())
@@ -142,10 +555,14 @@ def _normalize(text: str) -> str:
 def _keyword_issue_type(text: str) -> Optional[str]:
     """Cheap keyword vote before calling the LLM."""
     norm = _normalize(text)
+    if re.search(r"\bbox\b", norm) and re.search(
+        r"\b(broken|crushed|damaged|dented)\b", norm
+    ):
+        return "delivery"
     scores = {key: 0 for key in _ISSUE_KEYWORDS}
     for issue, words in _ISSUE_KEYWORDS.items():
         for word in words:
-            if word in norm:
+            if _phrase_in_norm(word, norm):
                 scores[issue] += 1
     best = max(scores, key=lambda k: scores[k])
     if scores[best] <= 0:
@@ -154,6 +571,73 @@ def _keyword_issue_type(text: str) -> Optional[str]:
     if len(tied) > 1:
         return None
     return best
+
+
+def _phrase_in_norm(phrase: str, norm: str) -> bool:
+    """Match multi-word phrases as substrings; single tokens as whole words."""
+    phrase = (phrase or "").strip()
+    if not phrase or not norm:
+        return False
+    if " " in phrase or "'" in phrase or "-" in phrase:
+        return phrase in norm
+    return bool(re.search(rf"\b{re.escape(phrase)}\b", norm))
+
+
+def _synonym_option_match(options: list[dict], norm: str) -> Optional[str]:
+    """Unique synonym hit among the current node's answer_keys."""
+    valid = {
+        str(opt.get("answer_key") or "")
+        for opt in options
+        if str(opt.get("answer_key") or "")
+    }
+    hits: list[str] = []
+    for key, phrases in _OPTION_SYNONYMS.items():
+        if key not in valid:
+            continue
+        if any(_phrase_in_norm(phrase, norm) for phrase in phrases):
+            hits.append(key)
+    uniq = list(dict.fromkeys(hits))
+    if len(uniq) == 1:
+        return uniq[0]
+    # Foot/calf rollers are a footrest path, not the rolling mechanism.
+    if set(uniq) == {"footrest", "rolling"} and re.search(
+        r"\b(foot|calf|leg) rollers?\b", norm
+    ):
+        return "footrest"
+    return None
+
+
+def _is_yes_key(key: str) -> bool:
+    return (
+        key == "yes"
+        or key.startswith("yes")
+        or key in {
+            "yes_worked",
+            "air_blowing",
+            "yes_hissing",
+            "pump_running",
+            "has_power",
+            "has_tracking",
+            "visible_at_unboxing",
+        }
+    )
+
+
+def _is_no_key(key: str) -> bool:
+    return (
+        key == "no"
+        or key.startswith("no")
+        or key in {
+            "never_worked",
+            "noticed_later",
+            "no_air",
+            "no_hissing",
+            "no_sound",
+            "no_power",
+            "no_tracking",
+            "no_white_glove",
+        }
+    )
 
 
 def _heuristic_option_match(options: list[dict], text: str) -> Optional[str]:
@@ -175,19 +659,33 @@ def _heuristic_option_match(options: list[dict], text: str) -> Optional[str]:
         if label and len(label) >= 12 and label in norm:
             return key
 
+    synonym = _synonym_option_match(options, norm)
+    if synonym:
+        return synonym
+
     keys = [str(o.get("answer_key", "")) for o in options]
-    has_yes = any(k.startswith("yes") or k == "yes" for k in keys)
-    has_no = any(k.startswith("no") or k == "no" for k in keys)
+    keys_set = set(keys)
+    if keys_set & _ISSUE_TYPES:
+        if "delivery" in keys_set and re.search(r"\bbox\b", norm) and re.search(
+            r"\b(broken|crushed|damaged|dented)\b", norm
+        ):
+            return "delivery"
+        guessed = _keyword_issue_type(text)
+        if guessed in keys_set:
+            return guessed
+
+    has_yes = any(_is_yes_key(k) for k in keys)
+    has_no = any(_is_no_key(k) for k in keys)
     if has_yes and has_no:
-        if _YES_RE.search(norm) and not _NO_RE.search(norm):
+        if _BARE_YES_RE.match(norm):
             for opt in options:
                 key = str(opt.get("answer_key", ""))
-                if key.startswith("yes") or key == "yes":
+                if _is_yes_key(key):
                     return key
-        if _NO_RE.search(norm) and not _YES_RE.search(norm):
+        if _BARE_NO_RE.match(norm):
             for opt in options:
                 key = str(opt.get("answer_key", ""))
-                if key.startswith("no") or key == "no":
+                if _is_no_key(key):
                     return key
 
     if "tracking" in norm:
@@ -198,18 +696,6 @@ def _heuristic_option_match(options: list[dict], text: str) -> Optional[str]:
                     return key
                 if _YES_RE.search(norm) and key.startswith("has"):
                     return key
-
-    words = [word for word in norm.split() if len(word) >= 5]
-    if words:
-        matches: list[str] = []
-        for opt in options:
-            label = _normalize(str(opt.get("label", "")))
-            key = str(opt.get("answer_key", ""))
-            key_norm = _normalize(key)
-            if any(word in label or word in key_norm for word in words):
-                matches.append(key)
-        if len(matches) == 1:
-            return matches[0]
 
     return None
 
@@ -313,12 +799,13 @@ def suggest_closest_option(options: list[dict], text: str) -> Optional[dict]:
         label = _normalize(str(opt.get("label") or ""))
         key = _normalize(str(opt.get("answer_key") or ""))
         score = 0
-        if key and len(key) >= 3 and key in norm:
+        key_words = key.replace("_", " ")
+        if key_words and len(key_words) >= 3 and _phrase_in_norm(key_words, norm):
             score += 4
         if label and len(label) >= 8 and label in norm:
             score += 5
         for word in norm.split():
-            if len(word) >= 4 and word in label:
+            if len(word) >= 4 and word not in _WEAK_WORDS and _phrase_in_norm(word, label):
                 score += 2
         if score > best_score:
             best_score = score

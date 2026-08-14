@@ -172,7 +172,7 @@ def test_shoulders_free_text_maps_to_option(warranty_client):
     assert "Shoulders" in (mapped.get("interpreted_option") or {}).get("label", "")
 
 
-def test_near_miss_suggests_option_and_yes_confirms(warranty_client, monkeypatch):
+def test_unclear_air_location_stays_put_until_clear(warranty_client, monkeypatch):
     import warranty_nlp as nlp
 
     monkeypatch.setattr(nlp, "_llm_json", lambda *_args, **_kwargs: None)
@@ -189,26 +189,23 @@ def test_near_miss_suggests_option_and_yes_confirms(warranty_client, monkeypatch
     )
     tid = payload["ticket"]["ticket_id"]
     _post(warranty_client, f"/api/v1/warranty/{tid}/answer", {"answer": "air"})
-    suggested = _post(
+    unclear = _post(
+        warranty_client,
+        f"/api/v1/warranty/{tid}/answer",
+        {"answer": "the upper bags"},
+    )
+    assert unclear.get("side_question") is True
+    assert unclear["ticket"]["current_node"]["node_id"] == "defect_air_location"
+    text = _customer_message(unclear)
+    assert "please tap" in text.lower() or "did you mean" in text.lower()
+
+    mapped = _post(
         warranty_client,
         f"/api/v1/warranty/{tid}/answer",
         {"answer": "hips"},
     )
-    assert suggested.get("side_question") is True
-    assert suggested.get("suggested_option", {}).get("answer_key") == "shoulders_hips"
-    text = _customer_message(suggested)
-    assert "did you mean" in text.lower()
-    assert "feet / calves" not in text.lower()
-
-    confirmed = _post(
-        warranty_client,
-        f"/api/v1/warranty/{tid}/answer",
-        {"answer": "yes"},
-    )
-    assert confirmed.get("side_question") is not True
-    assert confirmed["ticket"]["current_node"]["node_id"] == "defect_air_shoulders_hissing_q"
-    assert confirmed.get("nlp_interpreted") is True
-    assert "Got it" in (confirmed.get("assistant_message") or "")
+    assert mapped.get("side_question") is not True
+    assert mapped["ticket"]["current_node"]["node_id"] == "defect_air_shoulders_hissing_q"
 
 
 def test_clarifying_message_when_answer_is_ambiguous(warranty_client):
