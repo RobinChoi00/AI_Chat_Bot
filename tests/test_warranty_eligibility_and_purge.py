@@ -10,6 +10,7 @@ APP_DIR = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(APP_DIR))
 
 from warranty_eligibility import (  # noqa: E402
+    admin_eligibility_note,
     customer_eligibility_note,
     evaluate_purchase_eligibility,
     parse_purchase_date,
@@ -42,6 +43,13 @@ def test_evaluate_possibly_expired():
     )
     assert result.status == "possibly_expired"
     assert "outside the standard warranty window" in customer_eligibility_note(result).lower()
+
+
+def test_unknown_eligibility_is_visible_to_admin_not_customer():
+    result = evaluate_purchase_eligibility("")
+    assert result.status == "unknown"
+    assert customer_eligibility_note(result) == ""
+    assert "does not block" in admin_eligibility_note(result).lower()
 
 
 def test_purge_dry_run_smoke(tmp_path):

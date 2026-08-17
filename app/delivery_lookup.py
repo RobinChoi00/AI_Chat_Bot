@@ -11,10 +11,13 @@ Supports either:
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 from store_config import get_order_tracking_page_url
 
@@ -286,6 +289,38 @@ def lookup_by_tracking_number(tracking_number: str, domain: str) -> TrackingSnap
     return snap
 
 
+def safe_lookup_by_order_or_email(raw: str, domain: str) -> TrackingSnapshot:
+    """Lookup that never raises — failed APIs still return a persistable snapshot."""
+    try:
+        return lookup_by_order_or_email(raw, domain)
+    except Exception as exc:
+        logger.warning("Shopify delivery lookup failed: %s", exc)
+        order, email = parse_order_or_email(raw)
+        return TrackingSnapshot(
+            source="unavailable",
+            available=False,
+            order_number=order,
+            error="order_lookup_failed",
+            looked_up_at=_now_iso(),
+        )
+
+
+def safe_lookup_by_tracking_number(tracking_number: str, domain: str) -> TrackingSnapshot:
+    """Lookup that never raises — failed carrier APIs still keep the tracking number."""
+    tn = (tracking_number or "").strip()
+    try:
+        return lookup_by_tracking_number(tn, domain)
+    except Exception as exc:
+        logger.warning("Carrier delivery lookup failed: %s", exc)
+        return TrackingSnapshot(
+            source="unavailable",
+            available=False,
+            tracking_number=tn,
+            error="carrier_lookup_failed",
+            looked_up_at=_now_iso(),
+        )
+
+
 _CARRIER_PATTERNS = [
     (r"^1Z[A-Z0-9]{16}$", "ups"),
     (r"^9[2-5]\d{20,}$", "usps"),
@@ -371,10 +406,17 @@ def format_warranty_tracking_message(
     if not snapshot.available:
         lines = [
             "We couldn't verify your delivery details automatically right now.",
+            "We saved what you entered, and your case continues.",
             "Our support team will look this up and follow up with you.",
         ]
-        if snapshot.error:
-            lines.append(f"\n({snapshot.error})")
+        saved = snapshot.tracking_number or snapshot.order_number
+        if saved:
+            lines.append(f"Saved for our team: **{saved}**.")
+        error = (snapshot.error or "").strip()
+        if error and error.lower().startswith(
+            ("please", "for your privacy", "we could not verify")
+        ):
+            lines.append(f"\n({error})")
 
         help_links = build_self_service_lookup_links(
             domain=domain,
@@ -439,11 +481,18 @@ def format_warranty_tracking_message(
     return "\n".join(lines)
 
 
-def persist_snapshot(ticket_id: str, snapshot: TrackingSnapshot) -> None:
+def persist_snapshot(
+    ticket_id: str,
+    snapshot: TrackingSnapshot,
+    *,
+    raw_input: str = "",
+    lookup_kind: str = "",
+) -> None:
     from warranty_eligibility import evaluate_purchase_eligibility  # noqa: WPS433
     from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
 
     eligibility = evaluate_purchase_eligibility(snapshot.purchase_date)
+    order, email = parse_order_or_email(raw_input) if raw_input else ("", "")
 
     with warranty_db_session() as db:
         ticket = (
@@ -457,6 +506,22 @@ def persist_snapshot(ticket_id: str, snapshot: TrackingSnapshot) -> None:
             if eligibility.purchase_date_iso:
                 ticket.set_collected("purchase_date", eligibility.purchase_date_iso)
             ticket.set_collected("warranty_eligibility_status", eligibility.status)
+            if raw_input.strip():
+                ticket.set_collected("delivery_lookup_input", raw_input.strip()[:200])
+            if lookup_kind:
+                ticket.set_collected("delivery_lookup_kind", lookup_kind)
+            ticket.set_collected(
+                "delivery_lookup_failed",
+                "0" if snapshot.available else "1",
+            )
+            if snapshot.tracking_number:
+                ticket.set_collected("tracking_number", snapshot.tracking_number)
+            elif lookup_kind == "tracking" and raw_input.strip():
+                ticket.set_collected("tracking_number", raw_input.strip()[:80])
+            if snapshot.order_number or order:
+                ticket.set_collected("order_number", snapshot.order_number or order)
+            if email:
+                ticket.set_collected("checkout_email", email)
 
 
 def append_eligibility_to_tracking_message(message: str, ticket_id: str) -> str:

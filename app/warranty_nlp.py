@@ -215,6 +215,11 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "not turning on",
         "no power",
         "won't power on",
+        "won't start",
+        "wont start",
+        "doesn't start",
+        "no lights",
+        "chair is dead",
     ),
     "air": (
         "airbag",
@@ -242,6 +247,8 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "remote is dead",
         "remote dead",
         "blank screen",
+        "no display",
+        "screen is off",
     ),
     "rolling": (
         "rollers not moving",
@@ -250,6 +257,8 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "massage head",
         "massage mechanism",
         "rollers",
+        "heads stuck",
+        "mechanism stuck",
     ),
     "recline": (
         "won't recline",
@@ -1006,6 +1015,35 @@ def interpret_issue_type(user_text: str) -> Optional[str]:
 
     issue = _accept_llm_choice(parsed, "issue_type", list(_ISSUE_TYPES))
     return issue
+
+
+def append_unmapped_phrase(
+    existing: Any,
+    *,
+    node_id: str,
+    text: str,
+    limit: int = 12,
+) -> list[dict[str, str]]:
+    """Keep the last few unmatched typed answers for admin review."""
+    rows: list[dict[str, str]] = []
+    if isinstance(existing, list):
+        rows = [row for row in existing if isinstance(row, dict)]
+    elif isinstance(existing, str) and existing.strip():
+        try:
+            parsed = json.loads(existing)
+        except (TypeError, json.JSONDecodeError):
+            parsed = []
+        if isinstance(parsed, list):
+            rows = [row for row in parsed if isinstance(row, dict)]
+
+    trimmed = " ".join((text or "").strip().split())[:160]
+    node = str(node_id or "").strip()
+    if not trimmed or not node:
+        return rows[-limit:]
+    if rows and rows[-1].get("node_id") == node and rows[-1].get("text") == trimmed:
+        return rows[-limit:]
+    rows.append({"node_id": node, "text": trimmed})
+    return rows[-limit:]
 
 
 def interpret_warranty_answer(node: dict, user_text: str) -> Optional[str]:

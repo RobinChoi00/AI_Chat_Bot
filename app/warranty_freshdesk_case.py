@@ -352,6 +352,25 @@ def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
         ("Internal ticket ID", str(ticket.ticket_id or "")),
         ("Session", str(ticket.session_id or "")),
     ]
+    eligibility_status = str(collected.get("warranty_eligibility_status") or "").strip()
+    if eligibility_status:
+        summary_rows.append(("Warranty window (soft)", eligibility_status))
+    purchase_date = str(collected.get("purchase_date") or "").strip()
+    if purchase_date:
+        summary_rows.append(("Purchase date", purchase_date))
+    if str(collected.get("delivery_lookup_failed") or "") == "1":
+        saved = str(
+            collected.get("tracking_number")
+            or collected.get("order_number")
+            or collected.get("delivery_lookup_input")
+            or ""
+        ).strip()
+        summary_rows.append(
+            (
+                "Delivery lookup",
+                f"Failed — saved customer input{': ' + saved if saved else ''}",
+            )
+        )
     if error_code:
         fonz_meaning = str(collected.get("fonz_meaning") or "").strip()
         fonz_parts = str(collected.get("fonz_parts_internal") or "").strip()

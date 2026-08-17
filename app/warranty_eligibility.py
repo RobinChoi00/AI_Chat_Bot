@@ -142,6 +142,16 @@ def evaluate_purchase_eligibility(
     )
 
 
+def admin_eligibility_note(result: EligibilityResult) -> str:
+    """Internal copy — always set so admin can see unknown as well as dated cases."""
+    if result.status == "unknown":
+        return (
+            "Purchase date unknown — confirm coverage with the warranty team. "
+            "This does not block the case."
+        )
+    return result.summary or ""
+
+
 def customer_eligibility_note(result: EligibilityResult) -> str:
     if result.status == "in_warranty":
         return (

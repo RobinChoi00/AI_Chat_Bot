@@ -370,6 +370,32 @@ class TestCustomerPhraseGaps:
         }
         assert nlp.interpret_warranty_answer(recline, "footrest") == "footrest_recline"
 
+    def test_extra_defect_phrases(self, monkeypatch):
+        monkeypatch.setattr(nlp, "_llm_json", lambda *_a, **_k: None)
+        defect = {
+            "type": "question",
+            "options": [
+                {"answer_key": "air", "label": "Air / Inflation not working"},
+                {"answer_key": "remote", "label": "Remote / controller issue"},
+                {"answer_key": "rolling", "label": "Full rolling massage mechanism issue"},
+                {"answer_key": "power", "label": "Power issue (chair won't turn on or has power problems)"},
+            ],
+        }
+        assert nlp.interpret_warranty_answer(defect, "won't start") == "power"
+        assert nlp.interpret_warranty_answer(defect, "no display") == "remote"
+        assert nlp.interpret_warranty_answer(defect, "heads stuck") == "rolling"
+
+    def test_append_unmapped_phrase_dedupes_and_caps(self):
+        rows = []
+        rows = nlp.append_unmapped_phrase(rows, node_id="issue_type", text="hello")
+        rows = nlp.append_unmapped_phrase(rows, node_id="issue_type", text="hello")
+        assert len(rows) == 1
+        for i in range(20):
+            rows = nlp.append_unmapped_phrase(
+                rows, node_id="issue_type", text=f"phrase {i}"
+            )
+        assert len(rows) == 12
+
 
 class TestTroubleshootingOutcome:
     def test_review_stage_maps_tried_steps(self):

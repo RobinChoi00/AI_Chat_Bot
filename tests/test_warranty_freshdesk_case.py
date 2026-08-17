@@ -98,6 +98,25 @@ def test_case_description_strips_role_prefix_and_markdown_from_timeline():
     assert "Extra chat tips / side questions:" not in description
 
 
+def test_case_description_includes_soft_eligibility_and_failed_lookup():
+    from warranty_freshdesk_case import _build_case_description  # noqa: WPS433
+
+    ticket = _FakeTicket()
+    ticket.collected_data = json.dumps(
+        {
+            "warranty_eligibility_status": "possibly_expired",
+            "purchase_date": "2020-01-10",
+            "delivery_lookup_failed": "1",
+            "tracking_number": "1Z999AA10123456784",
+        }
+    )
+    description = _build_case_description(ticket, case_ref="WR-TEST", turns=[])
+    assert "possibly_expired" in description
+    assert "2020-01-10" in description
+    assert "Failed" in description
+    assert "1Z999AA10123456784" in description
+
+
 def test_case_description_truncation_stops_on_word_boundary():
     """A message with a long tail must be trimmed on whitespace + ellipsis,
     never mid-word (regression: ``blackberries`` came from a hard slice)."""

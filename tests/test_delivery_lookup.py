@@ -53,7 +53,55 @@ def test_format_unavailable_message():
         TrackingSnapshot(source="unavailable", available=False, error="not found")
     )
     assert "couldn't verify" in msg.lower()
-    assert "not found" in msg
+    assert "saved what you entered" in msg.lower()
+    assert "not found" not in msg
+
+
+def test_format_unavailable_keeps_privacy_prompt():
+    msg = format_warranty_tracking_message(
+        TrackingSnapshot(
+            source="unavailable",
+            available=False,
+            error="For your privacy, we need the checkout email.",
+        )
+    )
+    assert "privacy" in msg.lower()
+
+
+def test_safe_lookup_swallows_shopify_exception(monkeypatch):
+    from delivery_lookup import safe_lookup_by_order_or_email
+
+    class Boom:
+        @staticmethod
+        def fetch_shopify_order_status(*_a, **_k):
+            raise RuntimeError("shopify timeout")
+
+    monkeypatch.setattr("delivery_lookup._lazy_logistics", lambda: Boom())
+    snap = safe_lookup_by_order_or_email(
+        "#12345 buyer@example.com", "osaki.com"
+    )
+    assert snap.available is False
+    assert snap.order_number == "12345"
+    assert snap.error == "order_lookup_failed"
+
+
+def test_safe_lookup_swallows_carrier_exception(monkeypatch):
+    from delivery_lookup import safe_lookup_by_tracking_number
+
+    class Boom:
+        @staticmethod
+        def get_store_config(_domain):
+            return {}
+
+        @staticmethod
+        def enrich_tracking_from_track123(*_a, **_k):
+            raise RuntimeError("track123 down")
+
+    monkeypatch.setattr("delivery_lookup._lazy_logistics", lambda: Boom())
+    snap = safe_lookup_by_tracking_number("1Z999AA10123456784", "osaki.com")
+    assert snap.available is False
+    assert snap.tracking_number == "1Z999AA10123456784"
+    assert snap.error == "carrier_lookup_failed"
 
 
 def test_format_unavailable_message_includes_self_service_links():

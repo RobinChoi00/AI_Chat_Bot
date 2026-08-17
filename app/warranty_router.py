@@ -23,6 +23,7 @@ adds this server-side only after validating its signed, HTTP-only session.
 
 from __future__ import annotations
 
+import json
 import logging
 import mimetypes
 import os
@@ -1288,6 +1289,30 @@ def _interpreted_option_payload(node: dict, mapped_key: str, fallback_label: str
     return {"answer_key": mapped_key, "label": label}
 
 
+def _record_unmapped_phrase(engine, ticket_id: str, node: dict, answer: str) -> None:
+    from warranty_nlp import append_unmapped_phrase  # noqa: WPS433
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    node_id = str(node.get("node_id") or "")
+    if not node_id:
+        ticket = engine.get_ticket(ticket_id)
+        node_id = str(getattr(ticket, "current_node_id", "") or "")
+    with warranty_db_session() as db:
+        row = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        if row is None:
+            return
+        updated = append_unmapped_phrase(
+            row.get_collected().get("unmapped_phrases"),
+            node_id=node_id,
+            text=answer,
+        )
+        row.set_collected("unmapped_phrases", json.dumps(updated))
+
+
 def _build_side_question_response(
     engine,
     ticket_id: str,
@@ -1400,6 +1425,7 @@ def _clarify_menu_answer(
         )
 
     _write_pending_suggestion(engine, ticket_id, None)
+    _record_unmapped_phrase(engine, ticket_id, node, answer)
     return None, False, build_clarifying_workflow_message(node, answer), None
 
 
@@ -1520,10 +1546,10 @@ def _finalize_answer_response(
             append_eligibility_to_tracking_message,
             build_self_service_lookup_links,
             format_warranty_tracking_message,
-            lookup_by_order_or_email,
-            lookup_by_tracking_number,
             persist_snapshot,
             public_tracking_summary_payload,
+            safe_lookup_by_order_or_email,
+            safe_lookup_by_tracking_number,
         )
 
         ticket_for_domain = engine.get_ticket(ticket_id)
@@ -1537,12 +1563,17 @@ def _finalize_answer_response(
             "delivery_status_get_tracking",
         ):
             lookup_kind = "tracking"
-            snapshot = lookup_by_tracking_number(lookup_text, domain)
+            snapshot = safe_lookup_by_tracking_number(lookup_text, domain)
         else:
             lookup_kind = "order"
-            snapshot = lookup_by_order_or_email(lookup_text, domain)
+            snapshot = safe_lookup_by_order_or_email(lookup_text, domain)
 
-        persist_snapshot(ticket_id, snapshot)
+        persist_snapshot(
+            ticket_id,
+            snapshot,
+            raw_input=lookup_text,
+            lookup_kind=lookup_kind,
+        )
         self_service_links = build_self_service_lookup_links(
             domain=domain,
             lookup_kind=lookup_kind,

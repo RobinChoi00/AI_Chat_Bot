@@ -142,6 +142,13 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
         "warranty_eligibility",
         "warranty_eligibility_status",
         "purchase_date",
+        "unmapped_phrases",
+        "delivery_lookup_input",
+        "delivery_lookup_kind",
+        "delivery_lookup_failed",
+        "tracking_number",
+        "order_number",
+        "checkout_email",
       ].includes(key)
   );
   const fonz = ticket.fonz_diagnostics;
@@ -290,31 +297,105 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
         </dl>
       </section>
 
-      {eligibility?.status && eligibility.status !== "unknown" && (
+      {eligibility?.status ? (
         <section
           className={`rounded-xl border p-5 shadow-sm ${
             eligibility.status === "possibly_expired"
               ? "border-amber-200 bg-amber-50"
-              : "border-sky-200 bg-sky-50"
+              : eligibility.status === "unknown"
+                ? "border-gray-200 bg-gray-50"
+                : "border-sky-200 bg-sky-50"
           }`}
         >
           <h2
             className={`mb-3 text-sm font-semibold uppercase tracking-wide ${
               eligibility.status === "possibly_expired"
                 ? "text-amber-800"
-                : "text-sky-800"
+                : eligibility.status === "unknown"
+                  ? "text-gray-600"
+                  : "text-sky-800"
             }`}
           >
-            Warranty eligibility (soft)
+            Warranty eligibility (soft — does not block the case)
           </h2>
           <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <Field label="Status" value={eligibility.status} />
-            <Field label="Purchase date" value={eligibility.purchase_date} />
-            <Field label="Default expires" value={eligibility.expires_on} />
+            <Field label="Purchase date" value={eligibility.purchase_date || "Unknown"} />
+            <Field label="Default expires" value={eligibility.expires_on || "—"} />
           </dl>
-          {eligibility.summary ? (
-            <p className="mt-3 text-sm text-gray-700">{eligibility.summary}</p>
-          ) : null}
+          <p className="mt-3 text-sm text-gray-700">
+            {eligibility.status === "unknown"
+              ? "Purchase date unknown — confirm coverage with the warranty team. This does not block the case."
+              : eligibility.summary || ""}
+          </p>
+        </section>
+      ) : null}
+
+      {(() => {
+        const raw = ticket.collected_data?.unmapped_phrases;
+        let phrases: { node_id?: string; text?: string }[] = [];
+        if (Array.isArray(raw)) {
+          phrases = raw;
+        } else if (typeof raw === "string" && raw.trim()) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) phrases = parsed;
+          } catch {
+            phrases = [];
+          }
+        }
+        if (!phrases.length) return null;
+        return (
+          <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">
+              Unmapped customer phrases
+            </h2>
+            <p className="mb-3 text-sm text-gray-600">
+              Typed answers that did not match a menu option. The customer stayed
+              on that step.
+            </p>
+            <ul className="space-y-2 text-sm text-gray-800">
+              {phrases.map((row, idx) => (
+                <li key={`${row.node_id || "node"}-${idx}`}>
+                  <span className="font-mono text-xs text-gray-500">
+                    {row.node_id || "—"}
+                  </span>
+                  {": "}
+                  {row.text || "—"}
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })()}
+
+      {ticket.collected_data?.delivery_lookup_failed === "1" && (
+        <section className="rounded-xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-amber-800">
+            Delivery lookup failed
+          </h2>
+          <p className="mb-3 text-sm text-amber-900">
+            Automatic Shopify / carrier lookup did not return a status. The
+            customer&apos;s case continued. Look this up manually.
+          </p>
+          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <Field
+              label="Customer entered"
+              value={String(ticket.collected_data?.delivery_lookup_input || "—")}
+            />
+            <Field
+              label="Kind"
+              value={String(ticket.collected_data?.delivery_lookup_kind || "—")}
+            />
+            <Field
+              label="Tracking / order"
+              value={String(
+                ticket.collected_data?.tracking_number ||
+                  ticket.collected_data?.order_number ||
+                  "—"
+              )}
+            />
+          </dl>
         </section>
       )}
 
