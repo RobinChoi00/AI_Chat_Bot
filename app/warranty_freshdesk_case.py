@@ -354,7 +354,9 @@ def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
     ]
     eligibility_status = str(collected.get("warranty_eligibility_status") or "").strip()
     if eligibility_status:
-        summary_rows.append(("Warranty window (soft)", eligibility_status))
+        summary_rows.append(
+            ("Warranty cue (soft — confirm plan)", eligibility_status)
+        )
     purchase_date = str(collected.get("purchase_date") or "").strip()
     if purchase_date:
         summary_rows.append(("Purchase date", purchase_date))

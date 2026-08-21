@@ -10,6 +10,7 @@ APP_DIR = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(APP_DIR))
 
 from warranty_eligibility import (  # noqa: E402
+    WARRANTY_PLAN_REFERENCE,
     admin_eligibility_note,
     customer_eligibility_note,
     evaluate_purchase_eligibility,
@@ -32,7 +33,10 @@ def test_evaluate_in_warranty():
     )
     assert result.status == "in_warranty"
     assert result.days_remaining is not None and result.days_remaining > 0
-    assert "default 3-year" in customer_eligibility_note(result)
+    note = customer_eligibility_note(result)
+    assert "warranty plan" in note.lower()
+    assert "Standard" in result.summary or "plan" in result.summary.lower()
+    assert "Standard" in WARRANTY_PLAN_REFERENCE
 
 
 def test_evaluate_possibly_expired():
@@ -42,14 +46,20 @@ def test_evaluate_possibly_expired():
         years=3,
     )
     assert result.status == "possibly_expired"
-    assert "outside the standard warranty window" in customer_eligibility_note(result).lower()
+    note = customer_eligibility_note(result).lower()
+    assert "plan" in note
+    assert "still review" in note
+    assert "Brand extended" in result.summary or "Extended" in result.summary
 
 
 def test_unknown_eligibility_is_visible_to_admin_not_customer():
     result = evaluate_purchase_eligibility("")
     assert result.status == "unknown"
     assert customer_eligibility_note(result) == ""
-    assert "does not block" in admin_eligibility_note(result).lower()
+    admin = admin_eligibility_note(result).lower()
+    assert "does not block" in admin
+    assert "netsuite" in admin
+    assert "standard" in admin
 
 
 def test_purge_dry_run_smoke(tmp_path):

@@ -49,6 +49,10 @@ def test_lookup_install_video_updated_urls():
     dreamer = lookup_install_video("Osaki 3D Dreamer V2")
     assert dreamer["url"] == "https://youtu.be/7BmcooshWLs"
 
+    reflex = lookup_install_video("Titan Reflex")
+    assert reflex["url"] == "https://youtu.be/x9tldi4W9fk"
+    assert reflex["match"] in {"model", "series"}
+
 
 def test_lookup_install_video_multi_clip_escape_duo():
     install_videos._load_catalog.cache_clear()

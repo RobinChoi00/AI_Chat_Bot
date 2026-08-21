@@ -1383,7 +1383,7 @@ def _clarify_menu_answer(
     ticket_id: str,
     node: dict,
     answer: str,
-) -> tuple[None, bool, str, None]:
+) -> tuple[Optional[dict], bool, Optional[str], Optional[Dict[str, str]]]:
     from warranty_nlp import (  # noqa: WPS433
         build_clarifying_workflow_message,
         is_suggestion_confirmation,

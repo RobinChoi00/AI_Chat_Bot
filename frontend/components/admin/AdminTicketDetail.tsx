@@ -316,17 +316,25 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
                   : "text-sky-800"
             }`}
           >
-            Warranty eligibility (soft — does not block the case)
+            Warranty eligibility (soft — confirm plan; does not block)
           </h2>
           <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <Field label="Status" value={eligibility.status} />
             <Field label="Purchase date" value={eligibility.purchase_date || "Unknown"} />
-            <Field label="Default expires" value={eligibility.expires_on || "—"} />
+            <Field
+              label="Rough review horizon"
+              value={eligibility.expires_on || "—"}
+            />
           </dl>
           <p className="mt-3 text-sm text-gray-700">
             {eligibility.status === "unknown"
-              ? "Purchase date unknown — confirm coverage with the warranty team. This does not block the case."
+              ? "Purchase date unknown — confirm plan and purchase channel in NetSuite. Soft signal only; does not block the case."
               : eligibility.summary || ""}
+          </p>
+          <p className="mt-2 text-xs text-gray-500">
+            Plans: Standard (1 yr L+P then parts), Extended (3 yr L+P then parts),
+            Adjusted (rare), Brand extended / Mattress Firm / Johnson Fitness (5 yr L+P).
+            Unauthorized or third-party purchase: no service / no parts.
           </p>
         </section>
       ) : null}

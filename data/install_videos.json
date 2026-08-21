@@ -1,6 +1,6 @@
 {
-  "version": "1.4",
-  "updated": "2026-08-10",
+  "version": "1.5",
+  "updated": "2026-08-21",
   "description": "Model → installation YouTube URLs (watch links). Keys match product_catalog normalization.",
   "default": {
     "url": "https://www.otasupport.com",
@@ -54,6 +54,10 @@
     "quantum": {
       "url": "https://youtu.be/AUbHOnm4i_k",
       "label": "3D Quantum installation"
+    },
+    "reflex": {
+      "url": "https://youtu.be/x9tldi4W9fk",
+      "label": "Titan Reflex installation"
     },
     "nido": {
       "url": "https://youtu.be/LJxo6VbJLPc",
@@ -176,6 +180,18 @@
     "pinnacle-duo-flex": {
       "url": "https://youtu.be/UtiWbrLrNHo",
       "label": "Pinnacle 5D DuoFlex AI installation"
+    },
+    "reflex": {
+      "url": "https://youtu.be/x9tldi4W9fk",
+      "label": "Titan Reflex installation"
+    },
+    "ti-reflex": {
+      "url": "https://youtu.be/x9tldi4W9fk",
+      "label": "Titan Reflex installation"
+    },
+    "titan-reflex": {
+      "url": "https://youtu.be/x9tldi4W9fk",
+      "label": "Titan Reflex installation"
     },
     "titan-3d-quantum": {
       "url": "https://youtu.be/AUbHOnm4i_k",
