@@ -166,6 +166,7 @@ def parse_order_or_email(raw: str) -> tuple[str, str]:
 
     Prefer extracting an embedded email first so customers can paste
     ``#12345 you@example.com`` and we keep both for a privacy-safe lookup.
+    Also accepts wordy pastes like ``order 12345 email buyer@example.com``.
     """
     from delivery_intake import is_plausible_email, is_plausible_order_id  # noqa: WPS433
     from warranty_email import extract_email  # noqa: WPS433
@@ -181,6 +182,15 @@ def parse_order_or_email(raw: str) -> tuple[str, str]:
     remainder = text
     if email:
         remainder = text.replace(email, " ").strip()
+
+    # Strip common labels so "order: OSK123" / "email buyer@…" still parse.
+    remainder = re.sub(
+        r"\b(order(\s*(number|id|#))?|ord(\s*#)?|email|e-mail|checkout\s*email)\b[:#]?",
+        " ",
+        remainder,
+        flags=re.IGNORECASE,
+    )
+    remainder = remainder.strip(" ,;/|-")
 
     order = ""
     if remainder:
@@ -198,6 +208,23 @@ def parse_order_or_email(raw: str) -> tuple[str, str]:
         order = text.replace("#", "").strip()
 
     return order, email
+
+
+def admin_lookup_failure_reason(error: Optional[str]) -> str:
+    """Short internal label for failed delivery lookups (never invent customer copy)."""
+    code = (error or "").strip()
+    if not code:
+        return "unknown"
+    mapping = {
+        "order_lookup_failed": "Shopify/order lookup failed (API error)",
+        "carrier_lookup_failed": "Carrier lookup failed (API error)",
+    }
+    if code in mapping:
+        return mapping[code]
+    lower = code.lower()
+    if lower.startswith(("please", "for your privacy", "we could not verify")):
+        return code
+    return code[:120]
 
 
 def lookup_by_order_or_email(raw: str, domain: str) -> TrackingSnapshot:
@@ -259,10 +286,13 @@ def lookup_by_tracking_number(tracking_number: str, domain: str) -> TrackingSnap
     logistics = _lazy_logistics()
     store = logistics.get_store_config(domain)
     enriched = logistics.enrich_tracking_from_track123(tn, store)
+    source = "track123"
 
     if not enriched:
         carrier = logistics.resolve_carrier_name("", tn, "")
         enriched = logistics.enrich_tracking_from_aftership(carrier, tn) or {}
+        if enriched:
+            source = "aftership"
 
     if not enriched:
         return TrackingSnapshot(
@@ -284,7 +314,7 @@ def lookup_by_tracking_number(tracking_number: str, domain: str) -> TrackingSnap
         "last_event": enriched.get("last_event", "Latest carrier update"),
         "events": enriched.get("events", []),
     }
-    snap = _snapshot_from_tracking_data(data, source="track123", tracking_number=tn)
+    snap = _snapshot_from_tracking_data(data, source=source, tracking_number=tn)
     snap.available = True
     return snap
 
@@ -514,6 +544,13 @@ def persist_snapshot(
                 "delivery_lookup_failed",
                 "0" if snapshot.available else "1",
             )
+            if snapshot.available:
+                ticket.set_collected("delivery_lookup_error", "")
+            elif snapshot.error:
+                ticket.set_collected(
+                    "delivery_lookup_error",
+                    admin_lookup_failure_reason(snapshot.error)[:240],
+                )
             if snapshot.tracking_number:
                 ticket.set_collected("tracking_number", snapshot.tracking_number)
             elif lookup_kind == "tracking" and raw_input.strip():

@@ -108,6 +108,7 @@ def test_case_description_includes_soft_eligibility_and_failed_lookup():
             "purchase_date": "2020-01-10",
             "delivery_lookup_failed": "1",
             "tracking_number": "1Z999AA10123456784",
+            "delivery_lookup_error": "Carrier lookup failed (API error)",
         }
     )
     description = _build_case_description(ticket, case_ref="WR-TEST", turns=[])
@@ -115,6 +116,7 @@ def test_case_description_includes_soft_eligibility_and_failed_lookup():
     assert "2020-01-10" in description
     assert "Failed" in description
     assert "1Z999AA10123456784" in description
+    assert "Carrier lookup failed" in description
 
 
 def test_case_description_truncation_stops_on_word_boundary():

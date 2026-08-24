@@ -376,14 +376,132 @@ class TestCustomerPhraseGaps:
             "type": "question",
             "options": [
                 {"answer_key": "air", "label": "Air / Inflation not working"},
+                {"answer_key": "power", "label": "Power issue"},
                 {"answer_key": "remote", "label": "Remote / controller issue"},
                 {"answer_key": "rolling", "label": "Full rolling massage mechanism issue"},
-                {"answer_key": "power", "label": "Power issue (chair won't turn on or has power problems)"},
             ],
         }
+        assert nlp.interpret_warranty_answer(defect, "won't power up") == "power"
+        assert nlp.interpret_warranty_answer(defect, "losing air") == "air"
+        assert nlp.interpret_warranty_answer(defect, "dead chair") == "power"
         assert nlp.interpret_warranty_answer(defect, "won't start") == "power"
         assert nlp.interpret_warranty_answer(defect, "no display") == "remote"
         assert nlp.interpret_warranty_answer(defect, "heads stuck") == "rolling"
+
+        remote_checks = {
+            "type": "question",
+            "options": [
+                {"answer_key": "fuse_blown", "label": "The fuse looks blown"},
+                {"answer_key": "bad_connection", "label": "The cable connection seems loose or bad"},
+                {"answer_key": "all_checked_ok", "label": "All checked — nothing obvious found"},
+            ],
+        }
+        assert nlp.interpret_warranty_answer(remote_checks, "loose cable") == "bad_connection"
+        assert nlp.interpret_warranty_answer(remote_checks, "nothing obvious") == "all_checked_ok"
+
+        rolling = {
+            "type": "question",
+            "options": [
+                {"answer_key": "no_movement", "label": "Heads do not move at all"},
+                {"answer_key": "power_but_no_move", "label": "Heads seem to have power but barely move"},
+                {"answer_key": "worked_before_stopped", "label": "Worked before but stopped"},
+            ],
+        }
+        assert nlp.interpret_warranty_answer(rolling, "barely move") == "power_but_no_move"
+
+        delivery_extra = {
+            "type": "question",
+            "options": [
+                {"answer_key": "damaged_in_transit", "label": "Damaged in transit"},
+                {"answer_key": "never_arrived", "label": "Never arrived"},
+                {"answer_key": "wrong_item", "label": "Wrong item"},
+                {"answer_key": "other_delivery_problem", "label": "Something else"},
+            ],
+        }
+        assert (
+            nlp.interpret_warranty_answer(
+                delivery_extra, "package never arrived"
+            )
+            == "never_arrived"
+        )
+        assert (
+            nlp.interpret_warranty_answer(
+                delivery_extra, "not the model i ordered"
+            )
+            == "wrong_item"
+        )
+
+        inside = {
+            "type": "question",
+            "options": [
+                {"answer_key": "yes_chair_inside_damage", "label": "Yes, the chair was damaged inside"},
+                {"answer_key": "no_chair_inside_damage", "label": "No, the chair looked fine inside"},
+            ],
+        }
+        assert (
+            nlp.interpret_warranty_answer(inside, "damaged inside")
+            == "yes_chair_inside_damage"
+        )
+
+        power_flow = {
+            "type": "question",
+            "options": [
+                {"answer_key": "remote_on", "label": "Yes, remote turns on"},
+                {"answer_key": "remote_off", "label": "No, remote does not turn on"},
+            ],
+        }
+        assert nlp.interpret_warranty_answer(power_flow, "remote turns on") == "remote_on"
+        assert (
+            nlp.interpret_warranty_answer(power_flow, "remote won't turn on")
+            == "remote_off"
+        )
+
+        remote_power = {
+            "type": "question",
+            "options": [
+                {"answer_key": "has_power", "label": "Yes, the remote has power / screen shows something"},
+                {"answer_key": "no_power", "label": "No, remote is completely unresponsive / blank screen"},
+            ],
+        }
+        assert (
+            nlp.interpret_warranty_answer(remote_power, "screen shows something")
+            == "has_power"
+        )
+        assert (
+            nlp.interpret_warranty_answer(
+                remote_power, "remote completely unresponsive"
+            )
+            == "no_power"
+        )
+
+        rolling_noise = {
+            "type": "question",
+            "options": [
+                {"answer_key": "noise_up_down", "label": "Makes a loud noise when the mechanism moves up or down"},
+                {"answer_key": "noise_massaging", "label": "Makes noise while giving the massage"},
+                {"answer_key": "heads_not_moving", "label": "Heads not moving"},
+            ],
+        }
+        assert (
+            nlp.interpret_warranty_answer(rolling_noise, "noisy during massage")
+            == "noise_massaging"
+        )
+        assert (
+            nlp.interpret_warranty_answer(
+                rolling_noise, "loud noise going up or down"
+            )
+            == "noise_up_down"
+        )
+
+        cosmetic_side = {
+            "type": "question",
+            "options": [
+                {"answer_key": "panels_fixed", "label": "Panels were not properly installed — now fixed"},
+                {"answer_key": "still_damaged", "label": "Panels are installed correctly but still damaged"},
+            ],
+        }
+        assert nlp.interpret_warranty_answer(cosmetic_side, "still damaged") == "still_damaged"
+        assert nlp.interpret_warranty_answer(cosmetic_side, "panels fixed") == "panels_fixed"
 
     def test_append_unmapped_phrase_dedupes_and_caps(self):
         rows = []

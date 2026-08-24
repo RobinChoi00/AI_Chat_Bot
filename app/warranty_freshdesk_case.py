@@ -367,12 +367,11 @@ def _build_case_description(ticket, *, case_ref: str, turns=None) -> str:
             or collected.get("delivery_lookup_input")
             or ""
         ).strip()
-        summary_rows.append(
-            (
-                "Delivery lookup",
-                f"Failed — saved customer input{': ' + saved if saved else ''}",
-            )
-        )
+        reason = str(collected.get("delivery_lookup_error") or "").strip()
+        detail = f"Failed — saved customer input{': ' + saved if saved else ''}"
+        if reason:
+            detail = f"{detail} ({reason})"
+        summary_rows.append(("Delivery lookup", detail))
     if error_code:
         fonz_meaning = str(collected.get("fonz_meaning") or "").strip()
         fonz_parts = str(collected.get("fonz_parts_internal") or "").strip()

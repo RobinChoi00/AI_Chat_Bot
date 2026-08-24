@@ -32,6 +32,27 @@ def test_parse_order_or_email_detects_both():
     )
 
 
+def test_parse_order_or_email_wordy_paste():
+    assert parse_order_or_email("order 12345 email buyer@example.com") == (
+        "12345",
+        "buyer@example.com",
+    )
+    assert parse_order_or_email("Order #: OSK12345 / email: buyer@example.com") == (
+        "OSK12345",
+        "buyer@example.com",
+    )
+
+
+def test_admin_lookup_failure_reason_maps_codes():
+    from delivery_lookup import admin_lookup_failure_reason
+
+    assert "Shopify" in admin_lookup_failure_reason("order_lookup_failed")
+    assert "Carrier" in admin_lookup_failure_reason("carrier_lookup_failed")
+    assert "privacy" in admin_lookup_failure_reason(
+        "For your privacy, we need the checkout email."
+    ).lower()
+
+
 def test_lookup_by_order_requires_email(monkeypatch):
     called = {"n": 0}
 
@@ -255,6 +276,39 @@ def test_lookup_by_tracking_number_uses_track123(monkeypatch):
     assert snap.available is True
     assert snap.source == "track123"
     assert snap.tracking_number == "1Z999AA10123456784"
+
+
+def test_lookup_by_tracking_number_falls_back_to_aftership(monkeypatch):
+    class FakeMain:
+        @staticmethod
+        def get_store_config(domain):
+            return {}
+
+        @staticmethod
+        def enrich_tracking_from_track123(*_a, **_k):
+            return {}
+
+        @staticmethod
+        def enrich_tracking_from_aftership(carrier, tn):
+            assert tn == "1Z999AA10123456784"
+            return {
+                "status": "IN_TRANSIT",
+                "company": "UPS",
+                "eta": "Tomorrow",
+                "last_event": "On vehicle",
+                "current_location": "Austin, TX",
+                "events": [],
+            }
+
+        @staticmethod
+        def resolve_carrier_name(*_a, **_k):
+            return "UPS"
+
+    monkeypatch.setattr("delivery_lookup._lazy_logistics", lambda: FakeMain())
+    snap = lookup_by_tracking_number("1Z999AA10123456784", "osaki.com")
+    assert snap.available is True
+    assert snap.source == "aftership"
+    assert snap.carrier == "UPS"
 
 
 def test_lookup_by_order_or_email_shopify(monkeypatch):

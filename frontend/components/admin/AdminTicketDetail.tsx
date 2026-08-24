@@ -146,6 +146,7 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
         "delivery_lookup_input",
         "delivery_lookup_kind",
         "delivery_lookup_failed",
+        "delivery_lookup_error",
         "tracking_number",
         "order_number",
         "checkout_email",
@@ -402,6 +403,10 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
                   ticket.collected_data?.order_number ||
                   "—"
               )}
+            />
+            <Field
+              label="Failure reason"
+              value={String(ticket.collected_data?.delivery_lookup_error || "—")}
             />
           </dl>
         </section>
