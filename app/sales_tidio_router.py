@@ -183,7 +183,12 @@ def _run_sales_turn(
         channel="tidio",
         tidio_visitor_id=contact_id,
     )
-    result = respond(message, payload=payload)
+    from sales_models import get_session_collected, merge_session_collected
+
+    prefs = get_session_collected(session_id)
+    result = respond(message, payload=payload, domain=domain, prefs=prefs)
+    if result.prefs_patch:
+        merge_session_collected(session_id, result.prefs_patch)
     plain = _strip_md(result.reply)
     action = _next_action(result.intent, result.handoff)
     is_warranty_route = result.intent in WARRANTY_ROUTE_INTENTS

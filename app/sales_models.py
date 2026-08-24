@@ -236,3 +236,37 @@ def update_session_last_intent(
         row.last_message = last_message[:2000]
         if status:
             row.status = status
+
+
+def get_session_collected(session_id: str) -> dict:
+    with warranty_db_session() as db:
+        row = (
+            db.query(SalesSession)
+            .filter(SalesSession.session_id == session_id)
+            .one_or_none()
+        )
+        if row is None:
+            return {}
+        return row.get_collected()
+
+
+def merge_session_collected(session_id: str, patch: dict) -> dict:
+    """Shallow-merge ``patch`` into ``collected_data`` and return the new dict."""
+    with warranty_db_session() as db:
+        row = (
+            db.query(SalesSession)
+            .filter(SalesSession.session_id == session_id)
+            .one_or_none()
+        )
+        if row is None:
+            return dict(patch or {})
+        data = row.get_collected()
+        for key, value in (patch or {}).items():
+            if isinstance(value, dict) and isinstance(data.get(key), dict):
+                merged = dict(data[key])
+                merged.update(value)
+                data[key] = merged
+            else:
+                data[key] = value
+        row.collected_data = json.dumps(data)
+        return data

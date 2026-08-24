@@ -196,21 +196,67 @@ def load_product_index() -> tuple[ProductSpecs, ...]:
 
 def resolve_product(text: str) -> Optional[ProductSpecs]:
     """Find the single best ProductSpecs record for a free-text model input."""
-    resolved_title = resolve_model_name(text or "")
-    if not resolved_title:
+    raw = (text or "").strip()
+    if len(raw) < 2:
         return None
-    resolved_key = _normalize_key(resolved_title)
 
-    for record in load_product_index():
+    # Explicit aliases for case-workbook / sales names that diverge from Shopify titles.
+    alias = _CASE_MODEL_ALIASES.get(_normalize_key(raw))
+    if alias:
+        raw = alias
+
+    resolved_title = resolve_model_name(raw)
+    if not resolved_title:
+        resolved_title = raw
+    resolved_key = _normalize_key(resolved_title)
+    if not resolved_key:
+        return None
+
+    products = load_product_index()
+    for record in products:
         if _normalize_key(record.display_name) == resolved_key:
             return record
-        if _normalize_key(record.title).startswith(resolved_key):
+        if _normalize_key(record.title) == resolved_key:
             return record
-    # Loose fallback — first record whose display name shares the resolved key.
-    for record in load_product_index():
-        if resolved_key and resolved_key in _normalize_key(record.title):
+        if _normalize_key(record.handle) == resolved_key:
             return record
+
+    for record in products:
+        title_key = _normalize_key(record.title)
+        display_key = _normalize_key(record.display_name)
+        if resolved_key and (
+            title_key.startswith(resolved_key)
+            or display_key.startswith(resolved_key)
+            or resolved_key in title_key
+            or resolved_key in display_key
+        ):
+            return record
+
+    # Token overlap: require most distinctive tokens (ignore brand noise).
+    tokens = [t for t in re.findall(r"[a-z0-9]+", raw.lower()) if len(t) >= 3]
+    tokens = [t for t in tokens if t not in {"osaki", "titan", "massage", "chair", "pro", "the"}]
+    if len(tokens) >= 1:
+        best: Optional[ProductSpecs] = None
+        best_score = 0
+        for record in products:
+            hay = f"{record.title} {record.display_name} {record.handle}".lower()
+            score = sum(1 for t in tokens if t in hay)
+            if score > best_score and score >= max(1, len(tokens) - 1):
+                best = record
+                best_score = score
+        if best is not None:
+            return best
     return None
+
+
+# Case workbook / sales shorthand → Shopify-facing name hints.
+_CASE_MODEL_ALIASES: dict[str, str] = {
+    _normalize_key("Osaki aI 4D Yoga Flex"): "Osaki 4D Yoga Flex",
+    _normalize_key("Grande XL-Big and Tall"): "Titan Grande XL",
+    _normalize_key("OS-3D AI Vito"): "Osaki OS-3D AI Vito",
+    _normalize_key("Titan Rejuv 4D"): "Titan Rejūv 4D",
+    _normalize_key("Ventura 3D"): "Osaki Ventura 3D",
+}
 
 
 def list_active_products() -> list[ProductSpecs]:

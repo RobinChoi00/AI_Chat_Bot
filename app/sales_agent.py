@@ -8,7 +8,8 @@ handoff signal).
 
 No LLM calls happen here. Everything the customer sees is either:
   1. Hard-coded copy tied to a specific intent, or
-  2. Deterministic facts pulled from ``sales_catalog`` (price, specs, etc.).
+  2. Deterministic facts from ``sales_catalog`` (price, specs) / Shopify stock, or
+  3. A row from the practical-case workbook (``sales_cases``) for recommendations.
 
 That's what lets us honestly aim for 100% customer satisfaction: the AI
 never invents a price, promises a delivery date, or diagnoses a defect.
@@ -32,7 +33,18 @@ from sales_catalog import (
     recommend,
     resolve_product,
 )
-from sales_shopify_stock import fetch_live_stock
+from sales_cases import (
+    apply_payload_codes,
+    brand_for_domain,
+    cases_available,
+    enrich_implied_prefs,
+    lookup_case,
+    merge_prefs_from_hints,
+    missing_required,
+    rank_case_models,
+    short_do_not_recommend,
+)
+from sales_shopify_stock import LiveStockSnapshot, fetch_live_stock, stock_badge
 from sales_intent import (
     INTENT_COMPARE,
     INTENT_GREETING,
@@ -72,6 +84,8 @@ class SalesReply:
     quick_replies: list[QuickReply] = field(default_factory=list)
     tools_used: list[str] = field(default_factory=list)
     products: list[dict] = field(default_factory=list)  # public dicts, for UI cards
+    # Merged into sales_sessions.collected_data by the router (recommend prefs, etc.).
+    prefs_patch: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return {
@@ -214,7 +228,7 @@ def _price_reply(message: str) -> SalesReply:
     )
 
 
-def _stock_reply(message: str) -> SalesReply:
+def _stock_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
     product = _guess_model_from_text(message)
     if product is None:
         return SalesReply(
@@ -231,30 +245,30 @@ def _stock_reply(message: str) -> SalesReply:
             tools_used=["catalog.resolve_product"],
         )
 
-    live = fetch_live_stock(product.handle)
+    live = fetch_live_stock(
+        product.handle,
+        domain=domain,
+        title=product.title or product.display_name,
+    )
     tools = ["catalog.resolve_product"]
     if live is not None:
         tools.append("shopify.inventory")
-        if live.available_for_sale and (live.total_inventory is None or live.total_inventory > 0):
+        if live.in_stock:
             qty = (
                 f" About **{live.total_inventory}** unit(s) show in inventory right now."
                 if live.total_inventory is not None
                 else ""
             )
+            low = " (low stock)" if live.is_low else ""
             reply = (
-                f"**{product.display_name}** is **available to buy** right now.{qty}\n\n"
+                f"**{product.display_name}** is **available to buy** right now{low}.{qty}\n\n"
                 "Exact configuration (color/options) is confirmed at checkout."
             )
-        elif live.total_inventory == 0 or not live.available_for_sale:
+        else:
             reply = (
                 f"**{product.display_name}** is **not available to buy right now** "
                 "(out of stock or not listed for sale). A rep can check restock — "
                 "I won't invent a date."
-            )
-        else:
-            reply = (
-                f"**{product.display_name}** inventory lookup came back unclear. "
-                "I can connect you with a rep for a live check."
             )
     elif product.status.lower() == "active":
         reply = (
@@ -361,11 +375,54 @@ def _specs_reply(message: str) -> SalesReply:
 
 
 _BUDGET_BAND_REPLIES = (
-    QuickReply(label="Under $2,000", payload="recommend:budget:2000"),
-    QuickReply(label="Around $3,000", payload="recommend:budget:3000"),
-    QuickReply(label="Around $5,000", payload="recommend:budget:5000"),
-    QuickReply(label="Around $6,000", payload="recommend:budget:6000"),
-    QuickReply(label="Around $8,000+", payload="recommend:budget:8000"),
+    QuickReply(label="Under $3,000", payload="recommend:budget:under_3000"),
+    QuickReply(label="$3,000–$4,999", payload="recommend:budget:3000_4999"),
+    QuickReply(label="$5,000–$6,999", payload="recommend:budget:5000_6999"),
+    QuickReply(label="$7,000–$9,999", payload="recommend:budget:7000_9999"),
+    QuickReply(label="$10,000+", payload="recommend:budget:10000_plus"),
+)
+
+_HEIGHT_REPLIES = (
+    QuickReply(label='Under 5\'4"', payload="recommend:height:petite"),
+    QuickReply(label='5\'4"–5\'11"', payload="recommend:height:average"),
+    QuickReply(label='6\'0"–6\'2"', payload="recommend:height:tall"),
+    QuickReply(label='6\'3"+', payload="recommend:height:extra_tall"),
+)
+
+_WEIGHT_REPLIES = (
+    QuickReply(label="≤180 lb", payload="recommend:weight:le180"),
+    QuickReply(label="181–220 lb", payload="recommend:weight:181_220"),
+    QuickReply(label="221–260 lb", payload="recommend:weight:221_260"),
+    QuickReply(label="261–300 lb", payload="recommend:weight:261_300"),
+    QuickReply(label="301+ lb", payload="recommend:weight:301_plus"),
+)
+
+_GOAL_REPLIES = (
+    QuickReply(label="Neck & shoulders", payload="recommend:goal:neck"),
+    QuickReply(label="Lower back", payload="recommend:goal:lower_back"),
+    QuickReply(label="Upper back", payload="recommend:goal:upper_back"),
+    QuickReply(label="Foot & calf", payload="recommend:goal:feet"),
+    QuickReply(label="Full-body relax", payload="recommend:goal:full_body"),
+    QuickReply(label="Stretch / mobility", payload="recommend:goal:stretch"),
+)
+
+_INTENSITY_REPLIES = (
+    QuickReply(label="Gentle", payload="recommend:intensity:gentle"),
+    QuickReply(label="Balanced", payload="recommend:intensity:balanced"),
+    QuickReply(label="Strong / deep", payload="recommend:intensity:strong"),
+    QuickReply(label="Highly adjustable", payload="recommend:intensity:adjustable"),
+)
+
+_FOOT_REPLIES = (
+    QuickReply(label="Foot not important", payload="recommend:foot:not_important"),
+    QuickReply(label="Foot important", payload="recommend:foot:important"),
+    QuickReply(label="Foot is top priority", payload="recommend:foot:top"),
+)
+
+_SPACE_REPLIES = (
+    QuickReply(label="No space issue", payload="recommend:space:none"),
+    QuickReply(label="Small room", payload="recommend:space:small_room"),
+    QuickReply(label="Narrow doorway", payload="recommend:space:narrow_door"),
 )
 
 
@@ -392,30 +449,235 @@ def _why_pick(product: ProductSpecs, request: RecommendationRequest) -> str:
     return "; ".join(bits[:2])
 
 
-def _recommend_reply(message: str) -> SalesReply:
-    request = parse_recommendation_hints(message)
+def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
+    patch = {"recommend_prefs": prefs}
+    if missing == "budget":
+        return SalesReply(
+            reply=(
+                "Happy to recommend a chair. What's your **budget range**?\n\n"
+                "Tap a band below (from our sales fit guide), or type something "
+                "like *around 6000*."
+            ),
+            intent=INTENT_RECOMMEND,
+            quick_replies=[
+                *_BUDGET_BAND_REPLIES,
+                QuickReply(label="Talk to a human", payload="human"),
+            ],
+            tools_used=["cases.clarify"],
+            prefs_patch=patch,
+        )
+    if missing == "height":
+        return SalesReply(
+            reply="Got it. What's the **user height**?",
+            intent=INTENT_RECOMMEND,
+            quick_replies=[*_HEIGHT_REPLIES, QuickReply(label="Talk to a human", payload="human")],
+            tools_used=["cases.clarify"],
+            prefs_patch=patch,
+        )
+    if missing == "weight":
+        return SalesReply(
+            reply="Thanks. Roughly what **weight range**?",
+            intent=INTENT_RECOMMEND,
+            quick_replies=[*_WEIGHT_REPLIES, QuickReply(label="Talk to a human", payload="human")],
+            tools_used=["cases.clarify"],
+            prefs_patch=patch,
+        )
+    if missing == "goal":
+        return SalesReply(
+            reply="What's the **main focus** for the massage?",
+            intent=INTENT_RECOMMEND,
+            quick_replies=[*_GOAL_REPLIES, QuickReply(label="Talk to a human", payload="human")],
+            tools_used=["cases.clarify"],
+            prefs_patch=patch,
+        )
+    if missing == "intensity":
+        return SalesReply(
+            reply="Preferred **massage intensity**?",
+            intent=INTENT_RECOMMEND,
+            quick_replies=[
+                *_INTENSITY_REPLIES,
+                QuickReply(label="Talk to a human", payload="human"),
+            ],
+            tools_used=["cases.clarify"],
+            prefs_patch=patch,
+        )
+    if missing == "foot":
+        return SalesReply(
+            reply="How important are **foot & calf** rollers / kneading?",
+            intent=INTENT_RECOMMEND,
+            quick_replies=[*_FOOT_REPLIES, QuickReply(label="Talk to a human", payload="human")],
+            tools_used=["cases.clarify"],
+            prefs_patch=patch,
+        )
+    # space
+    return SalesReply(
+        reply="Any **space / doorway** constraint?",
+        intent=INTENT_RECOMMEND,
+        quick_replies=[*_SPACE_REPLIES, QuickReply(label="Talk to a human", payload="human")],
+        tools_used=["cases.clarify"],
+        prefs_patch=patch,
+    )
+
+
+def _case_recommend_reply(
+    prefs: dict[str, str],
+    *,
+    domain: str,
+    request: RecommendationRequest,
+) -> Optional[SalesReply]:
+    brand = brand_for_domain(domain)
+    if not cases_available(brand):
+        return None
+    match = lookup_case(prefs, brand=brand)
+    if match is None:
+        return None
+
+    lead, others, priority_note = rank_case_models(
+        match.primary_model,
+        match.alternative_1,
+        match.alternative_2,
+        brand=brand,
+    )
+    model_names = [n for n in [lead, *others] if n]
+
+    resolved: list[tuple[str, Optional[ProductSpecs], Optional[LiveStockSnapshot]]] = []
+    stock_checked = False
+    for name in model_names:
+        product = resolve_product(name)
+        snap: Optional[LiveStockSnapshot] = None
+        if product is not None:
+            snap = fetch_live_stock(
+                product.handle,
+                domain=domain,
+                title=product.title or product.display_name or name,
+            )
+            if snap is not None:
+                stock_checked = True
+        resolved.append((name, product, snap))
+
+    def _stock_rank(
+        item: tuple[str, Optional[ProductSpecs], Optional[LiveStockSnapshot]],
+    ) -> tuple:
+        _name, _product, snap = item
+        if snap is None:
+            return (1, 0)  # unknown — keep mid priority
+        if snap.in_stock:
+            return (0, 1 if snap.is_low else 0)
+        return (2, 0)  # OOS last
+
+    ordered = sorted(enumerate(resolved), key=lambda pair: (_stock_rank(pair[1]), pair[0]))
+    resolved = [item for _, item in ordered]
+
+    if resolved and resolved[0][0] != lead:
+        # Stock demotion changed the lead.
+        lead = resolved[0][0]
+        others = [n for n, _, _ in resolved[1:]]
+        priority_note = (
+            (priority_note + " ") if priority_note else ""
+        ) + f"Showing **{lead}** first because live inventory looks better right now."
+
+    bucket_bits = [
+        match.buckets.get("budget"),
+        match.buckets.get("height"),
+        match.buckets.get("weight"),
+        match.buckets.get("goal"),
+        match.buckets.get("intensity"),
+        match.buckets.get("foot"),
+        match.buckets.get("space"),
+    ]
+    lines = [
+        "Based on our **sales fit guide** "
+        f"({', '.join(b for b in bucket_bits if b)}):",
+        "",
+        f"**Primary pick: {lead}**",
+    ]
+    if priority_note:
+        lines.append(f"→ {priority_note}")
+    if match.reason:
+        lines.append(f"→ {match.reason}")
+    if others:
+        lines.append(f"\n**Also consider:** {' / '.join(others)}")
+    if match.trade_off and "no major" not in match.trade_off.lower():
+        lines.append(f"\nTrade-off: {match.trade_off}")
+    caveat = short_do_not_recommend(match.do_not_recommend_when)
+    if caveat:
+        lines.append(f"\n**Skip this pick if:** {caveat}")
+
+    products: list[ProductSpecs] = []
+    seen_handles: set[str] = set()
+    priced_lines: list[str] = []
+    for name, product, snap in resolved:
+        badge = stock_badge(snap) if stock_checked else None
+        if product is None:
+            if badge:
+                priced_lines.append(f"- **{name}** — catalog match pending ({badge})")
+            continue
+        if product.handle in seen_handles:
+            continue
+        seen_handles.add(product.handle)
+        products.append(product)
+        detail = ", ".join(
+            bit for bit in (product.massage_mechanism, product.track_type) if bit
+        )
+        line = (
+            f"- **{product.display_name}** — {_fmt_price(product.price_usd)}"
+            + (f" ({detail})" if detail else "")
+        )
+        if badge:
+            line += f" — *{badge}*"
+        priced_lines.append(line)
+
+    if priced_lines:
+        lines.append("\nLive catalog + stock:")
+        lines.extend(priced_lines)
+    elif model_names:
+        lines.append(
+            "\n(Catalog price lookup didn't match every model name — "
+            "a rep can confirm live pricing.)"
+        )
+
+    lines.append(
+        "\nWant specs on one of these, a different budget, or a sales specialist?"
+    )
+
+    quick: list[QuickReply] = []
+    for product in products[:3]:
+        quick.append(
+            QuickReply(label=f"Specs for {product.display_name}", payload=f"specs:{product.handle}")
+        )
+    quick.extend(list(_BUDGET_BAND_REPLIES[:2]))
+    quick.append(QuickReply(label="Talk to a human", payload="human"))
+
+    tools = ["cases.lookup", "cases.priority", "catalog.resolve_product"]
+    if stock_checked:
+        tools.append("shopify.inventory")
+
+    return SalesReply(
+        reply="\n".join(lines),
+        intent=INTENT_RECOMMEND,
+        quick_replies=quick,
+        tools_used=tools,
+        products=[p.as_public_dict() for p in products],
+        prefs_patch={"recommend_prefs": match.buckets},
+    )
+
+
+def _catalog_tier_recommend_reply(message: str, request: RecommendationRequest) -> SalesReply:
+    """Fallback when practical-case file is missing or incomplete."""
     has_hints = any(
-        [
-            request.height_in,
-            request.weight_lb,
-            request.budget_usd,
-            request.focus_areas,
-        ]
+        [request.height_in, request.weight_lb, request.budget_usd, request.focus_areas]
     )
     picks = recommend(request, limit=3)
     if not picks:
         return SalesReply(
             reply=(
                 "Happy to recommend a chair. What's your **budget range**?\n\n"
-                "Tap a price band below, or type something like *around 6000* / "
-                "*under 3000*.\n\n"
-                "You can also share **height** (e.g. *6'2\"*) or a focus area "
-                "(back / neck / feet)."
+                "Tap a price band below, or type something like *around 6000*."
             ),
             intent=INTENT_RECOMMEND,
             quick_replies=[
                 *_BUDGET_BAND_REPLIES,
-                QuickReply(label="Focus: back", payload="recommend:back"),
+                QuickReply(label="Focus: lower back", payload="recommend:goal:lower_back"),
                 QuickReply(label="Talk to a human", payload="human"),
             ],
             tools_used=["catalog.parse_hints"],
@@ -486,6 +748,39 @@ def _recommend_reply(message: str) -> SalesReply:
         + (["catalog.parse_hints"] if has_hints else []),
         products=[p.as_public_dict() for p in picks],
     )
+
+
+def _recommend_reply(
+    message: str,
+    *,
+    payload: Optional[str] = None,
+    domain: str = "osakiusa.com",
+    prefs: Optional[dict] = None,
+) -> SalesReply:
+    request = parse_recommendation_hints(message)
+    merged = dict((prefs or {}).get("recommend_prefs") or {})
+    if payload:
+        merged = apply_payload_codes(merged, payload)
+    merged = merge_prefs_from_hints(
+        merged,
+        height_in=request.height_in,
+        weight_lb=request.weight_lb,
+        budget_usd=request.budget_usd,
+        focus_areas=request.focus_areas,
+        free_text=request.free_text or message,
+    )
+    merged = enrich_implied_prefs(merged)
+
+    missing = missing_required(merged)
+    if missing:
+        return _clarify_recommend(missing[0], merged)
+
+    case_reply = _case_recommend_reply(merged, domain=domain, request=request)
+    if case_reply is not None:
+        return case_reply
+
+    return _catalog_tier_recommend_reply(message, request)
+
 
 
 _VS_RE = re.compile(r"\b(vs\.?|versus|compared\s+to|difference\s+between)\b", re.IGNORECASE)
@@ -692,7 +987,6 @@ def _list_reply() -> SalesReply:
 _PAYLOAD_ROUTES = {
     "menu": lambda _msg: _greeting_reply(),
     "list": lambda _msg: _list_reply(),
-    "recommend": lambda msg: _recommend_reply(msg),
     "compare": lambda msg: _compare_reply(msg),
     "price": lambda msg: _price_reply(msg),
     "stock": lambda msg: _stock_reply(msg),
@@ -704,38 +998,48 @@ _PAYLOAD_ROUTES = {
 }
 
 
-def _recommend_message_from_payload(payload: str, message: str) -> str:
-    """Map recommend:* button payloads to text the hint parser understands."""
-    parts = [p.strip() for p in (payload or "").split(":") if p.strip()]
-    if len(parts) >= 3 and parts[1].lower() == "budget":
-        amount = parts[2].rstrip("+")
-        if amount.isdigit():
-            return f"budget around ${amount}"
-    if len(parts) >= 2 and parts[1].lower() in {"back", "neck", "feet"}:
-        return parts[1].lower()
-    return (message or payload or "recommend").strip()
-
-
-def _payload_reply(payload: str, message: str) -> Optional[SalesReply]:
+def _payload_reply(
+    payload: str,
+    message: str,
+    *,
+    domain: str,
+    prefs: Optional[dict],
+) -> Optional[SalesReply]:
     parts = (payload or "").split(":")
     root = parts[0].strip().lower() if parts else ""
+    if root == "recommend":
+        return _recommend_reply(
+            message or "recommend",
+            payload=payload,
+            domain=domain,
+            prefs=prefs,
+        )
+    if root == "stock":
+        return _stock_reply(message or payload, domain=domain)
     factory = _PAYLOAD_ROUTES.get(root)
     if factory is None:
         return None
-    if root == "recommend":
-        return _recommend_reply(_recommend_message_from_payload(payload, message))
     return factory(message or payload)
 
 
-def respond(message: str, *, payload: Optional[str] = None) -> SalesReply:
+def respond(
+    message: str,
+    *,
+    payload: Optional[str] = None,
+    domain: str = "osakiusa.com",
+    prefs: Optional[dict] = None,
+) -> SalesReply:
     """Return a SalesReply for one customer message (+ optional button payload).
 
     ``payload`` is the ``QuickReply.payload`` value emitted by a previous
     turn. When set, it overrides intent classification so button taps behave
     predictably — critical for hitting 100% satisfaction on menu paths.
+
+    ``prefs`` is ``sales_sessions.collected_data`` (recommend answers accumulate
+    across turns via ``prefs_patch`` on the reply).
     """
     if payload:
-        forced = _payload_reply(payload, message)
+        forced = _payload_reply(payload, message, domain=domain, prefs=prefs)
         if forced is not None:
             return forced
 
@@ -753,11 +1057,11 @@ def respond(message: str, *, payload: Optional[str] = None) -> SalesReply:
     if intent.label == INTENT_PRICE:
         return _price_reply(message)
     if intent.label == INTENT_STOCK:
-        return _stock_reply(message)
+        return _stock_reply(message, domain=domain)
     if intent.label == INTENT_SPECS:
         return _specs_reply(message)
     if intent.label == INTENT_RECOMMEND:
-        return _recommend_reply(message)
+        return _recommend_reply(message, domain=domain, prefs=prefs)
     if intent.label == INTENT_COMPARE:
         return _compare_reply(message)
     if intent.label == INTENT_INTENSITY:

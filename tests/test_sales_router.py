@@ -127,7 +127,7 @@ def test_unclear_returns_menu_not_a_guess(client):
     assert any(q["payload"] == "human" for q in body["quick_replies"])
 
 
-def test_recommend_without_hints_returns_price_tiers(client):
+def test_recommend_without_hints_asks_budget(client):
     resp = client.post(
         "/api/v1/sales/chat",
         json={"session_id": "s-r", "message": "can you recommend a chair"},
@@ -136,15 +136,13 @@ def test_recommend_without_hints_returns_price_tiers(client):
     body = resp.json()
     assert body["intent"] == "recommend"
     assert body["handoff"] is False
-    reply = body["reply"].lower()
-    assert "price tier" in reply or "$2" in reply or "value" in reply
-    assert "$" in body["reply"]
+    assert "budget" in body["reply"].lower()
     payloads = {q["payload"] for q in body["quick_replies"]}
-    assert "recommend:budget:2000" in payloads
+    assert "recommend:budget:under_3000" in payloads
     assert any(p.startswith("recommend:budget:") for p in payloads)
 
 
-def test_recommend_budget_band_payload_returns_tiered_picks(client):
+def test_recommend_budget_band_then_asks_height(client):
     resp = client.post(
         "/api/v1/sales/chat",
         json={
@@ -156,11 +154,122 @@ def test_recommend_budget_band_payload_returns_tiered_picks(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["intent"] == "recommend"
-    assert "around $6,000" in body["reply"]
-    # Should list priced picks across tiers, not the "what's your budget" prompt.
+    # Budget saved → next clarifying question is height.
     assert "budget range" not in body["reply"].lower()
-    assert "$" in body["reply"]
-    assert "mid-range" in body["reply"].lower() or "premium" in body["reply"].lower()
+    assert "height" in body["reply"].lower()
+    payloads = {q["payload"] for q in body["quick_replies"]}
+    assert any(p.startswith("recommend:height:") for p in payloads)
+
+
+def test_recommend_guided_flow_returns_case_pick(client):
+    sid = "s-case-flow"
+    for payload in (
+        "recommend:budget:under_3000",
+        "recommend:height:petite",
+        "recommend:weight:le180",
+        "recommend:goal:neck",
+        "recommend:intensity:gentle",
+        "recommend:foot:not_important",
+        "recommend:space:none",
+    ):
+        resp = client.post(
+            "/api/v1/sales/chat",
+            json={
+                "session_id": sid,
+                "message": "",
+                "payload": payload,
+                "domain": "osakimassagechair.com",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+    assert body["intent"] == "recommend"
+    assert "primary pick" in body["reply"].lower()
+    assert "Osaki OS-Champ" in body["reply"]
+    assert "skip this pick if" in body["reply"].lower()
+
+
+def test_recommend_osakiusa_uses_titan_usa_book(client):
+    sid = "s-usa-titan-book"
+    for payload in (
+        "recommend:budget:under_3000",
+        "recommend:height:petite",
+        "recommend:weight:le180",
+        "recommend:goal:neck",
+        "recommend:intensity:gentle",
+        "recommend:foot:not_important",
+        "recommend:space:none",
+    ):
+        resp = client.post(
+            "/api/v1/sales/chat",
+            json={
+                "session_id": sid,
+                "message": "",
+                "payload": payload,
+                "domain": "osakiusa.com",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+    assert "Titan eCabin 3D" in body["reply"] or "Primary pick" in body["reply"]
+    assert "Osaki OS-Champ" not in body["reply"]
+
+
+def test_recommend_demotes_oos_with_live_stock(client, monkeypatch):
+    """When primary is OOS and an alt is in stock, lead with the in-stock model."""
+
+    class _Snap:
+        def __init__(self, handle, in_stock):
+            self.handle = handle
+            self.title = handle
+            self.status = "active"
+            self.available_for_sale = in_stock
+            self.total_inventory = 5 if in_stock else 0
+            self.source = "shopify"
+
+        @property
+        def in_stock(self):
+            return self.available_for_sale and self.total_inventory > 0
+
+        @property
+        def is_low(self):
+            return False
+
+    def _fake_stock(handle, domain=None, title=None, timeout=8.0):
+        # Champ OOS; force alts in stock when resolved.
+        if "champ" in (handle or "").lower():
+            return _Snap(handle, False)
+        return _Snap(handle, True)
+
+    monkeypatch.setattr("sales_agent.fetch_live_stock", _fake_stock)
+    monkeypatch.setattr("sales_shopify_stock.fetch_live_stock", _fake_stock)
+
+    sid = "s-stock-demote"
+    body = None
+    for payload in (
+        "recommend:budget:under_3000",
+        "recommend:height:petite",
+        "recommend:weight:le180",
+        "recommend:goal:neck",
+        "recommend:intensity:gentle",
+        "recommend:foot:not_important",
+        "recommend:space:none",
+    ):
+        resp = client.post(
+            "/api/v1/sales/chat",
+            json={
+                "session_id": sid,
+                "message": "",
+                "payload": payload,
+                "domain": "osakimassagechair.com",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+    assert body is not None
+    assert "in stock" in body["reply"].lower() or "out of stock" in body["reply"].lower()
+    assert "shopify.inventory" in body.get("tools_used", [])
 
 
 def test_menu_button_payload_returns_menu(client):

@@ -216,14 +216,20 @@ async def sales_chat(request: Request, body: SalesChatRequest):  # noqa: WPS231 
             detail="Provide `message` or `payload` (button choice).",
         )
 
+    domain = body.domain or "osakiusa.com"
     session_row = get_or_create_session(
         session_id=body.session_id,
-        domain=body.domain or "osakiusa.com",
+        domain=domain,
         channel=body.channel or "tidio",
         tidio_visitor_id=body.tidio_visitor_id,
     )
 
-    reply = respond(message, payload=payload)
+    from sales_models import get_session_collected, merge_session_collected
+
+    prefs = get_session_collected(body.session_id)
+    reply = respond(message, payload=payload, domain=domain, prefs=prefs)
+    if reply.prefs_patch:
+        merge_session_collected(body.session_id, reply.prefs_patch)
 
     if message:
         record_message(body.session_id, role="user", content=message, intent=reply.intent)

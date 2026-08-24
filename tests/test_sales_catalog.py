@@ -62,6 +62,14 @@ def test_resolve_product_unknown_returns_none():
     assert resolve_product("blender 9000") is None
 
 
+def test_resolve_case_workbook_aliases(catalog):
+    # Common sales-workbook shorthand should still resolve into the Shopify index.
+    champ = resolve_product("Osaki OS-Champ")
+    assert champ is not None
+    vito = resolve_product("OS-3D AI Vito")
+    assert vito is not None
+
+
 def test_parse_hints_extracts_height_and_weight():
     req = parse_recommendation_hints("I am 6'2\" and 230 lb, back pain")
     assert req.height_in == 74
