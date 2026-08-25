@@ -99,6 +99,20 @@ def test_parse_budget_accepts_trailing_dollar_sign():
     assert req.budget_usd == 6000
 
 
+def test_parse_budget_k_notation_and_under():
+    assert parse_recommendation_hints("under $5k").budget_usd == 5000
+    assert parse_recommendation_hints("around 6k").budget_usd == 6000
+    assert parse_recommendation_hints("budget 5000").budget_usd == 5000
+
+
+def test_parse_budget_ignores_weight_number():
+    req = parse_recommendation_hints("I'm 6 ft 2 around 220 lb budget 5000 lower back")
+    assert req.height_in == 74
+    assert req.weight_lb == 220
+    assert req.budget_usd == 5000
+    assert "back" in req.focus_areas
+
+
 def test_recommend_returns_one_pick_per_price_tier(catalog):
     """Default recommend: Value $2–3k, Mid $4–6k, Premium $8k+."""
     from sales_catalog import price_tier_label

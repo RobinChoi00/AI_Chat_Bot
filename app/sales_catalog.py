@@ -280,8 +280,17 @@ _BACK_HINT_RE = re.compile(
 )
 _NECK_HINT_RE = re.compile(r"\b(neck|shoulder|shoulders|traps)\b", re.I)
 _FEET_HINT_RE = re.compile(r"\b(feet|foot|calf|calves|legs?)\b", re.I)
-# Accept "$6000", "6000$", "6k", "$6,000".
-_BUDGET_RE = re.compile(r"\$?\s*(\d{3,5})\s*\$?(?:\s*(?:k|,000))?\b", re.I)
+# "$5k" / "5k" / "under 5k"
+_BUDGET_K_RE = re.compile(r"(?:\$|usd\s*)?\s*(\d{1,2})\s*k\b", re.I)
+# "$6,000", "under 5000", "budget 6000", "6000$"
+_BUDGET_NUM_RE = re.compile(
+    r"(?:\$)\s*(\d{1,3}(?:,\d{3})+|\d{3,5})\b|"
+    r"\b(?:under|around|about|near|budget(?:\s*(?:of|is|around|under)?)?|max|up\s+to|below)"
+    r"\s*(?:of\s+)?(?:\$)?\s*(\d{1,3}(?:,\d{3})+|\d{3,5})\b|"
+    r"\b(\d{3,5})\s*\$|"
+    r"\b(\d{3,5})\s*(?:usd|dollars?)\b",
+    re.I,
+)
 
 
 @dataclass
@@ -291,6 +300,35 @@ class RecommendationRequest:
     budget_usd: Optional[int] = None
     focus_areas: list[str] = field(default_factory=list)  # ["back", "neck", "feet"]
     free_text: str = ""
+
+
+def _parse_budget_usd(raw: str) -> Optional[int]:
+    """Pull a chair budget from free text; ignore weight/height numbers."""
+    if not raw:
+        return None
+    k_match = _BUDGET_K_RE.search(raw)
+    if k_match:
+        num = int(k_match.group(1)) * 1000
+        if 500 <= num <= 50000:
+            return num
+
+    candidates: list[int] = []
+    for match in _BUDGET_NUM_RE.finditer(raw):
+        token = next((g for g in match.groups() if g), None)
+        if not token:
+            continue
+        num = int(token.replace(",", ""))
+        start, end = match.span()
+        tail = raw[end : end + 10].lower()
+        # "220 lb" / "95 kg" must never become a budget.
+        if re.match(r"\s*(?:lb|lbs|pounds?|kg)\b", tail):
+            continue
+        if 500 <= num <= 50000:
+            candidates.append(num)
+    if not candidates:
+        return None
+    # Prefer the largest plausible chair price when several numbers appear.
+    return max(candidates)
 
 
 def parse_recommendation_hints(text: str) -> RecommendationRequest:
@@ -318,16 +356,7 @@ def parse_recommendation_hints(text: str) -> RecommendationRequest:
         if kg_match:
             req.weight_lb = int(round(int(kg_match.group(1)) * 2.20462))
 
-    budget = _BUDGET_RE.search(raw)
-    if budget:
-        raw_num = budget.group(1)
-        num = int(raw_num)
-        if raw.lower().find(raw_num + "k") != -1 or "$" + raw_num + "k" in raw.lower():
-            num *= 1000
-        if num < 1000 and (raw.lower().endswith("k") or "budget" in raw.lower()):
-            num *= 1000
-        if 500 <= num <= 50000:
-            req.budget_usd = num
+    req.budget_usd = _parse_budget_usd(raw)
 
     if _TALL_HINT_RE.search(raw) and not req.height_in:
         req.height_in = 76

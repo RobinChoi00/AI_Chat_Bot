@@ -270,6 +270,166 @@ def test_recommend_demotes_oos_with_live_stock(client, monkeypatch):
     assert body is not None
     assert "in stock" in body["reply"].lower() or "out of stock" in body["reply"].lower()
     assert "shopify.inventory" in body.get("tools_used", [])
+    payloads = {q["payload"] for q in body["quick_replies"]}
+    assert "lead:save_pick" in payloads
+    assert any(p.startswith("open:https://") for p in payloads)
+    assert "products/" in body["reply"]
+    assert "Why we recommend" in body["reply"] or "why we recommend" in body["reply"].lower()
+    assert "Open these links" in body["reply"] or "https://" in body["reply"]
+    # Demotion puts an in-stock model first → conversion CTAs should appear.
+    labels = {q["label"] for q in body["quick_replies"]}
+    assert "Shop this chair" in labels
+    assert "Financing at checkout" in labels
+
+
+def test_email_me_this_pick_captures_lead_with_summary(client, monkeypatch):
+    monkeypatch.setattr("sales_agent.fetch_live_stock", lambda *a, **k: None)
+    monkeypatch.setattr("sales_shopify_stock.fetch_live_stock", lambda *a, **k: None)
+
+    sid = "s-email-pick"
+    for payload in (
+        "recommend:budget:under_3000",
+        "recommend:height:petite",
+        "recommend:weight:le180",
+        "recommend:goal:neck",
+        "recommend:intensity:gentle",
+        "recommend:foot:not_important",
+        "recommend:space:none",
+    ):
+        resp = client.post(
+            "/api/v1/sales/chat",
+            json={
+                "session_id": sid,
+                "message": "",
+                "payload": payload,
+                "domain": "osakiusa.com",
+            },
+        )
+        assert resp.status_code == 200
+
+    ask = client.post(
+        "/api/v1/sales/chat",
+        json={"session_id": sid, "message": "", "payload": "lead:save_pick", "domain": "osakiusa.com"},
+    )
+    assert ask.status_code == 200
+    assert "email" in ask.json()["reply"].lower()
+
+    done = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "buyer@example.com",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert done.status_code == 200
+    body = done.json()
+    assert body["handoff"] is True
+    assert "buyer@example.com" in body["reply"]
+    assert "lead.capture" in body.get("tools_used", [])
+
+
+def test_free_text_skips_secondary_questions(client, monkeypatch):
+    """Core four in one message → recommend without asking intensity/foot/space."""
+    monkeypatch.setattr("sales_agent.fetch_live_stock", lambda *a, **k: None)
+
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-skip-secondary",
+            "message": "I'm 6'2, 220 lb, lower back pain, under $5k",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["intent"] == "recommend"
+    assert "primary pick" in body["reply"].lower()
+    assert "intensity" not in body["reply"].lower() or "defaults" in body["reply"].lower()
+    # Must not be stuck on a clarifying question.
+    assert "preferred **massage intensity**" not in body["reply"].lower()
+    payloads = {q["payload"] for q in body["quick_replies"]}
+    assert "lead:save_pick" in payloads
+
+
+def test_free_text_partial_still_asks_weight(client):
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-ask-weight",
+            "message": "6'2, back pain, under $5k",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["intent"] == "recommend"
+    assert "weight" in body["reply"].lower()
+    assert "primary pick" not in body["reply"].lower()
+
+
+def test_conversion_ctas_when_in_stock(client, monkeypatch):
+    class _Snap:
+        def __init__(self, handle):
+            self.handle = handle
+            self.title = handle
+            self.status = "active"
+            self.available_for_sale = True
+            self.total_inventory = 8
+            self.source = "shopify"
+
+        @property
+        def in_stock(self):
+            return True
+
+        @property
+        def is_low(self):
+            return False
+
+    monkeypatch.setattr(
+        "sales_agent.fetch_live_stock",
+        lambda handle, domain=None, title=None, timeout=8.0: _Snap(handle or "x"),
+    )
+
+    sid = "s-convert"
+    body = None
+    for payload in (
+        "recommend:budget:under_3000",
+        "recommend:height:petite",
+        "recommend:weight:le180",
+        "recommend:goal:neck",
+    ):
+        resp = client.post(
+            "/api/v1/sales/chat",
+            json={
+                "session_id": sid,
+                "message": "",
+                "payload": payload,
+                "domain": "osakiusa.com",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+    assert body is not None
+    assert "primary pick" in body["reply"].lower()
+    labels = {q["label"] for q in body["quick_replies"]}
+    assert "Shop this chair" in labels
+    assert "Financing at checkout" in labels
+    assert "Visit showroom" in labels
+    assert "cta.conversion" in body.get("tools_used", [])
+
+    showroom = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "",
+            "payload": "cta:showroom",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert showroom.status_code == 200
+    assert "Carrollton" in showroom.json()["reply"]
 
 
 def test_menu_button_payload_returns_menu(client):

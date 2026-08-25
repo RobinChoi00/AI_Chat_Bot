@@ -22,8 +22,10 @@ from sales_cases import (  # noqa: E402
     height_bucket,
     lookup_case,
     merge_prefs_from_hints,
+    missing_core,
     missing_required,
     rank_case_models,
+    secondary_defaults_applied,
     short_do_not_recommend,
     weight_bucket,
     budget_bucket,
@@ -116,6 +118,31 @@ def test_short_do_not_recommend():
 def test_enrich_implied_foot_from_goal():
     prefs = enrich_implied_prefs({"goal": "Foot & Calf"})
     assert prefs["foot"] == "Important"
+    # Core four incomplete → do not invent intensity/space yet.
+    assert "intensity" not in prefs
+    assert "space" not in prefs
+
+
+def test_enrich_applies_secondary_defaults_after_core_four():
+    core = {
+        "budget": "Under $3,000",
+        "height": 'Petite (<5\'4")',
+        "weight": "≤180 lb",
+        "goal": "Neck & Shoulders",
+    }
+    assert missing_core(core) == []
+    assert missing_required(core) == ["intensity", "foot", "space"]
+    before = dict(core)
+    filled = enrich_implied_prefs(core)
+    assert filled["intensity"] == "Balanced"
+    assert filled["foot"] == "Not Important"
+    assert filled["space"] == "No Space Constraint"
+    assert missing_required(filled) == []
+    assert set(secondary_defaults_applied(before, filled)) == {
+        "intensity",
+        "foot",
+        "space",
+    }
 
 
 def test_merge_hints_into_prefs():
@@ -131,3 +158,19 @@ def test_merge_hints_into_prefs():
     assert prefs["weight"] == "221–260 lb"
     assert prefs["budget"] == "$5,000–$6,999"
     assert prefs["goal"] == "Lower Back"
+
+
+def test_secondary_free_text_overrides_defaults():
+    prefs = {
+        "budget": "Under $3,000",
+        "height": 'Petite (<5\'4")',
+        "weight": "≤180 lb",
+        "goal": "Neck & Shoulders",
+        "intensity": "Balanced",
+        "foot": "Not Important",
+        "space": "No Space Constraint",
+    }
+    updated = merge_prefs_from_hints(prefs, free_text="I want a strong deep massage")
+    assert updated["intensity"] == "Strong"
+    updated = merge_prefs_from_hints(prefs, free_text="small apartment room")
+    assert updated["space"] == "Small Room"

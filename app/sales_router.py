@@ -205,7 +205,11 @@ def _mark_lead_status(lead_id: int, *, status: str, error: Optional[str]) -> Non
 
 @router.post("/api/v1/sales/chat", response_model=SalesChatResponse)
 @limiter.limit(_SALES_CHAT_RATE)
-async def sales_chat(request: Request, body: SalesChatRequest):  # noqa: WPS231 — router glue
+async def sales_chat(
+    request: Request,
+    body: SalesChatRequest,
+    background_tasks: BackgroundTasks,
+):  # noqa: WPS231 — router glue
     """Main sales chat turn — deterministic, no LLM."""
     message = _sanitize_message(body.message)
     payload = (body.payload or "").strip()[:200] or None
@@ -230,6 +234,41 @@ async def sales_chat(request: Request, body: SalesChatRequest):  # noqa: WPS231 
     reply = respond(message, payload=payload, domain=domain, prefs=prefs)
     if reply.prefs_patch:
         merge_session_collected(body.session_id, reply.prefs_patch)
+
+    if reply.lead_capture and reply.lead_capture.get("email"):
+        email = str(reply.lead_capture.get("email") or "").strip()
+        interest = str(reply.lead_capture.get("interest_summary") or "").strip() or None
+        reason = str(reply.lead_capture.get("reason") or "save_pick").strip() or "save_pick"
+        with warranty_db_session() as db:
+            row = SalesLead(
+                session_id=body.session_id,
+                email=email or None,
+                phone=None,
+                domain=domain,
+                interest_summary=interest,
+                reason=reason,
+                forwarded="pending",
+            )
+            db.add(row)
+            db.flush()
+            lead_id = row.id
+            session = (
+                db.query(SalesSession)
+                .filter(SalesSession.session_id == body.session_id)
+                .one_or_none()
+            )
+            if session is not None:
+                if email and not session.contact_email:
+                    session.contact_email = email
+                session.status = "handoff"
+        if email:
+            background_tasks.add_task(
+                _fire_lead_email,
+                email=email,
+                interest_summary=interest or "",
+                domain=domain,
+                lead_id=lead_id,
+            )
 
     if message:
         record_message(body.session_id, role="user", content=message, intent=reply.intent)
@@ -291,13 +330,20 @@ async def sales_lead(
     # Make sure a session row exists so admin dashboards can pivot on it.
     get_or_create_session(body.session_id, domain=domain, channel="tidio")
 
+    from sales_models import get_session_collected
+
+    collected = get_session_collected(body.session_id)
+    interest = (body.interest_summary or "").strip() or (
+        str(collected.get("pending_pick_summary") or "").strip() or None
+    )
+
     with warranty_db_session() as db:
         row = SalesLead(
             session_id=body.session_id,
             email=email or None,
             phone=phone or None,
             domain=domain,
-            interest_summary=body.interest_summary,
+            interest_summary=interest,
             reason=reason,
             forwarded="pending",
         )
@@ -321,7 +367,7 @@ async def sales_lead(
         background_tasks.add_task(
             _fire_lead_email,
             email=email,
-            interest_summary=body.interest_summary or "",
+            interest_summary=interest or "",
             domain=domain,
             lead_id=lead_id,
         )

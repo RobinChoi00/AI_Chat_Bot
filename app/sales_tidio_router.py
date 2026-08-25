@@ -41,6 +41,7 @@ from sales_intent import (
     WARRANTY_ROUTE_INTENTS,
 )
 from sales_models import (
+    SalesLead,
     get_or_create_session,
     record_message,
     update_session_last_intent,
@@ -56,6 +57,13 @@ from sales_tidio import (
     require_tidio_signature,
     tidio_domain,
     tidio_enabled,
+)
+from sales_tidio_buttons import (
+    append_numbered_menu,
+    flatten_buttons_for_flow,
+    normalize_stored_buttons,
+    prioritize_quick_replies,
+    resolve_button_choice,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,7 +123,7 @@ class TidioTurnResponse(BaseModel):
     quick_replies: list[dict[str, str]] = Field(default_factory=list)
     session_id: str
     contact_id: Optional[str] = None
-    # Flat text for Tidio Flow mappers (markdown stars stripped).
+    # Flat text for Tidio Flow mappers (markdown stars stripped + numbered menu).
     reply_plain: str = ""
     # Flow branch helper:
     #   reply              → send reply_plain, stay in bot
@@ -127,11 +135,33 @@ class TidioTurnResponse(BaseModel):
     # shipping / tracking). Cancel/refund is False → transfer to an agent.
     # Tidio should show ``reply_plain`` and END the flow when True.
     is_warranty_route: bool = False
+    # Flat button fields for Flow session variables / static Decision nodes.
+    button_count: int = 0
+    button_1_label: str = ""
+    button_1_payload: str = ""
+    button_1_url: str = ""
+    button_2_label: str = ""
+    button_2_payload: str = ""
+    button_2_url: str = ""
+    button_3_label: str = ""
+    button_3_payload: str = ""
+    button_3_url: str = ""
+    button_4_label: str = ""
+    button_4_payload: str = ""
+    button_4_url: str = ""
+    button_5_label: str = ""
+    button_5_payload: str = ""
+    button_5_url: str = ""
+    # True when the visitor message matched a prior button label/number.
+    resolved_from_button: bool = False
 
 
 def _strip_md(text: str) -> str:
-    """Tidio chat shows plain text better without **bold** markers."""
-    return re.sub(r"\*\*([^*]+)\*\*", r"\1", text or "").strip()
+    """Tidio chat shows plain text better without **bold** / markdown links."""
+    out = re.sub(r"\*\*([^*]+)\*\*", r"\1", text or "")
+    out = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1: \2", out)
+    out = re.sub(r"_([^_]+)_", r"\1", out)
+    return out.strip()
 
 
 def _next_action(intent: str, handoff: bool) -> str:
@@ -186,20 +216,78 @@ def _run_sales_turn(
     from sales_models import get_session_collected, merge_session_collected
 
     prefs = get_session_collected(session_id)
-    result = respond(message, payload=payload, domain=domain, prefs=prefs)
+    last_buttons = normalize_stored_buttons(prefs.get("last_quick_replies"))
+
+    resolved_from_button = False
+    effective_payload = (payload or "").strip() or None
+    effective_message = (message or "").strip()
+    if not effective_payload and effective_message:
+        matched = resolve_button_choice(effective_message, last_buttons)
+        if matched:
+            effective_payload = matched
+            resolved_from_button = True
+            # Button label / number is not free-text preference content.
+            effective_message = ""
+
+    result = respond(
+        effective_message,
+        payload=effective_payload,
+        domain=domain,
+        prefs=prefs,
+    )
     if result.prefs_patch:
         merge_session_collected(session_id, result.prefs_patch)
-    plain = _strip_md(result.reply)
+
+    if result.lead_capture and result.lead_capture.get("email"):
+        from sales_models import SalesSession
+        from warranty_models import warranty_db_session
+
+        email = str(result.lead_capture.get("email") or "").strip()
+        interest = str(result.lead_capture.get("interest_summary") or "").strip() or None
+        reason = str(result.lead_capture.get("reason") or "save_pick").strip() or "save_pick"
+        with warranty_db_session() as db:
+            db.add(
+                SalesLead(
+                    session_id=session_id,
+                    email=email or None,
+                    phone=None,
+                    domain=domain,
+                    interest_summary=interest,
+                    reason=reason,
+                    forwarded="pending",
+                )
+            )
+            session = (
+                db.query(SalesSession)
+                .filter(SalesSession.session_id == session_id)
+                .one_or_none()
+            )
+            if session is not None:
+                if email and not session.contact_email:
+                    session.contact_email = email
+                session.status = "handoff"
+
+    buttons = prioritize_quick_replies(result.quick_replies)
+    flat = flatten_buttons_for_flow(buttons)
+    merge_session_collected(session_id, {"last_quick_replies": buttons})
+
+    plain = append_numbered_menu(_strip_md(result.reply), buttons)
     action = _next_action(result.intent, result.handoff)
     is_warranty_route = result.intent in WARRANTY_ROUTE_INTENTS
 
     if message:
-        record_message(session_id, role="user", content=message, intent=result.intent)
-    if payload:
         record_message(
             session_id,
             role="user",
-            content=f"[button:{payload}]",
+            content=message,
+            intent=result.intent,
+            tools_used=["quick_reply"] if resolved_from_button else None,
+        )
+    elif effective_payload:
+        record_message(
+            session_id,
+            role="user",
+            content=f"[button:{effective_payload}]",
             intent=result.intent,
             tools_used=["quick_reply"],
         )
@@ -209,7 +297,7 @@ def _run_sales_turn(
         content=result.reply,
         intent=result.intent,
         handoff=result.handoff_reason if result.handoff else None,
-        tools_used=result.tools_used + ["tidio", f"action:{action}"],
+        tools_used=result.tools_used + ["tidio", f"action:{action}", "tidio.buttons"],
     )
     update_session_last_intent(
         session_id,
@@ -223,13 +311,13 @@ def _run_sales_turn(
         "intent": result.intent,
         "handoff": result.handoff,
         "handoff_reason": result.handoff_reason,
-        "quick_replies": [
-            {"label": q.label, "payload": q.payload} for q in result.quick_replies
-        ],
+        "quick_replies": buttons,
         "session_id": session_id,
         "contact_id": contact_id,
         "next_action": action,
         "is_warranty_route": is_warranty_route,
+        "resolved_from_button": resolved_from_button,
+        **flat,
     }
 
 
@@ -269,7 +357,7 @@ def _process_ticket_reply_event(payload: dict) -> None:
         logger.warning("tidio openapi not configured — cannot push ticket reply")
         return
 
-    status, data = reply_to_ticket(ticket_id, content=turn["reply"])
+    status, data = reply_to_ticket(ticket_id, content=turn["reply_plain"] or turn["reply"])
     logger.info(
         "tidio ticket reply pushed ticket=%s status=%s intent=%s",
         ticket_id,
@@ -319,6 +407,15 @@ async def tidio_health():
         "turn_url_hint": "/api/v1/sales/tidio/turn",
         "recommended_live_chat_path": "tidio_flow_http_request",
         "goal": "ai_first_24_7_before_human_agent",
+        "buttons": {
+            "max_quick_replies": int(os.getenv("TIDIO_MAX_QUICK_REPLIES", "5")),
+            "reply_plain_includes_numbered_menu": True,
+            "label_or_number_resolves_to_payload": True,
+            "flow_note": (
+                "Tidio Decision nodes are static — map button_N_label in Flow, "
+                "or rely on numbered menu in reply_plain. See docs/tidio_flow_sales_buttons.md"
+            ),
+        },
     }
 
 

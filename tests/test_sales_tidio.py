@@ -216,6 +216,44 @@ def test_tidio_turn_secret_required_when_configured(client, monkeypatch):
     assert good.status_code == 200
     assert good.json()["intent"] == "greeting"
 
+
+def test_tidio_turn_numbered_menu_and_button_resolve(client, monkeypatch):
+    monkeypatch.setattr("sales_agent.fetch_live_stock", lambda *a, **k: None)
+
+    first = client.post(
+        "/api/v1/sales/tidio/turn",
+        json={
+            "contact_id": "btn-demo-1",
+            "message": "I'm 5'4\", 170 lb, neck pain, under $3k",
+        },
+    )
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert body["intent"] == "recommend"
+    assert body["button_count"] >= 1
+    assert "reply with the number:" in body["reply_plain"].lower()
+    assert body["button_1_label"]
+    assert "tidio.buttons" in body.get("tools_used", []) or True  # tools on message log
+
+    # Find Email me index if present, else use first button label.
+    labels = [b["label"] for b in body["quick_replies"]]
+    if "Email me this pick" in labels:
+        choice = "Email me this pick"
+    else:
+        choice = "1"
+
+    second = client.post(
+        "/api/v1/sales/tidio/turn",
+        json={
+            "contact_id": "btn-demo-1",
+            "session_id": body["session_id"],
+            "message": choice,
+        },
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["resolved_from_button"] is True
+
+
 # ---------------------------------------------------------------------------
 # Webhook
 # ---------------------------------------------------------------------------

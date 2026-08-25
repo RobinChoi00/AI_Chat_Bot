@@ -18,8 +18,10 @@ Tidio's public OpenAPI does **not** expose a first-class "post as bot in live
 chat" endpoint. Practical paths we support:
 
 1. **Tidio Flow / Bot HTTP Request** → ``POST /api/v1/sales/tidio/turn``
-   Returns ``{reply, handoff, …}``. The Flow's next step sends that text
-   as the bot message. This is the recommended MVP for live chat.
+   Returns ``{reply_plain, quick_replies, button_N_*, next_action, …}``.
+   The Flow sends ``reply_plain`` (includes a numbered menu). Visitor taps a
+   static Decision button or types ``1`` / the label — we resolve to payload.
+   See ``docs/tidio_flow_sales_buttons.md``.
 
 2. **Ticket channel** → webhook ``ticket.replied`` (contact) → we reply with
    ``POST /tickets/{id}/reply`` as the configured operator.

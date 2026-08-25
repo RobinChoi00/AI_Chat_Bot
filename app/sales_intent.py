@@ -227,13 +227,19 @@ _STOCK_RE = re.compile(
 )
 
 _RECOMMEND_RE = re.compile(
-    r"\b("
+    r"(?:"
+    r"\b(?:"
     r"recommend|suggestion|which\s+(?:chair|model)|what\s+(?:chair|model).*should|"
     r"best\s+chair(?:\s+for)?|good\s+chair\s+for|fit\s+for\s+me|good\s+for\s+(?:tall|short|back|neck)|"
     r"my\s+height|my\s+weight|i\s+am\s+\d+\s*(?:ft|feet|cm|kg|lb|lbs|pounds|inches|'|\"|tall)|"
-    r"budget|under\s+\$?\d{3,5}|around\s+\$?\d{3,5}|"
-    r"추천"
-    r")\b",
+    r"budget|추천"
+    r")\b|"
+    # Budget bands — allow "$5k" / "under $ 7k" (space after $) / "around 6k"
+    r"(?:^|[\s,])(?:under|around|about|near|max|up\s+to|below)\s*(?:\$|usd)?\s*\d{1,2}\s*k\b|"
+    r"(?:^|[\s,])(?:under|around|about|near|max|up\s+to|below)\s*(?:\$|usd)?\s*\d{3,5}\b|"
+    r"(?:^|[\s,])\$\s*\d{1,2}\s*k\b|"
+    r"(?:^|[\s,])\$\s*\d{3,5}\b"
+    r")",
     re.IGNORECASE,
 )
 

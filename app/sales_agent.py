@@ -42,7 +42,19 @@ from sales_cases import (
     merge_prefs_from_hints,
     missing_required,
     rank_case_models,
+    secondary_defaults_applied,
     short_do_not_recommend,
+)
+from sales_cta import (
+    after_hours_blurb,
+    extract_email,
+    financing_page_url,
+    format_defaults_note,
+    format_fit_guide_summary,
+    is_sales_after_hours,
+    is_strong_buy_path,
+    product_page_url,
+    showroom_blurb,
 )
 from sales_shopify_stock import LiveStockSnapshot, fetch_live_stock, stock_badge
 from sales_intent import (
@@ -86,6 +98,8 @@ class SalesReply:
     products: list[dict] = field(default_factory=list)  # public dicts, for UI cards
     # Merged into sales_sessions.collected_data by the router (recommend prefs, etc.).
     prefs_patch: Optional[dict] = None
+    # Router creates a SalesLead when email is present (chat-native "Email me this pick").
+    lead_capture: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return {
@@ -519,11 +533,61 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
     )
 
 
+def _why_case_pick_lines(
+    *,
+    prefs: dict[str, str],
+    reason: str,
+    product: Optional[ProductSpecs],
+    priority_note: Optional[str] = None,
+) -> list[str]:
+    """Customer-facing 'why this chair' bullets from fit guide + catalog facts."""
+    lines = ["**Why we recommend it:**"]
+    fit_bits: list[str] = []
+    if prefs.get("goal"):
+        fit_bits.append(f"targets **{prefs['goal']}**")
+    if prefs.get("height"):
+        fit_bits.append(f"sized for **{prefs['height']}**")
+    if prefs.get("weight"):
+        fit_bits.append(f"rated for **{prefs['weight']}**")
+    if prefs.get("budget"):
+        fit_bits.append(f"in your **{prefs['budget']}** band")
+    if prefs.get("intensity"):
+        fit_bits.append(f"**{prefs['intensity']}** intensity")
+    if fit_bits:
+        lines.append("• Built around your fit: " + "; ".join(fit_bits) + ".")
+    cleaned_reason = (reason or "").strip()
+    if cleaned_reason:
+        lines.append(f"• {cleaned_reason}")
+    if product is not None:
+        bits = [
+            bit
+            for bit in (product.massage_mechanism, product.track_type)
+            if bit
+        ]
+        if bits:
+            lines.append(
+                "• This model’s hardware: **"
+                + " + ".join(bits)
+                + "**."
+            )
+        if product.price_usd is not None:
+            lines.append(f"• Listed around {_fmt_price(product.price_usd)} on the storefront.")
+    if priority_note:
+        # Strip markdown stars for nested reuse; caller may already bold names.
+        note = re.sub(r"\*\*([^*]+)\*\*", r"\1", priority_note).strip()
+        if note:
+            lines.append(f"• {note}")
+    if len(lines) == 1:
+        lines.append("• Best match from our sales fit guide for your answers.")
+    return lines
+
+
 def _case_recommend_reply(
     prefs: dict[str, str],
     *,
     domain: str,
     request: RecommendationRequest,
+    defaults_applied: Optional[list[str]] = None,
 ) -> Optional[SalesReply]:
     brand = brand_for_domain(domain)
     if not cases_available(brand):
@@ -585,16 +649,25 @@ def _case_recommend_reply(
         match.buckets.get("foot"),
         match.buckets.get("space"),
     ]
+    lead_product = resolved[0][1] if resolved else None
     lines = [
         "Based on our **sales fit guide** "
         f"({', '.join(b for b in bucket_bits if b)}):",
         "",
         f"**Primary pick: {lead}**",
+        "",
     ]
-    if priority_note:
-        lines.append(f"→ {priority_note}")
-    if match.reason:
-        lines.append(f"→ {match.reason}")
+    lines.extend(
+        _why_case_pick_lines(
+            prefs=match.buckets,
+            reason=match.reason,
+            product=lead_product,
+            priority_note=priority_note,
+        )
+    )
+    defaults_note = format_defaults_note(defaults_applied or [], match.buckets)
+    if defaults_note:
+        lines.append(f"\n_{defaults_note}_")
     if others:
         lines.append(f"\n**Also consider:** {' / '.join(others)}")
     if match.trade_off and "no major" not in match.trade_off.lower():
@@ -606,11 +679,21 @@ def _case_recommend_reply(
     products: list[ProductSpecs] = []
     seen_handles: set[str] = set()
     priced_lines: list[str] = []
+    public_products: list[dict] = []
+    product_links: list[tuple[str, str]] = []
+    primary_url: Optional[str] = None
+    primary_stock: Optional[str] = None
     for name, product, snap in resolved:
         badge = stock_badge(snap) if stock_checked else None
+        store_handle = (snap.handle if snap and snap.handle else None) or (
+            product.handle if product else None
+        )
+        url = product_page_url(domain, store_handle or "") if store_handle else None
         if product is None:
             if badge:
                 priced_lines.append(f"- **{name}** — catalog match pending ({badge})")
+            if url:
+                product_links.append((name, url))
             continue
         if product.handle in seen_handles:
             continue
@@ -619,13 +702,27 @@ def _case_recommend_reply(
         detail = ", ".join(
             bit for bit in (product.massage_mechanism, product.track_type) if bit
         )
+        display = product.display_name or name
         line = (
-            f"- **{product.display_name}** — {_fmt_price(product.price_usd)}"
+            f"- **{display}** — {_fmt_price(product.price_usd)}"
             + (f" ({detail})" if detail else "")
         )
         if badge:
             line += f" — *{badge}*"
+        if url:
+            # Plain URL so Tidio / SMS-style clients stay clickable.
+            line += f"\n  → {url}"
+            product_links.append((display, url))
         priced_lines.append(line)
+        card = product.as_public_dict()
+        if url:
+            card["product_url"] = url
+        if badge:
+            card["stock"] = badge
+        public_products.append(card)
+        if primary_url is None and url:
+            primary_url = url
+            primary_stock = badge
 
     if priced_lines:
         lines.append("\nLive catalog + stock:")
@@ -636,29 +733,83 @@ def _case_recommend_reply(
             "a rep can confirm live pricing.)"
         )
 
-    lines.append(
-        "\nWant specs on one of these, a different budget, or a sales specialist?"
+    if product_links:
+        lines.append("\n**Open these links to shop:**")
+        for label, url in product_links:
+            lines.append(f"• {label}: {url}")
+
+    if is_sales_after_hours():
+        lines.append(f"\n{after_hours_blurb()}")
+
+    buy_path = is_strong_buy_path(product_url=primary_url, stock_label=primary_stock)
+    finance_url = financing_page_url(domain, product_url=primary_url) if buy_path else None
+    if buy_path:
+        lines.append(
+            "\nReady when you are: tap a product link above (Affirm / financing "
+            "options appear at checkout — I won't invent rates), visit the "
+            "Carrollton showroom, or email this pick to sales. "
+            "Discounts and delivery dates still need a specialist."
+        )
+    else:
+        lines.append(
+            "\nNext step: open a product link above, email this pick to sales, "
+            "or talk to a specialist (stock / discounts / delivery dates)."
+        )
+
+    pick_summary = format_fit_guide_summary(
+        domain=domain,
+        prefs=match.buckets,
+        primary=lead,
+        alternatives=others,
+        product_url=primary_url,
+        stock_label=primary_stock,
     )
 
     quick: list[QuickReply] = []
-    for product in products[:3]:
+    if buy_path and primary_url:
+        quick.append(QuickReply(label="Shop this chair", payload=f"open:{primary_url}"))
+        if finance_url:
+            quick.append(
+                QuickReply(label="Financing at checkout", payload=f"cta:financing:{finance_url}")
+            )
+        quick.append(QuickReply(label="Visit showroom", payload="cta:showroom"))
+    elif primary_url:
+        quick.append(QuickReply(label="View this chair", payload=f"open:{primary_url}"))
+    quick.append(QuickReply(label="Email me this pick", payload="lead:save_pick"))
+    # After secondary defaults, offer a short refine path → re-runs case lookup.
+    if defaults_applied:
+        quick.extend(
+            [
+                QuickReply(label="Prefer stronger", payload="recommend:intensity:strong"),
+                QuickReply(label="Prefer gentler", payload="recommend:intensity:gentle"),
+                QuickReply(label="Foot rollers matter", payload="recommend:foot:important"),
+                QuickReply(label="Tight space / doorway", payload="recommend:space:small_room"),
+            ]
+        )
+    for product in products[:2]:
         quick.append(
             QuickReply(label=f"Specs for {product.display_name}", payload=f"specs:{product.handle}")
         )
-    quick.extend(list(_BUDGET_BAND_REPLIES[:2]))
     quick.append(QuickReply(label="Talk to a human", payload="human"))
 
-    tools = ["cases.lookup", "cases.priority", "catalog.resolve_product"]
+    tools = ["cases.lookup", "cases.priority", "catalog.resolve_product", "cta.product_url"]
     if stock_checked:
         tools.append("shopify.inventory")
+    if buy_path:
+        tools.append("cta.conversion")
 
     return SalesReply(
         reply="\n".join(lines),
         intent=INTENT_RECOMMEND,
         quick_replies=quick,
         tools_used=tools,
-        products=[p.as_public_dict() for p in products],
-        prefs_patch={"recommend_prefs": match.buckets},
+        products=public_products,
+        prefs_patch={
+            "recommend_prefs": match.buckets,
+            "pending_pick_summary": pick_summary,
+            "pending_primary": lead,
+            "pending_product_url": primary_url,
+        },
     )
 
 
@@ -769,13 +920,20 @@ def _recommend_reply(
         focus_areas=request.focus_areas,
         free_text=request.free_text or message,
     )
+    before_defaults = dict(merged)
     merged = enrich_implied_prefs(merged)
+    defaults_applied = secondary_defaults_applied(before_defaults, merged)
 
     missing = missing_required(merged)
     if missing:
         return _clarify_recommend(missing[0], merged)
 
-    case_reply = _case_recommend_reply(merged, domain=domain, request=request)
+    case_reply = _case_recommend_reply(
+        merged,
+        domain=domain,
+        request=request,
+        defaults_applied=defaults_applied,
+    )
     if case_reply is not None:
         return case_reply
 
@@ -998,6 +1156,135 @@ _PAYLOAD_ROUTES = {
 }
 
 
+def _ask_email_for_pick(prefs: Optional[dict]) -> SalesReply:
+    summary = ((prefs or {}).get("pending_pick_summary") or "").strip()
+    primary = ((prefs or {}).get("pending_primary") or "your recommended chair").strip()
+    blurb = (
+        f"Gladly — share your **email** and I'll pass **{primary}** "
+        "(plus your fit-guide notes) to our sales team for follow-up.\n\n"
+        "Type your email address in the chat."
+    )
+    if is_sales_after_hours():
+        blurb += f"\n\n{after_hours_blurb()}"
+    return SalesReply(
+        reply=blurb,
+        intent="lead_capture",
+        handoff=False,
+        quick_replies=[
+            QuickReply(label="Talk to a human instead", payload="human"),
+            QuickReply(label="Back to menu", payload="menu"),
+        ],
+        tools_used=["cta.email_pick"],
+        prefs_patch={
+            "awaiting_email_for_pick": True,
+            "pending_pick_summary": summary,
+            "pending_primary": primary,
+            "pending_product_url": (prefs or {}).get("pending_product_url"),
+        },
+    )
+
+
+def _capture_pick_lead(email: str, prefs: Optional[dict], *, domain: str) -> SalesReply:
+    summary = ((prefs or {}).get("pending_pick_summary") or "").strip()
+    if not summary:
+        summary = format_fit_guide_summary(
+            domain=domain,
+            prefs=(prefs or {}).get("recommend_prefs") or {},
+            primary=str((prefs or {}).get("pending_primary") or "Sales AI pick"),
+            alternatives=[],
+            product_url=(prefs or {}).get("pending_product_url"),
+        )
+    primary = ((prefs or {}).get("pending_primary") or "your pick").strip()
+    url = ((prefs or {}).get("pending_product_url") or "").strip()
+    lines = [
+        f"Thanks — I saved **{email}** with your pick (**{primary}**) for the sales team.",
+        "Someone will follow up (usually next business day for pricing / delivery / discounts).",
+    ]
+    if url:
+        lines.append(f"\nMeanwhile you can review it here: {url}")
+    if is_sales_after_hours():
+        lines.append(f"\n{after_hours_blurb()}")
+    return SalesReply(
+        reply="\n".join(lines),
+        intent="lead_capture",
+        handoff=True,
+        handoff_reason="save_pick",
+        quick_replies=[
+            QuickReply(label="Back to menu", payload="menu"),
+            QuickReply(label="Recommend another chair", payload="recommend"),
+        ],
+        tools_used=["cta.email_pick", "lead.capture"],
+        prefs_patch={
+            "awaiting_email_for_pick": False,
+            "pending_pick_summary": summary,
+        },
+        lead_capture={
+            "email": email,
+            "interest_summary": summary,
+            "reason": "save_pick",
+        },
+    )
+
+
+def _open_product_reply(url: str, prefs: Optional[dict]) -> SalesReply:
+    primary = ((prefs or {}).get("pending_primary") or "this chair").strip()
+    return SalesReply(
+        reply=(
+            f"Here's the product page for **{primary}**:\n{url}\n\n"
+            "Financing (Affirm) is offered **at checkout** on that page — "
+            "I won't invent rates or terms. "
+            "Want me to email this pick to sales, or check another budget?"
+        ),
+        intent=INTENT_RECOMMEND,
+        quick_replies=[
+            QuickReply(label="Email me this pick", payload="lead:save_pick"),
+            QuickReply(label="Visit showroom", payload="cta:showroom"),
+            QuickReply(label="Different budget", payload="recommend"),
+            QuickReply(label="Talk to a human", payload="human"),
+        ],
+        tools_used=["cta.product_url"],
+    )
+
+
+def _financing_cta_reply(url: str, prefs: Optional[dict]) -> SalesReply:
+    primary = ((prefs or {}).get("pending_primary") or "this chair").strip()
+    return SalesReply(
+        reply=(
+            f"For **{primary}**, open the product page and choose **Affirm / "
+            f"financing at checkout**:\n{url}\n\n"
+            "Eligibility and monthly amounts are shown by Affirm there — "
+            "I won't invent rates. A specialist can still help with promotions "
+            "or delivery timing."
+        ),
+        intent=INTENT_RECOMMEND,
+        quick_replies=[
+            QuickReply(label="Shop this chair", payload=f"open:{url}"),
+            QuickReply(label="Email me this pick", payload="lead:save_pick"),
+            QuickReply(label="Visit showroom", payload="cta:showroom"),
+            QuickReply(label="Talk to a human", payload="human"),
+        ],
+        tools_used=["cta.financing"],
+    )
+
+
+def _showroom_cta_reply(prefs: Optional[dict]) -> SalesReply:
+    primary = ((prefs or {}).get("pending_primary") or "").strip()
+    extra = f"\n\nYour current pick: **{primary}**." if primary else ""
+    url = ((prefs or {}).get("pending_product_url") or "").strip()
+    quick = [
+        QuickReply(label="Email me this pick", payload="lead:save_pick"),
+        QuickReply(label="Talk to a human", payload="human"),
+    ]
+    if url.startswith("https://"):
+        quick.insert(0, QuickReply(label="Shop this chair", payload=f"open:{url}"))
+    return SalesReply(
+        reply=showroom_blurb() + extra,
+        intent=INTENT_RECOMMEND,
+        quick_replies=quick,
+        tools_used=["cta.showroom"],
+    )
+
+
 def _payload_reply(
     payload: str,
     message: str,
@@ -1016,6 +1303,29 @@ def _payload_reply(
         )
     if root == "stock":
         return _stock_reply(message or payload, domain=domain)
+    if root == "lead":
+        action = parts[1].strip().lower() if len(parts) > 1 else "save_pick"
+        if action in {"save_pick", "email", "email_pick"}:
+            # If they already typed an email with the button tap, capture immediately.
+            email = extract_email(message or "")
+            if email:
+                return _capture_pick_lead(email, prefs, domain=domain)
+            return _ask_email_for_pick(prefs)
+    if root == "open" and len(parts) >= 2:
+        url = payload.split(":", 1)[1].strip()
+        if url.startswith("https://"):
+            return _open_product_reply(url, prefs)
+    if root == "cta":
+        action = parts[1].strip().lower() if len(parts) > 1 else ""
+        if action == "showroom":
+            return _showroom_cta_reply(prefs)
+        if action == "financing":
+            url = payload.split(":", 2)[2].strip() if len(parts) >= 3 else ""
+            if not url.startswith("https://"):
+                url = ((prefs or {}).get("pending_product_url") or "").strip()
+            if url.startswith("https://"):
+                return _financing_cta_reply(url, prefs)
+            return _showroom_cta_reply(prefs)
     factory = _PAYLOAD_ROUTES.get(root)
     if factory is None:
         return None
@@ -1038,6 +1348,12 @@ def respond(
     ``prefs`` is ``sales_sessions.collected_data`` (recommend answers accumulate
     across turns via ``prefs_patch`` on the reply).
     """
+    # Awaiting email after "Email me this pick" — capture before other intents.
+    if (prefs or {}).get("awaiting_email_for_pick"):
+        email = extract_email(message or "")
+        if email:
+            return _capture_pick_lead(email, prefs, domain=domain)
+
     if payload:
         forced = _payload_reply(payload, message, domain=domain, prefs=prefs)
         if forced is not None:

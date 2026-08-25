@@ -361,44 +361,78 @@ def merge_prefs_from_hints(
         gb = goal_bucket(focus_areas, free_text)
         if gb:
             out["goal"] = gb
-    if "intensity" not in out:
-        ib = intensity_bucket(free_text)
-        if ib:
-            out["intensity"] = ib
-    if "foot" not in out:
-        fb = foot_bucket(free_text, focus_areas)
-        if fb:
-            out["foot"] = fb
-    if "space" not in out:
-        sb = space_bucket(free_text)
-        if sb:
-            out["space"] = sb
+    # Secondary axes: free-text / refine answers may override earlier defaults.
+    ib = intensity_bucket(free_text)
+    if ib:
+        out["intensity"] = ib
+    fb = foot_bucket(free_text, focus_areas)
+    if fb:
+        out["foot"] = fb
+    sb = space_bucket(free_text)
+    if sb:
+        out["space"] = sb
     return out
 
 
-REQUIRED_PREF_KEYS = (
+# Must ask these — body fit + budget drive the case book.
+CORE_PREF_KEYS = (
     "budget",
     "height",
     "weight",
     "goal",
+)
+
+# Filled automatically once the core four are known so free-text / short
+# button paths do not force 7 back-and-forth turns.
+SECONDARY_PREF_KEYS = (
     "intensity",
     "foot",
     "space",
 )
+
+REQUIRED_PREF_KEYS = CORE_PREF_KEYS + SECONDARY_PREF_KEYS
+
+# Safe mid-case defaults when the customer didn't mention these axes.
+_SECONDARY_DEFAULTS = {
+    "intensity": "Balanced",
+    "foot": "Not Important",
+    "space": "No Space Constraint",
+}
 
 
 def missing_required(prefs: dict[str, str]) -> list[str]:
     return [k for k in REQUIRED_PREF_KEYS if not (prefs or {}).get(k)]
 
 
+def missing_core(prefs: dict[str, str]) -> list[str]:
+    return [k for k in CORE_PREF_KEYS if not (prefs or {}).get(k)]
+
+
 def enrich_implied_prefs(prefs: dict[str, str]) -> dict[str, str]:
-    """Fill axes that are implied by other answers (still deterministic)."""
+    """Fill axes implied by other answers, then secondary defaults after core four."""
     out = dict(prefs or {})
     goal = (out.get("goal") or "").strip()
     if goal == "Foot & Calf" and "foot" not in out:
         # Asking foot again after they chose Foot & Calf as the main goal is noise.
         out["foot"] = "Important"
+    # Once budget/height/weight/goal are known, skip intensity/foot/space questions.
+    if all(out.get(k) for k in CORE_PREF_KEYS):
+        for key, default in _SECONDARY_DEFAULTS.items():
+            if key not in out or not out[key]:
+                out[key] = default
     return out
+
+
+def secondary_defaults_applied(
+    before: dict[str, str], after: dict[str, str]
+) -> list[str]:
+    """Return secondary keys that were filled by enrich_implied_prefs defaults."""
+    applied: list[str] = []
+    for key in SECONDARY_PREF_KEYS:
+        if not (before or {}).get(key) and (after or {}).get(key):
+            # Foot implied by Foot & Calf goal is intentional, still a skip.
+            applied.append(key)
+    return applied
 
 
 def lookup_case(
