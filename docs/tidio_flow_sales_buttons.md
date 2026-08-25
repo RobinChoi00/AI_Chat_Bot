@@ -1,96 +1,98 @@
-# Tidio Flow — Sales AI buttons
+# Tidio Flow — Sales AI (free plan / no webhook upgrade)
 
-Tidio **cannot** build Decision (quick reply) buttons dynamically from an API
-JSON array. Buttons in the Flow editor are static. This project bridges that
-with three layers that work together.
+Paid **Webhooks** are optional. Live chat works with **Flow + API call** only.
 
-## What the API returns
+## 1. API Call (already done)
 
-`POST /api/v1/sales/tidio/turn`
+- URL: `https://api.osakichair.com/api/v1/sales/tidio/turn`
+- Header: `X-Tidio-Turn-Secret` = same value as server `TIDIO_TURN_SECRET`
+- Map outputs: `reply_plain`, `next_action`, `flow_stage`, `sales_session_id`,
+  `button_1_label` … `button_5_label`, `button_1_url`
 
-| Field | Use in Flow |
-|-------|-------------|
-| `reply_plain` | **Send a chat message** (includes numbered menu) |
-| `quick_replies[]` | Reference / debugging |
-| `button_1_label` … `button_5_label` | Mirror labels in a static Decision node |
-| `button_1_payload` … `button_5_payload` | Optional: send as next turn `payload` |
-| `button_1_url` … `button_5_url` | Link button when payload is `open:https://…` |
-| `button_count` | How many choices this turn |
-| `next_action` | `reply` / `transfer_operator` / `warranty_redirect` |
-| `resolved_from_button` | Visitor typed `1` or tapped a prior label |
+## 2. Core loop
 
-Header (prod): `X-Tidio-Turn-Secret: <TIDIO_TURN_SECRET>`
-
-## Recommended Flow (loop)
-
-1. **Trigger** — visitor opens chat / says hi  
-2. **Ask a question** — “How can I help?” → save as `visitor_message`  
-3. **API call** → `POST …/api/v1/sales/tidio/turn`  
-   Body:
-   ```json
-   {
-     "contact_id": "{{contact.id}}",
-     "message": "{{visitor_message}}",
-     "session_id": "tidio:{{contact.id}}"
-   }
-   ```
-4. Map outputs: `reply_plain`, `next_action`, `button_*`, `session_id`  
-5. **Send a chat message** → `{{reply_plain}}`  
-6. Branch on `next_action`:
-   - `transfer_operator` → Transfer to operator  
-   - `warranty_redirect` → End (warranty copy already in reply)  
-   - `reply` → **Ask a question** again (“Your choice or message”) → loop to step 3  
-
-Visitors can:
-
-- type free text, or  
-- reply `1` / `2` / `3`, or  
-- type the exact button label  
-
-The turn endpoint resolves those to the stored payload and re-runs Sales AI.
-
-## Optional: real Tidio buttons (static mirror)
-
-After step 5, add **Decision (quick replies)** with the **same labels** you
-usually return (example post-recommend set):
-
-1. Shop this chair  
-2. Email me this pick  
-3. Prefer stronger  
-4. Visit showroom  
-5. Talk to a human  
-
-Each branch → API call with:
-
-```json
-{
-  "contact_id": "{{contact.id}}",
-  "session_id": "tidio:{{contact.id}}",
-  "message": "Shop this chair",
-  "payload": "open:{{button_1_url}}"
-}
+```
+Trigger → Ask (visitor_message)
+       → API call
+       → Send {{sales_ai_reply}}
+       → Condition next_action
+            transfer_operator → Transfer to operator
+            warranty_redirect → End
+            reply → Condition flow_stage → (static buttons OR Ask again) → API
 ```
 
-For label-only branches, omit `payload` and set `message` to the button title —
-the server matches it against `last_quick_replies`.
+Visitors can always type `1` / `2` or the button label (server resolves it).
 
-**Decision (buttons)** allows max **3** items and can open a URL — use for
-Shop / Financing / Showroom when `button_N_url` is set.
+## 3. Free-plan real chips — Condition on `flow_stage`
 
-## Clarify path (budget / height / …)
+After Send, add **Condition** on `flow_stage`, then **Decision (quick replies)**
+with these **exact** labels (must match API):
 
-Either:
+### `menu`
+- Recommend a chair → API `message=recommend` or `payload=recommend`
+- Check a price → `message=price`
+- Availability / stock → `message=stock`
+- Compare two models → `message=compare`
+- Talk to a human → `message=talk to a human`
 
-- rely on the numbered menu in `reply_plain`, or  
-- add static Decision nodes: Under $3,000 / $3–5k / … that call turn with
-  `payload: "recommend:budget:under_3000"` etc.
+### `ask_budget`
+- Under $3,000 → `payload=recommend:budget:under_3000`
+- $3,000–$4,999 → `payload=recommend:budget:3000_4999`
+- $5,000–$6,999 → `payload=recommend:budget:5000_6999`
+- $7,000–$9,999 → `payload=recommend:budget:7000_9999`
+- $10,000+ → `payload=recommend:budget:10000_plus`
 
-## Local smoke
+### `ask_height`
+- Under 5'4" → `payload=recommend:height:petite`
+- 5'4"–5'11" → `payload=recommend:height:average`
+- 6'0"–6'2" → `payload=recommend:height:tall`
+- 6'3"+ → `payload=recommend:height:extra_tall`
+
+### `ask_weight`
+- ≤180 lb → `payload=recommend:weight:le180`
+- 181–220 lb → `payload=recommend:weight:181_220`
+- 221–260 lb → `payload=recommend:weight:221_260`
+- 261–300 lb → `payload=recommend:weight:261_300`
+- 301+ lb → `payload=recommend:weight:301_plus`
+
+### `ask_goal` (max useful set)
+- Neck & shoulders → `payload=recommend:goal:neck`
+- Lower back → `payload=recommend:goal:lower_back`
+- Upper back → `payload=recommend:goal:upper_back`
+- Foot & calf → `payload=recommend:goal:feet`
+- Full-body relax → `payload=recommend:goal:full_body`
+
+### `recommend` (after Primary pick)
+- Shop this chair → `message=Shop this chair` (or `payload=open:{{button_1_url}}`)
+- Email me this pick → `message=Email me this pick`
+- Prefer stronger → `payload=recommend:intensity:strong`
+- Visit showroom → `payload=cta:showroom`
+- Talk to a human → `message=talk to a human`
+
+**Decision (buttons)** max 3 + can open URL → use for Shop / Financing / Showroom
+when `button_N_url` is set.
+
+Each Decision branch → same API call with `contact_id`, `session_id`,
+`domain=osakiusa.com`, plus `message` and/or `payload` as above → Send reply → loop.
+
+## 4. Server `.env` (no extra Tidio fee)
+
+On EC2 `~/AI_Chat_Bot/.env` (then `docker compose up -d backend`):
 
 ```bash
-curl -s localhost:8000/api/v1/sales/tidio/turn \
-  -H 'Content-Type: application/json' \
-  -d '{"contact_id":"demo","message":"recommend a chair"}' | jq '.reply_plain,.button_count,.button_1_label'
+TIDIO_ENABLED=1
+TIDIO_DOMAIN=osakiusa.com
+TIDIO_TURN_SECRET=<same as Flow header>
+TIDIO_PUBLIC_KEY=<Project data → Public key>   # free
+# OpenAPI id/secret optional until webhooks/tickets
+# TIDIO_WEBHOOK_SECRET / OPERATOR_ID — skip until paid webhooks
 ```
 
-Then send `"message":"1"` with the same `session_id` / `contact_id`.
+Check: `curl -s https://api.osakichair.com/api/v1/sales/tidio/health`
+
+Expect `turn_secret_set: true` when secret is loaded by the container.
+
+## 5. Skipped (costs money)
+
+- Webhooks stack
+- Full OpenAPI CRM features that require Plus (ticket push can wait)

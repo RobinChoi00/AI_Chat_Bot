@@ -231,6 +231,7 @@ def test_tidio_turn_numbered_menu_and_button_resolve(client, monkeypatch):
     body = first.json()
     assert body["intent"] == "recommend"
     assert body["button_count"] >= 1
+    assert body.get("flow_stage") == "recommend"
     assert "reply with the number:" in body["reply_plain"].lower()
     assert body["button_1_label"]
     assert "tidio.buttons" in body.get("tools_used", []) or True  # tools on message log
@@ -252,6 +253,18 @@ def test_tidio_turn_numbered_menu_and_button_resolve(client, monkeypatch):
     )
     assert second.status_code == 200, second.text
     assert second.json()["resolved_from_button"] is True
+
+
+def test_tidio_turn_budget_only_asks_height_stage(client):
+    resp = client.post(
+        "/api/v1/sales/tidio/turn",
+        json={"contact_id": "stage-budget", "message": "under $7k"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["intent"] == "recommend"
+    assert body["flow_stage"] == "ask_height"
+    assert "height" in body["reply"].lower()
 
 
 # ---------------------------------------------------------------------------

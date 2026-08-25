@@ -100,6 +100,9 @@ class SalesReply:
     prefs_patch: Optional[dict] = None
     # Router creates a SalesLead when email is present (chat-native "Email me this pick").
     lead_capture: Optional[dict] = None
+    # Tidio Flow stage for static Decision (quick reply) branching — free plan.
+    # menu | ask_budget | ask_height | ask_weight | ask_goal | recommend | lead | handoff | warranty
+    flow_stage: str = "menu"
 
     def to_dict(self) -> dict:
         return {
@@ -110,6 +113,7 @@ class SalesReply:
             "quick_replies": [{"label": q.label, "payload": q.payload} for q in self.quick_replies],
             "tools_used": self.tools_used,
             "products": self.products,
+            "flow_stage": self.flow_stage,
         }
 
 
@@ -465,6 +469,9 @@ def _why_pick(product: ProductSpecs, request: RecommendationRequest) -> str:
 
 def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
     patch = {"recommend_prefs": prefs}
+    stage = f"ask_{missing}" if missing in {
+        "budget", "height", "weight", "goal", "intensity", "foot", "space"
+    } else "ask_budget"
     if missing == "budget":
         return SalesReply(
             reply=(
@@ -479,6 +486,7 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
             ],
             tools_used=["cases.clarify"],
             prefs_patch=patch,
+            flow_stage=stage,
         )
     if missing == "height":
         return SalesReply(
@@ -487,6 +495,7 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
             quick_replies=[*_HEIGHT_REPLIES, QuickReply(label="Talk to a human", payload="human")],
             tools_used=["cases.clarify"],
             prefs_patch=patch,
+            flow_stage=stage,
         )
     if missing == "weight":
         return SalesReply(
@@ -495,6 +504,7 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
             quick_replies=[*_WEIGHT_REPLIES, QuickReply(label="Talk to a human", payload="human")],
             tools_used=["cases.clarify"],
             prefs_patch=patch,
+            flow_stage=stage,
         )
     if missing == "goal":
         return SalesReply(
@@ -503,6 +513,7 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
             quick_replies=[*_GOAL_REPLIES, QuickReply(label="Talk to a human", payload="human")],
             tools_used=["cases.clarify"],
             prefs_patch=patch,
+            flow_stage=stage,
         )
     if missing == "intensity":
         return SalesReply(
@@ -514,6 +525,7 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
             ],
             tools_used=["cases.clarify"],
             prefs_patch=patch,
+            flow_stage=stage,
         )
     if missing == "foot":
         return SalesReply(
@@ -522,6 +534,7 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
             quick_replies=[*_FOOT_REPLIES, QuickReply(label="Talk to a human", payload="human")],
             tools_used=["cases.clarify"],
             prefs_patch=patch,
+            flow_stage=stage,
         )
     # space
     return SalesReply(
@@ -530,6 +543,7 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
         quick_replies=[*_SPACE_REPLIES, QuickReply(label="Talk to a human", payload="human")],
         tools_used=["cases.clarify"],
         prefs_patch=patch,
+        flow_stage=stage,
     )
 
 
@@ -804,6 +818,7 @@ def _case_recommend_reply(
         quick_replies=quick,
         tools_used=tools,
         products=public_products,
+        flow_stage="recommend",
         prefs_patch={
             "recommend_prefs": match.buckets,
             "pending_pick_summary": pick_summary,
@@ -1332,6 +1347,47 @@ def _payload_reply(
     return factory(message or payload)
 
 
+def _finalize_flow_stage(result: SalesReply) -> SalesReply:
+    """Fill flow_stage for Tidio static Decision branching when callers omit it."""
+    if result.flow_stage and result.flow_stage not in {"", "menu"}:
+        # Explicit ask_* / recommend / etc. already set.
+        if result.flow_stage.startswith("ask_") or result.flow_stage in {
+            "recommend",
+            "lead",
+            "handoff",
+            "warranty",
+            "shop",
+        }:
+            return result
+    from sales_intent import WARRANTY_ROUTE_INTENTS
+
+    if result.intent in WARRANTY_ROUTE_INTENTS:
+        result.flow_stage = "warranty"
+    elif result.lead_capture:
+        result.flow_stage = "lead"
+    elif result.handoff:
+        result.flow_stage = "handoff"
+    elif result.intent == INTENT_GREETING or result.intent == INTENT_UNCLEAR:
+        result.flow_stage = "menu"
+    elif "cases.clarify" in (result.tools_used or []):
+        # Prefer already-set ask_* from clarify; otherwise budget.
+        if not (result.flow_stage or "").startswith("ask_"):
+            result.flow_stage = "ask_budget"
+    elif "cases.lookup" in (result.tools_used or []) or "cta.conversion" in (
+        result.tools_used or []
+    ):
+        result.flow_stage = "recommend"
+    elif "cta.product_url" in (result.tools_used or []) or "cta.showroom" in (
+        result.tools_used or []
+    ):
+        result.flow_stage = "shop"
+    elif result.intent == INTENT_RECOMMEND:
+        result.flow_stage = "ask_budget"
+    else:
+        result.flow_stage = "menu"
+    return result
+
+
 def respond(
     message: str,
     *,
@@ -1352,35 +1408,35 @@ def respond(
     if (prefs or {}).get("awaiting_email_for_pick"):
         email = extract_email(message or "")
         if email:
-            return _capture_pick_lead(email, prefs, domain=domain)
+            return _finalize_flow_stage(_capture_pick_lead(email, prefs, domain=domain))
 
     if payload:
         forced = _payload_reply(payload, message, domain=domain, prefs=prefs)
         if forced is not None:
-            return forced
+            return _finalize_flow_stage(forced)
 
     intent = classify(message or "")
 
     if intent.label in HANDOFF_INTENTS:
-        return _handoff_reply(intent)
+        return _finalize_flow_stage(_handoff_reply(intent))
 
     if intent.label == INTENT_GREETING:
-        return _greeting_reply()
+        return _finalize_flow_stage(_greeting_reply())
 
     if intent.label == INTENT_ORDER_STATUS:
-        return _order_status_reply(message)
+        return _finalize_flow_stage(_order_status_reply(message))
 
     if intent.label == INTENT_PRICE:
-        return _price_reply(message)
+        return _finalize_flow_stage(_price_reply(message))
     if intent.label == INTENT_STOCK:
-        return _stock_reply(message, domain=domain)
+        return _finalize_flow_stage(_stock_reply(message, domain=domain))
     if intent.label == INTENT_SPECS:
-        return _specs_reply(message)
+        return _finalize_flow_stage(_specs_reply(message))
     if intent.label == INTENT_RECOMMEND:
-        return _recommend_reply(message, domain=domain, prefs=prefs)
+        return _finalize_flow_stage(_recommend_reply(message, domain=domain, prefs=prefs))
     if intent.label == INTENT_COMPARE:
-        return _compare_reply(message)
+        return _finalize_flow_stage(_compare_reply(message))
     if intent.label == INTENT_INTENSITY:
-        return _intensity_reply(message)
+        return _finalize_flow_stage(_intensity_reply(message))
 
-    return _unclear_reply()
+    return _finalize_flow_stage(_unclear_reply())

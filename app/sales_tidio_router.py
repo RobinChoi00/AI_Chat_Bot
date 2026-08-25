@@ -135,6 +135,9 @@ class TidioTurnResponse(BaseModel):
     # shipping / tracking). Cancel/refund is False → transfer to an agent.
     # Tidio should show ``reply_plain`` and END the flow when True.
     is_warranty_route: bool = False
+    # Static Decision branching (free Tidio plan — no dynamic buttons).
+    # menu | ask_budget | ask_height | ask_weight | ask_goal | recommend | …
+    flow_stage: str = "menu"
     # Flat button fields for Flow session variables / static Decision nodes.
     button_count: int = 0
     button_1_label: str = ""
@@ -317,6 +320,7 @@ def _run_sales_turn(
         "next_action": action,
         "is_warranty_route": is_warranty_route,
         "resolved_from_button": resolved_from_button,
+        "flow_stage": result.flow_stage or "menu",
         **flat,
     }
 
