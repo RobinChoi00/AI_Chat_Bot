@@ -58,7 +58,17 @@ def test_resolve_number_and_label():
         {"label": "Talk to a human", "payload": "human"},
     ]
     assert resolve_button_choice("1", buttons) == buttons[0]["payload"]
+    assert resolve_button_choice("1)", buttons) == buttons[0]["payload"]
+    assert resolve_button_choice("1.", buttons) == buttons[0]["payload"]
     assert resolve_button_choice("2", buttons) == "lead:save_pick"
     assert resolve_button_choice("Email me this pick", buttons) == "lead:save_pick"
     assert resolve_button_choice("3) Talk to a human", buttons) == "human"
     assert resolve_button_choice("something else", buttons) is None
+
+
+def test_resolve_falls_back_to_default_menu_when_session_lost():
+    assert resolve_button_choice("1", None) == "recommend"
+    assert resolve_button_choice("1.", []) == "recommend"
+    assert resolve_button_choice("2", None) == "stock"
+    assert resolve_button_choice("recommend", None) == "recommend"
+    assert resolve_button_choice("Recommend a chair", None) == "recommend"

@@ -139,6 +139,18 @@ def append_numbered_menu(reply_plain: str, buttons: list[dict[str, str]]) -> str
     return f"{base}{menu}"
 
 
+# Must match ``prioritize_quick_replies(_menu_quick_replies())`` numbering so
+# visitors can type ``1`` even when session ``last_quick_replies`` was lost
+# (common Tidio Flow bug when ``session_id`` is not passed between turns).
+_DEFAULT_MENU_BUTTONS: list[dict[str, str]] = [
+    {"label": "Recommend a chair", "payload": "recommend"},
+    {"label": "Availability / stock", "payload": "stock"},
+    {"label": "Talk to a human", "payload": "human"},
+    {"label": "Check a price", "payload": "price"},
+    {"label": "Compare two models", "payload": "compare"},
+]
+
+
 def resolve_button_choice(
     message: str,
     last_buttons: list[dict[str, str]] | None,
@@ -150,36 +162,40 @@ def resolve_button_choice(
       - exact / case-insensitive label match
       - bare number ``1`` … ``N``
       - ``1) Shop this chair`` style echoes
+
+    If ``last_buttons`` is empty, falls back to the default main-menu order
+    so ``1`` / ``1.`` still means Recommend a chair.
     """
-    if not last_buttons:
-        return None
     text = (message or "").strip()
     if not text:
         return None
 
-    # Bare index
-    if re.fullmatch(r"[1-9]", text):
-        idx = int(text) - 1
-        if 0 <= idx < len(last_buttons):
-            return last_buttons[idx]["payload"]
+    buttons = list(last_buttons or []) or list(_DEFAULT_MENU_BUTTONS)
 
-    # "1)" or "1." prefix
+    # Bare index: "1", "1)", "1.", "1:"
+    bare = re.fullmatch(r"([1-9])[).:\s]*", text)
+    if bare:
+        idx = int(bare.group(1)) - 1
+        if 0 <= idx < len(buttons):
+            return buttons[idx]["payload"]
+
+    # "1) Shop this chair" / "1. Recommend a chair"
     numbered = re.match(r"^([1-9])[).:\-\s]+(.+)$", text)
     if numbered:
         idx = int(numbered.group(1)) - 1
-        if 0 <= idx < len(last_buttons):
-            return last_buttons[idx]["payload"]
+        if 0 <= idx < len(buttons):
+            return buttons[idx]["payload"]
         text = numbered.group(2).strip()
 
     lowered = text.lower()
-    for btn in last_buttons:
+    for btn in buttons:
         if btn["label"].lower() == lowered:
             return btn["payload"]
 
     # Soft match: visitor typed a unique keyword from a label
     hits = [
         btn
-        for btn in last_buttons
+        for btn in buttons
         if lowered in btn["label"].lower() or btn["label"].lower() in lowered
     ]
     if len(hits) == 1:
