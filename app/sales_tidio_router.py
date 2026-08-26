@@ -441,6 +441,17 @@ async def tidio_turn(request: Request, body: TidioTurnRequest):
     if not message and not payload:
         raise HTTPException(status_code=422, detail="Provide message or payload.")
 
+    # Tidio Flow bug: Body typed as {{visitor_question}} instead of a variable chip.
+    if re.fullmatch(r"\{\{[^}]+\}\}", message or ""):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "message looks like an unsubstituted Tidio template "
+                f"({message!r}). In the API Call Body, insert message via the {{}} "
+                "chip picker (Ask → visitor_question), do not type braces by hand."
+            ),
+        )
+
     contact_id = (body.contact_id or "").strip() or None
     session_id = (body.session_id or "").strip() or (
         f"tidio:{contact_id}" if contact_id else f"tidio:anon:{os.urandom(8).hex()}"
@@ -453,6 +464,16 @@ async def tidio_turn(request: Request, body: TidioTurnRequest):
         payload=payload,
         contact_id=contact_id,
         domain=domain,
+    )
+    logger.info(
+        "tidio_turn session=%s contact=%s msg=%r payload=%r intent=%s resolved=%s stage=%s",
+        session_id,
+        contact_id,
+        (message or "")[:120],
+        payload,
+        result.get("intent"),
+        result.get("resolved_from_button"),
+        result.get("flow_stage"),
     )
     return TidioTurnResponse(**result)
 
