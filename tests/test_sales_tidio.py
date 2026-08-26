@@ -224,7 +224,7 @@ def test_tidio_turn_numbered_menu_and_button_resolve(client, monkeypatch):
         "/api/v1/sales/tidio/turn",
         json={
             "contact_id": "btn-demo-1",
-            "message": "I'm 5'4\", 170 lb, neck pain, under $3k",
+            "message": "I'm 5'4\", 170 lb, neck pain, no space issue, under $3k",
         },
     )
     assert first.status_code == 200, first.text

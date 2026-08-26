@@ -101,7 +101,7 @@ def after_hours_blurb() -> str:
 
 
 def format_defaults_note(applied: list[str], prefs: dict[str, str]) -> Optional[str]:
-    """One-liner when we skipped intensity/foot/space questions."""
+    """One-liner when we skipped intensity/foot questions."""
     if not applied:
         return None
     bits = []
@@ -109,8 +109,6 @@ def format_defaults_note(applied: list[str], prefs: dict[str, str]) -> Optional[
         bits.append(f"{prefs['intensity'].lower()} intensity")
     if "foot" in applied and prefs.get("foot"):
         bits.append(f"foot rollers: {prefs['foot'].lower()}")
-    if "space" in applied and prefs.get("space"):
-        bits.append(prefs["space"].lower())
     if not bits:
         return None
     return (

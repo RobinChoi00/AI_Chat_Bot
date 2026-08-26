@@ -34,6 +34,7 @@ from sales_catalog import (
     resolve_product,
 )
 from sales_cases import (
+    TIER_BUDGETS,
     apply_payload_codes,
     brand_for_domain,
     cases_available,
@@ -101,7 +102,7 @@ class SalesReply:
     # Router creates a SalesLead when email is present (chat-native "Email me this pick").
     lead_capture: Optional[dict] = None
     # Tidio Flow stage for static Decision (quick reply) branching — free plan.
-    # menu | ask_budget | ask_height | ask_weight | ask_goal | recommend | lead | handoff | warranty
+    # menu | ask_height | ask_weight | ask_space | ask_goal | recommend | lead | handoff | warranty
     flow_stage: str = "menu"
 
     def to_dict(self) -> dict:
@@ -471,26 +472,13 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
     patch = {"recommend_prefs": prefs}
     stage = f"ask_{missing}" if missing in {
         "budget", "height", "weight", "goal", "intensity", "foot", "space"
-    } else "ask_budget"
-    if missing == "budget":
-        return SalesReply(
-            reply=(
-                "Happy to recommend a chair. What's your **budget range**?\n\n"
-                "Tap a band below (from our sales fit guide), or type something "
-                "like *around 6000*."
-            ),
-            intent=INTENT_RECOMMEND,
-            quick_replies=[
-                *_BUDGET_BAND_REPLIES,
-                QuickReply(label="Talk to a human", payload="human"),
-            ],
-            tools_used=["cases.clarify"],
-            prefs_patch=patch,
-            flow_stage=stage,
-        )
+    } else "ask_height"
     if missing == "height":
         return SalesReply(
-            reply="Got it. What's the **user height**?",
+            reply=(
+                "Happy to recommend a chair. What's the **user height**?\n\n"
+                "I'll match fit first, then show **Value / Mid / Premium** options."
+            ),
             intent=INTENT_RECOMMEND,
             quick_replies=[*_HEIGHT_REPLIES, QuickReply(label="Talk to a human", payload="human")],
             tools_used=["cases.clarify"],
@@ -502,6 +490,18 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
             reply="Thanks. Roughly what **weight range**?",
             intent=INTENT_RECOMMEND,
             quick_replies=[*_WEIGHT_REPLIES, QuickReply(label="Talk to a human", payload="human")],
+            tools_used=["cases.clarify"],
+            prefs_patch=patch,
+            flow_stage=stage,
+        )
+    if missing == "space":
+        return SalesReply(
+            reply=(
+                "Any **doorway / space** constraint?\n\n"
+                "Narrow doorways and tight rooms matter for delivery and placement."
+            ),
+            intent=INTENT_RECOMMEND,
+            quick_replies=[*_SPACE_REPLIES, QuickReply(label="Talk to a human", payload="human")],
             tools_used=["cases.clarify"],
             prefs_patch=patch,
             flow_stage=stage,
@@ -536,14 +536,29 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
             prefs_patch=patch,
             flow_stage=stage,
         )
-    # space
+    # Optional: customer volunteered a budget refine after the tier list.
+    if missing == "budget":
+        return SalesReply(
+            reply=(
+                "Want to narrow by **budget band**?\n\n"
+                "Or skip this — I can keep showing Value / Mid / Premium picks."
+            ),
+            intent=INTENT_RECOMMEND,
+            quick_replies=[
+                *_BUDGET_BAND_REPLIES,
+                QuickReply(label="Talk to a human", payload="human"),
+            ],
+            tools_used=["cases.clarify"],
+            prefs_patch=patch,
+            flow_stage=stage,
+        )
     return SalesReply(
-        reply="Any **space / doorway** constraint?",
+        reply="Got it. What's the **user height**?",
         intent=INTENT_RECOMMEND,
-        quick_replies=[*_SPACE_REPLIES, QuickReply(label="Talk to a human", payload="human")],
+        quick_replies=[*_HEIGHT_REPLIES, QuickReply(label="Talk to a human", payload="human")],
         tools_used=["cases.clarify"],
         prefs_patch=patch,
-        flow_stage=stage,
+        flow_stage="ask_height",
     )
 
 
@@ -594,6 +609,178 @@ def _why_case_pick_lines(
     if len(lines) == 1:
         lines.append("• Best match from our sales fit guide for your answers.")
     return lines
+
+
+def _tiered_case_recommend_reply(
+    prefs: dict[str, str],
+    *,
+    domain: str,
+    request: RecommendationRequest,
+    defaults_applied: Optional[list[str]] = None,
+) -> Optional[SalesReply]:
+    """Fit-first recommend: one primary pick per Value / Mid / Premium budget band."""
+    brand = brand_for_domain(domain)
+    if not cases_available(brand):
+        return None
+
+    fit_bits = [
+        prefs.get("height"),
+        prefs.get("weight"),
+        prefs.get("space"),
+        prefs.get("goal"),
+    ]
+    fit_label = ", ".join(b for b in fit_bits if b) or "your answers"
+    lines = [
+        f"Based on **{fit_label}**, here are picks across budget tiers "
+        "(from our sales fit guide):",
+        "",
+    ]
+    defaults_note = format_defaults_note(defaults_applied or [], prefs)
+    if defaults_note:
+        lines.append(f"_{defaults_note}_")
+        lines.append("")
+
+    public_products: list[dict] = []
+    product_links: list[tuple[str, str]] = []
+    used_models: set[str] = set()
+    tier_leads: list[tuple[str, str, Optional[ProductSpecs]]] = []
+    stock_checked = False
+    n = 0
+
+    for tier_label, budget in TIER_BUDGETS:
+        tier_prefs = enrich_implied_prefs({**prefs, "budget": budget})
+        match = lookup_case(tier_prefs, brand=brand)
+        if match is None:
+            continue
+        lead, others, _priority_note = rank_case_models(
+            match.primary_model,
+            match.alternative_1,
+            match.alternative_2,
+            brand=brand,
+        )
+        pick_name = lead
+        if pick_name in used_models:
+            pick_name = next((m for m in others if m and m not in used_models), None)
+        if not pick_name or pick_name in used_models:
+            continue
+        used_models.add(pick_name)
+
+        product = resolve_product(pick_name)
+        snap: Optional[LiveStockSnapshot] = None
+        if product is not None:
+            snap = fetch_live_stock(
+                product.handle,
+                domain=domain,
+                title=product.title or product.display_name or pick_name,
+            )
+            if snap is not None:
+                stock_checked = True
+        badge = stock_badge(snap) if stock_checked else None
+        store_handle = (snap.handle if snap and snap.handle else None) or (
+            product.handle if product else None
+        )
+        url = product_page_url(domain, store_handle or "") if store_handle else None
+        n += 1
+        display = (product.display_name if product else None) or pick_name
+        price = _fmt_price(product.price_usd) if product else "price on request"
+        detail = ""
+        if product:
+            detail_bits = [
+                bit
+                for bit in (product.massage_mechanism, product.track_type)
+                if bit
+            ]
+            if detail_bits:
+                detail = f" ({' + '.join(detail_bits)})"
+        stock_bit = f" — *{badge}*" if badge else ""
+        lines.append(f"**{n}. {tier_label}**")
+        lines.append(f"- **{display}** — {price}{detail}{stock_bit}")
+        why = (match.reason or "").strip()
+        if why:
+            # Keep each tier scannable in chat.
+            short_why = why if len(why) <= 160 else why[:157].rstrip() + "…"
+            lines.append(f"  → {short_why}")
+        if url:
+            lines.append(f"  → {url}")
+            product_links.append((display, url))
+        if product is not None:
+            card = product.as_public_dict()
+            if url:
+                card["product_url"] = url
+            if badge:
+                card["stock"] = badge
+            public_products.append(card)
+        lines.append("")
+        tier_leads.append((tier_label, pick_name, product))
+
+    if not tier_leads:
+        return None
+
+    if product_links:
+        lines.append("**Open these links to shop:**")
+        for label, url in product_links:
+            lines.append(f"• {label}: {url}")
+        lines.append("")
+
+    if is_sales_after_hours():
+        lines.append(after_hours_blurb())
+        lines.append("")
+
+    lines.append(
+        "Reply with a **number (1–3)**, tap a chair for specs, narrow by budget, "
+        "or email a pick to sales. I won't invent discounts or delivery dates."
+    )
+
+    primary_name = tier_leads[0][1]
+    primary_url = product_links[0][1] if product_links else None
+    pick_summary = format_fit_guide_summary(
+        domain=domain,
+        prefs=prefs,
+        primary=primary_name,
+        alternatives=[name for _, name, _ in tier_leads[1:]],
+        product_url=primary_url,
+        stock_label=None,
+    )
+
+    quick: list[QuickReply] = [
+        QuickReply(label="Email me these picks", payload="lead:save_pick"),
+    ]
+    for _tier, name, product in tier_leads[:3]:
+        if product is not None:
+            quick.append(
+                QuickReply(
+                    label=f"Specs for {product.display_name}",
+                    payload=f"specs:{product.handle}",
+                )
+            )
+        else:
+            quick.append(
+                QuickReply(label=f"Ask about {name}", payload="human")
+            )
+    quick.extend(_BUDGET_BAND_REPLIES[:3])
+    quick.append(QuickReply(label="Talk to a human", payload="human"))
+
+    tools = ["cases.lookup", "cases.tiered", "catalog.resolve_product", "cta.product_url"]
+    if stock_checked:
+        tools.append("shopify.inventory")
+
+    return SalesReply(
+        reply="\n".join(lines).rstrip(),
+        intent=INTENT_RECOMMEND,
+        quick_replies=quick,
+        tools_used=tools,
+        products=public_products,
+        flow_stage="recommend",
+        prefs_patch={
+            "recommend_prefs": prefs,
+            "pending_pick_summary": pick_summary,
+            "pending_primary": primary_name,
+            "pending_product_url": primary_url,
+            "pending_tier_picks": [
+                {"tier": t, "model": m} for t, m, _p in tier_leads
+            ],
+        },
+    )
 
 
 def _case_recommend_reply(
@@ -837,16 +1024,16 @@ def _catalog_tier_recommend_reply(message: str, request: RecommendationRequest) 
     if not picks:
         return SalesReply(
             reply=(
-                "Happy to recommend a chair. What's your **budget range**?\n\n"
-                "Tap a price band below, or type something like *around 6000*."
+                "Happy to recommend a chair. What's the **user height**?\n\n"
+                "I'll match fit first, then show **Value / Mid / Premium** options."
             ),
             intent=INTENT_RECOMMEND,
             quick_replies=[
-                *_BUDGET_BAND_REPLIES,
-                QuickReply(label="Focus: lower back", payload="recommend:goal:lower_back"),
+                *_HEIGHT_REPLIES,
                 QuickReply(label="Talk to a human", payload="human"),
             ],
             tools_used=["catalog.parse_hints"],
+            flow_stage="ask_height",
         )
 
     header_bits: list[str] = []
@@ -857,12 +1044,12 @@ def _catalog_tier_recommend_reply(message: str, request: RecommendationRequest) 
     if request.focus_areas:
         header_bits.append("focus: " + ", ".join(request.focus_areas))
     if request.budget_usd:
-        header_bits.append(f"budget around ${request.budget_usd:,}")
+        header_bits.append(f"mentioned budget around ${request.budget_usd:,}")
 
     if header_bits:
         header = (
-            f"Based on {'; '.join(header_bits)}, here are three options "
-            "across price tiers:"
+            f"Based on {'; '.join(header_bits)}, here are options "
+            "across **Value / Mid / Premium**:"
         )
     else:
         header = (
@@ -871,7 +1058,7 @@ def _catalog_tier_recommend_reply(message: str, request: RecommendationRequest) 
         )
 
     lines = [header]
-    for product in picks:
+    for i, product in enumerate(picks, start=1):
         detail = ", ".join(
             [
                 bit
@@ -886,17 +1073,17 @@ def _catalog_tier_recommend_reply(message: str, request: RecommendationRequest) 
         )
         tier = price_tier_label(product.price_usd)
         why = _why_pick(product, request)
-        prefix = f"**{tier}** — " if tier else ""
+        tier_bit = f"{tier}" if tier else f"Option {i}"
         line = (
-            f"- {prefix}**{product.display_name}** — {_fmt_price(product.price_usd)}"
+            f"**{i}. {tier_bit}**\n"
+            f"- **{product.display_name}** — {_fmt_price(product.price_usd)}"
             + (f"  ({detail})" if detail else "")
         )
         if why:
             line += f"\n  → {why}"
         lines.append(line)
     lines.append(
-        "\nWant specs on one of these, a different budget band, or should I "
-        "connect you with a sales specialist?"
+        "\nReply with a number, ask for specs, or connect with a sales specialist."
     )
 
     return SalesReply(
@@ -907,12 +1094,12 @@ def _catalog_tier_recommend_reply(message: str, request: RecommendationRequest) 
                 QuickReply(label=f"Specs for {p.display_name}", payload=f"specs:{p.handle}")
                 for p in picks[:3]
             ],
-            *_BUDGET_BAND_REPLIES[:3],
             QuickReply(label="Talk to a human", payload="human"),
         ],
         tools_used=["catalog.recommend"]
         + (["catalog.parse_hints"] if has_hints else []),
         products=[p.as_public_dict() for p in picks],
+        flow_stage="recommend",
     )
 
 
@@ -943,14 +1130,26 @@ def _recommend_reply(
     if missing:
         return _clarify_recommend(missing[0], merged)
 
-    case_reply = _case_recommend_reply(
-        merged,
-        domain=domain,
-        request=request,
-        defaults_applied=defaults_applied,
-    )
-    if case_reply is not None:
-        return case_reply
+    # Budget volunteered (button / free text) → focused single-band pick.
+    # Otherwise → Value / Mid / Premium list from the case book.
+    if merged.get("budget"):
+        case_reply = _case_recommend_reply(
+            merged,
+            domain=domain,
+            request=request,
+            defaults_applied=defaults_applied,
+        )
+        if case_reply is not None:
+            return case_reply
+    else:
+        tiered = _tiered_case_recommend_reply(
+            merged,
+            domain=domain,
+            request=request,
+            defaults_applied=defaults_applied,
+        )
+        if tiered is not None:
+            return tiered
 
     return _catalog_tier_recommend_reply(message, request)
 
@@ -1370,9 +1569,9 @@ def _finalize_flow_stage(result: SalesReply) -> SalesReply:
     elif result.intent == INTENT_GREETING or result.intent == INTENT_UNCLEAR:
         result.flow_stage = "menu"
     elif "cases.clarify" in (result.tools_used or []):
-        # Prefer already-set ask_* from clarify; otherwise budget.
+        # Prefer already-set ask_* from clarify; otherwise height (fit-first).
         if not (result.flow_stage or "").startswith("ask_"):
-            result.flow_stage = "ask_budget"
+            result.flow_stage = "ask_height"
     elif "cases.lookup" in (result.tools_used or []) or "cta.conversion" in (
         result.tools_used or []
     ):
@@ -1382,7 +1581,7 @@ def _finalize_flow_stage(result: SalesReply) -> SalesReply:
     ):
         result.flow_stage = "shop"
     elif result.intent == INTENT_RECOMMEND:
-        result.flow_stage = "ask_budget"
+        result.flow_stage = "ask_height"
     else:
         result.flow_stage = "menu"
     return result

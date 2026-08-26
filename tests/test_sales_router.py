@@ -127,7 +127,7 @@ def test_unclear_returns_menu_not_a_guess(client):
     assert any(q["payload"] == "human" for q in body["quick_replies"])
 
 
-def test_recommend_without_hints_asks_budget(client):
+def test_recommend_without_hints_asks_height(client):
     resp = client.post(
         "/api/v1/sales/chat",
         json={"session_id": "s-r", "message": "can you recommend a chair"},
@@ -136,10 +136,10 @@ def test_recommend_without_hints_asks_budget(client):
     body = resp.json()
     assert body["intent"] == "recommend"
     assert body["handoff"] is False
-    assert "budget" in body["reply"].lower()
+    assert "height" in body["reply"].lower()
+    assert "budget range" not in body["reply"].lower()
     payloads = {q["payload"] for q in body["quick_replies"]}
-    assert "recommend:budget:under_3000" in payloads
-    assert any(p.startswith("recommend:budget:") for p in payloads)
+    assert any(p.startswith("recommend:height:") for p in payloads)
 
 
 def test_recommend_budget_band_then_asks_height(client):
@@ -154,23 +154,20 @@ def test_recommend_budget_band_then_asks_height(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["intent"] == "recommend"
-    # Budget saved → next clarifying question is height.
-    assert "budget range" not in body["reply"].lower()
+    # Budget saved optionally → still ask height first for fit.
     assert "height" in body["reply"].lower()
     payloads = {q["payload"] for q in body["quick_replies"]}
     assert any(p.startswith("recommend:height:") for p in payloads)
 
 
-def test_recommend_guided_flow_returns_case_pick(client):
+def test_recommend_guided_flow_returns_tiered_picks(client):
     sid = "s-case-flow"
+    body = None
     for payload in (
-        "recommend:budget:under_3000",
         "recommend:height:petite",
         "recommend:weight:le180",
-        "recommend:goal:neck",
-        "recommend:intensity:gentle",
-        "recommend:foot:not_important",
         "recommend:space:none",
+        "recommend:goal:neck",
     ):
         resp = client.post(
             "/api/v1/sales/chat",
@@ -184,21 +181,51 @@ def test_recommend_guided_flow_returns_case_pick(client):
         assert resp.status_code == 200
         body = resp.json()
     assert body["intent"] == "recommend"
+    reply = body["reply"].lower()
+    assert "value" in reply
+    assert "mid-range" in reply or "mid" in reply
+    assert "premium" in reply
+    assert "titan pro cura" in reply or "osaki" in reply
+    assert "budget tiers" in reply or "across budget" in reply
+
+
+def test_recommend_budget_refine_returns_primary_pick(client):
+    """After fit answers, volunteering a budget narrows to a single-band pick."""
+    sid = "s-budget-refine"
+    body = None
+    for payload in (
+        "recommend:height:petite",
+        "recommend:weight:le180",
+        "recommend:space:none",
+        "recommend:goal:neck",
+        "recommend:budget:under_3000",
+    ):
+        resp = client.post(
+            "/api/v1/sales/chat",
+            json={
+                "session_id": sid,
+                "message": "",
+                "payload": payload,
+                "domain": "osakimassagechair.com",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
     assert "primary pick" in body["reply"].lower()
-    assert "Osaki OS-Champ" in body["reply"]
+    # Balanced default → Under $3k petite/neck row (not the Gentle Champ row).
+    assert "Titan Pro Cura" in body["reply"] or "Primary pick" in body["reply"]
     assert "skip this pick if" in body["reply"].lower()
 
 
 def test_recommend_osakiusa_uses_titan_usa_book(client):
     sid = "s-usa-titan-book"
+    body = None
     for payload in (
-        "recommend:budget:under_3000",
         "recommend:height:petite",
         "recommend:weight:le180",
-        "recommend:goal:neck",
-        "recommend:intensity:gentle",
-        "recommend:foot:not_important",
         "recommend:space:none",
+        "recommend:goal:neck",
+        "recommend:budget:under_3000",
     ):
         resp = client.post(
             "/api/v1/sales/chat",
@@ -247,13 +274,11 @@ def test_recommend_demotes_oos_with_live_stock(client, monkeypatch):
     sid = "s-stock-demote"
     body = None
     for payload in (
-        "recommend:budget:under_3000",
         "recommend:height:petite",
         "recommend:weight:le180",
-        "recommend:goal:neck",
-        "recommend:intensity:gentle",
-        "recommend:foot:not_important",
         "recommend:space:none",
+        "recommend:goal:neck",
+        "recommend:budget:under_3000",
     ):
         resp = client.post(
             "/api/v1/sales/chat",
@@ -288,13 +313,11 @@ def test_email_me_this_pick_captures_lead_with_summary(client, monkeypatch):
 
     sid = "s-email-pick"
     for payload in (
-        "recommend:budget:under_3000",
         "recommend:height:petite",
         "recommend:weight:le180",
-        "recommend:goal:neck",
-        "recommend:intensity:gentle",
-        "recommend:foot:not_important",
         "recommend:space:none",
+        "recommend:goal:neck",
+        "recommend:budget:under_3000",
     ):
         resp = client.post(
             "/api/v1/sales/chat",
@@ -330,14 +353,14 @@ def test_email_me_this_pick_captures_lead_with_summary(client, monkeypatch):
 
 
 def test_free_text_skips_secondary_questions(client, monkeypatch):
-    """Core four in one message → recommend without asking intensity/foot/space."""
+    """Core fit + space in one message → recommend without asking intensity/foot."""
     monkeypatch.setattr("sales_agent.fetch_live_stock", lambda *a, **k: None)
 
     resp = client.post(
         "/api/v1/sales/chat",
         json={
             "session_id": "s-skip-secondary",
-            "message": "I'm 6'2, 220 lb, lower back pain, under $5k",
+            "message": "I'm 6'2, 220 lb, lower back pain, no space issue, under $5k",
             "domain": "osakiusa.com",
         },
     )
@@ -394,10 +417,11 @@ def test_conversion_ctas_when_in_stock(client, monkeypatch):
     sid = "s-convert"
     body = None
     for payload in (
-        "recommend:budget:under_3000",
         "recommend:height:petite",
         "recommend:weight:le180",
+        "recommend:space:none",
         "recommend:goal:neck",
+        "recommend:budget:under_3000",
     ):
         resp = client.post(
             "/api/v1/sales/chat",

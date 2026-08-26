@@ -35,14 +35,7 @@ with these **exact** labels (must match API):
 - Compare two models → `message=compare`
 - Talk to a human → `message=talk to a human`
 
-### `ask_budget`
-- Under $3,000 → `payload=recommend:budget:under_3000`
-- $3,000–$4,999 → `payload=recommend:budget:3000_4999`
-- $5,000–$6,999 → `payload=recommend:budget:5000_6999`
-- $7,000–$9,999 → `payload=recommend:budget:7000_9999`
-- $10,000+ → `payload=recommend:budget:10000_plus`
-
-### `ask_height`
+### `ask_height` (first question — fit before budget)
 - Under 5'4" → `payload=recommend:height:petite`
 - 5'4"–5'11" → `payload=recommend:height:average`
 - 6'0"–6'2" → `payload=recommend:height:tall`
@@ -55,6 +48,11 @@ with these **exact** labels (must match API):
 - 261–300 lb → `payload=recommend:weight:261_300`
 - 301+ lb → `payload=recommend:weight:301_plus`
 
+### `ask_space` (doorway / room)
+- No space issue → `payload=recommend:space:none`
+- Small room → `payload=recommend:space:small_room`
+- Narrow doorway → `payload=recommend:space:narrow_door`
+
 ### `ask_goal` (max useful set)
 - Neck & shoulders → `payload=recommend:goal:neck`
 - Lower back → `payload=recommend:goal:lower_back`
@@ -62,10 +60,17 @@ with these **exact** labels (must match API):
 - Foot & calf → `payload=recommend:goal:feet`
 - Full-body relax → `payload=recommend:goal:full_body`
 
-### `recommend` (after Primary pick)
-- Shop this chair → `message=Shop this chair` (or `payload=open:{{button_1_url}}`)
-- Email me this pick → `message=Email me this pick`
-- Prefer stronger → `payload=recommend:intensity:strong`
+### `ask_budget` (optional refine after the tier list)
+- Under $3,000 → `payload=recommend:budget:under_3000`
+- $3,000–$4,999 → `payload=recommend:budget:3000_4999`
+- $5,000–$6,999 → `payload=recommend:budget:5000_6999`
+- $7,000–$9,999 → `payload=recommend:budget:7000_9999`
+- $10,000+ → `payload=recommend:budget:10000_plus`
+
+### `recommend` (Value / Mid / Premium list, or focused pick if budget set)
+- Specs for … → `payload=specs:…`
+- Email me these picks → `message=Email me this pick`
+- Under $3,000 / Mid bands → `payload=recommend:budget:…` (narrow)
 - Visit showroom → `payload=cta:showroom`
 - Talk to a human → `message=talk to a human`
 

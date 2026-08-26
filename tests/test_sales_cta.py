@@ -86,8 +86,8 @@ def test_strong_buy_path_in_stock_only():
 
 def test_defaults_note_and_showroom():
     note = format_defaults_note(
-        ["intensity", "space"],
-        {"intensity": "Balanced", "space": "No Space Constraint"},
+        ["intensity", "foot"],
+        {"intensity": "Balanced", "foot": "Not Important"},
     )
     assert note is not None
     assert "balanced intensity" in note.lower()

@@ -136,7 +136,7 @@ class TidioTurnResponse(BaseModel):
     # Tidio should show ``reply_plain`` and END the flow when True.
     is_warranty_route: bool = False
     # Static Decision branching (free Tidio plan — no dynamic buttons).
-    # menu | ask_budget | ask_height | ask_weight | ask_goal | recommend | …
+    # menu | ask_height | ask_weight | ask_space | ask_goal | recommend | …
     flow_stage: str = "menu"
     # Flat button fields for Flow session variables / static Decision nodes.
     button_count: int = 0

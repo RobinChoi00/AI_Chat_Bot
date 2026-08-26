@@ -374,20 +374,20 @@ def merge_prefs_from_hints(
     return out
 
 
-# Must ask these — body fit + budget drive the case book.
+# Must ask these first — body fit + doorway. Budget is NOT a gate: we
+# recommend across Value / Mid / Premium tiers once these are known.
 CORE_PREF_KEYS = (
-    "budget",
     "height",
     "weight",
+    "space",
     "goal",
 )
 
 # Filled automatically once the core four are known so free-text / short
-# button paths do not force 7 back-and-forth turns.
+# button paths do not force extra intensity/foot turns.
 SECONDARY_PREF_KEYS = (
     "intensity",
     "foot",
-    "space",
 )
 
 REQUIRED_PREF_KEYS = CORE_PREF_KEYS + SECONDARY_PREF_KEYS
@@ -396,8 +396,14 @@ REQUIRED_PREF_KEYS = CORE_PREF_KEYS + SECONDARY_PREF_KEYS
 _SECONDARY_DEFAULTS = {
     "intensity": "Balanced",
     "foot": "Not Important",
-    "space": "No Space Constraint",
 }
+
+# Representative case-book budget bands for the 3-tier list (low / mid / high).
+TIER_BUDGETS = (
+    ("Value (under ~$5k)", "Under $3,000"),
+    ("Mid-range (~$5–7k)", "$5,000–$6,999"),
+    ("Premium ($10k+)", "$10,000+"),
+)
 
 
 def missing_required(prefs: dict[str, str]) -> list[str]:
@@ -415,7 +421,7 @@ def enrich_implied_prefs(prefs: dict[str, str]) -> dict[str, str]:
     if goal == "Foot & Calf" and "foot" not in out:
         # Asking foot again after they chose Foot & Calf as the main goal is noise.
         out["foot"] = "Important"
-    # Once budget/height/weight/goal are known, skip intensity/foot/space questions.
+    # Once height/weight/space/goal are known, skip intensity/foot questions.
     if all(out.get(k) for k in CORE_PREF_KEYS):
         for key, default in _SECONDARY_DEFAULTS.items():
             if key not in out or not out[key]:
@@ -443,7 +449,9 @@ def lookup_case(
 ) -> Optional[CaseMatch]:
     brand_key = (brand or brand_for_domain(domain)).strip().lower()
     filled = enrich_implied_prefs(prefs)
-    if missing_required(filled):
+    # Budget is optional in the chat flow (we recommend across tiers), but
+    # each case-book row is keyed by a specific budget band.
+    if missing_required(filled) or not filled.get("budget"):
         return None
 
     key = (
