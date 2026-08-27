@@ -53,6 +53,13 @@ with these **exact** labels (must match API):
 - Small room → `payload=recommend:space:small_room`
 - Narrow doorway → `payload=recommend:space:narrow_door`
 
+### `ask_doorway` (after narrow / small room)
+- 28" → `payload=recommend:doorway:28`
+- 30" → `payload=recommend:doorway:30`
+- 32" → `payload=recommend:doorway:32`
+- 36"+ → `payload=recommend:doorway:36`
+- Not sure → `payload=recommend:doorway:skip`
+
 ### `ask_goal` (max useful set)
 - Neck & shoulders → `payload=recommend:goal:neck`
 - Lower back → `payload=recommend:goal:lower_back`

@@ -25,12 +25,15 @@ _MAX_BUTTONS = max(1, min(8, int(os.getenv("TIDIO_MAX_QUICK_REPLIES", "5"))))
 # Lower = keep first when capping.
 _PREFIX_PRIORITY: list[tuple[str, int]] = [
     ("open:", 10),
+    ("tier:", 10),
+    ("compare:tiers:", 15),
     ("cta:financing", 20),
     ("lead:", 25),
     ("cta:showroom", 30),
     ("recommend:height:", 50),
     ("recommend:weight:", 50),
     ("recommend:space:", 50),
+    ("recommend:doorway:", 50),
     ("recommend:goal:", 50),
     ("recommend:intensity:", 55),
     ("recommend:foot:", 55),

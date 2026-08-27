@@ -332,6 +332,21 @@ def apply_payload_codes(prefs: dict[str, str], payload: str) -> dict[str, str]:
             out["foot"] = _FOOT_CODE[code]
         elif key == "space" and code in _SPACE_CODE:
             out["space"] = _SPACE_CODE[code]
+        elif key == "doorway":
+            # recommend:doorway:30 | recommend:doorway:skip
+            if code == "skip":
+                out["doorway_in"] = "skip"
+            else:
+                try:
+                    inches = float(code)
+                except ValueError:
+                    inches = None
+                if inches is not None and 20 <= inches <= 48:
+                    out["doorway_in"] = (
+                        str(int(inches)) if inches == int(inches) else str(inches)
+                    )
+                    if "space" not in out:
+                        out["space"] = "Narrow Doorway"
     return out
 
 
@@ -371,6 +386,24 @@ def merge_prefs_from_hints(
     sb = space_bucket(free_text)
     if sb:
         out["space"] = sb
+    # Doorway inches from free text ("30 inch door", '32"').
+    if "doorway_in" not in out:
+        dm = re.search(
+            r"(\d{2}(?:\.\d)?)\s*(?:\"|''|in(?:ch(?:es)?)?)\s*(?:door|doorway)?",
+            free_text or "",
+            re.I,
+        )
+        if dm:
+            try:
+                inches = float(dm.group(1))
+            except ValueError:
+                inches = None
+            if inches is not None and 20 <= inches <= 48:
+                out["doorway_in"] = (
+                    str(int(inches)) if inches == int(inches) else str(inches)
+                )
+                if "space" not in out:
+                    out["space"] = "Narrow Doorway"
     return out
 
 

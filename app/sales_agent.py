@@ -434,6 +434,21 @@ _SPACE_REPLIES = (
     QuickReply(label="Narrow doorway", payload="recommend:space:narrow_door"),
 )
 
+_DOORWAY_INCH_REPLIES = (
+    QuickReply(label='28"', payload="recommend:doorway:28"),
+    QuickReply(label='30"', payload="recommend:doorway:30"),
+    QuickReply(label='32"', payload="recommend:doorway:32"),
+    QuickReply(label='36"+', payload="recommend:doorway:36"),
+    QuickReply(label="Not sure", payload="recommend:doorway:skip"),
+)
+
+_COMPACT_SPACES = frozenset({"Narrow Doorway", "Small Room"})
+
+_DOORWAY_MSG_RE = re.compile(
+    r"(\d{2}(?:\.\d)?)\s*(?:\"|''|in(?:ch(?:es)?)?)\b",
+    re.I,
+)
+
 
 def _why_pick(product: ProductSpecs, request: RecommendationRequest) -> str:
     """One short reason so recommendations don't feel like a random list."""
@@ -458,10 +473,60 @@ def _why_pick(product: ProductSpecs, request: RecommendationRequest) -> str:
     return "; ".join(bits[:2])
 
 
+def _parse_doorway_inches_message(text: str) -> Optional[float]:
+    """Pull a doorway width like 30\" / 32 in from free text."""
+    match = _DOORWAY_MSG_RE.search(text or "")
+    if not match:
+        return None
+    try:
+        inches = float(match.group(1))
+    except ValueError:
+        return None
+    if 20 <= inches <= 48:
+        return inches
+    return None
+
+
+def _needs_doorway_inches(prefs: dict[str, str]) -> bool:
+    space = (prefs.get("space") or "").strip()
+    if space not in _COMPACT_SPACES:
+        return False
+    return not (prefs.get("doorway_in") or "").strip()
+
+
+def _doorway_limit_in(prefs: dict[str, str]) -> Optional[float]:
+    raw = (prefs.get("doorway_in") or "").strip().lower()
+    if not raw or raw == "skip":
+        return None
+    try:
+        return float(raw.rstrip("+"))
+    except ValueError:
+        return None
+
+
+def _clarify_doorway_inches(prefs: dict[str, str]) -> SalesReply:
+    return SalesReply(
+        reply=(
+            "What's the **narrowest doorway** on the delivery path "
+            "(inches)?\n\n"
+            "I'll only keep chairs that can fit — or tap **Not sure** to skip."
+        ),
+        intent=INTENT_RECOMMEND,
+        quick_replies=[
+            *_DOORWAY_INCH_REPLIES,
+            QuickReply(label="Talk to a human", payload="human"),
+        ],
+        tools_used=["cases.clarify"],
+        prefs_patch={"recommend_prefs": prefs},
+        flow_stage="ask_doorway",
+    )
+
+
+
 def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
     patch = {"recommend_prefs": prefs}
     stage = f"ask_{missing}" if missing in {
-        "height", "weight", "goal", "intensity", "foot", "space"
+        "height", "weight", "goal", "intensity", "foot", "space", "doorway_in"
     } else "ask_height"
     if missing == "height":
         return SalesReply(
@@ -496,6 +561,8 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
             prefs_patch=patch,
             flow_stage=stage,
         )
+    if missing == "doorway_in":
+        return _clarify_doorway_inches(prefs)
     if missing == "goal":
         return SalesReply(
             reply="What's the **main focus** for the massage?",
@@ -669,6 +736,7 @@ def _collect_tier_candidates(
     """Return (model_name, reason, doorway_in_or_999) candidates for a tier."""
     seen: set[str] = set()
     out: list[tuple[str, str, float]] = []
+    limit = _doorway_limit_in(prefs)
     for budget in budgets:
         match = lookup_case(
             enrich_implied_prefs({**prefs, "budget": budget}),
@@ -688,8 +756,34 @@ def _collect_tier_candidates(
         for name in [lead, *others]:
             if not name or name in used_models or name in seen:
                 continue
+            # Hard filter when shopper gave a doorway width.
+            if limit is not None and door_key < 999 and door_key > limit:
+                continue
             seen.add(name)
             out.append((name, reason, door_key))
+    # If the hard filter wiped the tier, fall back to unfiltered candidates.
+    if not out and limit is not None:
+        for budget in budgets:
+            match = lookup_case(
+                enrich_implied_prefs({**prefs, "budget": budget}),
+                brand=brand,
+            )
+            if match is None:
+                continue
+            lead, others, _ = rank_case_models(
+                match.primary_model,
+                match.alternative_1,
+                match.alternative_2,
+                brand=brand,
+            )
+            reason = match.reason or ""
+            doorway = _parse_min_doorway_in(reason)
+            door_key = doorway if doorway is not None else 999.0
+            for name in [lead, *others]:
+                if not name or name in used_models or name in seen:
+                    continue
+                seen.add(name)
+                out.append((name, reason, door_key))
     return out
 
 
@@ -868,18 +962,20 @@ def _tiered_case_recommend_reply(
 
     # Order matters: numbered menu 1–3 must match Value / Mid / Premium.
     quick: list[QuickReply] = []
-    for tier in tier_leads[:3]:
+    for i, tier in enumerate(tier_leads[:3], start=1):
         short_tier = tier["tier"].split("(")[0].strip()
         label = f"{short_tier}: {tier['display']}"
-        if tier.get("url"):
-            quick.append(QuickReply(label=label, payload=f"open:{tier['url']}"))
-        elif tier.get("handle"):
-            quick.append(QuickReply(label=label, payload=f"specs:{tier['handle']}"))
-        else:
-            quick.append(QuickReply(label=label, payload="human"))
+        quick.append(QuickReply(label=label, payload=f"tier:{i}"))
+    if len(tier_leads) >= 2:
+        quick.append(
+            QuickReply(
+                label="Compare Value vs Mid",
+                payload="compare:tiers:1:2",
+            )
+        )
     quick.append(QuickReply(label="Email me these picks", payload="lead:save_pick"))
     quick.append(QuickReply(label="Talk to a human", payload="human"))
-    # Showroom is offered in copy; keep off the 5-button cap so 1–3 stay the tiers.
+    # Keep 1–3 as the tier picks after Tidio button ranking/cap.
 
     tools = ["cases.lookup", "cases.tiered", "catalog.resolve_product", "cta.product_url"]
     if stock_checked:
@@ -1239,12 +1335,30 @@ def _recommend_reply(
         focus_areas=request.focus_areas,
         free_text=request.free_text or message,
     )
+    # Bare "30 inch" / '32"' answers after ask_doorway.
+    door_msg = _parse_doorway_inches_message(message or "")
+    if door_msg is not None and not (merged.get("doorway_in") or "").strip():
+        merged["doorway_in"] = (
+            str(int(door_msg)) if door_msg == int(door_msg) else str(door_msg)
+        )
+        if "space" not in merged:
+            merged["space"] = "Narrow Doorway"
+
     before_defaults = dict(merged)
     # Budget is never asked and never gates the reply — Value/Mid/Premium
     # tiers inject case-book budget bands internally only.
     merged.pop("budget", None)
     merged = enrich_implied_prefs(merged)
     defaults_applied = secondary_defaults_applied(before_defaults, merged)
+
+    # After compact space, ask doorway inches before goal / recommend.
+    if (
+        merged.get("height")
+        and merged.get("weight")
+        and (merged.get("space") or "") in _COMPACT_SPACES
+        and _needs_doorway_inches(merged)
+    ):
+        return _clarify_doorway_inches(merged)
 
     missing = missing_required(merged)
     if missing:
@@ -1616,7 +1730,28 @@ def _payload_reply(
 ) -> Optional[SalesReply]:
     parts = (payload or "").split(":")
     root = parts[0].strip().lower() if parts else ""
+    if root == "tier" and len(parts) >= 2:
+        try:
+            n = int(re.sub(r"\D", "", parts[1]) or "0")
+        except ValueError:
+            n = 0
+        if 1 <= n <= 3:
+            return _tier_followup_reply(n - 1, prefs, domain=domain)
+        return None
+    if root == "compare" and len(parts) >= 4 and parts[1].strip().lower() == "tiers":
+        try:
+            left_n = int(parts[2])
+            right_n = int(parts[3])
+        except ValueError:
+            return None
+        return _compare_pending_tiers_reply(prefs, left_n, right_n)
     if root == "recommend":
+        if len(parts) >= 2 and parts[1].strip().lower() == "again":
+            return _recommend_reply(
+                "recommend",
+                domain=domain,
+                prefs=prefs,
+            )
         return _recommend_reply(
             message or "recommend",
             payload=payload,
@@ -1664,6 +1799,7 @@ def _finalize_flow_stage(result: SalesReply) -> SalesReply:
             "handoff",
             "warranty",
             "shop",
+            "ask_doorway",
         }:
             return result
     from sales_intent import WARRANTY_ROUTE_INTENTS
@@ -1695,32 +1831,187 @@ def _finalize_flow_stage(result: SalesReply) -> SalesReply:
     return result
 
 
-def _tier_digit_reply(message: str, prefs: Optional[dict]) -> Optional[SalesReply]:
-    """Map bare 1/2/3 to the matching Value/Mid/Premium pick after a tier list."""
-    digit = re.fullmatch(r"([1-3])[).:\s]*", (message or "").strip())
-    if not digit:
-        return None
+def _tier_followup_reply(
+    idx: int,
+    prefs: Optional[dict],
+    *,
+    domain: str = "osakiusa.com",
+) -> Optional[SalesReply]:
+    """After 1/2/3: why-this-chair card + shop / specs / email / compare."""
     picks = (prefs or {}).get("pending_tier_picks") or []
-    if not isinstance(picks, list):
-        return None
-    idx = int(digit.group(1)) - 1
-    if not (0 <= idx < len(picks)):
+    if not isinstance(picks, list) or not (0 <= idx < len(picks)):
         return None
     pick = picks[idx]
     if not isinstance(pick, dict):
         return None
-    patched = dict(prefs or {})
-    display = (pick.get("display") or pick.get("model") or "").strip()
-    if display:
-        patched["pending_primary"] = display
+
+    display = (pick.get("display") or pick.get("model") or "this chair").strip()
+    tier = (pick.get("tier") or f"Option {idx + 1}").strip()
     url = (pick.get("url") or "").strip()
-    if url.startswith("https://"):
-        patched["pending_product_url"] = url
-        return _open_product_reply(url, patched)
     handle = (pick.get("handle") or "").strip()
+    stock = (pick.get("stock") or "").strip()
+    product = resolve_product(handle or display)
+    rec_prefs = ((prefs or {}).get("recommend_prefs") or {})
+
+    why_bits: list[str] = []
+    if rec_prefs.get("goal"):
+        why_bits.append(f"targets **{rec_prefs['goal']}**")
+    if rec_prefs.get("height"):
+        why_bits.append(f"sized for **{rec_prefs['height']}**")
+    if product is not None:
+        for bit in (product.massage_mechanism, product.track_type):
+            if bit:
+                why_bits.append(bit)
+    if stock:
+        why_bits.append(stock)
+    if rec_prefs.get("doorway_in") and rec_prefs.get("doorway_in") != "skip":
+        why_bits.append(f"checked against your **{rec_prefs['doorway_in']}\"** doorway")
+
+    lines = [
+        f"**{tier}** — **{display}**"
+        + (f" · {_fmt_price(product.price_usd)}" if product and product.price_usd else ""),
+        "",
+        "**Why this pick:**",
+    ]
+    if why_bits:
+        lines.append("• " + " · ".join(why_bits[:4]))
+    else:
+        lines.append("• Best match in this price tier for your fit answers.")
+    if url:
+        lines.append(f"\nShop: {url}")
+    lines.append(
+        "\nFinancing (Affirm) shows at checkout — I won't invent rates. "
+        "Want specs, a compare, or email this to sales?"
+    )
+
+    patched = dict(prefs or {})
+    patched["pending_primary"] = display
+    if url:
+        patched["pending_product_url"] = url
+
+    quick: list[QuickReply] = []
+    if url.startswith("https://"):
+        quick.append(QuickReply(label="Shop this chair", payload=f"open:{url}"))
     if handle:
-        return _specs_reply(handle)
-    return None
+        quick.append(QuickReply(label="Full specs", payload=f"specs:{handle}"))
+    quick.append(QuickReply(label="Email me this pick", payload="lead:save_pick"))
+    # Compare this tier to the other of Value/Mid when possible.
+    if idx == 0 and len(picks) >= 2:
+        quick.append(QuickReply(label="Compare vs Mid", payload="compare:tiers:1:2"))
+    elif idx == 1 and len(picks) >= 1:
+        quick.append(QuickReply(label="Compare vs Value", payload="compare:tiers:1:2"))
+    elif idx == 2 and len(picks) >= 2:
+        quick.append(QuickReply(label="Compare vs Mid", payload="compare:tiers:2:3"))
+    quick.append(QuickReply(label="Back to list", payload="recommend:again"))
+    quick.append(QuickReply(label="Talk to a human", payload="human"))
+
+    return SalesReply(
+        reply="\n".join(lines),
+        intent=INTENT_RECOMMEND,
+        quick_replies=quick,
+        tools_used=["cases.tiered", "cta.product_url"],
+        products=[product.as_public_dict()] if product else [],
+        flow_stage="recommend",
+        prefs_patch=patched,
+    )
+
+
+def _compare_pending_tiers_reply(
+    prefs: Optional[dict],
+    left_n: int,
+    right_n: int,
+) -> Optional[SalesReply]:
+    """Compare two pending tier picks by 1-based indexes."""
+    picks = (prefs or {}).get("pending_tier_picks") or []
+    if not isinstance(picks, list):
+        return None
+    li, ri = left_n - 1, right_n - 1
+    if not (0 <= li < len(picks) and 0 <= ri < len(picks)):
+        return None
+    left_pick = picks[li]
+    right_pick = picks[ri]
+    if not isinstance(left_pick, dict) or not isinstance(right_pick, dict):
+        return None
+    left_name = left_pick.get("model") or left_pick.get("display") or ""
+    right_name = right_pick.get("model") or right_pick.get("display") or ""
+    result = compare(left_name, right_name)
+    if result is None:
+        # Fall back to handles.
+        result = compare(
+            left_pick.get("handle") or left_name,
+            right_pick.get("handle") or right_name,
+        )
+    if result is None:
+        return SalesReply(
+            reply=(
+                f"I couldn't line up **{left_pick.get('display') or left_name}** vs "
+                f"**{right_pick.get('display') or right_name}** in the catalog. "
+                "A specialist can compare them side by side."
+            ),
+            intent=INTENT_COMPARE,
+            quick_replies=[
+                QuickReply(label="Back to list", payload="recommend:again"),
+                QuickReply(label="Talk to a human", payload="human"),
+            ],
+            tools_used=["catalog.compare"],
+            flow_stage="recommend",
+        )
+
+    left = result["left"]
+    right = result["right"]
+    diff = result["diff"]
+    lt = (left_pick.get("tier") or "Option A").split("(")[0].strip()
+    rt = (right_pick.get("tier") or "Option B").split("(")[0].strip()
+    lines = [
+        f"**{lt}: {left['model']}** — {_fmt_price(left['price_usd'])}",
+        f"**{rt}: {right['model']}** — {_fmt_price(right['price_usd'])}",
+        "",
+        f"- **Mechanism**: {diff['mechanism'][0] or '—'} vs {diff['mechanism'][1] or '—'}",
+        f"- **Track**: {diff['track'][0] or '—'} vs {diff['track'][1] or '—'}",
+        f"- **Zero gravity**: {diff['zero_gravity'][0] or '—'} vs {diff['zero_gravity'][1] or '—'}",
+        f"- **Heating**: {diff['heating'][0] or '—'} vs {diff['heating'][1] or '—'}",
+        f"- **Foot roller**: {diff['foot_roller'][0] or '—'} vs {diff['foot_roller'][1] or '—'}",
+    ]
+    if diff["price_delta_usd"] is not None:
+        delta = diff["price_delta_usd"]
+        if abs(delta) >= 1:
+            direction = "more" if delta > 0 else "less"
+            lines.append(
+                f"- **Price gap**: {rt} is about ${abs(delta):,.0f} {direction}."
+            )
+    lines.append(
+        "\nReply **1** for Value, **2** for Mid (or the tier you want), "
+        "or ask a specialist to help you choose."
+    )
+    quick = [
+        QuickReply(label=f"Choose {lt}", payload=f"tier:{left_n}"),
+        QuickReply(label=f"Choose {rt}", payload=f"tier:{right_n}"),
+        QuickReply(label="Back to list", payload="recommend:again"),
+        QuickReply(label="Talk to a human", payload="human"),
+    ]
+    return SalesReply(
+        reply="\n".join(lines),
+        intent=INTENT_COMPARE,
+        quick_replies=quick,
+        tools_used=["catalog.compare", "cases.tiered"],
+        products=[left, right],
+        flow_stage="recommend",
+        prefs_patch={
+            "pending_tier_picks": picks,
+            "recommend_prefs": (prefs or {}).get("recommend_prefs") or {},
+        },
+    )
+
+
+def _tier_digit_reply(message: str, prefs: Optional[dict]) -> Optional[SalesReply]:
+    """Map bare 1/2/3 to the matching Value/Mid/Premium follow-up card."""
+    digit = re.fullmatch(r"([1-3])[).:\s]*", (message or "").strip())
+    if not digit:
+        return None
+    picks = (prefs or {}).get("pending_tier_picks") or []
+    if not isinstance(picks, list) or not picks:
+        return None
+    return _tier_followup_reply(int(digit.group(1)) - 1, prefs)
 
 
 def respond(

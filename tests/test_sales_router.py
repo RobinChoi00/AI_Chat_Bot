@@ -438,7 +438,8 @@ def test_tiered_recommend_includes_product_links_when_in_stock(client, monkeypat
     assert "https://" in body["reply"]
     payloads = {q["payload"] for q in body["quick_replies"]}
     assert "lead:save_pick" in payloads
-    assert any(p.startswith("open:https://") for p in payloads)
+    assert "tier:1" in payloads
+    assert "compare:tiers:1:2" in payloads
     assert "shopify.inventory" in body.get("tools_used", [])
 
     opened = client.post(
@@ -446,7 +447,21 @@ def test_tiered_recommend_includes_product_links_when_in_stock(client, monkeypat
         json={"session_id": sid, "message": "1", "domain": "osakiusa.com"},
     )
     assert opened.status_code == 200
-    assert "https://" in opened.json()["reply"]
+    follow = opened.json()["reply"].lower()
+    assert "why this pick" in follow
+    assert "shop" in follow or "https://" in follow
+
+    compared = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "",
+            "payload": "compare:tiers:1:2",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert compared.status_code == 200
+    assert "mechanism" in compared.json()["reply"].lower()
 
     showroom = client.post(
         "/api/v1/sales/chat",
@@ -459,6 +474,44 @@ def test_tiered_recommend_includes_product_links_when_in_stock(client, monkeypat
     )
     assert showroom.status_code == 200
     assert "Carrollton" in showroom.json()["reply"]
+
+
+def test_narrow_door_asks_doorway_inches(client):
+    sid = "s-door-inches"
+    body = None
+    for payload in (
+        "recommend:height:average",
+        "recommend:weight:le180",
+        "recommend:space:narrow_door",
+    ):
+        resp = client.post(
+            "/api/v1/sales/chat",
+            json={
+                "session_id": sid,
+                "message": "",
+                "payload": payload,
+                "domain": "osakiusa.com",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+    assert "doorway" in body["reply"].lower()
+    assert body.get("flow_stage") == "ask_doorway" or "inches" in body["reply"].lower()
+    payloads = {q["payload"] for q in body["quick_replies"]}
+    assert "recommend:doorway:30" in payloads
+
+    # Provide inches then continue to goal.
+    nxt = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "",
+            "payload": "recommend:doorway:30",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert nxt.status_code == 200
+    assert "focus" in nxt.json()["reply"].lower() or "goal" in nxt.json()["reply"].lower() or "main focus" in nxt.json()["reply"].lower()
 
 
 def test_menu_button_payload_returns_menu(client):
