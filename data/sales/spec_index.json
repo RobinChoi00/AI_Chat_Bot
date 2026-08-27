@@ -1,0 +1,2160 @@
+{
+  "source": "Specification_Massage Chair.xlsx",
+  "model_count": 177,
+  "models": [
+    {
+      "name": "Titan 3D Quantum",
+      "brand": "Titan",
+      "spec_name": "3D Quantum",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "3D Quantum"
+      ]
+    },
+    {
+      "name": "Osaki Oasis",
+      "brand": "Osaki",
+      "spec_name": "Oasis",
+      "max_user_lb": 250.0,
+      "wall_clearance_in": 7.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Oasis"
+      ]
+    },
+    {
+      "name": "Titan Rejuv 4D",
+      "brand": "Titan",
+      "spec_name": "Rejūv 4D",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 4.7,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Titan Rejūv 4D",
+        "Rejūv 4D"
+      ]
+    },
+    {
+      "name": "Osaki 4D Helix LE",
+      "brand": "Osaki Platinum",
+      "spec_name": "Helix LE",
+      "max_user_lb": 264.5,
+      "wall_clearance_in": 8.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Helix LE",
+        "Osaki Platinum Helix LE"
+      ]
+    },
+    {
+      "name": "Titan TP-Epic 4D",
+      "brand": "Titan",
+      "spec_name": "TP Epic 4D",
+      "max_user_lb": 264.0,
+      "wall_clearance_in": 6.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "TP Epic 4D",
+        "Titan TP Epic 4D"
+      ]
+    },
+    {
+      "name": "Osaki JP-Nexus 4D Made in Japan",
+      "brand": "Osaki Japan",
+      "spec_name": "JP-Nexus 4D",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 3.5,
+      "door_asm_in": 33.0,
+      "door_dis_in": null,
+      "aliases": [
+        "JP-Nexus 4D",
+        "Osaki Japan JP-Nexus 4D"
+      ]
+    },
+    {
+      "name": "Osaki 4D+3D Manhattan Duo",
+      "brand": "Osaki",
+      "spec_name": "Manhattan Duo",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 4.5,
+      "door_asm_in": 31.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Manhattan Duo",
+        "Osaki Manhattan Duo"
+      ]
+    },
+    {
+      "name": "Osaki OS-Trion Flex Duo 4D+3D",
+      "brand": "Osaki",
+      "spec_name": "Trion Flex Duo",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 9.5,
+      "door_asm_in": 33.0,
+      "door_dis_in": 30.5,
+      "aliases": [
+        "Trion Flex Duo",
+        "Osaki Trion Flex Duo"
+      ]
+    },
+    {
+      "name": "Osaki Platinum - Escape Duo 4D",
+      "brand": "Osaki Platinum",
+      "spec_name": "4D Escape Duo",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 0.8,
+      "door_asm_in": 31.4,
+      "door_dis_in": null,
+      "aliases": [
+        "4D Escape Duo",
+        "Osaki Platinum 4D Escape Duo"
+      ]
+    },
+    {
+      "name": "Osaki OS-Champ",
+      "brand": "Osaki",
+      "spec_name": "Champ",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 9.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Champ",
+        "Osaki Champ"
+      ]
+    },
+    {
+      "name": "Osaki Signature II",
+      "brand": "Osaki",
+      "spec_name": "Signature II",
+      "max_user_lb": 250.0,
+      "wall_clearance_in": 5.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Signature II"
+      ]
+    },
+    {
+      "name": "Osaki Nova II 3D+",
+      "brand": "Osaki",
+      "spec_name": "Nova II",
+      "max_user_lb": 250.0,
+      "wall_clearance_in": 8.5,
+      "door_asm_in": 29.75,
+      "door_dis_in": null,
+      "aliases": [
+        "Nova II",
+        "Osaki Nova II"
+      ]
+    },
+    {
+      "name": "OS-3D AI Vito",
+      "brand": "Osaki",
+      "spec_name": "Vito",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 6.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Osaki OS-3D AI Vito",
+        "Osaki Vito",
+        "Vito"
+      ]
+    },
+    {
+      "name": "Titan Malibu Sync",
+      "brand": "Titan",
+      "spec_name": "Malibu Sync",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Malibu Sync"
+      ]
+    },
+    {
+      "name": "Ventura 3D",
+      "brand": "Osaki",
+      "spec_name": "Ventura",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 11.3,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Osaki Ventura 3D",
+        "Osaki Ventura",
+        "Ventura"
+      ]
+    },
+    {
+      "name": "Grande XL-Big and Tall",
+      "brand": "Titan",
+      "spec_name": "Grande XL",
+      "max_user_lb": 375.0,
+      "wall_clearance_in": 9.0,
+      "door_asm_in": 34.0,
+      "door_dis_in": 31.0,
+      "aliases": [
+        "Titan Grande XL",
+        "Grande XL"
+      ]
+    },
+    {
+      "name": "Titan Pro 4D Astro",
+      "brand": "Titan",
+      "spec_name": "Pro 4D Astro",
+      "max_user_lb": 264.5,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Pro 4D Astro"
+      ]
+    },
+    {
+      "name": "Titan Pro Cura 4D",
+      "brand": "Titan",
+      "spec_name": "Cura",
+      "max_user_lb": 275.0,
+      "wall_clearance_in": 6.0,
+      "door_asm_in": 31.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Cura",
+        "Titan Cura"
+      ]
+    },
+    {
+      "name": "Osaki Virtus Duo 4D",
+      "brand": "Osaki",
+      "spec_name": "Virtus",
+      "max_user_lb": 250.0,
+      "wall_clearance_in": 5.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Virtus",
+        "Osaki Virtus"
+      ]
+    },
+    {
+      "name": "Osaki aI 4D Yoga Flex",
+      "brand": "Osaki",
+      "spec_name": "4D Yoga Flex",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 5.0,
+      "door_asm_in": 30.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Osaki 4D Yoga Flex",
+        "4D Yoga Flex"
+      ]
+    },
+    {
+      "name": "Osaki Pro 4D Epic LE",
+      "brand": "Osaki",
+      "spec_name": "Epic LE",
+      "max_user_lb": 297.0,
+      "wall_clearance_in": 6.5,
+      "door_asm_in": 31.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Epic LE",
+        "Osaki Epic LE"
+      ]
+    },
+    {
+      "name": "Osaki OS-Highpointe 4D",
+      "brand": "Osaki",
+      "spec_name": "Highpointe",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 36.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Highpointe",
+        "Osaki Highpointe"
+      ]
+    },
+    {
+      "name": "Osaki 5D+4D Kairos Duo",
+      "brand": "Osaki Platinum",
+      "spec_name": "Kairos 5D+4D",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 33.0,
+      "door_dis_in": 31.5,
+      "aliases": [
+        "Kairos 5D+4D",
+        "Osaki Platinum Kairos 5D+4D"
+      ]
+    },
+    {
+      "name": "Osaki 4D Bravo Duo Mech 4D+3D",
+      "brand": "Osaki",
+      "spec_name": "Bravo Duo Mech",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Bravo Duo Mech",
+        "Osaki Bravo Duo Mech"
+      ]
+    },
+    {
+      "name": "Osaki Duke XL 4D",
+      "brand": "Osaki",
+      "spec_name": "Duke XL",
+      "max_user_lb": 400.0,
+      "wall_clearance_in": 12.0,
+      "door_asm_in": 35.0,
+      "door_dis_in": 28.0,
+      "aliases": [
+        "Duke XL",
+        "Osaki Duke XL"
+      ]
+    },
+    {
+      "name": "Osaki 4D+3D Bravo Duo Flex",
+      "brand": "Osaki Platinum",
+      "spec_name": "Bravo Duo Flex",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Bravo Duo Flex",
+        "Osaki Platinum Bravo Duo Flex"
+      ]
+    },
+    {
+      "name": "Osaki 4D Maestro LE 2.0",
+      "brand": "Osaki",
+      "spec_name": "Maestro LE 2.0",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 5.0,
+      "door_asm_in": 31.9,
+      "door_dis_in": 28.0,
+      "aliases": [
+        "Maestro LE 2.0",
+        "Osaki Maestro LE 2.0"
+      ]
+    },
+    {
+      "name": "Osaki OP-4D Master",
+      "brand": "Osaki Platinum",
+      "spec_name": "Master",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 31.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Master",
+        "Osaki Platinum Master"
+      ]
+    },
+    {
+      "name": "Osaki OP-AI Xrest 4D",
+      "brand": "Osaki Platinum",
+      "spec_name": "Xrest",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 31.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Xrest",
+        "Osaki Platinum Xrest"
+      ]
+    },
+    {
+      "name": "Osaki AI Apex 5D+4D Duo",
+      "brand": "Osaki",
+      "spec_name": "Apex Duo",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 33.5,
+      "door_dis_in": 30.0,
+      "aliases": [
+        "Apex Duo",
+        "Osaki Apex Duo"
+      ]
+    },
+    {
+      "name": "Osaki OS-Pro 4D+3D DuoMax",
+      "brand": "Osaki",
+      "spec_name": "DuoMax",
+      "max_user_lb": 330.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 31.5,
+      "door_dis_in": 30.0,
+      "aliases": [
+        "DuoMax",
+        "Osaki DuoMax"
+      ]
+    },
+    {
+      "name": "Osaki OS-Pro 4D+3D DuoMax SE",
+      "brand": "Osaki Platinum",
+      "spec_name": "4D DuoMax SE",
+      "max_user_lb": 330.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 31.5,
+      "door_dis_in": 30.0,
+      "aliases": [
+        "4D DuoMax SE",
+        "Osaki Platinum 4D DuoMax SE"
+      ]
+    },
+    {
+      "name": "Pinnacle 5D Duoflex AI",
+      "brand": "Osaki Platinum",
+      "spec_name": "Pinnacle 5D DuoFlex AI",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 31.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Pinnacle 5D DuoFlex AI",
+        "Osaki Platinum Pinnacle 5D DuoFlex AI"
+      ]
+    },
+    {
+      "name": "Osaki 4000",
+      "brand": "Osaki",
+      "spec_name": "4000",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": null,
+      "door_asm_in": 35.0,
+      "door_dis_in": null,
+      "aliases": [
+        "4000"
+      ]
+    },
+    {
+      "name": "Osaki Pro 3D Pro Cyber",
+      "brand": "Osaki Pro",
+      "spec_name": "3D Pro Cyber",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": null,
+      "door_asm_in": 35.4,
+      "door_dis_in": null,
+      "aliases": [
+        "3D Pro Cyber"
+      ]
+    },
+    {
+      "name": "Osaki Pro Omni",
+      "brand": "Osaki Pro",
+      "spec_name": "Omni",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 4.7,
+      "door_asm_in": 33.1,
+      "door_dis_in": null,
+      "aliases": [
+        "Omni"
+      ]
+    },
+    {
+      "name": "Osaki Bello",
+      "brand": "Osaki",
+      "spec_name": "Bello",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 25.6,
+      "door_dis_in": null,
+      "aliases": [
+        "Bello"
+      ]
+    },
+    {
+      "name": "Osaki 4000XT",
+      "brand": "Osaki",
+      "spec_name": "4000XT",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 28.8,
+      "door_dis_in": null,
+      "aliases": [
+        "4000XT"
+      ]
+    },
+    {
+      "name": "Osaki Pro Honor",
+      "brand": "Osaki Pro",
+      "spec_name": "Honor",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 4.5,
+      "door_asm_in": 28.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Honor"
+      ]
+    },
+    {
+      "name": "Osaki TP-8500",
+      "brand": "Osaki",
+      "spec_name": "TP-8500",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 31.0,
+      "door_dis_in": null,
+      "aliases": [
+        "TP-8500"
+      ]
+    },
+    {
+      "name": "Osaki Ekon Plus",
+      "brand": "Osaki",
+      "spec_name": "Ekon Plus",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 34.0,
+      "door_dis_in": 29.0,
+      "aliases": [
+        "Ekon Plus"
+      ]
+    },
+    {
+      "name": "Titan Pro Alpha",
+      "brand": "Titan",
+      "spec_name": "Pro Alpha",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 6.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Pro Alpha"
+      ]
+    },
+    {
+      "name": "Amamedic AM-Juno II",
+      "brand": "Amamedic",
+      "spec_name": "AM-Juno II",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "AM-Juno II"
+      ]
+    },
+    {
+      "name": "Osaki Pro 4D Emperor",
+      "brand": "Osaki Pro",
+      "spec_name": "4D Emperor",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 4.7,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "4D Emperor"
+      ]
+    },
+    {
+      "name": "Osaki Pro Tecno",
+      "brand": "Osaki Pro",
+      "spec_name": "Tecno",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Tecno"
+      ]
+    },
+    {
+      "name": "Titan Pro Acro 3D",
+      "brand": "Titan",
+      "spec_name": "Pro Acro 3D",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Pro Acro 3D"
+      ]
+    },
+    {
+      "name": "Titan TI-S1 Shiatsu Armchair",
+      "brand": "Titan",
+      "spec_name": "TI-S1 Shiatsu Armchair",
+      "max_user_lb": null,
+      "wall_clearance_in": null,
+      "door_asm_in": 29.53,
+      "door_dis_in": null,
+      "aliases": [
+        "TI-S1 Shiatsu Armchair"
+      ]
+    },
+    {
+      "name": "Amamedic 3D Premium",
+      "brand": "Amamedic",
+      "spec_name": "3D Premium",
+      "max_user_lb": 265.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 29.9,
+      "door_dis_in": null,
+      "aliases": [
+        "3D Premium"
+      ]
+    },
+    {
+      "name": "Osaki Dreamer V2",
+      "brand": "Osaki",
+      "spec_name": "Dreamer V2",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 32.75,
+      "door_dis_in": null,
+      "aliases": [
+        "Dreamer V2"
+      ]
+    },
+    {
+      "name": "Osaki Hiro LT",
+      "brand": "Osaki",
+      "spec_name": "Hiro LT",
+      "max_user_lb": 265.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Hiro LT"
+      ]
+    },
+    {
+      "name": "Osaki Maxim 3D LE",
+      "brand": "Osaki",
+      "spec_name": "Maxim 3D LE",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 29.9,
+      "door_dis_in": null,
+      "aliases": [
+        "Maxim 3D LE"
+      ]
+    },
+    {
+      "name": "Osaki Hamilton LE",
+      "brand": "Osaki",
+      "spec_name": "Hamilton LE",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 32.0,
+      "door_dis_in": 30.0,
+      "aliases": [
+        "Hamilton LE"
+      ]
+    },
+    {
+      "name": "Osaki Pro Ekon",
+      "brand": "Osaki Pro",
+      "spec_name": "Ekon",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 34.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Ekon"
+      ]
+    },
+    {
+      "name": "Theramedic Flex",
+      "brand": "Theramedic",
+      "spec_name": "Flex",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": 27.5,
+      "aliases": [
+        "Flex"
+      ]
+    },
+    {
+      "name": "Titan Pro Omega 3D",
+      "brand": "Titan",
+      "spec_name": "Pro Omega 3D",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Pro Omega 3D"
+      ]
+    },
+    {
+      "name": "Titan Pro Vigor 4D",
+      "brand": "Titan",
+      "spec_name": "Pro Vigor 4D",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 4.5,
+      "door_asm_in": 31.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Pro Vigor 4D"
+      ]
+    },
+    {
+      "name": "Titan Vending Massage",
+      "brand": "Titan",
+      "spec_name": "Vending Massage",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": null,
+      "door_asm_in": 33.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Vending Massage"
+      ]
+    },
+    {
+      "name": "Titan Pro Ace II",
+      "brand": "Titan",
+      "spec_name": "Pro Ace II",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": null,
+      "door_asm_in": 32.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Pro Ace II"
+      ]
+    },
+    {
+      "name": "Titan Pro Cascade 3D",
+      "brand": "Titan",
+      "spec_name": "Pro Cascade 3D",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 2.5,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Pro Cascade 3D"
+      ]
+    },
+    {
+      "name": "Titan Pandora",
+      "brand": "Titan",
+      "spec_name": "Pandora",
+      "max_user_lb": 220.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Pandora"
+      ]
+    },
+    {
+      "name": "Titan Optimus 3D",
+      "brand": "Titan",
+      "spec_name": "Optimus 3D",
+      "max_user_lb": 275.0,
+      "wall_clearance_in": 13.8,
+      "door_asm_in": 28.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Optimus 3D"
+      ]
+    },
+    {
+      "name": "Inada Robo",
+      "brand": "Inada",
+      "spec_name": "Robo",
+      "max_user_lb": null,
+      "wall_clearance_in": null,
+      "door_asm_in": 42.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Robo"
+      ]
+    },
+    {
+      "name": "Titan Aurora",
+      "brand": "Titan",
+      "spec_name": "Aurora",
+      "max_user_lb": 220.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Aurora"
+      ]
+    },
+    {
+      "name": "Osaki Vista",
+      "brand": "Osaki",
+      "spec_name": "Vista",
+      "max_user_lb": 264.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Vista"
+      ]
+    },
+    {
+      "name": "Osaki Atai",
+      "brand": "Osaki",
+      "spec_name": "Atai",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 5.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Atai"
+      ]
+    },
+    {
+      "name": "Osaki Pro 3D Opulent",
+      "brand": "Osaki Pro",
+      "spec_name": "3D Opulent",
+      "max_user_lb": 220.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 29.7,
+      "door_dis_in": null,
+      "aliases": [
+        "3D Opulent"
+      ]
+    },
+    {
+      "name": "Amamedic 3D Integra",
+      "brand": "Amamedic",
+      "spec_name": "3D Integra",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "3D Integra"
+      ]
+    },
+    {
+      "name": "Theramedic 3D LTX",
+      "brand": "Theramedic",
+      "spec_name": "3D LTX",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "3D LTX"
+      ]
+    },
+    {
+      "name": "Titan Luna 3D",
+      "brand": "Titan",
+      "spec_name": "Luna 3D",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 24.25,
+      "door_dis_in": null,
+      "aliases": [
+        "Luna 3D"
+      ]
+    },
+    {
+      "name": "Titan Premium Fleetwood II",
+      "brand": "Titan",
+      "spec_name": "Premium Fleetwood II",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 34.5,
+      "door_dis_in": 30.0,
+      "aliases": [
+        "Premium Fleetwood II"
+      ]
+    },
+    {
+      "name": "Osaki Tao 3D",
+      "brand": "Osaki",
+      "spec_name": "Tao 3D",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Tao 3D"
+      ]
+    },
+    {
+      "name": "Osaki Japan JP650",
+      "brand": "Osaki Japan",
+      "spec_name": "JP650",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 7.0,
+      "door_asm_in": 31.1,
+      "door_dis_in": null,
+      "aliases": [
+        "JP650"
+      ]
+    },
+    {
+      "name": "Osaki 4D Avalon",
+      "brand": "Osaki",
+      "spec_name": "4D Avalon",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 32.0,
+      "door_dis_in": 29.5,
+      "aliases": [
+        "4D Avalon"
+      ]
+    },
+    {
+      "name": "Osaki Pro Encore",
+      "brand": "Osaki Pro",
+      "spec_name": "Encore",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Encore"
+      ]
+    },
+    {
+      "name": "Titan TP-Cosmo",
+      "brand": "Titan",
+      "spec_name": "TP-Cosmo",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "TP-Cosmo"
+      ]
+    },
+    {
+      "name": "Ador 3D Allure",
+      "brand": "Ador",
+      "spec_name": "3D Allure",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 30.5,
+      "door_dis_in": 30.0,
+      "aliases": [
+        "3D Allure"
+      ]
+    },
+    {
+      "name": "Amamedic Hilux 4D",
+      "brand": "Amamedic",
+      "spec_name": "Hilux 4D",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 4.7,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Hilux 4D"
+      ]
+    },
+    {
+      "name": "Osaki 4000T",
+      "brand": "Osaki",
+      "spec_name": "4000T",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": null,
+      "door_asm_in": 35.0,
+      "door_dis_in": null,
+      "aliases": [
+        "4000T"
+      ]
+    },
+    {
+      "name": "Osaki 4000LS",
+      "brand": "Osaki",
+      "spec_name": "4000LS",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 6.0,
+      "door_asm_in": 30.7,
+      "door_dis_in": null,
+      "aliases": [
+        "4000LS"
+      ]
+    },
+    {
+      "name": "Osaki First Class",
+      "brand": "Osaki",
+      "spec_name": "First Class",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 1.5,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "First Class"
+      ]
+    },
+    {
+      "name": "Osaki OS-3D Premier",
+      "brand": "Osaki",
+      "spec_name": "OS-3D Premier",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "OS-3D Premier"
+      ]
+    },
+    {
+      "name": "Osaki Otamic LE",
+      "brand": "Osaki",
+      "spec_name": "Otamic LE",
+      "max_user_lb": 265.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Otamic LE"
+      ]
+    },
+    {
+      "name": "Osaki Pro Alpina",
+      "brand": "Osaki Pro",
+      "spec_name": "Alpina",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 5.0,
+      "door_asm_in": 33.1,
+      "door_dis_in": null,
+      "aliases": [
+        "Alpina"
+      ]
+    },
+    {
+      "name": "Osaki Pro Maestro LE",
+      "brand": "Osaki Pro",
+      "spec_name": "Maestro LE",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 5.0,
+      "door_asm_in": 31.9,
+      "door_dis_in": 30.7,
+      "aliases": [
+        "Maestro LE"
+      ]
+    },
+    {
+      "name": "Osaki Pro Pro Maestro",
+      "brand": "Osaki Pro",
+      "spec_name": "Pro Maestro",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 5.0,
+      "door_asm_in": 31.9,
+      "door_dis_in": 28.0,
+      "aliases": [
+        "Pro Maestro"
+      ]
+    },
+    {
+      "name": "Osaki Pro Soho II",
+      "brand": "Osaki Pro",
+      "spec_name": "Soho II",
+      "max_user_lb": 265.0,
+      "wall_clearance_in": 4.5,
+      "door_asm_in": 29.53,
+      "door_dis_in": null,
+      "aliases": [
+        "Soho II"
+      ]
+    },
+    {
+      "name": "Osaki Pro Yamato",
+      "brand": "Osaki Pro",
+      "spec_name": "Yamato",
+      "max_user_lb": 265.0,
+      "wall_clearance_in": 1.5,
+      "door_asm_in": 33.1,
+      "door_dis_in": 33.0,
+      "aliases": [
+        "Yamato"
+      ]
+    },
+    {
+      "name": "Theramedic 4D LT",
+      "brand": "Theramedic",
+      "spec_name": "4D LT",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 34.0,
+      "door_dis_in": 29.0,
+      "aliases": [
+        "4D LT"
+      ]
+    },
+    {
+      "name": "Ador AD Infinix",
+      "brand": "Ador",
+      "spec_name": "AD Infinix",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 28.0,
+      "door_dis_in": null,
+      "aliases": [
+        "AD Infinix"
+      ]
+    },
+    {
+      "name": "Titan Elite 3D",
+      "brand": "Titan",
+      "spec_name": "Elite 3D",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Elite 3D"
+      ]
+    },
+    {
+      "name": "Amamedic Q7",
+      "brand": "Amamedic",
+      "spec_name": "Q7",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": null,
+      "door_asm_in": 28.9,
+      "door_dis_in": null,
+      "aliases": [
+        "Q7"
+      ]
+    },
+    {
+      "name": "Amamedic Silo",
+      "brand": "Amamedic",
+      "spec_name": "Silo",
+      "max_user_lb": 330.0,
+      "wall_clearance_in": 11.8,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Silo"
+      ]
+    },
+    {
+      "name": "Osaki Solis 4D+",
+      "brand": "Osaki",
+      "spec_name": "Solis 4D+",
+      "max_user_lb": 330.0,
+      "wall_clearance_in": 10.0,
+      "door_asm_in": 31.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Solis 4D+"
+      ]
+    },
+    {
+      "name": "Osaki Pro Escape",
+      "brand": "Osaki Pro",
+      "spec_name": "Escape",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": null,
+      "door_asm_in": 32.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Escape"
+      ]
+    },
+    {
+      "name": "Osaki Pro 4D Paragon",
+      "brand": "Osaki Pro",
+      "spec_name": "4D Paragon",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 33.0,
+      "door_dis_in": 27.0,
+      "aliases": [
+        "4D Paragon"
+      ]
+    },
+    {
+      "name": "Titan Summit Flex SL-Track",
+      "brand": "Titan",
+      "spec_name": "Summit Flex SL-Track",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 28.0,
+      "door_dis_in": 25.0,
+      "aliases": [
+        "Summit Flex SL-Track"
+      ]
+    },
+    {
+      "name": "Osaki Pro Admiral II",
+      "brand": "Osaki Pro",
+      "spec_name": "Admiral II",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 4.7,
+      "door_asm_in": 30.7,
+      "door_dis_in": null,
+      "aliases": [
+        "Admiral II"
+      ]
+    },
+    {
+      "name": "Titan 3D Prestige",
+      "brand": "Titan",
+      "spec_name": "3D Prestige",
+      "max_user_lb": 265.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 29.9,
+      "door_dis_in": null,
+      "aliases": [
+        "3D Prestige"
+      ]
+    },
+    {
+      "name": "Osaki 4000CS",
+      "brand": "Osaki",
+      "spec_name": "4000CS",
+      "max_user_lb": 220.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 30.7,
+      "door_dis_in": null,
+      "aliases": [
+        "4000CS"
+      ]
+    },
+    {
+      "name": "Osaki 7200H Pinnacle",
+      "brand": "Osaki",
+      "spec_name": "7200H Pinnacle",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": null,
+      "door_asm_in": 36.0,
+      "door_dis_in": null,
+      "aliases": [
+        "7200H Pinnacle"
+      ]
+    },
+    {
+      "name": "Titan Harmony II 3D",
+      "brand": "Titan",
+      "spec_name": "Harmony II 3D",
+      "max_user_lb": 330.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Harmony II 3D"
+      ]
+    },
+    {
+      "name": "Titan Pro Jupiter XL",
+      "brand": "Titan",
+      "spec_name": "Pro Jupiter XL",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 32.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Pro Jupiter XL"
+      ]
+    },
+    {
+      "name": "Osaki Monarch",
+      "brand": "Osaki",
+      "spec_name": "Monarch",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 32.0,
+      "door_dis_in": 26.5,
+      "aliases": [
+        "Monarch"
+      ]
+    },
+    {
+      "name": "Titan Luxe 3D",
+      "brand": "Titan",
+      "spec_name": "Luxe 3D",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Luxe 3D"
+      ]
+    },
+    {
+      "name": "Titan Jupiter LE Premium",
+      "brand": "Titan",
+      "spec_name": "Jupiter LE Premium",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 3.2,
+      "door_asm_in": 32.0,
+      "door_dis_in": 29.5,
+      "aliases": [
+        "Jupiter LE Premium"
+      ]
+    },
+    {
+      "name": "Osaki Platinum Kairos 4D LT",
+      "brand": "Osaki Platinum",
+      "spec_name": "Kairos 4D LT",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 35.0,
+      "door_dis_in": 30.0,
+      "aliases": [
+        "Kairos 4D LT"
+      ]
+    },
+    {
+      "name": "Amamedic Vesper",
+      "brand": "Amamedic",
+      "spec_name": "Vesper",
+      "max_user_lb": 264.0,
+      "wall_clearance_in": 6.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Vesper"
+      ]
+    },
+    {
+      "name": "Osaki Platinum Vera 4D",
+      "brand": "Osaki Platinum",
+      "spec_name": "Vera 4D",
+      "max_user_lb": 275.0,
+      "wall_clearance_in": 9.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Vera 4D"
+      ]
+    },
+    {
+      "name": "Osaki Platinum OP-4D VIVO",
+      "brand": "Osaki Platinum",
+      "spec_name": "OP-4D VIVO",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 9.5,
+      "door_asm_in": 33.0,
+      "door_dis_in": 30.5,
+      "aliases": [
+        "OP-4D VIVO"
+      ]
+    },
+    {
+      "name": "Titan TP-4D 8500 Max",
+      "brand": "Titan",
+      "spec_name": "TP-4D 8500 Max",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 4.5,
+      "door_asm_in": 30.5,
+      "door_dis_in": null,
+      "aliases": [
+        "TP-4D 8500 Max"
+      ]
+    },
+    {
+      "name": "Titan TP-Ronin 4D",
+      "brand": "Titan",
+      "spec_name": "TP-Ronin 4D",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 4.5,
+      "door_asm_in": 30.5,
+      "door_dis_in": null,
+      "aliases": [
+        "TP-Ronin 4D"
+      ]
+    },
+    {
+      "name": "Osaki 3D Aspire",
+      "brand": "Osaki",
+      "spec_name": "3D Aspire",
+      "max_user_lb": 275.0,
+      "wall_clearance_in": 2.4,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "3D Aspire"
+      ]
+    },
+    {
+      "name": "Osaki Ultima",
+      "brand": "Osaki",
+      "spec_name": "Ultima",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Ultima"
+      ]
+    },
+    {
+      "name": "Amamedic R7 LE",
+      "brand": "Amamedic",
+      "spec_name": "R7 LE",
+      "max_user_lb": 264.0,
+      "wall_clearance_in": 7.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "R7 LE"
+      ]
+    },
+    {
+      "name": "Osaki OS Flagship 4D",
+      "brand": "Osaki",
+      "spec_name": "OS Flagship 4D",
+      "max_user_lb": 264.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 31.0,
+      "door_dis_in": null,
+      "aliases": [
+        "OS Flagship 4D"
+      ]
+    },
+    {
+      "name": "Amamedic Renew",
+      "brand": "Amamedic",
+      "spec_name": "Renew",
+      "max_user_lb": 330.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Renew"
+      ]
+    },
+    {
+      "name": "Amamedic Revive",
+      "brand": "Amamedic",
+      "spec_name": "Revive",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 31.5,
+      "door_dis_in": 29.0,
+      "aliases": [
+        "Revive"
+      ]
+    },
+    {
+      "name": "Amamedic Juno II 3D",
+      "brand": "Amamedic",
+      "spec_name": "Juno II 3D",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 30.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Juno II 3D"
+      ]
+    },
+    {
+      "name": "Osaki 3D Champ 2",
+      "brand": "Osaki",
+      "spec_name": "3D Champ 2",
+      "max_user_lb": 264.0,
+      "wall_clearance_in": 7.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "3D Champ 2"
+      ]
+    },
+    {
+      "name": "Osaki Ziva",
+      "brand": "Osaki",
+      "spec_name": "Ziva",
+      "max_user_lb": 264.6,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Ziva"
+      ]
+    },
+    {
+      "name": "Osaki Monarch LE",
+      "brand": "Osaki",
+      "spec_name": "Monarch LE",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 2.4,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Monarch LE"
+      ]
+    },
+    {
+      "name": "Osaki Sonoma 4D (Kanji)",
+      "brand": "Osaki",
+      "spec_name": "Sonoma 4D (Kanji)",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 4.5,
+      "door_asm_in": 30.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Sonoma 4D (Kanji)"
+      ]
+    },
+    {
+      "name": "Titan Telos",
+      "brand": "Titan",
+      "spec_name": "Telos",
+      "max_user_lb": 264.6,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Telos"
+      ]
+    },
+    {
+      "name": "Osaki Pinnacle LE",
+      "brand": "Osaki",
+      "spec_name": "Pinnacle LE",
+      "max_user_lb": 264.5,
+      "wall_clearance_in": 6.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Pinnacle LE"
+      ]
+    },
+    {
+      "name": "Titan H7",
+      "brand": "Titan",
+      "spec_name": "H7",
+      "max_user_lb": 264.0,
+      "wall_clearance_in": 7.5,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "H7"
+      ]
+    },
+    {
+      "name": "Titan Royale",
+      "brand": "Titan",
+      "spec_name": "Royale",
+      "max_user_lb": 264.0,
+      "wall_clearance_in": 7.5,
+      "door_asm_in": 28.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Royale"
+      ]
+    },
+    {
+      "name": "Titan Regal",
+      "brand": "Titan",
+      "spec_name": "Regal",
+      "max_user_lb": 264.0,
+      "wall_clearance_in": 7.5,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Regal"
+      ]
+    },
+    {
+      "name": "Osaki Envy",
+      "brand": "Osaki",
+      "spec_name": "Envy",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 31.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Envy"
+      ]
+    },
+    {
+      "name": "Osaki Grand Duo",
+      "brand": "Osaki",
+      "spec_name": "Grand Duo",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 33.5,
+      "door_dis_in": 30.0,
+      "aliases": [
+        "Grand Duo"
+      ]
+    },
+    {
+      "name": "Osaki Orion Duo",
+      "brand": "Osaki",
+      "spec_name": "Orion Duo",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 31.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Orion Duo"
+      ]
+    },
+    {
+      "name": "Titan Vibe 3D",
+      "brand": "Titan",
+      "spec_name": "Vibe 3D",
+      "max_user_lb": 275.0,
+      "wall_clearance_in": 6.0,
+      "door_asm_in": 32.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Vibe 3D"
+      ]
+    },
+    {
+      "name": "Osaki 4D Atlas XL",
+      "brand": "Osaki",
+      "spec_name": "4D Atlas XL",
+      "max_user_lb": 400.0,
+      "wall_clearance_in": 12.0,
+      "door_asm_in": 35.0,
+      "door_dis_in": 28.7,
+      "aliases": [
+        "4D Atlas XL"
+      ]
+    },
+    {
+      "name": "Osaki Platinum Flagship Duo",
+      "brand": "Osaki Platinum",
+      "spec_name": "Flagship Duo",
+      "max_user_lb": 264.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 31.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Flagship Duo"
+      ]
+    },
+    {
+      "name": "Osaki Platinum 4D Zion",
+      "brand": "Osaki Platinum",
+      "spec_name": "4D Zion",
+      "max_user_lb": 275.0,
+      "wall_clearance_in": 5.5,
+      "door_asm_in": 32.0,
+      "door_dis_in": 25.2,
+      "aliases": [
+        "4D Zion"
+      ]
+    },
+    {
+      "name": "Titan 3D Drift",
+      "brand": "Titan",
+      "spec_name": "3D Drift",
+      "max_user_lb": 264.6,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "3D Drift"
+      ]
+    },
+    {
+      "name": "Titan Ultra 2",
+      "brand": "Titan",
+      "spec_name": "Ultra 2",
+      "max_user_lb": 264.6,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Ultra 2"
+      ]
+    },
+    {
+      "name": "Osaki Platinum 4D Horizon Pro",
+      "brand": "Osaki Platinum",
+      "spec_name": "4D Horizon Pro",
+      "max_user_lb": 275.0,
+      "wall_clearance_in": 5.5,
+      "door_asm_in": 32.0,
+      "door_dis_in": 25.2,
+      "aliases": [
+        "4D Horizon Pro"
+      ]
+    },
+    {
+      "name": "Titan 4D Advent",
+      "brand": "Titan",
+      "spec_name": "4D Advent",
+      "max_user_lb": 220.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 31.5,
+      "door_dis_in": null,
+      "aliases": [
+        "4D Advent"
+      ]
+    },
+    {
+      "name": "Titan Arcadia 3D LE",
+      "brand": "Titan",
+      "spec_name": "Arcadia 3D LE",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 10.0,
+      "door_asm_in": 31.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Arcadia 3D LE"
+      ]
+    },
+    {
+      "name": "Osaki 4D Achilles",
+      "brand": "Osaki",
+      "spec_name": "4D Achilles",
+      "max_user_lb": null,
+      "wall_clearance_in": 2.5,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "4D Achilles"
+      ]
+    },
+    {
+      "name": "Titan Axiom LE",
+      "brand": "Titan",
+      "spec_name": "Axiom LE",
+      "max_user_lb": 240.0,
+      "wall_clearance_in": 7.0,
+      "door_asm_in": 28.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Axiom LE"
+      ]
+    },
+    {
+      "name": "Amamedic 3D Astoria",
+      "brand": "Amamedic",
+      "spec_name": "3D Astoria",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 4.5,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "3D Astoria"
+      ]
+    },
+    {
+      "name": "Osaki Platinum Somnus Duo Flex Ai",
+      "brand": "Osaki Platinum",
+      "spec_name": "Somnus Duo Flex Ai",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 32.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Somnus Duo Flex Ai"
+      ]
+    },
+    {
+      "name": "Osaki Platinum Vista 4D",
+      "brand": "Osaki Platinum",
+      "spec_name": "Vista 4D",
+      "max_user_lb": 275.0,
+      "wall_clearance_in": 5.5,
+      "door_asm_in": 33.5,
+      "door_dis_in": 25.2,
+      "aliases": [
+        "Vista 4D"
+      ]
+    },
+    {
+      "name": "Osaki Vibe 4D",
+      "brand": "Osaki",
+      "spec_name": "Vibe 4D",
+      "max_user_lb": 275.0,
+      "wall_clearance_in": 6.0,
+      "door_asm_in": 32.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Vibe 4D"
+      ]
+    },
+    {
+      "name": "Titan Pro 4D Endor",
+      "brand": "Titan",
+      "spec_name": "Pro 4D Endor",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 8.0,
+      "door_asm_in": 31.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Pro 4D Endor"
+      ]
+    },
+    {
+      "name": "Osaki Platinum 4D Sapphire",
+      "brand": "Osaki Platinum",
+      "spec_name": "4D Sapphire",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": null,
+      "door_asm_in": 33.5,
+      "door_dis_in": null,
+      "aliases": [
+        "4D Sapphire"
+      ]
+    },
+    {
+      "name": "Titan TI Reflex",
+      "brand": "Titan",
+      "spec_name": "TI Reflex",
+      "max_user_lb": 352.0,
+      "wall_clearance_in": 2.0,
+      "door_asm_in": 30.5,
+      "door_dis_in": null,
+      "aliases": [
+        "TI Reflex"
+      ]
+    },
+    {
+      "name": "Osaki Therabed V2",
+      "brand": "Osaki",
+      "spec_name": "Therabed V2",
+      "max_user_lb": null,
+      "wall_clearance_in": null,
+      "door_asm_in": 28.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Therabed V2"
+      ]
+    },
+    {
+      "name": "Osaki Panorama",
+      "brand": "Osaki",
+      "spec_name": "Panorama",
+      "max_user_lb": 240.0,
+      "wall_clearance_in": 5.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Panorama"
+      ]
+    },
+    {
+      "name": "Amamedic Pro 4D Haven",
+      "brand": "Amamedic",
+      "spec_name": "Pro 4D Haven",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 3.5,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Pro 4D Haven"
+      ]
+    },
+    {
+      "name": "Titan ion",
+      "brand": "Titan",
+      "spec_name": "ion",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 8.0,
+      "door_asm_in": 31.0,
+      "door_dis_in": null,
+      "aliases": [
+        "ion"
+      ]
+    },
+    {
+      "name": "Osaki Platinum Hypnos",
+      "brand": "Osaki Platinum",
+      "spec_name": "Hypnos",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 32.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Hypnos"
+      ]
+    },
+    {
+      "name": "Titan eCabin",
+      "brand": "Titan",
+      "spec_name": "eCabin",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 5.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "eCabin"
+      ]
+    },
+    {
+      "name": "Titan Plantaris",
+      "brand": "Titan",
+      "spec_name": "Plantaris",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 7.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Plantaris"
+      ]
+    },
+    {
+      "name": "Titan Forge",
+      "brand": "Titan",
+      "spec_name": "Forge",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 30.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Forge"
+      ]
+    },
+    {
+      "name": "Titan Tesoro",
+      "brand": "Titan",
+      "spec_name": "Tesoro",
+      "max_user_lb": 250.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Tesoro"
+      ]
+    },
+    {
+      "name": "Titan Nido",
+      "brand": "Titan",
+      "spec_name": "Nido",
+      "max_user_lb": 250.0,
+      "wall_clearance_in": 10.0,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Nido"
+      ]
+    },
+    {
+      "name": "Titan Gemini",
+      "brand": "Titan",
+      "spec_name": "Gemini",
+      "max_user_lb": 264.5,
+      "wall_clearance_in": 7.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Gemini"
+      ]
+    },
+    {
+      "name": "Titan Ignite Sync",
+      "brand": "Titan",
+      "spec_name": "Ignite Sync",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Ignite Sync"
+      ]
+    },
+    {
+      "name": "Osaki Solo Flex",
+      "brand": "Osaki",
+      "spec_name": "Solo Flex",
+      "max_user_lb": 250.0,
+      "wall_clearance_in": 4.5,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Solo Flex"
+      ]
+    },
+    {
+      "name": "Titan Zena",
+      "brand": "Titan",
+      "spec_name": "Zena",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 34.9,
+      "door_dis_in": null,
+      "aliases": [
+        "Zena"
+      ]
+    },
+    {
+      "name": "Titan V03",
+      "brand": "Titan",
+      "spec_name": "V03",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "V03"
+      ]
+    },
+    {
+      "name": "Kanji Shogun",
+      "brand": "Kanji",
+      "spec_name": "Shogun",
+      "max_user_lb": 330.0,
+      "wall_clearance_in": 4.0,
+      "door_asm_in": 31.5,
+      "door_dis_in": 30.0,
+      "aliases": [
+        "Shogun"
+      ]
+    },
+    {
+      "name": "Osaki Emperor II",
+      "brand": "Osaki",
+      "spec_name": "Emperor II",
+      "max_user_lb": 250.0,
+      "wall_clearance_in": 3.15,
+      "door_asm_in": 31.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Emperor II"
+      ]
+    },
+    {
+      "name": "Osaki 4000LE",
+      "brand": "Osaki",
+      "spec_name": "4000LE",
+      "max_user_lb": 260.0,
+      "wall_clearance_in": 3.5,
+      "door_asm_in": 30.5,
+      "door_dis_in": null,
+      "aliases": [
+        "4000LE"
+      ]
+    },
+    {
+      "name": "Osaki Vivant",
+      "brand": "Osaki",
+      "spec_name": "Vivant",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 4.5,
+      "door_asm_in": 32.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Vivant"
+      ]
+    },
+    {
+      "name": "Osaki Quest",
+      "brand": "Osaki",
+      "spec_name": "Quest",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 11.5,
+      "door_asm_in": 29.5,
+      "door_dis_in": null,
+      "aliases": [
+        "Quest"
+      ]
+    },
+    {
+      "name": "Osaki Platinum Vanguard Duo",
+      "brand": "Osaki Platinum",
+      "spec_name": "Vanguard Duo",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 0.5,
+      "door_asm_in": 31.4,
+      "door_dis_in": null,
+      "aliases": [
+        "Vanguard Duo"
+      ]
+    },
+    {
+      "name": "Titan Aria",
+      "brand": "Titan",
+      "spec_name": "Aria",
+      "max_user_lb": 275.0,
+      "wall_clearance_in": 6.0,
+      "door_asm_in": 31.2,
+      "door_dis_in": null,
+      "aliases": [
+        "Aria"
+      ]
+    },
+    {
+      "name": "Titan Nexa",
+      "brand": "Titan",
+      "spec_name": "Nexa",
+      "max_user_lb": 275.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 28.2,
+      "door_dis_in": null,
+      "aliases": [
+        "Nexa"
+      ]
+    },
+    {
+      "name": "Titan Prestige LE",
+      "brand": "Titan",
+      "spec_name": "Prestige LE",
+      "max_user_lb": 220.0,
+      "wall_clearance_in": 1.0,
+      "door_asm_in": 29.9,
+      "door_dis_in": null,
+      "aliases": [
+        "Prestige LE"
+      ]
+    },
+    {
+      "name": "Titan Liberty",
+      "brand": "Titan",
+      "spec_name": "Liberty",
+      "max_user_lb": 275.0,
+      "wall_clearance_in": 3.0,
+      "door_asm_in": 28.1,
+      "door_dis_in": null,
+      "aliases": [
+        "Liberty"
+      ]
+    },
+    {
+      "name": "Titan Forma",
+      "brand": "Titan",
+      "spec_name": "Forma",
+      "max_user_lb": 270.0,
+      "wall_clearance_in": 6.0,
+      "door_asm_in": 29.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Forma"
+      ]
+    },
+    {
+      "name": "Osaki Milan",
+      "brand": "Osaki",
+      "spec_name": "Milan",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": 10.0,
+      "door_asm_in": 30.0,
+      "door_dis_in": null,
+      "aliases": [
+        "Milan"
+      ]
+    },
+    {
+      "name": "Titan Ethos Duo",
+      "brand": "Titan",
+      "spec_name": "Ethos Duo",
+      "max_user_lb": 280.0,
+      "wall_clearance_in": null,
+      "door_asm_in": null,
+      "door_dis_in": null,
+      "aliases": [
+        "Ethos Duo"
+      ]
+    },
+    {
+      "name": "Osaki Quantum 2.0",
+      "brand": "Osaki",
+      "spec_name": "Quantum 2.0",
+      "max_user_lb": 275.0,
+      "wall_clearance_in": null,
+      "door_asm_in": null,
+      "door_dis_in": null,
+      "aliases": [
+        "Quantum 2.0"
+      ]
+    }
+  ]
+}

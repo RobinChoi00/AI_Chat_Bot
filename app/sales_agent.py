@@ -58,6 +58,12 @@ from sales_cta import (
     showroom_blurb,
 )
 from sales_shopify_stock import LiveStockSnapshot, fetch_live_stock, stock_badge
+from sales_spec_index import (
+    doorway_inches_for_model,
+    doorway_ok,
+    wall_ok,
+    weight_ok,
+)
 from sales_intent import (
     INTENT_COMPARE,
     INTENT_GREETING,
@@ -442,6 +448,15 @@ _DOORWAY_INCH_REPLIES = (
     QuickReply(label="Not sure", payload="recommend:doorway:skip"),
 )
 
+_DOORWAY_FIT_REPLIES = (
+    QuickReply(label="Assembled only", payload="recommend:doorway_fit:assembled"),
+    QuickReply(
+        label="OK to disassemble",
+        payload="recommend:doorway_fit:disassembled",
+    ),
+    QuickReply(label="Not sure", payload="recommend:doorway_fit:assembled"),
+)
+
 _COMPACT_SPACES = frozenset({"Narrow Doorway", "Small Room"})
 
 _DOORWAY_MSG_RE = re.compile(
@@ -494,6 +509,14 @@ def _needs_doorway_inches(prefs: dict[str, str]) -> bool:
     return not (prefs.get("doorway_in") or "").strip()
 
 
+def _needs_doorway_fit(prefs: dict[str, str]) -> bool:
+    """After inches (not skip), ask assembled vs disassemble once."""
+    raw = (prefs.get("doorway_in") or "").strip().lower()
+    if not raw or raw == "skip":
+        return False
+    return not (prefs.get("doorway_fit") or "").strip()
+
+
 def _doorway_limit_in(prefs: dict[str, str]) -> Optional[float]:
     raw = (prefs.get("doorway_in") or "").strip().lower()
     if not raw or raw == "skip":
@@ -502,6 +525,13 @@ def _doorway_limit_in(prefs: dict[str, str]) -> Optional[float]:
         return float(raw.rstrip("+"))
     except ValueError:
         return None
+
+
+def _doorway_fit_mode(prefs: dict[str, str]) -> str:
+    mode = (prefs.get("doorway_fit") or "assembled").strip().lower()
+    if mode in {"assembled", "disassembled", "either"}:
+        return mode
+    return "assembled"
 
 
 def _clarify_doorway_inches(prefs: dict[str, str]) -> SalesReply:
@@ -522,11 +552,33 @@ def _clarify_doorway_inches(prefs: dict[str, str]) -> SalesReply:
     )
 
 
+def _clarify_doorway_fit(prefs: dict[str, str]) -> SalesReply:
+    inches = (prefs.get("doorway_in") or "").strip()
+    inch_bit = f' ({inches}")' if inches and inches != "skip" else ""
+    return SalesReply(
+        reply=(
+            f"Got it{inch_bit}. Can the delivery team **fully disassemble** "
+            "the chair if needed?\n\n"
+            "**Assembled only** uses the stricter clearance. "
+            "**OK to disassemble** may unlock a few more models."
+        ),
+        intent=INTENT_RECOMMEND,
+        quick_replies=[
+            *_DOORWAY_FIT_REPLIES,
+            QuickReply(label="Talk to a human", payload="human"),
+        ],
+        tools_used=["cases.clarify"],
+        prefs_patch={"recommend_prefs": prefs},
+        flow_stage="ask_doorway_fit",
+    )
+
+
 
 def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
     patch = {"recommend_prefs": prefs}
     stage = f"ask_{missing}" if missing in {
-        "height", "weight", "goal", "intensity", "foot", "space", "doorway_in"
+        "height", "weight", "goal", "intensity", "foot", "space", "doorway_in",
+        "doorway_fit",
     } else "ask_height"
     if missing == "height":
         return SalesReply(
@@ -563,6 +615,8 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
         )
     if missing == "doorway_in":
         return _clarify_doorway_inches(prefs)
+    if missing == "doorway_fit":
+        return _clarify_doorway_fit(prefs)
     if missing == "goal":
         return SalesReply(
             reply="What's the **main focus** for the massage?",
@@ -726,6 +780,36 @@ def _stock_rank(snap: Optional[LiveStockSnapshot]) -> int:
     return 2
 
 
+def _model_doorway_key(
+    model_name: str,
+    *,
+    reason: str,
+    mode: str,
+) -> float:
+    """Per-model doorway inches for sort/filter; 999 = unknown."""
+    door = doorway_inches_for_model(model_name, mode=mode)
+    if door is not None:
+        return door
+    parsed = _parse_min_doorway_in(reason)
+    return parsed if parsed is not None else 999.0
+
+
+def _passes_fit_gates(
+    model_name: str,
+    prefs: dict[str, str],
+    *,
+    limit: Optional[float],
+    mode: str,
+) -> bool:
+    if not weight_ok(model_name, prefs.get("weight") or ""):
+        return False
+    if not wall_ok(model_name, prefs.get("space") or ""):
+        return False
+    if not doorway_ok(model_name, limit_in=limit, mode=mode):
+        return False
+    return True
+
+
 def _collect_tier_candidates(
     prefs: dict[str, str],
     *,
@@ -737,32 +821,11 @@ def _collect_tier_candidates(
     seen: set[str] = set()
     out: list[tuple[str, str, float]] = []
     limit = _doorway_limit_in(prefs)
-    for budget in budgets:
-        match = lookup_case(
-            enrich_implied_prefs({**prefs, "budget": budget}),
-            brand=brand,
-        )
-        if match is None:
-            continue
-        lead, others, _ = rank_case_models(
-            match.primary_model,
-            match.alternative_1,
-            match.alternative_2,
-            brand=brand,
-        )
-        reason = match.reason or ""
-        doorway = _parse_min_doorway_in(reason)
-        door_key = doorway if doorway is not None else 999.0
-        for name in [lead, *others]:
-            if not name or name in used_models or name in seen:
-                continue
-            # Hard filter when shopper gave a doorway width.
-            if limit is not None and door_key < 999 and door_key > limit:
-                continue
-            seen.add(name)
-            out.append((name, reason, door_key))
-    # If the hard filter wiped the tier, fall back to unfiltered candidates.
-    if not out and limit is not None:
+    mode = _doorway_fit_mode(prefs)
+
+    def _gather(*, apply_hard_filter: bool) -> list[tuple[str, str, float]]:
+        local: list[tuple[str, str, float]] = []
+        local_seen: set[str] = set()
         for budget in budgets:
             match = lookup_case(
                 enrich_implied_prefs({**prefs, "budget": budget}),
@@ -777,13 +840,33 @@ def _collect_tier_candidates(
                 brand=brand,
             )
             reason = match.reason or ""
-            doorway = _parse_min_doorway_in(reason)
-            door_key = doorway if doorway is not None else 999.0
             for name in [lead, *others]:
-                if not name or name in used_models or name in seen:
+                if not name or name in used_models or name in local_seen:
                     continue
-                seen.add(name)
-                out.append((name, reason, door_key))
+                if apply_hard_filter and not _passes_fit_gates(
+                    name, prefs, limit=limit, mode=mode
+                ):
+                    continue
+                local_seen.add(name)
+                door_key = _model_doorway_key(name, reason=reason, mode=mode)
+                local.append((name, reason, door_key))
+        return local
+
+    out = _gather(apply_hard_filter=True)
+    # If hard filters emptied the tier, fall back so we still show something —
+    # the no-fit path handles the all-tiers-empty case.
+    if not out and (limit is not None or prefs.get("weight") or prefs.get("space")):
+        out = _gather(apply_hard_filter=False)
+        # Still drop confirmed doorway failures when we have a limit; prefer
+        # empty over recommending a chair that cannot enter.
+        if limit is not None:
+            filtered = [
+                row
+                for row in out
+                if doorway_ok(row[0], limit_in=limit, mode=mode)
+            ]
+            if filtered:
+                out = filtered
     return out
 
 
@@ -822,6 +905,64 @@ def _choose_tier_pick(
     scored.sort(key=lambda row: (row[0], row[1], row[2]))
     best = scored[0]
     return best[3], best[4], best[5], best[6], best[7]
+
+
+def _no_fit_recommend_reply(
+    prefs: dict[str, str],
+    *,
+    defaults_applied: Optional[list[str]] = None,
+) -> SalesReply:
+    """Honest empty result when hard fit gates leave no tier picks."""
+    bits: list[str] = []
+    door = (prefs.get("doorway_in") or "").strip()
+    if door and door != "skip":
+        mode = _doorway_fit_mode(prefs)
+        mode_bit = (
+            " (assembled)"
+            if mode == "assembled"
+            else " (with disassembly)"
+            if mode == "disassembled"
+            else ""
+        )
+        bits.append(f'a **{door}"** doorway{mode_bit}')
+    if prefs.get("weight"):
+        bits.append(f"**{prefs['weight']}** capacity")
+    if prefs.get("space") == "Small Room":
+        bits.append("**small-room** wall clearance")
+    constraint = ", ".join(bits) if bits else "your fit answers"
+    lines = [
+        f"I couldn't find a chair that safely clears **{constraint}** "
+        "in our current Value / Mid / Premium set.",
+        "",
+        "You can:",
+        "• Widen the doorway estimate or allow **disassembly**",
+        "• Relax the space constraint",
+        "• Talk to a specialist for custom delivery options",
+        "",
+    ]
+    defaults_note = format_defaults_note(defaults_applied or [], prefs)
+    if defaults_note:
+        lines.append(defaults_note)
+        lines.append("")
+    lines.append("Or ask to visit the Carrollton showroom.")
+    replies = [
+        QuickReply(label="Widen doorway / skip", payload="recommend:doorway:skip"),
+        QuickReply(
+            label="OK to disassemble",
+            payload="recommend:doorway_fit:disassembled",
+        ),
+        QuickReply(label="No space issue", payload="recommend:space:none"),
+        QuickReply(label="Talk to a human", payload="human"),
+        QuickReply(label="Visit showroom", payload="cta:showroom"),
+    ]
+    return SalesReply(
+        reply="\n".join(lines).rstrip(),
+        intent=INTENT_RECOMMEND,
+        quick_replies=replies,
+        tools_used=["cases.nofit"],
+        prefs_patch={"recommend_prefs": prefs},
+        flow_stage="recommend_nofit",
+    )
 
 
 def _tiered_case_recommend_reply(
@@ -899,7 +1040,10 @@ def _tiered_case_recommend_reply(
         url = product_page_url(domain, store_handle or "") if store_handle else None
         n += 1
         display = (product.display_name if product else None) or pick_name
-        price = _fmt_price(product.price_usd) if product else "price on request"
+        live_price = getattr(snap, "price_usd", None) if snap is not None else None
+        catalog_price = product.price_usd if product else None
+        show_price = live_price if live_price is not None else catalog_price
+        price = _fmt_price(show_price) if show_price is not None else "price on request"
         stock_bit = f" · *{badge}*" if badge else ""
 
         lines.append(f"**{n}. {tier_label}** — **{display}** · {price}{stock_bit}")
@@ -915,6 +1059,8 @@ def _tiered_case_recommend_reply(
             lines.append(url)
         if product is not None:
             card = product.as_public_dict()
+            if show_price is not None:
+                card["price_usd"] = show_price
             if url:
                 card["product_url"] = url
             if badge:
@@ -933,7 +1079,7 @@ def _tiered_case_recommend_reply(
         )
 
     if not tier_leads:
-        return None
+        return _no_fit_recommend_reply(prefs, defaults_applied=defaults_applied)
 
     defaults_note = format_defaults_note(defaults_applied or [], prefs)
     if defaults_note:
@@ -1351,7 +1497,7 @@ def _recommend_reply(
     merged = enrich_implied_prefs(merged)
     defaults_applied = secondary_defaults_applied(before_defaults, merged)
 
-    # After compact space, ask doorway inches before goal / recommend.
+    # After compact space, ask doorway inches, then assembled vs disassemble.
     if (
         merged.get("height")
         and merged.get("weight")
@@ -1359,6 +1505,13 @@ def _recommend_reply(
         and _needs_doorway_inches(merged)
     ):
         return _clarify_doorway_inches(merged)
+    if (
+        merged.get("height")
+        and merged.get("weight")
+        and (merged.get("space") or "") in _COMPACT_SPACES
+        and _needs_doorway_fit(merged)
+    ):
+        return _clarify_doorway_fit(merged)
 
     missing = missing_required(merged)
     if missing:
@@ -1795,11 +1948,13 @@ def _finalize_flow_stage(result: SalesReply) -> SalesReply:
         # Explicit ask_* / recommend / etc. already set.
         if result.flow_stage.startswith("ask_") or result.flow_stage in {
             "recommend",
+            "recommend_nofit",
             "lead",
             "handoff",
             "warranty",
             "shop",
             "ask_doorway",
+            "ask_doorway_fit",
         }:
             return result
     from sales_intent import WARRANTY_ROUTE_INTENTS
@@ -1865,7 +2020,17 @@ def _tier_followup_reply(
     if stock:
         why_bits.append(stock)
     if rec_prefs.get("doorway_in") and rec_prefs.get("doorway_in") != "skip":
-        why_bits.append(f"checked against your **{rec_prefs['doorway_in']}\"** doorway")
+        fit = _doorway_fit_mode(rec_prefs)
+        fit_bit = (
+            ", assembled"
+            if fit == "assembled"
+            else ", with disassembly"
+            if fit == "disassembled"
+            else ""
+        )
+        why_bits.append(
+            f"checked against your **{rec_prefs['doorway_in']}\"** doorway{fit_bit}"
+        )
 
     lines = [
         f"**{tier}** — **{display}**"

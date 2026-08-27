@@ -33,6 +33,7 @@ _PREFIX_PRIORITY: list[tuple[str, int]] = [
     ("recommend:height:", 50),
     ("recommend:weight:", 50),
     ("recommend:space:", 50),
+    ("recommend:doorway_fit:", 51),
     ("recommend:doorway:", 50),
     ("recommend:goal:", 50),
     ("recommend:intensity:", 55),

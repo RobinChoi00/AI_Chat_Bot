@@ -445,8 +445,8 @@ def _recommend_sort_key(
 
 # Fallback catalog shelves — aligned with chat Value / Mid / Premium bands.
 _PRICE_TIERS: tuple[tuple[str, int, Optional[int]], ...] = (
-    ("Value (under ~$3k)", 1500, 3499),
-    ("Mid-range (~$5–7k)", 5000, 6999),
+    ("Value (under ~$3k)", 0, 2999),
+    ("Mid-range (~$3–7k)", 3000, 6999),
     ("Premium ($7k+)", 7000, None),
 )
 

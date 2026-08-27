@@ -500,7 +500,7 @@ def test_narrow_door_asks_doorway_inches(client):
     payloads = {q["payload"] for q in body["quick_replies"]}
     assert "recommend:doorway:30" in payloads
 
-    # Provide inches then continue to goal.
+    # Provide inches → ask assembled vs disassemble.
     nxt = client.post(
         "/api/v1/sales/chat",
         json={
@@ -511,7 +511,78 @@ def test_narrow_door_asks_doorway_inches(client):
         },
     )
     assert nxt.status_code == 200
-    assert "focus" in nxt.json()["reply"].lower() or "goal" in nxt.json()["reply"].lower() or "main focus" in nxt.json()["reply"].lower()
+    nxt_body = nxt.json()
+    assert nxt_body.get("flow_stage") == "ask_doorway_fit" or "disassemble" in nxt_body[
+        "reply"
+    ].lower()
+    fit_payloads = {q["payload"] for q in nxt_body["quick_replies"]}
+    assert "recommend:doorway_fit:assembled" in fit_payloads
+
+    # Assembled-only → continue to goal.
+    goal = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "",
+            "payload": "recommend:doorway_fit:assembled",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert goal.status_code == 200
+    assert (
+        "focus" in goal.json()["reply"].lower()
+        or "goal" in goal.json()["reply"].lower()
+        or "main focus" in goal.json()["reply"].lower()
+    )
+
+
+def test_golden_narrow_door_excludes_highpointe(client, monkeypatch):
+    """30\" assembled narrow path must not recommend Highpointe (36.5\")."""
+
+    class _Snap:
+        handle = "dummy"
+        title = "Dummy"
+        status = "active"
+        available_for_sale = True
+        total_inventory = 5
+        source = "shopify"
+        price_usd = 2499.0
+
+        @property
+        def in_stock(self):
+            return True
+
+        @property
+        def is_low(self):
+            return False
+
+    monkeypatch.setattr("sales_agent.fetch_live_stock", lambda *a, **k: _Snap())
+
+    sid = "s-golden-narrow"
+    body = None
+    for payload in (
+        "recommend:height:average",
+        "recommend:weight:le180",
+        "recommend:space:narrow_door",
+        "recommend:doorway:30",
+        "recommend:doorway_fit:assembled",
+        "recommend:goal:neck",
+    ):
+        resp = client.post(
+            "/api/v1/sales/chat",
+            json={
+                "session_id": sid,
+                "message": "",
+                "payload": payload,
+                "domain": "osakiusa.com",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+    assert body is not None
+    assert body["intent"] == "recommend"
+    assert "Highpointe" not in body["reply"]
 
 
 def test_menu_button_payload_returns_menu(client):

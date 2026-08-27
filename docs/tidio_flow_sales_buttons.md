@@ -60,6 +60,14 @@ with these **exact** labels (must match API):
 - 36"+ → `payload=recommend:doorway:36`
 - Not sure → `payload=recommend:doorway:skip`
 
+### `ask_doorway_fit` (after inches, not skip)
+- Assembled only → `payload=recommend:doorway_fit:assembled`
+- OK to disassemble → `payload=recommend:doorway_fit:disassembled`
+- Not sure → `payload=recommend:doorway_fit:assembled` (stricter default)
+
+Runtime fit uses `data/sales/spec_index.json` (assembled / disassembled
+doorway, max user weight, wall clearance) — not case-reason text alone.
+
 ### `ask_goal` (max useful set)
 - Neck & shoulders → `payload=recommend:goal:neck`
 - Lower back → `payload=recommend:goal:lower_back`

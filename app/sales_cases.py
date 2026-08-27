@@ -336,6 +336,8 @@ def apply_payload_codes(prefs: dict[str, str], payload: str) -> dict[str, str]:
             # recommend:doorway:30 | recommend:doorway:skip
             if code == "skip":
                 out["doorway_in"] = "skip"
+                # Skipping inches also skips the disassemble follow-up.
+                out.setdefault("doorway_fit", "assembled")
             else:
                 try:
                     inches = float(code)
@@ -347,6 +349,10 @@ def apply_payload_codes(prefs: dict[str, str], payload: str) -> dict[str, str]:
                     )
                     if "space" not in out:
                         out["space"] = "Narrow Doorway"
+        elif key == "doorway_fit":
+            # recommend:doorway_fit:assembled|disassembled|either
+            if code in {"assembled", "disassembled", "either"}:
+                out["doorway_fit"] = code
     return out
 
 
@@ -443,11 +449,11 @@ _GOAL_INTENSITY = {
     "Stretching & Mobility": "Highly Adjustable",
 }
 
-# Good / Better / Best shelves. Premium may span mid-premium + flagship bands.
-# Labels match what we look up; full Excel 3-tier regen can come later.
+# Value / Mid / Premium shelves mapped onto the case-book budget bands.
+# Mid covers the full mid stack ($3k–$7k) so the $3–5k band is not orphaned.
 TIER_BUDGETS = (
     ("Value (under ~$3k)", ("Under $3,000",)),
-    ("Mid-range (~$5–7k)", ("$5,000–$6,999",)),
+    ("Mid-range (~$3–7k)", ("$3,000–$4,999", "$5,000–$6,999")),
     ("Premium ($7k+)", ("$7,000–$9,999", "$10,000+")),
 )
 

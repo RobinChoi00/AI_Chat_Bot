@@ -36,6 +36,7 @@ _PRODUCT_FIELDS = """
           title
           availableForSale
           inventoryQuantity
+          price
         }
       }
     }
@@ -70,6 +71,7 @@ class LiveStockSnapshot:
     available_for_sale: bool
     total_inventory: Optional[int]
     source: str  # shopify | unavailable
+    price_usd: Optional[float] = None
 
     @property
     def in_stock(self) -> bool:
@@ -134,6 +136,7 @@ def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> LiveSt
     variant_edges = (((node.get("variants") or {}).get("edges")) or [])
     variant_nodes = [(edge or {}).get("node") or {} for edge in variant_edges]
     any_available = any(bool(v.get("availableForSale")) for v in variant_nodes)
+    price_usd: Optional[float] = None
     if total_int is None and variant_nodes:
         qty_sum = 0
         saw_qty = False
@@ -148,6 +151,15 @@ def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> LiveSt
                 continue
         if saw_qty:
             total_int = qty_sum
+    for v in variant_nodes:
+        raw_price = v.get("price")
+        if raw_price is None or raw_price == "":
+            continue
+        try:
+            price_usd = float(raw_price)
+            break
+        except (TypeError, ValueError):
+            continue
     if not variant_nodes:
         any_available = str(node.get("status") or "").upper() == "ACTIVE" and (
             total_int is None or total_int > 0
@@ -161,6 +173,7 @@ def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> LiveSt
         available_for_sale=any_available,
         total_inventory=total_int,
         source="shopify",
+        price_usd=price_usd,
     )
 
 

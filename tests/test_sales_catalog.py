@@ -122,7 +122,7 @@ def test_recommend_returns_one_pick_per_price_tier(catalog):
     assert picks, "expected tiered recommendations"
     labels = [price_tier_label(p.price_usd) for p in picks]
     assert "Value (under ~$3k)" in labels
-    assert "Mid-range (~$5–7k)" in labels
+    assert "Mid-range (~$3–7k)" in labels
     assert "Premium ($7k+)" in labels
     # One chair per shelf — no two picks in the same band.
     assert len(labels) == len(set(labels))
