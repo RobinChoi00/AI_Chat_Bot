@@ -114,16 +114,16 @@ def test_parse_budget_ignores_weight_number():
 
 
 def test_recommend_returns_one_pick_per_price_tier(catalog):
-    """Default recommend: Value $2–3k, Mid $4–6k, Premium $8k+."""
+    """Default recommend: Value / Mid / Premium shelves."""
     from sales_catalog import price_tier_label
 
     req = parse_recommendation_hints("recommend a chair for a tall person")
     picks = recommend(req, limit=3)
     assert picks, "expected tiered recommendations"
     labels = [price_tier_label(p.price_usd) for p in picks]
-    assert "Value ($2–3k)" in labels
-    assert "Mid-range ($4–6k)" in labels
-    assert "Premium ($8k+)" in labels
+    assert "Value (under ~$3k)" in labels
+    assert "Mid-range (~$5–7k)" in labels
+    assert "Premium (~$7k+)" in labels
     # One chair per shelf — no two picks in the same band.
     assert len(labels) == len(set(labels))
 

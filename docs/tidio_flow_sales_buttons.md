@@ -60,17 +60,9 @@ with these **exact** labels (must match API):
 - Foot & calf → `payload=recommend:goal:feet`
 - Full-body relax → `payload=recommend:goal:full_body`
 
-### `ask_budget` (optional refine after the tier list)
-- Under $3,000 → `payload=recommend:budget:under_3000`
-- $3,000–$4,999 → `payload=recommend:budget:3000_4999`
-- $5,000–$6,999 → `payload=recommend:budget:5000_6999`
-- $7,000–$9,999 → `payload=recommend:budget:7000_9999`
-- $10,000+ → `payload=recommend:budget:10000_plus`
-
-### `recommend` (Value / Mid / Premium list, or focused pick if budget set)
+### `recommend` (Value / Mid / Premium list — no budget ask)
 - Specs for … → `payload=specs:…`
 - Email me these picks → `message=Email me this pick`
-- Under $3,000 / Mid bands → `payload=recommend:budget:…` (narrow)
 - Visit showroom → `payload=cta:showroom`
 - Talk to a human → `message=talk to a human`
 

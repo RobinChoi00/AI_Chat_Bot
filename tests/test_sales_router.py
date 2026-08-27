@@ -142,7 +142,8 @@ def test_recommend_without_hints_asks_height(client):
     assert any(p.startswith("recommend:height:") for p in payloads)
 
 
-def test_recommend_budget_band_then_asks_height(client):
+def test_recommend_budget_payload_ignored_still_asks_height(client):
+    """Legacy budget payloads no longer gate the flow — still fit-first."""
     resp = client.post(
         "/api/v1/sales/chat",
         json={
@@ -154,10 +155,10 @@ def test_recommend_budget_band_then_asks_height(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["intent"] == "recommend"
-    # Budget saved optionally → still ask height first for fit.
     assert "height" in body["reply"].lower()
     payloads = {q["payload"] for q in body["quick_replies"]}
     assert any(p.startswith("recommend:height:") for p in payloads)
+    assert not any(p.startswith("recommend:budget:") for p in payloads)
 
 
 def test_recommend_guided_flow_returns_tiered_picks(client):
@@ -186,12 +187,14 @@ def test_recommend_guided_flow_returns_tiered_picks(client):
     assert "mid-range" in reply or "mid" in reply
     assert "premium" in reply
     assert "titan pro cura" in reply or "osaki" in reply
-    assert "budget tiers" in reply or "across budget" in reply
+    assert "primary pick" not in reply
+    payloads = {q["payload"] for q in body["quick_replies"]}
+    assert not any(p.startswith("recommend:budget:") for p in payloads)
 
 
-def test_recommend_budget_refine_returns_primary_pick(client):
-    """After fit answers, volunteering a budget narrows to a single-band pick."""
-    sid = "s-budget-refine"
+def test_recommend_budget_after_fit_still_returns_tiers(client):
+    """Budget refine payloads are ignored — always Value/Mid/Premium list."""
+    sid = "s-budget-ignored"
     body = None
     for payload in (
         "recommend:height:petite",
@@ -211,10 +214,10 @@ def test_recommend_budget_refine_returns_primary_pick(client):
         )
         assert resp.status_code == 200
         body = resp.json()
-    assert "primary pick" in body["reply"].lower()
-    # Balanced default → Under $3k petite/neck row (not the Gentle Champ row).
-    assert "Titan Pro Cura" in body["reply"] or "Primary pick" in body["reply"]
-    assert "skip this pick if" in body["reply"].lower()
+    reply = body["reply"].lower()
+    assert "value" in reply
+    assert "premium" in reply
+    assert "primary pick" not in reply
 
 
 def test_recommend_osakiusa_uses_titan_usa_book(client):
@@ -225,7 +228,6 @@ def test_recommend_osakiusa_uses_titan_usa_book(client):
         "recommend:weight:le180",
         "recommend:space:none",
         "recommend:goal:neck",
-        "recommend:budget:under_3000",
     ):
         resp = client.post(
             "/api/v1/sales/chat",
@@ -238,8 +240,9 @@ def test_recommend_osakiusa_uses_titan_usa_book(client):
         )
         assert resp.status_code == 200
         body = resp.json()
-    assert "Titan eCabin 3D" in body["reply"] or "Primary pick" in body["reply"]
+    assert "Titan eCabin" in body["reply"] or "value" in body["reply"].lower()
     assert "Osaki OS-Champ" not in body["reply"]
+    assert "primary pick" not in body["reply"].lower()
 
 
 def test_recommend_demotes_oos_with_live_stock(client, monkeypatch):
@@ -278,7 +281,6 @@ def test_recommend_demotes_oos_with_live_stock(client, monkeypatch):
         "recommend:weight:le180",
         "recommend:space:none",
         "recommend:goal:neck",
-        "recommend:budget:under_3000",
     ):
         resp = client.post(
             "/api/v1/sales/chat",
@@ -297,14 +299,10 @@ def test_recommend_demotes_oos_with_live_stock(client, monkeypatch):
     assert "shopify.inventory" in body.get("tools_used", [])
     payloads = {q["payload"] for q in body["quick_replies"]}
     assert "lead:save_pick" in payloads
-    assert any(p.startswith("open:https://") for p in payloads)
-    assert "products/" in body["reply"]
-    assert "Why we recommend" in body["reply"] or "why we recommend" in body["reply"].lower()
-    assert "Open these links" in body["reply"] or "https://" in body["reply"]
-    # Demotion puts an in-stock model first → conversion CTAs should appear.
-    labels = {q["label"] for q in body["quick_replies"]}
-    assert "Shop this chair" in labels
-    assert "Financing at checkout" in labels
+    assert "products/" in body["reply"] or "https://" in body["reply"]
+    assert "value" in body["reply"].lower()
+    assert "https://" in body["reply"]
+    assert "Open these links" not in body["reply"]
 
 
 def test_email_me_this_pick_captures_lead_with_summary(client, monkeypatch):
@@ -317,7 +315,6 @@ def test_email_me_this_pick_captures_lead_with_summary(client, monkeypatch):
         "recommend:weight:le180",
         "recommend:space:none",
         "recommend:goal:neck",
-        "recommend:budget:under_3000",
     ):
         resp = client.post(
             "/api/v1/sales/chat",
@@ -367,9 +364,11 @@ def test_free_text_skips_secondary_questions(client, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["intent"] == "recommend"
-    assert "primary pick" in body["reply"].lower()
+    reply = body["reply"].lower()
+    assert "value" in reply
+    assert "premium" in reply
+    assert "primary pick" not in reply
     assert "intensity" not in body["reply"].lower() or "defaults" in body["reply"].lower()
-    # Must not be stuck on a clarifying question.
     assert "preferred **massage intensity**" not in body["reply"].lower()
     payloads = {q["payload"] for q in body["quick_replies"]}
     assert "lead:save_pick" in payloads
@@ -391,7 +390,7 @@ def test_free_text_partial_still_asks_weight(client):
     assert "primary pick" not in body["reply"].lower()
 
 
-def test_conversion_ctas_when_in_stock(client, monkeypatch):
+def test_tiered_recommend_includes_product_links_when_in_stock(client, monkeypatch):
     class _Snap:
         def __init__(self, handle):
             self.handle = handle
@@ -421,7 +420,6 @@ def test_conversion_ctas_when_in_stock(client, monkeypatch):
         "recommend:weight:le180",
         "recommend:space:none",
         "recommend:goal:neck",
-        "recommend:budget:under_3000",
     ):
         resp = client.post(
             "/api/v1/sales/chat",
@@ -436,12 +434,11 @@ def test_conversion_ctas_when_in_stock(client, monkeypatch):
         body = resp.json()
 
     assert body is not None
-    assert "primary pick" in body["reply"].lower()
+    assert "value" in body["reply"].lower()
+    assert "https://" in body["reply"]
     labels = {q["label"] for q in body["quick_replies"]}
-    assert "Shop this chair" in labels
-    assert "Financing at checkout" in labels
-    assert "Visit showroom" in labels
-    assert "cta.conversion" in body.get("tools_used", [])
+    assert any("Email me" in label for label in labels)
+    assert "shopify.inventory" in body.get("tools_used", [])
 
     showroom = client.post(
         "/api/v1/sales/chat",

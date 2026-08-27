@@ -398,11 +398,13 @@ _SECONDARY_DEFAULTS = {
     "foot": "Not Important",
 }
 
-# Representative case-book budget bands for the 3-tier list (low / mid / high).
+# Representative case-book bands for Good / Better / Best in chat.
+# Labels match the band we actually look up (no "under ~$5k" while querying $3k).
+# Full 5-band Excel regen can come later; chat uses these three shelves only.
 TIER_BUDGETS = (
-    ("Value (under ~$5k)", "Under $3,000"),
+    ("Value (under ~$3k)", "Under $3,000"),
     ("Mid-range (~$5–7k)", "$5,000–$6,999"),
-    ("Premium ($10k+)", "$10,000+"),
+    ("Premium (~$7–10k)", "$7,000–$9,999"),
 )
 
 

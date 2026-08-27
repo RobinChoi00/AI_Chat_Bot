@@ -34,7 +34,6 @@ _PREFIX_PRIORITY: list[tuple[str, int]] = [
     ("recommend:goal:", 50),
     ("recommend:intensity:", 55),
     ("recommend:foot:", 55),
-    ("recommend:budget:", 60),
     ("recommend:", 70),
     ("specs:", 80),
     ("stock:", 85),
