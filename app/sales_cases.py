@@ -398,13 +398,24 @@ _SECONDARY_DEFAULTS = {
     "foot": "Not Important",
 }
 
-# Representative case-book bands for Good / Better / Best in chat.
-# Labels match the band we actually look up (no "under ~$5k" while querying $3k).
-# Full 5-band Excel regen can come later; chat uses these three shelves only.
+# Soft intensity from massage goal when the shopper didn't say gentle/strong.
+_GOAL_INTENSITY = {
+    "Neck & Shoulders": "Balanced",
+    "Upper Back": "Balanced",
+    "Lower Back": "Strong",
+    "Hips & Seat": "Balanced",
+    "Arms & Hands": "Gentle",
+    "Foot & Calf": "Balanced",
+    "Full-Body Relaxation": "Gentle",
+    "Stretching & Mobility": "Highly Adjustable",
+}
+
+# Good / Better / Best shelves. Premium may span mid-premium + flagship bands.
+# Labels match what we look up; full Excel 3-tier regen can come later.
 TIER_BUDGETS = (
-    ("Value (under ~$3k)", "Under $3,000"),
-    ("Mid-range (~$5–7k)", "$5,000–$6,999"),
-    ("Premium (~$7–10k)", "$7,000–$9,999"),
+    ("Value (under ~$3k)", ("Under $3,000",)),
+    ("Mid-range (~$5–7k)", ("$5,000–$6,999",)),
+    ("Premium ($7k+)", ("$7,000–$9,999", "$10,000+")),
 )
 
 
@@ -425,9 +436,10 @@ def enrich_implied_prefs(prefs: dict[str, str]) -> dict[str, str]:
         out["foot"] = "Important"
     # Once height/weight/space/goal are known, skip intensity/foot questions.
     if all(out.get(k) for k in CORE_PREF_KEYS):
-        for key, default in _SECONDARY_DEFAULTS.items():
-            if key not in out or not out[key]:
-                out[key] = default
+        if not out.get("intensity"):
+            out["intensity"] = _GOAL_INTENSITY.get(goal) or _SECONDARY_DEFAULTS["intensity"]
+        if not out.get("foot"):
+            out["foot"] = _SECONDARY_DEFAULTS["foot"]
     return out
 
 

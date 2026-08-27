@@ -101,21 +101,17 @@ def after_hours_blurb() -> str:
 
 
 def format_defaults_note(applied: list[str], prefs: dict[str, str]) -> Optional[str]:
-    """One-liner when we skipped intensity/foot questions."""
+    """Short note when we skipped intensity/foot questions."""
     if not applied:
         return None
     bits = []
     if "intensity" in applied and prefs.get("intensity"):
-        bits.append(f"{prefs['intensity'].lower()} intensity")
+        bits.append(prefs["intensity"].lower())
     if "foot" in applied and prefs.get("foot"):
-        bits.append(f"foot rollers: {prefs['foot'].lower()}")
+        bits.append(f"foot {prefs['foot'].lower()}")
     if not bits:
         return None
-    return (
-        "I filled in a few fit-guide defaults ("
-        + "; ".join(bits)
-        + ") so we could recommend faster — say if any of that is wrong."
-    )
+    return f"_Assumed {', '.join(bits)} — say if that should change._"
 
 
 def format_fit_guide_summary(

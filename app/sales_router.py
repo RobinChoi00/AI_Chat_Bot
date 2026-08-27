@@ -231,9 +231,35 @@ async def sales_chat(
     from sales_models import get_session_collected, merge_session_collected
 
     prefs = get_session_collected(body.session_id)
-    reply = respond(message, payload=payload, domain=domain, prefs=prefs)
+    from sales_tidio_buttons import (
+        normalize_stored_buttons,
+        prioritize_quick_replies,
+        resolve_button_choice,
+    )
+
+    effective_payload = payload
+    effective_message = message
+    if not effective_payload and effective_message:
+        matched = resolve_button_choice(
+            effective_message,
+            normalize_stored_buttons(prefs.get("last_quick_replies")),
+        )
+        if matched:
+            effective_payload = matched
+            effective_message = ""
+
+    reply = respond(
+        effective_message,
+        payload=effective_payload,
+        domain=domain,
+        prefs=prefs,
+    )
     if reply.prefs_patch:
         merge_session_collected(body.session_id, reply.prefs_patch)
+    merge_session_collected(
+        body.session_id,
+        {"last_quick_replies": prioritize_quick_replies(reply.quick_replies)},
+    )
 
     if reply.lead_capture and reply.lead_capture.get("email"):
         email = str(reply.lead_capture.get("email") or "").strip()

@@ -436,9 +436,17 @@ def test_tiered_recommend_includes_product_links_when_in_stock(client, monkeypat
     assert body is not None
     assert "value" in body["reply"].lower()
     assert "https://" in body["reply"]
-    labels = {q["label"] for q in body["quick_replies"]}
-    assert any("Email me" in label for label in labels)
+    payloads = {q["payload"] for q in body["quick_replies"]}
+    assert "lead:save_pick" in payloads
+    assert any(p.startswith("open:https://") for p in payloads)
     assert "shopify.inventory" in body.get("tools_used", [])
+
+    opened = client.post(
+        "/api/v1/sales/chat",
+        json={"session_id": sid, "message": "1", "domain": "osakiusa.com"},
+    )
+    assert opened.status_code == 200
+    assert "https://" in opened.json()["reply"]
 
     showroom = client.post(
         "/api/v1/sales/chat",

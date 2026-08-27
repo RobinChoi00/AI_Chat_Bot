@@ -142,6 +142,18 @@ def test_enrich_applies_secondary_defaults_after_core_four():
     }
 
 
+def test_enrich_intensity_from_lower_back_goal():
+    filled = enrich_implied_prefs(
+        {
+            "height": 'Average (5\'4"–5\'11")',
+            "weight": "≤180 lb",
+            "space": "No Space Constraint",
+            "goal": "Lower Back",
+        }
+    )
+    assert filled["intensity"] == "Strong"
+
+
 def test_merge_hints_into_prefs():
     prefs = merge_prefs_from_hints(
         {},

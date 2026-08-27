@@ -588,6 +588,7 @@ def _short_tier_blurb(
     *,
     prefs: dict[str, str],
     reason: str = "",
+    doorway_in: Optional[float] = None,
 ) -> Optional[str]:
     """One short line under each tier pick — chat-scannable, no case-book dump."""
     bits: list[str] = []
@@ -595,10 +596,24 @@ def _short_tier_blurb(
         for bit in (product.massage_mechanism, product.track_type):
             if bit and bit not in bits:
                 bits.append(bit)
+        if doorway_in is not None and prefs.get("space") in {
+            "Narrow Doorway",
+            "Small Room",
+        }:
+            bits.append(f'~{doorway_in:g}" doorway')
         if "yes" in (product.foot_roller or "").lower() and prefs.get("goal") == "Foot & Calf":
             bits.append("foot/calf rollers")
-        elif prefs.get("goal") and product.track_type in {"L-Track", "SL-Track"}:
-            if prefs["goal"] in {"Lower Back", "Upper Back", "Neck & Shoulders", "Full-Body Relaxation"}:
+        elif (
+            prefs.get("goal")
+            and product.track_type in {"L-Track", "SL-Track"}
+            and len(bits) < 3
+        ):
+            if prefs["goal"] in {
+                "Lower Back",
+                "Upper Back",
+                "Neck & Shoulders",
+                "Full-Body Relaxation",
+            }:
                 bits.append(f"fits {prefs['goal'].lower()}")
     if bits:
         return " · ".join(bits[:3])
@@ -614,6 +629,105 @@ def _short_tier_blurb(
     if len(cleaned) > 90:
         cleaned = cleaned[:87].rstrip(" ,;") + "…"
     return cleaned
+
+
+_DOORWAY_IN_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*in(?:ch(?:es)?)?\s*min(?:imum)?\s*doorway",
+    re.I,
+)
+
+
+def _parse_min_doorway_in(reason: str) -> Optional[float]:
+    match = _DOORWAY_IN_RE.search(reason or "")
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _compact_space(prefs: dict[str, str]) -> bool:
+    return (prefs.get("space") or "") in {"Narrow Doorway", "Small Room"}
+
+
+def _stock_rank(snap: Optional[LiveStockSnapshot]) -> int:
+    if snap is None:
+        return 1
+    if snap.in_stock:
+        return 0
+    return 2
+
+
+def _collect_tier_candidates(
+    prefs: dict[str, str],
+    *,
+    budgets: tuple[str, ...],
+    brand: str,
+    used_models: set[str],
+) -> list[tuple[str, str, float]]:
+    """Return (model_name, reason, doorway_in_or_999) candidates for a tier."""
+    seen: set[str] = set()
+    out: list[tuple[str, str, float]] = []
+    for budget in budgets:
+        match = lookup_case(
+            enrich_implied_prefs({**prefs, "budget": budget}),
+            brand=brand,
+        )
+        if match is None:
+            continue
+        lead, others, _ = rank_case_models(
+            match.primary_model,
+            match.alternative_1,
+            match.alternative_2,
+            brand=brand,
+        )
+        reason = match.reason or ""
+        doorway = _parse_min_doorway_in(reason)
+        door_key = doorway if doorway is not None else 999.0
+        for name in [lead, *others]:
+            if not name or name in used_models or name in seen:
+                continue
+            seen.add(name)
+            out.append((name, reason, door_key))
+    return out
+
+
+def _choose_tier_pick(
+    candidates: list[tuple[str, str, float]],
+    *,
+    domain: str,
+    prefer_compact: bool,
+) -> Optional[tuple[str, Optional[ProductSpecs], Optional[LiveStockSnapshot], str, Optional[float]]]:
+    """Pick best candidate by stock, then doorway when space is tight, then list order."""
+    if not candidates:
+        return None
+    scored: list[tuple] = []
+    for idx, (name, reason, door_key) in enumerate(candidates):
+        product = resolve_product(name)
+        snap: Optional[LiveStockSnapshot] = None
+        if product is not None:
+            snap = fetch_live_stock(
+                product.handle,
+                domain=domain,
+                title=product.title or product.display_name or name,
+            )
+        door_sort = door_key if prefer_compact else 0.0
+        scored.append(
+            (
+                _stock_rank(snap),
+                door_sort,
+                idx,
+                name,
+                product,
+                snap,
+                reason,
+                door_key if door_key < 999 else None,
+            )
+        )
+    scored.sort(key=lambda row: (row[0], row[1], row[2]))
+    best = scored[0]
+    return best[3], best[4], best[5], best[6], best[7]
 
 
 def _tiered_case_recommend_reply(
@@ -641,40 +755,49 @@ def _tiered_case_recommend_reply(
     ]
 
     public_products: list[dict] = []
-    product_links: list[tuple[str, str]] = []
     used_models: set[str] = set()
-    tier_leads: list[tuple[str, str, Optional[ProductSpecs]]] = []
+    tier_leads: list[dict] = []
     stock_checked = False
+    prefer_compact = _compact_space(prefs)
     n = 0
 
-    for tier_label, budget in TIER_BUDGETS:
-        tier_prefs = enrich_implied_prefs({**prefs, "budget": budget})
-        match = lookup_case(tier_prefs, brand=brand)
-        if match is None:
-            continue
-        lead, others, _priority_note = rank_case_models(
-            match.primary_model,
-            match.alternative_1,
-            match.alternative_2,
+    for tier_label, budgets in TIER_BUDGETS:
+        candidates = _collect_tier_candidates(
+            prefs,
+            budgets=budgets,
             brand=brand,
+            used_models=used_models,
         )
-        pick_name = lead
-        if pick_name in used_models:
-            pick_name = next((m for m in others if m and m not in used_models), None)
-        if not pick_name or pick_name in used_models:
+        chosen = _choose_tier_pick(
+            candidates,
+            domain=domain,
+            prefer_compact=prefer_compact,
+        )
+        if chosen is None:
             continue
-        used_models.add(pick_name)
+        pick_name, product, snap, reason, doorway_in = chosen
+        if snap is not None:
+            stock_checked = True
+        # Swap to an in-stock alt when the lead is confirmed OOS.
+        if snap is not None and not snap.in_stock:
+            for alt_name, alt_reason, alt_door in candidates:
+                if alt_name == pick_name:
+                    continue
+                alt_product = resolve_product(alt_name)
+                if alt_product is None:
+                    continue
+                alt_snap = fetch_live_stock(
+                    alt_product.handle,
+                    domain=domain,
+                    title=alt_product.title or alt_product.display_name or alt_name,
+                )
+                if alt_snap is not None and alt_snap.in_stock:
+                    pick_name, product, snap = alt_name, alt_product, alt_snap
+                    reason = alt_reason
+                    doorway_in = alt_door if alt_door < 999 else None
+                    break
 
-        product = resolve_product(pick_name)
-        snap: Optional[LiveStockSnapshot] = None
-        if product is not None:
-            snap = fetch_live_stock(
-                product.handle,
-                domain=domain,
-                title=product.title or product.display_name or pick_name,
-            )
-            if snap is not None:
-                stock_checked = True
+        used_models.add(pick_name)
         badge = stock_badge(snap) if stock_checked else None
         store_handle = (snap.handle if snap and snap.handle else None) or (
             product.handle if product else None
@@ -686,12 +809,16 @@ def _tiered_case_recommend_reply(
         stock_bit = f" · *{badge}*" if badge else ""
 
         lines.append(f"**{n}. {tier_label}** — **{display}** · {price}{stock_bit}")
-        blurb = _short_tier_blurb(product, prefs=prefs, reason=match.reason or "")
+        blurb = _short_tier_blurb(
+            product,
+            prefs=prefs,
+            reason=reason,
+            doorway_in=doorway_in,
+        )
         if blurb:
             lines.append(blurb)
         if url:
             lines.append(url)
-            product_links.append((display, url))
         if product is not None:
             card = product.as_public_dict()
             if url:
@@ -700,14 +827,23 @@ def _tiered_case_recommend_reply(
                 card["stock"] = badge
             public_products.append(card)
         lines.append("")
-        tier_leads.append((tier_label, pick_name, product))
+        tier_leads.append(
+            {
+                "tier": tier_label,
+                "model": pick_name,
+                "display": display,
+                "handle": product.handle if product else None,
+                "url": url,
+                "stock": badge,
+            }
+        )
 
     if not tier_leads:
         return None
 
     defaults_note = format_defaults_note(defaults_applied or [], prefs)
     if defaults_note:
-        lines.append(f"_{defaults_note}_")
+        lines.append(defaults_note)
         lines.append("")
 
     if is_sales_after_hours():
@@ -715,36 +851,35 @@ def _tiered_case_recommend_reply(
         lines.append("")
 
     lines.append(
-        "Reply **1–3** for a tier, ask for specs, or email these picks to sales."
+        "Reply **1 / 2 / 3** for that chair, email these picks, "
+        "or ask to visit the Carrollton showroom."
     )
 
-    primary_name = tier_leads[0][1]
-    primary_url = product_links[0][1] if product_links else None
+    primary = tier_leads[0]
+    primary_url = primary.get("url")
     pick_summary = format_fit_guide_summary(
         domain=domain,
         prefs=prefs,
-        primary=primary_name,
-        alternatives=[name for _, name, _ in tier_leads[1:]],
+        primary=primary["model"],
+        alternatives=[t["model"] for t in tier_leads[1:]],
         product_url=primary_url,
-        stock_label=None,
+        stock_label=primary.get("stock"),
     )
 
-    quick: list[QuickReply] = [
-        QuickReply(label="Email me these picks", payload="lead:save_pick"),
-    ]
-    for _tier, name, product in tier_leads[:3]:
-        if product is not None:
-            quick.append(
-                QuickReply(
-                    label=f"Specs for {product.display_name}",
-                    payload=f"specs:{product.handle}",
-                )
-            )
+    # Order matters: numbered menu 1–3 must match Value / Mid / Premium.
+    quick: list[QuickReply] = []
+    for tier in tier_leads[:3]:
+        short_tier = tier["tier"].split("(")[0].strip()
+        label = f"{short_tier}: {tier['display']}"
+        if tier.get("url"):
+            quick.append(QuickReply(label=label, payload=f"open:{tier['url']}"))
+        elif tier.get("handle"):
+            quick.append(QuickReply(label=label, payload=f"specs:{tier['handle']}"))
         else:
-            quick.append(
-                QuickReply(label=f"Ask about {name}", payload="human")
-            )
+            quick.append(QuickReply(label=label, payload="human"))
+    quick.append(QuickReply(label="Email me these picks", payload="lead:save_pick"))
     quick.append(QuickReply(label="Talk to a human", payload="human"))
+    # Showroom is offered in copy; keep off the 5-button cap so 1–3 stay the tiers.
 
     tools = ["cases.lookup", "cases.tiered", "catalog.resolve_product", "cta.product_url"]
     if stock_checked:
@@ -760,11 +895,9 @@ def _tiered_case_recommend_reply(
         prefs_patch={
             "recommend_prefs": prefs,
             "pending_pick_summary": pick_summary,
-            "pending_primary": primary_name,
+            "pending_primary": primary["model"],
             "pending_product_url": primary_url,
-            "pending_tier_picks": [
-                {"tier": t, "model": m} for t, m, _p in tier_leads
-            ],
+            "pending_tier_picks": tier_leads,
         },
     )
 
@@ -1038,7 +1171,7 @@ def _catalog_tier_recommend_reply(message: str, request: RecommendationRequest) 
     else:
         header = (
             "Here are three strong options across price tiers — "
-            "**Value (under ~$3k)**, **Mid-range (~$5–7k)**, and **Premium (~$7k+)**:"
+            "**Value (under ~$3k)**, **Mid-range (~$5–7k)**, and **Premium ($7k+)**:"
         )
 
     lines = [header]
@@ -1562,6 +1695,34 @@ def _finalize_flow_stage(result: SalesReply) -> SalesReply:
     return result
 
 
+def _tier_digit_reply(message: str, prefs: Optional[dict]) -> Optional[SalesReply]:
+    """Map bare 1/2/3 to the matching Value/Mid/Premium pick after a tier list."""
+    digit = re.fullmatch(r"([1-3])[).:\s]*", (message or "").strip())
+    if not digit:
+        return None
+    picks = (prefs or {}).get("pending_tier_picks") or []
+    if not isinstance(picks, list):
+        return None
+    idx = int(digit.group(1)) - 1
+    if not (0 <= idx < len(picks)):
+        return None
+    pick = picks[idx]
+    if not isinstance(pick, dict):
+        return None
+    patched = dict(prefs or {})
+    display = (pick.get("display") or pick.get("model") or "").strip()
+    if display:
+        patched["pending_primary"] = display
+    url = (pick.get("url") or "").strip()
+    if url.startswith("https://"):
+        patched["pending_product_url"] = url
+        return _open_product_reply(url, patched)
+    handle = (pick.get("handle") or "").strip()
+    if handle:
+        return _specs_reply(handle)
+    return None
+
+
 def respond(
     message: str,
     *,
@@ -1583,6 +1744,12 @@ def respond(
         email = extract_email(message or "")
         if email:
             return _finalize_flow_stage(_capture_pick_lead(email, prefs, domain=domain))
+
+    # After a tier list, bare "1"/"2"/"3" opens that chair (chat + Tidio).
+    if not payload:
+        tier_reply = _tier_digit_reply(message, prefs)
+        if tier_reply is not None:
+            return _finalize_flow_stage(tier_reply)
 
     if payload:
         forced = _payload_reply(payload, message, domain=domain, prefs=prefs)

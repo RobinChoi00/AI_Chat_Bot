@@ -447,7 +447,7 @@ def _recommend_sort_key(
 _PRICE_TIERS: tuple[tuple[str, int, Optional[int]], ...] = (
     ("Value (under ~$3k)", 1500, 3499),
     ("Mid-range (~$5–7k)", 5000, 6999),
-    ("Premium (~$7k+)", 7000, None),
+    ("Premium ($7k+)", 7000, None),
 )
 
 
@@ -502,7 +502,7 @@ def _recommend_across_tiers(req: RecommendationRequest) -> list[ProductSpecs]:
 def recommend(req: RecommendationRequest, limit: int = 3) -> list[ProductSpecs]:
     """Return up to ``limit`` best matches for a recommendation request.
 
-    Default (limit ≥ 3): one Value (under ~$3k), one Mid (~$5–7k), one Premium (~$7k+)
+    Default (limit ≥ 3): one Value (under ~$3k), one Mid (~$5–7k), one Premium ($7k+)
     pick so shoppers see a clear good / better / best spread.
     """
     limit = max(1, min(limit, 5))

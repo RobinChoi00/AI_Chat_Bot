@@ -90,5 +90,5 @@ def test_defaults_note_and_showroom():
         {"intensity": "Balanced", "foot": "Not Important"},
     )
     assert note is not None
-    assert "balanced intensity" in note.lower()
+    assert "balanced" in note.lower()
     assert "Carrollton" in showroom_blurb()
