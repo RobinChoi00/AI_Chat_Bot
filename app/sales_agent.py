@@ -852,22 +852,7 @@ def _collect_tier_candidates(
                 local.append((name, reason, door_key))
         return local
 
-    out = _gather(apply_hard_filter=True)
-    # If hard filters emptied the tier, fall back so we still show something —
-    # the no-fit path handles the all-tiers-empty case.
-    if not out and (limit is not None or prefs.get("weight") or prefs.get("space")):
-        out = _gather(apply_hard_filter=False)
-        # Still drop confirmed doorway failures when we have a limit; prefer
-        # empty over recommending a chair that cannot enter.
-        if limit is not None:
-            filtered = [
-                row
-                for row in out
-                if doorway_ok(row[0], limit_in=limit, mode=mode)
-            ]
-            if filtered:
-                out = filtered
-    return out
+    return _gather(apply_hard_filter=True)
 
 
 def _choose_tier_pick(
