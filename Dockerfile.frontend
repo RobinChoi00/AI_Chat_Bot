@@ -5,7 +5,7 @@
 # Requires BuildKit for npm cache mount (default in Docker 23+):
 #   DOCKER_BUILDKIT=1 docker compose build frontend
 
-FROM node:20-alpine AS base
+FROM node:26-alpine AS base
 WORKDIR /app
 RUN apk add --no-cache ca-certificates && apk upgrade --no-cache
 
