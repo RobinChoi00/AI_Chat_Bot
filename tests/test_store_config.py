@@ -9,6 +9,8 @@ sys.path.insert(0, str(APP_DIR))
 from store_config import (  # noqa: E402
     get_order_tracking_page_url,
     get_storefront_base_url,
+    is_supported_storefront_domain,
+    normalize_storefront_domain,
 )
 
 
@@ -33,3 +35,13 @@ def test_get_order_tracking_page_url_env_override(monkeypatch):
         get_order_tracking_page_url("titanchair.com")
         == "https://example.com/track"
     )
+
+
+def test_normalize_and_validate_storefront_domain():
+    assert (
+        normalize_storefront_domain("https://www.osakiusa.com/products/x")
+        == "osakiusa.com"
+    )
+    assert is_supported_storefront_domain("chat.osakiusa.com")
+    assert not is_supported_storefront_domain("osakiusa.com.attacker.invalid")
+    assert not is_supported_storefront_domain("example.invalid")

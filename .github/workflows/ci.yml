@@ -38,6 +38,8 @@ jobs:
               raise SystemExit(f"Expected >=100 Fonz entries after ingest, got {count}")
           print(f"Fonz entries ready: {count}")
           PY
+      - name: Validate Sales case books and spec gates
+        run: python script/validate_sales_artifacts.py
       - name: Run pytest
         run: |
           set +e

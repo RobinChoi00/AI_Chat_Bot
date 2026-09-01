@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -182,3 +183,42 @@ def _as_float(value) -> Optional[float]:
 
 def clear_spec_index_cache() -> None:
     load_spec_index.cache_clear()
+
+
+def sales_artifact_health() -> dict:
+    """Deployment-safe snapshot for health/admin surfaces."""
+    files = {
+        "spec_index": _SPEC_INDEX_PATH,
+        "cases_osaki": _DATA_DIR / "practical_cases_osaki.csv.gz",
+        "cases_titan": _DATA_DIR / "practical_cases_titan.csv.gz",
+    }
+    snapshot = {}
+    for name, path in files.items():
+        exists = path.is_file()
+        modified_at = None
+        size_bytes = 0
+        if exists:
+            stat = path.stat()
+            size_bytes = stat.st_size
+            modified_at = datetime.fromtimestamp(
+                stat.st_mtime, tz=timezone.utc
+            ).replace(microsecond=0).isoformat()
+        snapshot[name] = {
+            "exists": exists,
+            "size_bytes": size_bytes,
+            "modified_at": modified_at,
+        }
+    index = load_spec_index()
+    unique_models = {spec.name for spec in index.values()}
+    doorway_models = {
+        spec.name
+        for spec in index.values()
+        if spec.door_asm_in is not None or spec.door_dis_in is not None
+    }
+    return {
+        "ok": all(row["exists"] for row in snapshot.values())
+        and len(unique_models) >= 150,
+        "models": len(unique_models),
+        "doorway_models": len(doorway_models),
+        "files": snapshot,
+    }

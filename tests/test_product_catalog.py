@@ -48,7 +48,7 @@ def test_resolve_maestro_prefers_clean_title_over_kakaotalk_bundle():
     if not pc._CSV_PATH.is_file():
         return
     resolved = pc.resolve_model_name("Maestro")
-    assert resolved == "Osaki OS-Pro Maestro"
+    assert resolved == "Osaki OS-Pro Maestro 4D"
     assert "kakaotalk" not in resolved.lower()
     assert "free eye" not in resolved.lower()
 

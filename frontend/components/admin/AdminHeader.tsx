@@ -41,7 +41,13 @@ export default function AdminHeader() {
             href="/admin/warranty/dashboard"
             className="rounded-md px-2 py-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
           >
-            Metrics
+            Warranty metrics
+          </Link>
+          <Link
+            href="/admin/sales"
+            className="rounded-md px-2 py-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+          >
+            Sales metrics
           </Link>
           <Link
             href="/admin/ops"

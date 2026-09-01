@@ -432,6 +432,11 @@ def _looks_like_model_and_code_only(text: str) -> bool:
     ]
     if not tokens:
         return True
+    # A single unknown model-family token plus a code (for example
+    # ``hiro error code 99``) is still code-only. Keep explicit symptom
+    # words such as ``power`` on the normal classifier path.
+    if len(tokens) == 1 and _keyword_workflow_prefill(tokens[0]) is None:
+        return True
 
     try:
         from product_catalog import resolve_model_name  # noqa: WPS433

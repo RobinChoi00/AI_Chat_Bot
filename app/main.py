@@ -1102,6 +1102,13 @@ except ImportError:
     from sales_router import router as sales_router  # type: ignore
 app.include_router(sales_router)
 
+# Sales funnel + lead-delivery dashboard (admin only).
+try:
+    from app.sales_metrics import router as sales_metrics_router
+except ImportError:
+    from sales_metrics import router as sales_metrics_router  # type: ignore
+app.include_router(sales_metrics_router)
+
 # Tidio webhook + Flow turn adapter for OsakiUSA Sales AI.
 try:
     from app.sales_tidio_router import router as sales_tidio_router

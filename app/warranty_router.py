@@ -1965,17 +1965,40 @@ async def record_warranty_session_contact_email(
 
 
 @router.post("/api/v1/warranty/session/{session_id}/register-model", tags=["warranty"])
-async def register_warranty_model(session_id: str, body: WarrantyRegisterModelRequest):
+async def register_warranty_model(
+    session_id: str,
+    body: WarrantyRegisterModelRequest,
+    background_tasks: BackgroundTasks,
+):
     """
     Step 1 of warranty intake: confirm chair model, then show issue-type options.
     """
     _require_web_chat_privacy(session_id)
     engine = _lazy_engine()
-    return _register_model_ticket(engine, session_id, body.model, body.domain)
+    payload = _register_model_ticket(engine, session_id, body.model, body.domain)
+    ticket = payload.get("ticket") or {}
+    ticket_id = str(ticket.get("ticket_id") or "")
+    resolved_model = str(payload.get("resolved_model") or body.model)
+    if ticket_id:
+        from warranty_order_verification import verify_ticket_purchase  # noqa: WPS433
+
+        background_tasks.add_task(
+            verify_ticket_purchase,
+            ticket_id=ticket_id,
+            session_id=session_id,
+            domain=body.domain,
+            expected_model=resolved_model,
+        )
+        payload["purchase_verification_scheduled"] = True
+    return payload
 
 
 @router.post("/api/v1/warranty/session/{session_id}/confirm-model", tags=["warranty"])
-async def confirm_warranty_model(session_id: str, body: WarrantyConfirmModelRequest):
+async def confirm_warranty_model(
+    session_id: str,
+    body: WarrantyConfirmModelRequest,
+    background_tasks: BackgroundTasks,
+):
     """
     Confirm or correct the chair model after smart-start inferred it from free text.
     """
@@ -2006,7 +2029,19 @@ async def confirm_warranty_model(session_id: str, body: WarrantyConfirmModelRequ
 
     ticket = engine.get_ticket(ticket_id)
     node = engine.get_current_node(ticket_id)
-    return _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    if ticket is not None and str(ticket.model_name or "").strip():
+        from warranty_order_verification import verify_ticket_purchase  # noqa: WPS433
+
+        background_tasks.add_task(
+            verify_ticket_purchase,
+            ticket_id=ticket_id,
+            session_id=session_id,
+            domain=body.domain,
+            expected_model=str(ticket.model_name),
+        )
+        payload["purchase_verification_scheduled"] = True
+    return payload
 
 
 @router.post("/api/v1/warranty/session/{session_id}/quick-start", tags=["warranty"])

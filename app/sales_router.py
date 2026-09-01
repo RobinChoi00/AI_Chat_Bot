@@ -52,6 +52,7 @@ from sales_models import (
     record_message,
     update_session_last_intent,
 )
+from store_config import is_supported_storefront_domain, normalize_storefront_domain
 from warranty_models import warranty_db_session
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,14 @@ def _sanitize_message(text: str) -> str:
     return (text or "").strip()[:_MAX_MESSAGE_LEN]
 
 
+def _resolve_sales_domain(value: Optional[str]) -> str:
+    default = os.getenv("TIDIO_DOMAIN", "osakiusa.com")
+    domain = normalize_storefront_domain(value or default)
+    if not is_supported_storefront_domain(domain):
+        raise HTTPException(status_code=422, detail="Unsupported storefront domain.")
+    return domain
+
+
 def _reply_to_response(reply: SalesReply, session_id: str) -> SalesChatResponse:
     return SalesChatResponse(
         reply=reply.reply,
@@ -152,6 +161,24 @@ def _reply_to_response(reply: SalesReply, session_id: str) -> SalesChatResponse:
         tools_used=reply.tools_used,
         session_id=session_id,
     )
+
+
+def _alert_lead_failure(*, lead_id: int, domain: str, error: str) -> None:
+    """Best-effort alert without including customer PII."""
+    try:
+        from ops_notify import send_ops_alert  # noqa: WPS433
+
+        send_ops_alert(
+            "[Sales AI] Lead forwarding failed",
+            (
+                f"Lead ID: {lead_id}\n"
+                f"Domain: {domain or 'unknown'}\n"
+                f"Error: {(error or 'unknown')[:500]}\n\n"
+                "Review the failed lead in /admin/sales."
+            ),
+        )
+    except Exception:  # pragma: no cover - alerting must not break chat
+        logger.exception("sales lead failure alert failed for lead_id=%s", lead_id)
 
 
 def _fire_lead_email(
@@ -170,6 +197,11 @@ def _fire_lead_email(
         except ImportError:
             logger.warning("sales lead capture: email transport unavailable")
             _mark_lead_status(lead_id, status="failed", error="transport_unavailable")
+            _alert_lead_failure(
+                lead_id=lead_id,
+                domain=domain,
+                error="transport_unavailable",
+            )
             return
 
     try:
@@ -184,9 +216,13 @@ def _fire_lead_email(
     except Exception as exc:  # pragma: no cover — email side-effects
         logger.exception("sales lead email failed: %s", exc)
         _mark_lead_status(lead_id, status="failed", error=str(exc)[:500])
+        _alert_lead_failure(lead_id=lead_id, domain=domain, error=str(exc))
         return
 
-    _mark_lead_status(lead_id, status="sent" if ok else "failed", error=None if ok else "smtp_returned_false")
+    error = None if ok else "smtp_returned_false"
+    _mark_lead_status(lead_id, status="sent" if ok else "failed", error=error)
+    if error:
+        _alert_lead_failure(lead_id=lead_id, domain=domain, error=error)
 
 
 def _mark_lead_status(lead_id: int, *, status: str, error: Optional[str]) -> None:
@@ -220,7 +256,7 @@ async def sales_chat(
             detail="Provide `message` or `payload` (button choice).",
         )
 
-    domain = body.domain or "osakiusa.com"
+    domain = _resolve_sales_domain(body.domain)
     session_row = get_or_create_session(
         session_id=body.session_id,
         domain=domain,
@@ -350,7 +386,7 @@ async def sales_lead(
     if email and not _EMAIL_RE.match(email):
         raise HTTPException(status_code=422, detail="Invalid email format.")
 
-    domain = (body.domain or "unknown").strip()
+    domain = _resolve_sales_domain(body.domain)
     reason = (body.reason or "").strip().lower() or None
 
     # Make sure a session row exists so admin dashboards can pivot on it.
@@ -535,3 +571,36 @@ async def admin_list_leads(
         "offset": offset,
         "rows": [row.to_dict() for row in rows],
     }
+
+
+@router.post("/admin/sales/leads/{lead_id}/retry")
+async def admin_retry_lead(
+    lead_id: int,
+    background_tasks: BackgroundTasks,
+    x_admin_key: Optional[str] = Header(default=None),
+):
+    """Retry a failed/pending lead notification without duplicating the lead."""
+    _require_admin(x_admin_key)
+    with warranty_db_session() as db:
+        row = db.query(SalesLead).filter(SalesLead.id == lead_id).one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="lead not found")
+        email = str(row.email or "").strip()
+        if not email:
+            raise HTTPException(
+                status_code=422,
+                detail="This lead has no email address to forward.",
+            )
+        row.forwarded = "pending"
+        row.forwarded_error = None
+        domain = str(row.domain or "")
+        interest = str(row.interest_summary or "")
+
+    background_tasks.add_task(
+        _fire_lead_email,
+        email=email,
+        interest_summary=interest,
+        domain=domain,
+        lead_id=lead_id,
+    )
+    return {"ok": True, "lead_id": lead_id, "forwarded": "pending"}

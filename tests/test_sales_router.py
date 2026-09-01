@@ -616,6 +616,31 @@ def test_chat_requires_message_or_payload(client):
     assert resp.status_code == 422
 
 
+def test_chat_rejects_unknown_storefront_domain(client):
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-domain",
+            "message": "recommend a chair",
+            "domain": "example.invalid",
+        },
+    )
+    assert resp.status_code == 422
+    assert "storefront" in resp.json()["detail"].lower()
+
+
+def test_chat_normalizes_supported_storefront_domain(client):
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-normal-domain",
+            "message": "hello",
+            "domain": "https://www.osakiusa.com/products/example",
+        },
+    )
+    assert resp.status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # Session resume + admin dashboards
 # ---------------------------------------------------------------------------
@@ -735,6 +760,38 @@ def test_admin_leads_lists_captured_lead(client, monkeypatch):
     assert body["total"] >= 1
     reasons = [row["reason"] for row in body["rows"]]
     assert "human" in reasons
+
+
+def test_admin_can_retry_failed_lead(client, monkeypatch):
+    import sales_router as sr
+    from sales_models import SalesLead
+    from warranty_models import warranty_db_session
+
+    with warranty_db_session() as db:
+        lead = SalesLead(
+            session_id="s-retry",
+            email="retry@example.com",
+            domain="osakiusa.com",
+            interest_summary="Retry me",
+            forwarded="failed",
+            forwarded_error="smtp",
+        )
+        db.add(lead)
+        db.flush()
+        lead_id = lead.id
+
+    called = {}
+    monkeypatch.setattr(sr, "_fire_lead_email", lambda **kwargs: called.update(kwargs))
+    response = client.post(
+        f"/admin/sales/leads/{lead_id}/retry",
+        headers={"X-Admin-Key": "test-admin-key"},
+    )
+    assert response.status_code == 200
+    assert called["lead_id"] == lead_id
+    with warranty_db_session() as db:
+        saved = db.query(SalesLead).filter_by(id=lead_id).one()
+        assert saved.forwarded == "pending"
+        assert saved.forwarded_error is None
 
 
 # ---------------------------------------------------------------------------

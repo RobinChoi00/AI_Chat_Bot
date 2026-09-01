@@ -4,8 +4,38 @@ from __future__ import annotations
 
 import os
 from typing import Dict
+from urllib.parse import urlparse
 
 from warranty_defaults import DEFAULT_STOREFRONT_BASE_URL
+
+SUPPORTED_STOREFRONT_DOMAINS = frozenset(
+    {
+        "osakiusa.com",
+        "titanchair.com",
+        "osakichair.com",
+        "osakimassagechair.com",
+        "osaki-titan.com",
+        "osakititan.com",
+    }
+)
+
+
+def normalize_storefront_domain(target_domain: str) -> str:
+    """Return a lower-case hostname without scheme, path, port, or ``www``."""
+    raw = (target_domain or "").strip().lower()
+    if not raw:
+        return ""
+    parsed = urlparse(raw if "://" in raw else f"//{raw}", scheme="https")
+    host = (parsed.hostname or "").strip(".")
+    return host[4:] if host.startswith("www.") else host
+
+
+def is_supported_storefront_domain(target_domain: str) -> bool:
+    host = normalize_storefront_domain(target_domain)
+    return any(
+        host == domain or host.endswith(f".{domain}")
+        for domain in SUPPORTED_STOREFRONT_DOMAINS
+    )
 
 
 def get_store_key_prefix(target_domain: str) -> str:

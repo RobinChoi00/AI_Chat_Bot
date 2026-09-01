@@ -188,6 +188,55 @@ export interface WarrantyMetricsResponse {
 }
 
 // ------------------------------------------------------------
+// Sales funnel dashboard
+// ------------------------------------------------------------
+
+export interface SalesMetricsResponse {
+  range: {
+    days: number;
+    start: string;
+    end: string;
+  };
+  totals: {
+    started: number;
+    engaged: number;
+    engagement_rate_pct: number;
+    recommended: number;
+    recommend_rate_pct: number;
+    nofit: number;
+    nofit_rate_pct: number;
+    handoffs: number;
+    handoff_rate_pct: number;
+    leads: number;
+    lead_rate_pct: number;
+    lead_forward_failed: number;
+    lead_forward_failure_rate_pct: number;
+    user_turns: number;
+    assistant_turns: number;
+  };
+  by_status: Array<{ status: string; count: number }>;
+  by_intent: Array<{ intent: string; count: number }>;
+  by_domain: Array<{ domain: string; count: number }>;
+  by_channel: Array<{ channel: string; count: number }>;
+  lead_delivery: Array<{ status: string; count: number }>;
+  daily: Array<{
+    day: string;
+    started: number;
+    recommended: number;
+    leads: number;
+  }>;
+  artifacts: {
+    ok: boolean;
+    models: number;
+    doorway_models: number;
+    files: Record<
+      string,
+      { exists: boolean; size_bytes: number; modified_at: string | null }
+    >;
+  };
+}
+
+// ------------------------------------------------------------
 // Request bodies
 // ------------------------------------------------------------
 

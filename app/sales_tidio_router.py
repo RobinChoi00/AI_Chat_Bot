@@ -65,6 +65,7 @@ from sales_tidio_buttons import (
     prioritize_quick_replies,
     resolve_button_choice,
 )
+from store_config import is_supported_storefront_domain, normalize_storefront_domain
 
 logger = logging.getLogger(__name__)
 
@@ -396,6 +397,8 @@ def _process_human_takeover(payload: dict) -> None:
 @router.get("/api/v1/sales/tidio/health")
 async def tidio_health():
     """Non-secret config checklist for ops."""
+    from sales_spec_index import sales_artifact_health  # noqa: WPS433
+
     return {
         "enabled": tidio_enabled(),
         "domain": tidio_domain(),
@@ -411,6 +414,7 @@ async def tidio_health():
         "turn_url_hint": "/api/v1/sales/tidio/turn",
         "recommended_live_chat_path": "tidio_flow_http_request",
         "goal": "ai_first_24_7_before_human_agent",
+        "sales_artifacts": sales_artifact_health(),
         "buttons": {
             "max_quick_replies": int(os.getenv("TIDIO_MAX_QUICK_REPLIES", "5")),
             "reply_plain_includes_numbered_menu": True,
@@ -456,7 +460,9 @@ async def tidio_turn(request: Request, body: TidioTurnRequest):
     session_id = (body.session_id or "").strip() or (
         f"tidio:{contact_id}" if contact_id else f"tidio:anon:{os.urandom(8).hex()}"
     )
-    domain = (body.domain or tidio_domain()).strip()
+    domain = normalize_storefront_domain(body.domain or tidio_domain())
+    if not is_supported_storefront_domain(domain):
+        raise HTTPException(status_code=422, detail="Unsupported storefront domain.")
 
     result = _run_sales_turn(
         session_id=session_id,

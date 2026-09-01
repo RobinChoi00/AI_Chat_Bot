@@ -214,6 +214,24 @@ def _record_freshdesk_create_failure(
         logger.warning(
             "Could not persist Freshdesk create failure for %s: %s", ticket_id, exc
         )
+    # First failure is actionable; then alert every third retry to avoid
+    # silently losing cases without flooding the ops mailbox.
+    if attempts == 1 or attempts % 3 == 0:
+        try:
+            from ops_notify import send_ops_alert  # noqa: WPS433
+
+            send_ops_alert(
+                "[Warranty] Freshdesk case creation failed",
+                (
+                    f"Warranty ticket: {ticket_id}\n"
+                    f"Case reference: {case_ref or 'not assigned'}\n"
+                    f"Attempt: {attempts}\n"
+                    f"Error: {updates['freshdesk_create_error']}\n"
+                    f"Detail: {updates['freshdesk_create_error_detail'] or 'none'}"
+                ),
+            )
+        except Exception:  # pragma: no cover - alerting must not mask case result
+            logger.exception("Freshdesk failure alert failed for %s", ticket_id)
     return {
         "created": False,
         "error": updates["freshdesk_create_error"],
