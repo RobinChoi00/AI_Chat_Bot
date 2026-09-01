@@ -61,6 +61,7 @@ from sales_shopify_stock import LiveStockSnapshot, fetch_live_stock, stock_badge
 from sales_spec_index import (
     doorway_inches_for_model,
     doorway_ok,
+    lookup_fit_spec,
     wall_ok,
     weight_ok,
 )
@@ -135,6 +136,21 @@ def _fmt_price(price_usd: Optional[float]) -> str:
     return f"${price_usd:,.0f}"
 
 
+def _fmt_live_price(
+    snap: Optional[LiveStockSnapshot],
+    fallback_price: Optional[float],
+) -> str:
+    """Format Shopify's current variant price or an honest catalog fallback."""
+    live_low = getattr(snap, "price_usd", None) if snap is not None else None
+    if live_low is None:
+        return _fmt_price(fallback_price)
+    low = live_low
+    high = getattr(snap, "price_max_usd", None)
+    if high is not None and high > low:
+        return f"{_fmt_price(low)}–{_fmt_price(high)} depending on options"
+    return _fmt_price(low)
+
+
 def _menu_quick_replies() -> list[QuickReply]:
     """Default set of quick-reply buttons — always present as an escape hatch."""
     return [
@@ -202,7 +218,7 @@ def _price_candidates(limit: int = 3) -> list[ProductSpecs]:
     return picks
 
 
-def _price_reply(message: str) -> SalesReply:
+def _price_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
     product = _guess_model_from_text(message)
     if product is None:
         samples = _price_candidates()
@@ -212,7 +228,7 @@ def _price_reply(message: str) -> SalesReply:
             "and I'll match fit first."
         ]
         if samples:
-            lines.append("\nPopular price points right now:")
+            lines.append("\nPopular catalog price points:")
             for p in samples:
                 lines.append(f"- **{p.display_name}** — {_fmt_price(p.price_usd)}")
         return SalesReply(
@@ -226,18 +242,40 @@ def _price_reply(message: str) -> SalesReply:
             products=[p.as_public_dict() for p in samples],
         )
 
-    price_txt = _fmt_price(product.price_usd)
-    availability = (
-        "✅ Currently in our active catalog."
-        if product.status.lower() == "active"
-        else "⚠️ This model is not in our active catalog right now — a rep can confirm availability."
+    live = fetch_live_stock(
+        product.handle,
+        domain=domain,
+        title=product.title or product.display_name,
+    )
+    price_txt = _fmt_live_price(live, product.price_usd)
+    if live is not None:
+        availability = (
+            "✅ Available to buy now."
+            if live.in_stock
+            else "⚠️ Not currently available to buy."
+        )
+    else:
+        availability = (
+            "✅ Currently in our active catalog; checkout confirms final availability."
+            if product.status.lower() == "active"
+            else "⚠️ This model is not in our active catalog right now — a rep can confirm availability."
+        )
+    price_source = (
+        "This price was checked live on Shopify."
+        if live is not None and live.price_usd is not None
+        else "Live pricing was unavailable, so this is the latest catalog price."
     )
     reply = (
         f"**{product.display_name}** — {price_txt}.\n\n"
         f"{availability}\n\n"
-        "This is the published base price. For any other offer, I can connect "
+        f"{price_source} For any other offer, I can connect "
         "you with our sales team."
     )
+    public = product.as_public_dict()
+    if live is not None and live.price_usd is not None:
+        public["price_usd"] = live.price_usd
+        public["price_max_usd"] = live.price_max_usd
+        public["stock"] = stock_badge(live)
     return SalesReply(
         reply=reply,
         intent=INTENT_PRICE,
@@ -246,8 +284,11 @@ def _price_reply(message: str) -> SalesReply:
             QuickReply(label="Compare with another model", payload="compare"),
             QuickReply(label="Talk to a human", payload="human"),
         ],
-        tools_used=["catalog.resolve_product"],
-        products=[product.as_public_dict()],
+        tools_used=[
+            "catalog.resolve_product",
+            *(["shopify.price_inventory"] if live is not None else []),
+        ],
+        products=[public],
     )
 
 
@@ -277,14 +318,9 @@ def _stock_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
     if live is not None:
         tools.append("shopify.inventory")
         if live.in_stock:
-            qty = (
-                f" About **{live.total_inventory}** unit(s) show in inventory right now."
-                if live.total_inventory is not None
-                else ""
-            )
             low = " (low stock)" if live.is_low else ""
             reply = (
-                f"**{product.display_name}** is **available to buy** right now{low}.{qty}\n\n"
+                f"**{product.display_name}** is **available to buy** right now{low}.\n\n"
                 "Exact configuration (color/options) is confirmed at checkout."
             )
         else:
@@ -353,7 +389,9 @@ def _specs_reply(message: str) -> SalesReply:
             tools_used=["catalog.resolve_product"],
         )
 
-    specs = product.as_public_dict()["specs"]
+    public = product.as_public_dict()
+    specs = public["specs"]
+    fit = lookup_fit_spec(product.display_name)
     lines = [f"**{product.display_name}** — {_fmt_price(product.price_usd)}"]
 
     asked = [
@@ -384,6 +422,22 @@ def _specs_reply(message: str) -> SalesReply:
         val = str(specs.get(key) or "").strip()
         if val:
             lines.append(f"- **{label}**: {val}")
+    if fit is not None:
+        fit_public = {
+            "max_user_lb": fit.max_user_lb,
+            "doorway_assembled_in": fit.door_asm_in,
+            "doorway_disassembled_in": fit.door_dis_in,
+            "wall_clearance_in": fit.wall_clearance_in,
+        }
+        public["fit_specs"] = fit_public
+        if fit.max_user_lb is not None:
+            lines.append(f"- **Maximum user weight**: {fit.max_user_lb:g} lb")
+        if fit.door_asm_in is not None:
+            lines.append(f"- **Doorway (assembled)**: {fit.door_asm_in:g} in")
+        if fit.door_dis_in is not None:
+            lines.append(f"- **Doorway (disassembled)**: {fit.door_dis_in:g} in")
+        if fit.wall_clearance_in is not None:
+            lines.append(f"- **Wall clearance**: {fit.wall_clearance_in:g} in")
     return SalesReply(
         reply="\n".join(lines),
         intent=INTENT_SPECS,
@@ -393,7 +447,7 @@ def _specs_reply(message: str) -> SalesReply:
             QuickReply(label="Talk to a human", payload="human"),
         ],
         tools_used=["catalog.resolve_product"],
-        products=[product.as_public_dict()],
+        products=[public],
     )
 
 
@@ -1028,7 +1082,7 @@ def _tiered_case_recommend_reply(
         live_price = getattr(snap, "price_usd", None) if snap is not None else None
         catalog_price = product.price_usd if product else None
         show_price = live_price if live_price is not None else catalog_price
-        price = _fmt_price(show_price) if show_price is not None else "price on request"
+        price = _fmt_live_price(snap, catalog_price)
         stock_bit = f" · *{badge}*" if badge else ""
 
         lines.append(f"**{n}. {tier_label}** — **{display}** · {price}{stock_bit}")
@@ -1046,6 +1100,8 @@ def _tiered_case_recommend_reply(
             card = product.as_public_dict()
             if show_price is not None:
                 card["price_usd"] = show_price
+            if snap is not None and getattr(snap, "price_max_usd", None) is not None:
+                card["price_max_usd"] = snap.price_max_usd
             if url:
                 card["product_url"] = url
             if badge:
@@ -1898,6 +1954,8 @@ def _payload_reply(
         )
     if root == "stock":
         return _stock_reply(message or payload, domain=domain)
+    if root == "price":
+        return _price_reply(message or payload, domain=domain)
     if root == "lead":
         action = parts[1].strip().lower() if len(parts) > 1 else "save_pick"
         if action in {"save_pick", "email", "email_pick"}:
@@ -2209,7 +2267,7 @@ def respond(
         return _finalize_flow_stage(_order_status_reply(message))
 
     if intent.label == INTENT_PRICE:
-        return _finalize_flow_stage(_price_reply(message))
+        return _finalize_flow_stage(_price_reply(message, domain=domain))
     if intent.label == INTENT_STOCK:
         return _finalize_flow_stage(_stock_reply(message, domain=domain))
     if intent.label == INTENT_SPECS:

@@ -87,17 +87,22 @@ def validate_casebook(brand: str) -> None:
                 if not model or model == "NO VERIFIED MATCH":
                     continue
                 listed += 1
-                if lookup_fit_spec(model) is None:
+                spec = lookup_fit_spec(model)
+                if spec is None:
                     continue
                 known_specs += 1
-                if not weight_ok(model, row["Weight"]):
+                if spec.max_user_lb is not None and not weight_ok(model, row["Weight"]):
                     failures.append(f"{model}: fails weight {row['Weight']}")
-                if row["Space Constraint"] == "Narrow Doorway" and not doorway_ok(
-                    model, limit_in=32.0, mode="assembled"
+                if (
+                    row["Space Constraint"] == "Narrow Doorway"
+                    and spec.door_asm_in is not None
+                    and not doorway_ok(model, limit_in=32.0, mode="assembled")
                 ):
                     failures.append(f"{model}: fails 32in assembled doorway")
-                if row["Space Constraint"] == "Small Room" and not wall_ok(
-                    model, "Small Room"
+                if (
+                    row["Space Constraint"] == "Small Room"
+                    and spec.wall_clearance_in is not None
+                    and not wall_ok(model, "Small Room")
                 ):
                     failures.append(f"{model}: fails small-room clearance")
 

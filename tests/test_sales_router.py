@@ -608,6 +608,55 @@ def test_price_without_model_asks_for_it(client):
     assert "which model" in reply or "model name" in reply
 
 
+def test_named_price_uses_live_shopify_variant_range(client, monkeypatch):
+    class _Snap:
+        handle = "osaki-os-champ"
+        title = "Osaki OS-Champ"
+        status = "active"
+        available_for_sale = True
+        total_inventory = 5
+        source = "shopify"
+        price_usd = 1299.0
+        price_max_usd = 1499.0
+        in_stock = True
+        is_low = False
+
+    monkeypatch.setattr("sales_agent.fetch_live_stock", lambda *a, **k: _Snap())
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-live-price",
+            "message": "How much is the Osaki OS-Champ?",
+            "domain": "osakiusa.com",
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "$1,299–$1,499 depending on options" in body["reply"]
+    assert "checked live on Shopify" in body["reply"]
+    assert body["products"][0]["price_usd"] == 1299.0
+    assert body["products"][0]["price_max_usd"] == 1499.0
+
+
+def test_specs_include_authoritative_fit_dimensions(client):
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-fit-specs",
+            "message": "Show me specs for Osaki OS-Champ",
+            "domain": "osakiusa.com",
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "Maximum user weight" in body["reply"]
+    assert "Doorway (assembled)" in body["reply"]
+    assert "Wall clearance" in body["reply"]
+    assert body["products"][0]["fit_specs"]["doorway_assembled_in"] is not None
+
+
 def test_chat_requires_message_or_payload(client):
     resp = client.post(
         "/api/v1/sales/chat",

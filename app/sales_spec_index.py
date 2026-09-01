@@ -61,7 +61,8 @@ class ModelFitSpec:
         if mode == "either":
             vals = [v for v in (asm, dis) if v is not None]
             return min(vals) if vals else None
-        return asm if asm is not None else dis
+        # Never substitute a disassembled width for an assembled-only request.
+        return asm
 
 
 def _normalize_key(text: str) -> str:
@@ -138,13 +139,13 @@ def doorway_inches_for_model(
 
 
 def weight_ok(model_name: str, weight_bucket: str) -> bool:
-    """True when unknown or capacity covers the shopper band."""
+    """True when capacity is known and covers the requested shopper band."""
     need = WEIGHT_HARD_LB.get((weight_bucket or "").strip())
     if need is None:
         return True
     spec = lookup_fit_spec(model_name)
     if spec is None or spec.max_user_lb is None:
-        return True
+        return False
     return spec.max_user_lb >= need
 
 
@@ -153,7 +154,7 @@ def wall_ok(model_name: str, space: str) -> bool:
         return True
     spec = lookup_fit_spec(model_name)
     if spec is None or spec.wall_clearance_in is None:
-        return True
+        return False
     return spec.wall_clearance_in <= SMALL_ROOM_MAX_WALL_IN
 
 
@@ -163,12 +164,12 @@ def doorway_ok(
     limit_in: Optional[float],
     mode: str = "assembled",
 ) -> bool:
-    """True when no limit, unknown spec, or chair clears the doorway."""
+    """True when no limit, or a known chair dimension clears the doorway."""
     if limit_in is None:
         return True
     door = doorway_inches_for_model(model_name, mode=mode)
     if door is None:
-        return True
+        return False
     return door <= limit_in
 
 

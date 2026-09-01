@@ -431,7 +431,16 @@ def test_weight_gate_rejects_under_capacity():
 def test_wall_gate_small_room():
     assert wall_ok("Osaki OS-Highpointe 4D", "Small Room")
     assert not wall_ok("Osaki OS-Champ", "Small Room")  # 9 in clearance
-    assert wall_ok("Totally Unknown Chair XYZ", "Small Room")
+    assert not wall_ok("Totally Unknown Chair XYZ", "Small Room")
+
+
+def test_unknown_specs_fail_closed_when_fit_is_constrained():
+    unknown = "Totally Unknown Chair XYZ"
+    assert not doorway_ok(unknown, limit_in=32, mode="assembled")
+    assert not weight_ok(unknown, "≤180 lb")
+    assert not wall_ok(unknown, "Small Room")
+    assert doorway_ok(unknown, limit_in=None, mode="assembled")
+    assert wall_ok(unknown, "No Space Issue")
 
 
 @pytest.mark.parametrize(
@@ -508,16 +517,25 @@ def test_casebook_models_pass_spec_gates(brand):
                 name = (row.get(col) or "").strip()
                 if not name or name == "NO VERIFIED MATCH":
                     continue
-                if lookup_fit_spec(name) is None:
+                spec = lookup_fit_spec(name)
+                if spec is None:
                     continue
                 checked += 1
-                if not weight_ok(name, weight):
+                if spec.max_user_lb is not None and not weight_ok(name, weight):
                     fails.append(f"{col} {name} fails {weight}")
-                if space == "Narrow Doorway" and not doorway_ok(
+                if (
+                    space == "Narrow Doorway"
+                    and spec.door_asm_in is not None
+                    and not doorway_ok(
                     name, limit_in=NARROW_MAX_IN, mode="assembled"
+                    )
                 ):
                     fails.append(f"{col} {name} fails {NARROW_MAX_IN}in doorway")
-                if space == "Small Room" and not wall_ok(name, "Small Room"):
+                if (
+                    space == "Small Room"
+                    and spec.wall_clearance_in is not None
+                    and not wall_ok(name, "Small Room")
+                ):
                     fails.append(f"{col} {name} fails small-room wall")
     assert checked > 1000, f"{brand}: expected a populated case book"
     assert fails == [], f"{brand} spec-gate mismatches: {fails[:12]}"

@@ -45,7 +45,7 @@ def test_stock_badge_labels():
         stock_badge(
             LiveStockSnapshot("h", "t", "active", True, 2, "shopify")
         )
-        == "low stock (2)"
+        == "low stock"
     )
     assert (
         stock_badge(
@@ -53,6 +53,42 @@ def test_stock_badge_labels():
         )
         == "out of stock"
     )
+
+
+def test_snapshot_uses_shopify_sellability_and_variant_price_range():
+    from sales_shopify_stock import _snapshot_from_node
+
+    snap = _snapshot_from_node(
+        {
+            "handle": "chair",
+            "title": "Chair",
+            "status": "ACTIVE",
+            "totalInventory": 0,
+            "variants": {
+                "edges": [
+                    {
+                        "node": {
+                            "availableForSale": True,
+                            "inventoryQuantity": 0,
+                            "price": "2999.00",
+                        }
+                    },
+                    {
+                        "node": {
+                            "availableForSale": True,
+                            "inventoryQuantity": 0,
+                            "price": "3499.00",
+                        }
+                    },
+                ]
+            },
+        },
+        fallback_handle="chair",
+    )
+
+    assert snap.in_stock  # Shopify may allow continued selling at zero inventory.
+    assert snap.price_usd == 2999.0
+    assert snap.price_max_usd == 3499.0
 
 
 def test_handle_candidates_strip_massage_chair_suffix():

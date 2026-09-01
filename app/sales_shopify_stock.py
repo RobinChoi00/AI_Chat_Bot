@@ -72,14 +72,14 @@ class LiveStockSnapshot:
     total_inventory: Optional[int]
     source: str  # shopify | unavailable
     price_usd: Optional[float] = None
+    price_max_usd: Optional[float] = None
 
     @property
     def in_stock(self) -> bool:
-        if not self.available_for_sale:
-            return False
-        if self.total_inventory is None:
-            return True
-        return self.total_inventory > 0
+        # Shopify's sellability flag accounts for inventory policy (including
+        # "continue selling when out of stock"), so it is more authoritative
+        # than the aggregate inventory count.
+        return self.available_for_sale
 
     @property
     def is_low(self) -> bool:
@@ -95,8 +95,7 @@ def stock_badge(snap: Optional[LiveStockSnapshot]) -> str:
     if snap is None:
         return "stock unchecked"
     if snap.in_stock and snap.is_low:
-        qty = snap.total_inventory
-        return f"low stock ({qty})" if qty is not None else "low stock"
+        return "low stock"
     if snap.in_stock:
         return "in stock"
     return "out of stock"
@@ -136,7 +135,7 @@ def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> LiveSt
     variant_edges = (((node.get("variants") or {}).get("edges")) or [])
     variant_nodes = [(edge or {}).get("node") or {} for edge in variant_edges]
     any_available = any(bool(v.get("availableForSale")) for v in variant_nodes)
-    price_usd: Optional[float] = None
+    prices: list[float] = []
     if total_int is None and variant_nodes:
         qty_sum = 0
         saw_qty = False
@@ -156,8 +155,7 @@ def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> LiveSt
         if raw_price is None or raw_price == "":
             continue
         try:
-            price_usd = float(raw_price)
-            break
+            prices.append(float(raw_price))
         except (TypeError, ValueError):
             continue
     if not variant_nodes:
@@ -173,7 +171,8 @@ def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> LiveSt
         available_for_sale=any_available,
         total_inventory=total_int,
         source="shopify",
-        price_usd=price_usd,
+        price_usd=min(prices) if prices else None,
+        price_max_usd=max(prices) if prices else None,
     )
 
 
