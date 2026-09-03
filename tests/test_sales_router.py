@@ -719,6 +719,25 @@ def test_specs_include_authoritative_fit_dimensions(client):
     assert body["products"][0]["fit_specs"]["doorway_assembled_in"] is not None
 
 
+def test_tell_me_about_a_named_model_returns_its_specs(client):
+    """Regression: 'tell me about the Maestro' used to ask which model, even
+    though the fallback had already identified Maestro as a catalog token."""
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-tell-me",
+            "message": "tell me about the Maestro",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["intent"] == "specs"
+    assert "maestro" in body["reply"].lower()
+    assert "which model would you like specs for" not in body["reply"].lower()
+    assert body.get("products")
+
+
 def test_chat_requires_message_or_payload(client):
     resp = client.post(
         "/api/v1/sales/chat",

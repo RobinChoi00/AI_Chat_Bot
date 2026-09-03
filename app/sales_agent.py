@@ -81,7 +81,7 @@ from sales_intent import (
     classify,
     handoff_message,
 )
-from sales_intent_fallback import resolve_unclear
+from sales_intent_fallback import named_model_in_text, resolve_unclear
 from sales_policy import (
     TOPIC_SHIPPING,
     TOPIC_SHOWROOM,
@@ -189,7 +189,14 @@ _MENU_INTRO = (
 
 
 def _guess_model_from_text(text: str) -> Optional[ProductSpecs]:
-    return resolve_product(text or "")
+    product = resolve_product(text or "")
+    if product is not None:
+        return product
+    # `resolve_product` matches names, not sentences, so "tell me about the
+    # Maestro" slips past it. The fallback index knows which catalog token was
+    # in the message, so retry with just that name.
+    named = named_model_in_text(text or "")
+    return resolve_product(named) if named else None
 
 
 # ---------------------------------------------------------------------------
