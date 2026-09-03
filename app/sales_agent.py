@@ -70,6 +70,7 @@ from sales_intent import (
     INTENT_GREETING,
     INTENT_INTENSITY,
     INTENT_ORDER_STATUS,
+    INTENT_PREPURCHASE_POLICY,
     INTENT_PRICE,
     INTENT_RECOMMEND,
     INTENT_SPECS,
@@ -79,6 +80,14 @@ from sales_intent import (
     SalesIntent,
     classify,
     handoff_message,
+)
+from sales_intent_fallback import resolve_unclear
+from sales_policy import (
+    TOPIC_SHIPPING,
+    TOPIC_SHOWROOM,
+    TOPIC_WHITE_GLOVE,
+    detect_topic as detect_policy_topic,
+    policy_answer,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,6 +117,8 @@ class SalesReply:
     prefs_patch: Optional[dict] = None
     # Router creates a SalesLead when email is present (chat-native "Email me this pick").
     lead_capture: Optional[dict] = None
+    # Router writes a SalesFeedback row when the shopper rates an answer.
+    feedback: Optional[dict] = None
     # Tidio Flow stage for static Decision (quick reply) branching — free plan.
     # menu | ask_height | ask_weight | ask_space | ask_goal | recommend | lead | handoff | warranty
     flow_stage: str = "menu"
@@ -1730,6 +1741,79 @@ def _greeting_reply() -> SalesReply:
     )
 
 
+#: Answers substantive enough to be worth rating. Asking after a menu prompt
+#: or a clarifying question would measure nothing and add friction.
+RATEABLE_INTENTS = frozenset(
+    {
+        INTENT_PREPURCHASE_POLICY,
+        INTENT_PRICE,
+        INTENT_SPECS,
+        INTENT_STOCK,
+        INTENT_COMPARE,
+    }
+)
+
+
+def feedback_quick_replies() -> list[QuickReply]:
+    return [
+        QuickReply(label="That helped", payload="feedback:up"),
+        QuickReply(label="Not what I needed", payload="feedback:down"),
+    ]
+
+
+def _feedback_reply(direction: str, prefs: Optional[dict]) -> Optional[SalesReply]:
+    """Acknowledge a rating and hand the router a row to persist."""
+    if direction not in {"up", "down"}:
+        return None
+    rating = "helpful" if direction == "up" else "not_helpful"
+    rated_intent = str((prefs or {}).get("last_rateable_intent") or "") or None
+
+    if rating == "helpful":
+        text = "Glad that helped. Anything else I can check for you?"
+        quick = _menu_quick_replies()
+    else:
+        text = (
+            "Sorry that missed the mark — thanks for telling me. "
+            "Want me to try a different angle, or put you with a specialist?"
+        )
+        quick = [
+            QuickReply(label="Recommend a chair", payload="recommend"),
+            QuickReply(label="Talk to a human", payload="human"),
+        ]
+
+    return SalesReply(
+        reply=text,
+        intent="feedback",
+        quick_replies=quick,
+        tools_used=[f"feedback.{rating}"],
+        feedback={"rating": rating, "intent": rated_intent},
+    )
+
+
+def _prepurchase_policy_reply(message: str, *, domain: str) -> SalesReply:
+    """Answer a published policy question instead of handing it to a human."""
+    topic = detect_policy_topic(message)
+    answer = policy_answer(topic, domain) if topic else None
+    if answer is None:
+        return _unclear_reply()
+
+    followups = [QuickReply(label="Recommend a chair", payload="recommend")]
+    if topic in (TOPIC_SHIPPING, TOPIC_WHITE_GLOVE):
+        followups.append(
+            QuickReply(label="Check doorway fit", payload="recommend:space:narrow")
+        )
+    if topic != TOPIC_SHOWROOM:
+        followups.append(QuickReply(label="Visit showroom", payload="cta:showroom"))
+    followups.append(QuickReply(label="Talk to a human", payload="human"))
+
+    return SalesReply(
+        reply=answer,
+        intent=INTENT_PREPURCHASE_POLICY,
+        quick_replies=followups,
+        tools_used=[f"policy.{topic}"],
+    )
+
+
 def _unclear_reply() -> SalesReply:
     return SalesReply(
         reply=(
@@ -1964,6 +2048,8 @@ def _payload_reply(
             if email:
                 return _capture_pick_lead(email, prefs, domain=domain)
             return _ask_email_for_pick(prefs)
+    if root == "feedback" and len(parts) >= 2:
+        return _feedback_reply(parts[1].strip().lower(), prefs)
     if root == "open" and len(parts) >= 2:
         url = payload.split(":", 1)[1].strip()
         if url.startswith("https://"):
@@ -1986,6 +2072,30 @@ def _payload_reply(
 
 
 def _finalize_flow_stage(result: SalesReply) -> SalesReply:
+    """Resolve the flow stage, then instrument the turn for analytics."""
+    result = _resolve_flow_stage(result)
+
+    # Stamp the stage into tools_used so per-question drop-off can be measured
+    # from the message log without a schema change.
+    stage = result.flow_stage or "menu"
+    tools = result.tools_used or []
+    if not any(t.startswith("stage:") for t in tools):
+        result.tools_used = tools + [f"stage:{stage}"]
+
+    # Offer a rating on answers substantial enough for it to mean something.
+    if result.intent in RATEABLE_INTENTS and not result.handoff:
+        existing = {q.payload for q in result.quick_replies}
+        for quick in feedback_quick_replies():
+            if quick.payload not in existing:
+                result.quick_replies.append(quick)
+        patch = dict(result.prefs_patch or {})
+        patch["last_rateable_intent"] = result.intent
+        result.prefs_patch = patch
+
+    return result
+
+
+def _resolve_flow_stage(result: SalesReply) -> SalesReply:
     """Fill flow_stage for Tidio static Decision branching when callers omit it."""
     if result.flow_stage and result.flow_stage not in {"", "menu"}:
         # Explicit ask_* / recommend / etc. already set.
@@ -2257,8 +2367,20 @@ def respond(
 
     intent = classify(message or "")
 
+    # Regexes miss unusual phrasing, which showed up in production as a 27%
+    # `unclear` rate. Re-route those turns before falling back to the menu.
+    if intent.label == INTENT_UNCLEAR:
+        recovered = resolve_unclear(message or "")
+        if recovered is not None:
+            intent = recovered
+
     if intent.label in HANDOFF_INTENTS:
         return _finalize_flow_stage(_handoff_reply(intent))
+
+    if intent.label == INTENT_PREPURCHASE_POLICY:
+        return _finalize_flow_stage(
+            _prepurchase_policy_reply(message, domain=domain)
+        )
 
     if intent.label == INTENT_GREETING:
         return _finalize_flow_stage(_greeting_reply())

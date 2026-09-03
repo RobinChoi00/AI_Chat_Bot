@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 from typing import Optional, cast
 
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy import Column, DateTime, Float, Integer, String, Text
 
 from warranty_models import Base, _engine, _now_cst, warranty_db_session
 
@@ -152,6 +152,71 @@ class SalesLead(Base):
         }
 
 
+class SalesFeedback(Base):
+    """Thumbs up/down a shopper gave on a specific answer.
+
+    Without this the funnel could show that an answer was delivered but never
+    whether it landed, which is the difference between activity and quality.
+    """
+
+    __tablename__ = "sales_feedback"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    session_id   = Column(String, index=True, nullable=False)
+    rating       = Column(String, index=True, nullable=False)  # helpful | not_helpful
+    intent       = Column(String, index=True, nullable=True)   # what was rated
+    domain       = Column(String, index=True, default="unknown")
+    comment      = Column(Text, nullable=True)
+    created_at   = Column(DateTime, default=_now_cst, index=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id":         self.id,
+            "session_id": self.session_id,
+            "rating":     self.rating,
+            "intent":     self.intent,
+            "domain":     self.domain,
+            "comment":    self.comment,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class SalesConversion(Base):
+    """A Shopify order matched back to the chat session that influenced it.
+
+    Until this existed the funnel stopped at "lead captured" and there was no
+    way to show the chat produced revenue.
+    """
+
+    __tablename__ = "sales_conversions"
+
+    id                = Column(Integer, primary_key=True, index=True)
+    shopify_order_id  = Column(String, unique=True, index=True, nullable=False)
+    order_number      = Column(String, nullable=True)
+    session_id        = Column(String, index=True, nullable=True)  # None = unattributed
+    email             = Column(String, index=True, nullable=True)
+    domain            = Column(String, index=True, default="unknown")
+    total_usd         = Column(Float, nullable=True)
+    currency          = Column(String, nullable=True)
+    matched_by        = Column(String, index=True, nullable=True)  # session_email | lead_email
+    ordered_at        = Column(DateTime, index=True, nullable=True)
+    created_at        = Column(DateTime, default=_now_cst, index=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id":               self.id,
+            "shopify_order_id": self.shopify_order_id,
+            "order_number":     self.order_number,
+            "session_id":       self.session_id,
+            "domain":           self.domain,
+            "total_usd":        self.total_usd,
+            "currency":         self.currency,
+            "matched_by":       self.matched_by,
+            "ordered_at":       self.ordered_at.isoformat() if self.ordered_at else None,
+            "created_at":       self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 Base.metadata.create_all(bind=_engine)
 
 
@@ -215,6 +280,31 @@ def record_message(
             tools_used=json.dumps(tools_used or []),
         )
         db.add(row)
+
+
+def record_feedback(
+    session_id: str,
+    *,
+    rating: str,
+    intent: Optional[str] = None,
+    domain: str = "unknown",
+    comment: Optional[str] = None,
+) -> Optional[int]:
+    """Store a thumbs up/down. Returns the row id, or None for a bad rating."""
+    normalized = (rating or "").strip().lower()
+    if normalized not in {"helpful", "not_helpful"}:
+        return None
+    with warranty_db_session() as db:
+        row = SalesFeedback(
+            session_id=session_id,
+            rating=normalized,
+            intent=(intent or None),
+            domain=domain or "unknown",
+            comment=(comment or None),
+        )
+        db.add(row)
+        db.flush()
+        return int(row.id)
 
 
 def update_session_last_intent(

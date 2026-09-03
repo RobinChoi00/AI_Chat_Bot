@@ -27,6 +27,7 @@ from sales_intent import (  # noqa: E402
     INTENT_INTENSITY,
     INTENT_ORDER_STATUS,
     INTENT_PARTS_TECHNICIAN,
+    INTENT_PREPURCHASE_POLICY,
     INTENT_PRICE,
     INTENT_RECOMMEND,
     INTENT_SPECS,
@@ -104,18 +105,34 @@ def test_discount_never_answered_directly():
 
 
 def test_eta_and_delivery_promise_route_to_human():
+    """Anything that would require promising a *date* still hands off."""
     for text in [
         "when will it arrive",
         "how long until delivery",
         "estimated delivery date?",
         "can you guarantee delivery before Christmas",
         "lead time please",
-        "do you offer free shipping",
-        "can you ship to Hawaii",
     ]:
         intent = classify(text)
         assert intent.label == INTENT_ETA_SHIPPING, text
         assert intent.is_handoff, text
+
+
+def test_shipping_policy_questions_are_answered_not_handed_off():
+    """Published policy has an answer, so a shopper should get one."""
+    for text in ["do you offer free shipping", "how much is shipping", "curbside?"]:
+        intent = classify(text)
+        assert intent.label == INTENT_PREPURCHASE_POLICY, text
+        assert not intent.is_handoff, text
+
+
+def test_undeliverable_regions_get_the_authoritative_no():
+    """We don't deliver to HI/AK/Guam — the generic policy would mislead."""
+    from sales_policy import TOPIC_RESTRICTED_REGION, detect_topic
+
+    for text in ["can you ship to Hawaii", "do you deliver to Alaska", "shipping to Guam"]:
+        assert detect_topic(text) == TOPIC_RESTRICTED_REGION, text
+        assert classify(text).label == INTENT_PREPURCHASE_POLICY, text
 
 
 def test_shipping_and_warranty_handoffs_use_warranty_department_contact():
@@ -376,7 +393,9 @@ def test_tidio_short_triggers_are_classified():
         "sale": INTENT_DISCOUNT,
         "deal": INTENT_DISCOUNT,
         "promo": INTENT_DISCOUNT,
-        "financing": INTENT_DISCOUNT,
+        # Financing has a published answer (Affirm at checkout), so it is
+        # answered rather than handed to a rep.
+        "financing": INTENT_PREPURCHASE_POLICY,
         "shipping": INTENT_ETA_SHIPPING,
         "delivery": INTENT_ETA_SHIPPING,
         "arrive": INTENT_ETA_SHIPPING,

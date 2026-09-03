@@ -45,10 +45,40 @@ def _lazy_orm():
     import sys as _sys
 
     _sys.path.insert(0, str(Path(__file__).parent))
-    from sales_models import SalesLead, SalesMessage, SalesSession  # noqa: WPS433
+    from sales_models import (  # noqa: WPS433
+        SalesConversion,
+        SalesFeedback,
+        SalesLead,
+        SalesMessage,
+        SalesSession,
+    )
     from warranty_models import warranty_db_session  # noqa: WPS433
 
-    return SalesSession, SalesMessage, SalesLead, warranty_db_session
+    return (
+        SalesSession,
+        SalesMessage,
+        SalesLead,
+        SalesFeedback,
+        SalesConversion,
+        warranty_db_session,
+    )
+
+
+#: The recommend interview in the order a shopper walks it. Drop-off between
+#: consecutive stages tells us which question is losing people.
+_FUNNEL_STAGES: tuple[tuple[str, str], ...] = (
+    ("ask_height", "Height"),
+    ("ask_weight", "Weight"),
+    ("ask_space", "Room / space"),
+    ("ask_doorway", "Doorway width"),
+    ("ask_doorway_fit", "Assembled vs disassembled"),
+    ("ask_goal", "Primary goal"),
+    ("recommend", "Recommendation shown"),
+)
+
+
+def _stages(tools: set[str]) -> set[str]:
+    return {t.split(":", 1)[1] for t in tools if t.startswith("stage:")}
 
 
 def _tools(raw: Optional[str]) -> set[str]:
@@ -67,7 +97,14 @@ async def sales_metrics(
 ) -> dict[str, Any]:
     """Aggregate recommendation, handoff, lead, and delivery-health metrics."""
     _require_admin(x_admin_key)
-    SalesSession, SalesMessage, SalesLead, warranty_db_session = _lazy_orm()
+    (
+        SalesSession,
+        SalesMessage,
+        SalesLead,
+        SalesFeedback,
+        SalesConversion,
+        warranty_db_session,
+    ) = _lazy_orm()
 
     end = _now_cst()
     start = (end - timedelta(days=days - 1)).replace(
@@ -77,11 +114,19 @@ async def sales_metrics(
     with warranty_db_session() as db:
         session_q = db.query(SalesSession).filter(SalesSession.created_at >= start)
         lead_q = db.query(SalesLead).filter(SalesLead.created_at >= start)
+        feedback_q = db.query(SalesFeedback).filter(SalesFeedback.created_at >= start)
+        conversion_q = db.query(SalesConversion).filter(
+            SalesConversion.created_at >= start
+        )
         if domain:
             session_q = session_q.filter(SalesSession.domain.contains(domain))
             lead_q = lead_q.filter(SalesLead.domain.contains(domain))
+            feedback_q = feedback_q.filter(SalesFeedback.domain.contains(domain))
+            conversion_q = conversion_q.filter(SalesConversion.domain.contains(domain))
         sessions = session_q.all()
         leads = lead_q.all()
+        feedback = feedback_q.all()
+        conversions = conversion_q.all()
 
         session_ids = [str(row.session_id) for row in sessions]
         messages = (
@@ -98,6 +143,9 @@ async def sales_metrics(
     recommended_sessions: set[str] = set()
     nofit_sessions: set[str] = set()
     handoff_sessions: set[str] = set()
+    stage_sessions: defaultdict[str, set[str]] = defaultdict(set)
+    unclear_turns = 0
+    assistant_total = 0
 
     for msg in messages:
         sid = str(msg.session_id)
@@ -106,11 +154,16 @@ async def sales_metrics(
             user_turns[sid] += 1
         elif role == "assistant":
             assistant_turns[sid] += 1
+            assistant_total += 1
             tools = _tools(msg.tools_used)
             if tools & {"cases.lookup", "catalog.recommend"}:
                 recommended_sessions.add(sid)
             if "cases.nofit" in tools:
                 nofit_sessions.add(sid)
+            for stage in _stages(tools):
+                stage_sessions[stage].add(sid)
+            if str(msg.intent or "").strip().lower() == "unclear":
+                unclear_turns += 1
         intent = str(msg.intent or "").strip().lower()
         if role == "assistant" and intent:
             intent_counts[intent] += 1
@@ -150,6 +203,49 @@ async def sales_metrics(
     nofit = len(nofit_sessions)
     lead_count = len(leads)
     failed_leads = lead_status_counts["failed"]
+
+    # Per-question drop-off. "Advanced" means the session reached *any* later
+    # question, not specifically the next one — the doorway questions are only
+    # asked for narrow spaces, so a strict next-stage comparison would report
+    # everyone who skipped them as having quit.
+    funnel_rows: list[dict[str, Any]] = []
+    for index, (stage, label) in enumerate(_FUNNEL_STAGES):
+        here = stage_sessions.get(stage, set())
+        later: set[str] = set()
+        for next_stage, _ in _FUNNEL_STAGES[index + 1 :]:
+            later |= stage_sessions.get(next_stage, set())
+        advanced = len(here & later) if later else len(here)
+        dropped = max(len(here) - advanced, 0)
+        funnel_rows.append(
+            {
+                "stage": stage,
+                "label": label,
+                "reached": len(here),
+                "advanced": advanced,
+                "dropped": dropped,
+                "drop_off_pct": _percent(dropped, len(here)),
+            }
+        )
+
+    rating_counts: Counter[str] = Counter()
+    feedback_by_intent: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    for row in feedback:
+        rating = str(row.rating or "").lower()
+        rating_counts[rating] += 1
+        feedback_by_intent[str(row.intent or "unknown").lower()][rating] += 1
+
+    helpful = rating_counts["helpful"]
+    not_helpful = rating_counts["not_helpful"]
+    rated = helpful + not_helpful
+
+    # Revenue. Orders we could not tie to a session are still counted in
+    # `orders_seen` so the attributed share stays honest.
+    attributed = [c for c in conversions if c.session_id]
+    attributed_revenue = sum(float(c.total_usd or 0.0) for c in attributed)
+    match_counts: Counter[str] = Counter(
+        str(c.matched_by or "unattributed").lower() for c in conversions
+    )
+
     from sales_spec_index import sales_artifact_health  # noqa: WPS433
 
     daily_rows = []
@@ -182,7 +278,39 @@ async def sales_metrics(
             "lead_forward_failure_rate_pct": _percent(failed_leads, lead_count),
             "user_turns": sum(user_turns.values()),
             "assistant_turns": sum(assistant_turns.values()),
+            # The share of answers where the bot admitted it didn't understand.
+            "unclear_turns": unclear_turns,
+            "unclear_rate_pct": _percent(unclear_turns, assistant_total),
+            "csat_rated": rated,
+            "csat_helpful": helpful,
+            "csat_not_helpful": not_helpful,
+            "csat_score_pct": _percent(helpful, rated),
+            "orders_seen": len(conversions),
+            "orders_attributed": len(attributed),
+            "attribution_rate_pct": _percent(len(attributed), len(conversions)),
+            "attributed_revenue_usd": round(attributed_revenue, 2),
+            "session_to_order_rate_pct": _percent(len(attributed), started),
+            "lead_to_order_rate_pct": _percent(len(attributed), lead_count),
         },
+        "conversion_match": [
+            {"matched_by": key, "count": count}
+            for key, count in match_counts.most_common()
+        ],
+        "question_funnel": funnel_rows,
+        "feedback_by_intent": [
+            {
+                "intent": intent,
+                "helpful": counts["helpful"],
+                "not_helpful": counts["not_helpful"],
+                "score_pct": _percent(
+                    counts["helpful"], counts["helpful"] + counts["not_helpful"]
+                ),
+            }
+            for intent, counts in sorted(
+                feedback_by_intent.items(),
+                key=lambda kv: -(kv[1]["helpful"] + kv[1]["not_helpful"]),
+            )
+        ],
         "by_status": [
             {"status": key, "count": count}
             for key, count in status_counts.most_common()

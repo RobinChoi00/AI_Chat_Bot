@@ -73,7 +73,6 @@ def client():
         ("any discount available?", "discount"),
         ("when will it arrive?", "eta_shipping"),
         ("where is my order", "order_status"),
-        ("do you ship to Alaska", "eta_shipping"),
         ("talk to a human", "human"),
     ],
 )
@@ -94,6 +93,69 @@ def test_guardrail_intents_return_handoff(client, message, expected_intent):
     if expected_intent == "discount":
         assert "%" not in body["reply"]
         assert "promo" not in body["reply"].lower()
+
+
+def test_answer_offers_a_rating_and_stores_it(client):
+    """An answer the shopper can rate, and a rating that actually persists."""
+    from sales_models import SalesFeedback
+    from warranty_models import warranty_db_session
+
+    sid = "s-csat"
+    answer = client.post(
+        "/api/v1/sales/chat",
+        json={"session_id": sid, "message": "what is your return policy", "domain": "osakiusa.com"},
+    )
+    assert answer.status_code == 200, answer.text
+    payloads = [q["payload"] for q in answer.json()["quick_replies"]]
+    assert "feedback:up" in payloads and "feedback:down" in payloads
+
+    rated = client.post(
+        "/api/v1/sales/chat",
+        json={"session_id": sid, "message": "", "payload": "feedback:down", "domain": "osakiusa.com"},
+    )
+    assert rated.status_code == 200, rated.text
+    assert rated.json()["intent"] == "feedback"
+
+    with warranty_db_session() as db:
+        rows = db.query(SalesFeedback).filter(SalesFeedback.session_id == sid).all()
+        assert len(rows) == 1
+        assert rows[0].rating == "not_helpful"
+        # The rating is attributed to the answer it was given for.
+        assert rows[0].intent == "prepurchase_policy"
+
+
+def test_clarifying_questions_are_not_rateable(client):
+    """Rating a "what's your height?" prompt would measure nothing."""
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={"session_id": "s-no-csat", "message": "recommend a chair", "domain": "osakiusa.com"},
+    )
+    payloads = [q["payload"] for q in resp.json()["quick_replies"]]
+    assert "feedback:up" not in payloads
+
+
+@pytest.mark.parametrize(
+    ("message", "must_contain"),
+    [
+        ("what is your return policy", "30 days"),
+        ("how long is the warranty", "three (3) years"),
+        ("how much is shipping", "curb"),
+        ("do you ship to Alaska", "don't deliver"),
+        ("do you offer financing", "Affirm"),
+    ],
+)
+def test_prepurchase_questions_are_answered_over_chat(client, message, must_contain):
+    """These used to send shoppers to the Warranty Department by mistake."""
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={"session_id": "s-policy", "message": message, "domain": "osakiusa.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["intent"] == "prepurchase_policy"
+    assert body["handoff"] is False
+    assert must_contain.lower() in body["reply"].lower()
+    assert "service@osakititan.com" not in body["reply"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -761,14 +823,14 @@ def test_lead_rejects_invalid_email(client):
 
 
 def test_lead_captures_and_masks_email(client, monkeypatch):
-    import sales_router as sr
+    import sales_leads
 
     called = {}
 
-    def _fake_fire(**kwargs):
+    def _fake_deliver(**kwargs):
         called.update(kwargs)
 
-    monkeypatch.setattr(sr, "_fire_lead_email", _fake_fire)
+    monkeypatch.setattr(sales_leads, "deliver_lead", _fake_deliver)
 
     resp = client.post(
         "/api/v1/sales/lead",
@@ -785,12 +847,37 @@ def test_lead_captures_and_masks_email(client, monkeypatch):
     # Public response never leaks a full email.
     assert "@example.com" in body["email"]
     assert body["email"] != "jane.doe@example.com"
+    # Sales must actually be notified, not just have the row stored.
+    assert called["email"] == "jane.doe@example.com"
+
+
+def test_phone_only_lead_still_notifies_sales(client, monkeypatch):
+    """A phone-only lead is as actionable as an email and must be forwarded."""
+    import sales_leads
+
+    called = {}
+    monkeypatch.setattr(
+        sales_leads, "deliver_lead", lambda **kwargs: called.update(kwargs)
+    )
+
+    resp = client.post(
+        "/api/v1/sales/lead",
+        json={
+            "session_id": "s-phone-lead",
+            "phone": "+1-555-0100",
+            "reason": "human",
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert called["phone"] == "+1-555-0100"
+    assert not called["email"]
 
 
 def test_admin_leads_lists_captured_lead(client, monkeypatch):
-    import sales_router as sr
+    import sales_leads
 
-    monkeypatch.setattr(sr, "_fire_lead_email", lambda **_: None)
+    monkeypatch.setattr(sales_leads, "deliver_lead", lambda **_: None)
 
     client.post(
         "/api/v1/sales/lead",
@@ -812,7 +899,7 @@ def test_admin_leads_lists_captured_lead(client, monkeypatch):
 
 
 def test_admin_can_retry_failed_lead(client, monkeypatch):
-    import sales_router as sr
+    import sales_leads
     from sales_models import SalesLead
     from warranty_models import warranty_db_session
 
@@ -830,7 +917,9 @@ def test_admin_can_retry_failed_lead(client, monkeypatch):
         lead_id = lead.id
 
     called = {}
-    monkeypatch.setattr(sr, "_fire_lead_email", lambda **kwargs: called.update(kwargs))
+    monkeypatch.setattr(
+        sales_leads, "deliver_lead", lambda **kwargs: called.update(kwargs)
+    )
     response = client.post(
         f"/admin/sales/leads/{lead_id}/retry",
         headers={"X-Admin-Key": "test-admin-key"},

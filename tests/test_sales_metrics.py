@@ -153,3 +153,118 @@ def test_metrics_domain_filter(client):
     )
     assert response.status_code == 200
     assert response.json()["totals"]["started"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Answer quality — CSAT and per-question drop-off
+# ---------------------------------------------------------------------------
+
+
+def _seed_funnel() -> None:
+    """Three shoppers who quit at different points in the interview."""
+    now = datetime.now(_CST)
+    walks = {
+        "finished": ["ask_height", "ask_weight", "ask_space", "ask_goal", "recommend"],
+        "quit_at_weight": ["ask_height", "ask_weight"],
+        "quit_at_space": ["ask_height", "ask_weight", "ask_space"],
+    }
+    with wm.warranty_db_session() as db:
+        for sid, stages in walks.items():
+            db.add(
+                sm.SalesSession(
+                    session_id=sid,
+                    domain="osakiusa.com",
+                    channel="tidio",
+                    created_at=now,
+                )
+            )
+            for stage in stages:
+                db.add(
+                    sm.SalesMessage(
+                        session_id=sid,
+                        role="assistant",
+                        content=stage,
+                        intent="recommend",
+                        tools_used=json.dumps([f"stage:{stage}"]),
+                    )
+                )
+
+
+def test_question_funnel_shows_where_shoppers_quit(client):
+    _seed_funnel()
+    response = client.get(
+        "/admin/sales/metrics?days=7", headers={"X-Admin-Key": _ADMIN_KEY}
+    )
+    assert response.status_code == 200
+    funnel = {row["stage"]: row for row in response.json()["question_funnel"]}
+
+    assert funnel["ask_height"]["reached"] == 3
+    assert funnel["ask_height"]["dropped"] == 0
+
+    # Weight is where one of the three stops.
+    assert funnel["ask_weight"]["reached"] == 3
+    assert funnel["ask_weight"]["dropped"] == 1
+
+    # Of the two who answered space, only one reaches the goal question.
+    assert funnel["ask_space"]["reached"] == 2
+    assert funnel["ask_space"]["dropped"] == 1
+
+
+def test_unclear_rate_is_reported(client):
+    """The 27% production figure needs to be visible to be driven down."""
+    now = datetime.now(_CST)
+    with wm.warranty_db_session() as db:
+        db.add(sm.SalesSession(session_id="s1", domain="osakiusa.com", created_at=now))
+        db.add_all(
+            [
+                sm.SalesMessage(session_id="s1", role="assistant", content="a", intent="unclear"),
+                sm.SalesMessage(session_id="s1", role="assistant", content="b", intent="specs"),
+                sm.SalesMessage(session_id="s1", role="assistant", content="c", intent="price"),
+                sm.SalesMessage(session_id="s1", role="assistant", content="d", intent="price"),
+            ]
+        )
+    response = client.get(
+        "/admin/sales/metrics?days=7", headers={"X-Admin-Key": _ADMIN_KEY}
+    )
+    totals = response.json()["totals"]
+    assert totals["unclear_turns"] == 1
+    assert totals["unclear_rate_pct"] == 25.0
+
+
+def test_csat_score_and_breakdown(client):
+    now = datetime.now(_CST)
+    with wm.warranty_db_session() as db:
+        db.add(sm.SalesSession(session_id="s1", domain="osakiusa.com", created_at=now))
+        db.add_all(
+            [
+                sm.SalesFeedback(
+                    session_id="s1", rating="helpful", intent="specs",
+                    domain="osakiusa.com", created_at=now,
+                ),
+                sm.SalesFeedback(
+                    session_id="s1", rating="helpful", intent="specs",
+                    domain="osakiusa.com", created_at=now,
+                ),
+                sm.SalesFeedback(
+                    session_id="s1", rating="not_helpful", intent="price",
+                    domain="osakiusa.com", created_at=now,
+                ),
+            ]
+        )
+    response = client.get(
+        "/admin/sales/metrics?days=7", headers={"X-Admin-Key": _ADMIN_KEY}
+    )
+    body = response.json()
+    assert body["totals"]["csat_rated"] == 3
+    assert body["totals"]["csat_score_pct"] == 66.7
+
+    by_intent = {row["intent"]: row for row in body["feedback_by_intent"]}
+    assert by_intent["specs"]["score_pct"] == 100.0
+    assert by_intent["price"]["score_pct"] == 0.0
+
+
+def test_feedback_rejects_an_unknown_rating():
+    from sales_models import record_feedback
+
+    assert record_feedback("s1", rating="meh") is None
+    assert record_feedback("s1", rating="helpful") is not None

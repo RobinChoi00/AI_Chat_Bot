@@ -40,9 +40,10 @@ from sales_intent import (
     INTENT_HUMAN,
     WARRANTY_ROUTE_INTENTS,
 )
+from sales_leads import capture_lead, schedule_lead_delivery
 from sales_models import (
-    SalesLead,
     get_or_create_session,
+    record_feedback,
     record_message,
     update_session_last_intent,
 )
@@ -210,6 +211,7 @@ def _run_sales_turn(
     payload: Optional[str],
     contact_id: Optional[str],
     domain: str,
+    background_tasks: Optional[BackgroundTasks] = None,
 ) -> dict[str, Any]:
     get_or_create_session(
         session_id,
@@ -242,34 +244,33 @@ def _run_sales_turn(
     if result.prefs_patch:
         merge_session_collected(session_id, result.prefs_patch)
 
-    if result.lead_capture and result.lead_capture.get("email"):
-        from sales_models import SalesSession
-        from warranty_models import warranty_db_session
+    if result.feedback:
+        record_feedback(
+            session_id,
+            rating=str(result.feedback.get("rating") or ""),
+            intent=result.feedback.get("intent"),
+            domain=domain,
+        )
 
+    if result.lead_capture and result.lead_capture.get("email"):
         email = str(result.lead_capture.get("email") or "").strip()
         interest = str(result.lead_capture.get("interest_summary") or "").strip() or None
         reason = str(result.lead_capture.get("reason") or "save_pick").strip() or "save_pick"
-        with warranty_db_session() as db:
-            db.add(
-                SalesLead(
-                    session_id=session_id,
-                    email=email or None,
-                    phone=None,
-                    domain=domain,
-                    interest_summary=interest,
-                    reason=reason,
-                    forwarded="pending",
-                )
+        lead_id = capture_lead(
+            session_id=session_id,
+            domain=domain,
+            email=email,
+            interest_summary=interest,
+            reason=reason,
+        )
+        if lead_id is not None:
+            schedule_lead_delivery(
+                background_tasks,
+                lead_id=lead_id,
+                domain=domain,
+                email=email,
+                interest_summary=interest,
             )
-            session = (
-                db.query(SalesSession)
-                .filter(SalesSession.session_id == session_id)
-                .one_or_none()
-            )
-            if session is not None:
-                if email and not session.contact_email:
-                    session.contact_email = email
-                session.status = "handoff"
 
     buttons = prioritize_quick_replies(result.quick_replies)
     flat = flatten_buttons_for_flow(buttons)
@@ -429,7 +430,11 @@ async def tidio_health():
 
 @router.post("/api/v1/sales/tidio/turn", response_model=TidioTurnResponse)
 @limiter.limit(_SALES_CHAT_RATE)
-async def tidio_turn(request: Request, body: TidioTurnRequest):
+async def tidio_turn(
+    request: Request,
+    body: TidioTurnRequest,
+    background_tasks: BackgroundTasks,
+):
     """
     Tidio Flow / Bot HTTP Request target.
 
@@ -470,6 +475,7 @@ async def tidio_turn(request: Request, body: TidioTurnRequest):
         payload=payload,
         contact_id=contact_id,
         domain=domain,
+        background_tasks=background_tasks,
     )
     logger.info(
         "tidio_turn session=%s contact=%s msg=%r payload=%r intent=%s resolved=%s stage=%s",

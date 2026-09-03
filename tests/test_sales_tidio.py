@@ -255,6 +255,51 @@ def test_tidio_turn_numbered_menu_and_button_resolve(client, monkeypatch):
     assert second.json()["resolved_from_button"] is True
 
 
+def test_tidio_turn_lead_capture_notifies_sales(client, monkeypatch):
+    """Regression: Tidio is the only production channel, and it used to store
+    the lead row without ever emailing sales. A captured email must always
+    reach the sales inbox, not just the database."""
+    import sales_leads
+    from sales_models import SalesLead
+    from warranty_models import warranty_db_session
+
+    monkeypatch.setattr("sales_agent.fetch_live_stock", lambda *a, **k: None)
+
+    delivered: list[dict] = []
+    monkeypatch.setattr(
+        sales_leads, "deliver_lead", lambda **kwargs: delivered.append(kwargs)
+    )
+
+    sid = "tidio:lead-notify"
+    for payload in (
+        "recommend:height:average",
+        "recommend:weight:le180",
+        "recommend:space:none",
+        "recommend:goal:neck",
+        "lead:save_pick",
+    ):
+        step = client.post(
+            "/api/v1/sales/tidio/turn",
+            json={"session_id": sid, "message": "", "payload": payload},
+        )
+        assert step.status_code == 200, step.text
+
+    final = client.post(
+        "/api/v1/sales/tidio/turn",
+        json={"session_id": sid, "message": "shopper@example.com"},
+    )
+    assert final.status_code == 200, final.text
+
+    with warranty_db_session() as db:
+        rows = db.query(SalesLead).filter(SalesLead.session_id == sid).all()
+        assert len(rows) == 1
+        assert rows[0].email == "shopper@example.com"
+
+    assert len(delivered) == 1
+    assert delivered[0]["email"] == "shopper@example.com"
+    assert delivered[0]["lead_id"] == rows[0].id
+
+
 def test_tidio_turn_budget_only_asks_height_stage(client):
     resp = client.post(
         "/api/v1/sales/tidio/turn",

@@ -28,6 +28,7 @@ Design principles
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -43,12 +44,15 @@ except ImportError:  # pragma: no cover
 
 from pii_redact import mask_email, mask_phone
 from sales_agent import SalesReply, respond
+from sales_conversion import record_order, require_shopify_signature
 from sales_intent import HANDOFF_INTENTS
+from sales_leads import capture_lead, schedule_lead_delivery
 from sales_models import (
     SalesLead,
     SalesMessage,
     SalesSession,
     get_or_create_session,
+    record_feedback,
     record_message,
     update_session_last_intent,
 )
@@ -163,77 +167,6 @@ def _reply_to_response(reply: SalesReply, session_id: str) -> SalesChatResponse:
     )
 
 
-def _alert_lead_failure(*, lead_id: int, domain: str, error: str) -> None:
-    """Best-effort alert without including customer PII."""
-    try:
-        from ops_notify import send_ops_alert  # noqa: WPS433
-
-        send_ops_alert(
-            "[Sales AI] Lead forwarding failed",
-            (
-                f"Lead ID: {lead_id}\n"
-                f"Domain: {domain or 'unknown'}\n"
-                f"Error: {(error or 'unknown')[:500]}\n\n"
-                "Review the failed lead in /admin/sales."
-            ),
-        )
-    except Exception:  # pragma: no cover - alerting must not break chat
-        logger.exception("sales lead failure alert failed for lead_id=%s", lead_id)
-
-
-def _fire_lead_email(
-    *,
-    email: str,
-    interest_summary: str,
-    domain: str,
-    lead_id: int,
-) -> None:
-    """Send the lead notification email in the background — best-effort."""
-    try:
-        from main import send_sales_lead_email  # type: ignore
-    except ImportError:  # pragma: no cover
-        try:
-            from app.main import send_sales_lead_email  # type: ignore
-        except ImportError:
-            logger.warning("sales lead capture: email transport unavailable")
-            _mark_lead_status(lead_id, status="failed", error="transport_unavailable")
-            _alert_lead_failure(
-                lead_id=lead_id,
-                domain=domain,
-                error="transport_unavailable",
-            )
-            return
-
-    try:
-        ok = bool(
-            send_sales_lead_email(
-                email,
-                interest_summary or "Sales AI (Tidio) — customer requested follow-up",
-                "",
-                domain or "",
-            )
-        )
-    except Exception as exc:  # pragma: no cover — email side-effects
-        logger.exception("sales lead email failed: %s", exc)
-        _mark_lead_status(lead_id, status="failed", error=str(exc)[:500])
-        _alert_lead_failure(lead_id=lead_id, domain=domain, error=str(exc))
-        return
-
-    error = None if ok else "smtp_returned_false"
-    _mark_lead_status(lead_id, status="sent" if ok else "failed", error=error)
-    if error:
-        _alert_lead_failure(lead_id=lead_id, domain=domain, error=error)
-
-
-def _mark_lead_status(lead_id: int, *, status: str, error: Optional[str]) -> None:
-    with warranty_db_session() as db:
-        row = db.query(SalesLead).filter(SalesLead.id == lead_id).one_or_none()
-        if row is None:
-            return
-        row.forwarded = status
-        row.forwarded_error = error
-
-
 # ---------------------------------------------------------------------------
 # Public endpoints
 # ---------------------------------------------------------------------------
@@ -297,39 +230,32 @@ async def sales_chat(
         {"last_quick_replies": prioritize_quick_replies(reply.quick_replies)},
     )
 
+    if reply.feedback:
+        record_feedback(
+            body.session_id,
+            rating=str(reply.feedback.get("rating") or ""),
+            intent=reply.feedback.get("intent"),
+            domain=domain,
+        )
+
     if reply.lead_capture and reply.lead_capture.get("email"):
         email = str(reply.lead_capture.get("email") or "").strip()
         interest = str(reply.lead_capture.get("interest_summary") or "").strip() or None
         reason = str(reply.lead_capture.get("reason") or "save_pick").strip() or "save_pick"
-        with warranty_db_session() as db:
-            row = SalesLead(
-                session_id=body.session_id,
-                email=email or None,
-                phone=None,
-                domain=domain,
-                interest_summary=interest,
-                reason=reason,
-                forwarded="pending",
-            )
-            db.add(row)
-            db.flush()
-            lead_id = row.id
-            session = (
-                db.query(SalesSession)
-                .filter(SalesSession.session_id == body.session_id)
-                .one_or_none()
-            )
-            if session is not None:
-                if email and not session.contact_email:
-                    session.contact_email = email
-                session.status = "handoff"
-        if email:
-            background_tasks.add_task(
-                _fire_lead_email,
-                email=email,
-                interest_summary=interest or "",
-                domain=domain,
+        lead_id = capture_lead(
+            session_id=body.session_id,
+            domain=domain,
+            email=email,
+            interest_summary=interest,
+            reason=reason,
+        )
+        if lead_id is not None:
+            schedule_lead_delivery(
+                background_tasks,
                 lead_id=lead_id,
+                domain=domain,
+                email=email,
+                interest_summary=interest,
             )
 
     if message:
@@ -399,40 +325,26 @@ async def sales_lead(
         str(collected.get("pending_pick_summary") or "").strip() or None
     )
 
-    with warranty_db_session() as db:
-        row = SalesLead(
-            session_id=body.session_id,
-            email=email or None,
-            phone=phone or None,
-            domain=domain,
-            interest_summary=interest,
-            reason=reason,
-            forwarded="pending",
-        )
-        db.add(row)
-        db.flush()
-        lead_id = row.id
+    lead_id = capture_lead(
+        session_id=body.session_id,
+        domain=domain,
+        email=email,
+        phone=phone,
+        interest_summary=interest,
+        reason=reason or "human",
+    )
+    if lead_id is None:  # Unreachable: validated above that one contact exists.
+        raise HTTPException(status_code=422, detail="No contact details to capture.")
 
-        session = (
-            db.query(SalesSession)
-            .filter(SalesSession.session_id == body.session_id)
-            .one_or_none()
-        )
-        if session is not None:
-            if email and not session.contact_email:
-                session.contact_email = email
-            if phone and not session.contact_phone:
-                session.contact_phone = phone
-            session.status = "handoff"
-
-    if email:
-        background_tasks.add_task(
-            _fire_lead_email,
-            email=email,
-            interest_summary=interest or "",
-            domain=domain,
-            lead_id=lead_id,
-        )
+    # Phone-only leads are just as actionable as emails, so both notify sales.
+    schedule_lead_delivery(
+        background_tasks,
+        lead_id=lead_id,
+        domain=domain,
+        email=email,
+        phone=phone,
+        interest_summary=interest,
+    )
 
     logger.info(
         "sales_lead captured session=%s email=%s phone=%s reason=%s",
@@ -448,6 +360,47 @@ async def sales_lead(
         email=mask_email(email) if email else None,
         phone=mask_phone(phone) if phone else None,
     )
+
+
+@router.post("/api/v1/sales/shopify/webhook")
+async def shopify_order_webhook(
+    request: Request,
+    x_shopify_hmac_sha256: Optional[str] = Header(default=None),
+    x_shopify_shop_domain: Optional[str] = Header(default=None),
+    x_shopify_topic: Optional[str] = Header(default=None),
+):
+    """Close the loop: attribute a Shopify order back to the chat that drove it.
+
+    Registered for ``orders/create`` and/or ``orders/paid``. Duplicate
+    deliveries of the same order are ignored, so subscribing to both is safe.
+    """
+    raw = await request.body()
+    domain = _resolve_sales_domain(x_shopify_shop_domain)
+    try:
+        require_shopify_signature(raw, x_shopify_hmac_sha256 or "", domain)
+    except ValueError as exc:
+        logger.warning("shopify webhook rejected: %s", exc)
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+
+    topic = (x_shopify_topic or "").strip().lower()
+    if topic and not topic.startswith("orders/"):
+        return {"ok": True, "ignored": topic}
+
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except (UnicodeDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Malformed JSON body.")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Malformed JSON body.")
+
+    recorded = record_order(payload, domain=domain)
+    if recorded is None:
+        return {"ok": True, "duplicate": True}
+    return {
+        "ok": True,
+        "attributed": bool(recorded.get("session_id")),
+        "matched_by": recorded.get("matched_by"),
+    }
 
 
 @router.get("/api/v1/sales/session/{session_id}")
@@ -586,21 +539,23 @@ async def admin_retry_lead(
         if row is None:
             raise HTTPException(status_code=404, detail="lead not found")
         email = str(row.email or "").strip()
-        if not email:
+        phone = str(row.phone or "").strip()
+        if not email and not phone:
             raise HTTPException(
                 status_code=422,
-                detail="This lead has no email address to forward.",
+                detail="This lead has no email or phone number to forward.",
             )
         row.forwarded = "pending"
         row.forwarded_error = None
         domain = str(row.domain or "")
         interest = str(row.interest_summary or "")
 
-    background_tasks.add_task(
-        _fire_lead_email,
-        email=email,
-        interest_summary=interest,
-        domain=domain,
+    schedule_lead_delivery(
+        background_tasks,
         lead_id=lead_id,
+        domain=domain,
+        email=email,
+        phone=phone,
+        interest_summary=interest,
     )
     return {"ok": True, "lead_id": lead_id, "forwarded": "pending"}

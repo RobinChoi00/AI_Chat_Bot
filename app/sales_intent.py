@@ -43,6 +43,7 @@ INTENT_SPECS = "specs"
 INTENT_INTENSITY = "intensity"
 INTENT_HUMAN = "human"
 INTENT_GREETING = "greeting"
+INTENT_PREPURCHASE_POLICY = "prepurchase_policy"
 INTENT_UNCLEAR = "unclear"
 
 # Intents that must NEVER be answered by the AI — always hand off / redirect.
@@ -380,6 +381,13 @@ def _matched(pattern: re.Pattern, text: str) -> tuple[str, ...]:
     return tuple(m.group(0).strip().lower() for m in pattern.finditer(text))
 
 
+def _prepurchase_policy_topic(text: str) -> Optional[str]:
+    """Imported lazily so ``sales_policy`` can import intent labels."""
+    from sales_policy import detect_topic
+
+    return detect_topic(text)
+
+
 def classify(text: str) -> SalesIntent:
     """Classify a customer message into a sales intent.
 
@@ -390,6 +398,20 @@ def classify(text: str) -> SalesIntent:
     raw = (text or "").strip()
     if not raw:
         return SalesIntent(label=INTENT_UNCLEAR, confidence="none")
+
+    # 0) Pre-purchase policy questions ("what's your return policy?", "how long
+    #    is the warranty?", "how much is shipping?"). These have published
+    #    answers and must be handled before the guardrails below, which would
+    #    otherwise send a shopper to the Warranty Department. `detect_topic`
+    #    returns None the moment the message mentions an existing order or
+    #    chair, so post-purchase messages still fall through to the guardrails.
+    policy_topic = _prepurchase_policy_topic(raw)
+    if policy_topic:
+        return SalesIntent(
+            label=INTENT_PREPURCHASE_POLICY,
+            confidence="high",
+            matched_terms=(policy_topic,),
+        )
 
     # 1) Cancel / refund / return → warranty team (silent AI). Highest priority
     #    because a message like "I want to cancel my broken chair" must not
