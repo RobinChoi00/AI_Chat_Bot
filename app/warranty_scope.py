@@ -147,11 +147,12 @@ def build_warranty_scope_refusal(reason: str = "") -> str:
         return build_order_cancel_handoff_message()
     if (reason or "").strip().lower() == "shipping_policy":
         return (
-            "We **do not deliver** to **Hawaii, Alaska, or Guam**.\n\n"
-            "This chat is for **warranty support** only — setup, a delivery "
-            "problem after purchase, or a chair malfunction.\n\n"
-            "For other shipping or sales questions, please check the shipping "
-            "policy on our website or contact our sales team."
+            "This chat is for **warranty support** after a purchase.\n\n"
+            "**Hawaii and Alaska:** we do ship there, but **you pay the freight**. "
+            "The cost depends on the model and address — sales gets a carrier quote.\n"
+            "**Guam:** we do not ship there.\n\n"
+            "For a quote or any other shipping question, please use the main "
+            "website sales chat or contact our sales team."
         )
     return (
         "This chat is for **warranty support** only — installation, delivery, "

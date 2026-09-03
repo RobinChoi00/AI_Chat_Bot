@@ -24,7 +24,9 @@ from sales_intent import INTENT_PREPURCHASE_POLICY, classify  # noqa: E402
 from sales_policy import (  # noqa: E402
     POLICY_TOPICS,
     TOPIC_FINANCING,
+    TOPIC_MECHANISM,
     TOPIC_RESTRICTED_REGION,
+    TOPIC_REMOTE_SHIPPING,
     TOPIC_RETURNS,
     TOPIC_SHIPPING,
     TOPIC_SHOWROOM,
@@ -53,9 +55,12 @@ from sales_policy import (  # noqa: E402
         ("do you have an extended warranty", TOPIC_WARRANTY_TERMS),
         ("how much is shipping", TOPIC_SHIPPING),
         ("is delivery free", TOPIC_SHIPPING),
-        ("do you ship to Alaska", TOPIC_RESTRICTED_REGION),
-        ("can you deliver to Hawaii", TOPIC_RESTRICTED_REGION),
+        ("how long does shipping take", TOPIC_SHIPPING),
+        ("do you ship to Alaska", TOPIC_REMOTE_SHIPPING),
+        ("can you deliver to Hawaii", TOPIC_REMOTE_SHIPPING),
         ("shipping to Guam?", TOPIC_RESTRICTED_REGION),
+        ("what's the difference between 3D and 4D", TOPIC_MECHANISM),
+        ("what is a dual roller", TOPIC_MECHANISM),
         ("do you assemble it", TOPIC_WHITE_GLOVE),
         ("is white glove available", TOPIC_WHITE_GLOVE),
         ("can you carry it upstairs", TOPIC_WHITE_GLOVE),
@@ -115,10 +120,12 @@ def test_every_topic_renders_a_non_empty_answer(topic):
 @pytest.mark.parametrize(
     ("topic", "path"),
     [
-        (TOPIC_RETURNS, "/policies/refund-policy"),
+        (TOPIC_RETURNS, "/pages/sales-policy"),
         (TOPIC_WARRANTY_TERMS, "/pages/warranty"),
-        (TOPIC_SHIPPING, "/policies/shipping-policy"),
-        (TOPIC_WHITE_GLOVE, "/policies/shipping-policy"),
+        (TOPIC_SHIPPING, "/pages/shipping-handling"),
+        (TOPIC_WHITE_GLOVE, "/pages/shipping-handling"),
+        (TOPIC_REMOTE_SHIPPING, "/pages/shipping-handling"),
+        (TOPIC_RESTRICTED_REGION, "/pages/shipping-handling"),
     ],
 )
 def test_answers_link_the_official_policy_page(topic, path):
@@ -130,19 +137,31 @@ def test_policy_links_follow_the_storefront_domain():
     assert "titanchair.com" in policy_answer(TOPIC_RETURNS, "titanchair.com")
 
 
-def test_restricted_region_answer_is_an_explicit_no():
-    """Matches the rule the warranty scope gate already enforces."""
+def test_guam_is_an_explicit_no():
     answer = policy_answer(TOPIC_RESTRICTED_REGION, "osakiusa.com")
-    assert "don't deliver" in answer.lower()
-    for region in ("Hawaii", "Alaska", "Guam"):
-        assert region in answer
+    assert "don't ship to Guam" in answer or "don't ship to guam" in answer.lower()
+    assert "guam" in answer.lower()
+    assert "hawaii" in answer.lower()
+
+
+def test_hawaii_and_alaska_ship_with_customer_paid_freight():
+    answer = policy_answer(TOPIC_REMOTE_SHIPPING, "osakiusa.com").lower()
+    assert "hawaii" in answer and "alaska" in answer
+    assert "you pay" in answer or "customer" in answer
+    assert "quote" in answer
+    assert "don't deliver" not in answer
+    assert "don't ship" not in answer
 
 
 def test_returns_answer_states_the_published_window_and_costs():
     answer = policy_answer(TOPIC_RETURNS, "osakiusa.com")
     assert "30 days" in answer
+    assert "outbound" in answer.lower() or "both" in answer.lower()
+    assert "white glove" in answer.lower()
+    assert "not refundable" in answer.lower()
     assert "20%" in answer
     assert "RMA" in answer
+    assert "sales-policy" in answer
 
 
 def test_warranty_answer_states_the_published_coverage():
@@ -151,11 +170,21 @@ def test_warranty_answer_states_the_published_coverage():
     assert "Year 1" in answer and "Year 2" in answer
 
 
-def test_shipping_answer_refuses_to_promise_a_date():
-    """The published policy says exact times are unavailable — so must we."""
+def test_shipping_answer_states_lead_times_without_a_calendar_date():
+    """Sales published ceiling is up to 2 / 3 weeks — not a promised day."""
     answer = policy_answer(TOPIC_SHIPPING, "osakiusa.com").lower()
-    assert "can't promise a specific date" in answer
+    assert "up to 2 weeks" in answer
+    assert "up to 3 weeks" in answer
+    assert "can't promise a specific calendar date" in answer
     assert "assembly is not included" in answer
+
+
+def test_mechanism_answer_explains_each_axis():
+    answer = policy_answer(TOPIC_MECHANISM, "osakiusa.com").lower()
+    assert "2d" in answer and "3d" in answer and "4d" in answer and "5d" in answer
+    assert "dual roller" in answer
+    assert "x and y" in answer
+    assert "in and out" in answer
 
 
 def test_financing_answer_quotes_no_rate_or_term():

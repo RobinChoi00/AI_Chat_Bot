@@ -139,8 +139,12 @@ def test_clarifying_questions_are_not_rateable(client):
     [
         ("what is your return policy", "30 days"),
         ("how long is the warranty", "three (3) years"),
-        ("how much is shipping", "curb"),
-        ("do you ship to Alaska", "don't deliver"),
+        ("how much is shipping", "up to 2 weeks"),
+        ("how long does shipping take", "up to 3 weeks"),
+        ("do you ship to Alaska", "you pay"),
+        ("can you deliver to Hawaii", "quote"),
+        ("do you ship to Guam", "don't ship"),
+        ("what's the difference between 3D and 4D", "in and out"),
         ("do you offer financing", "Affirm"),
     ],
 )

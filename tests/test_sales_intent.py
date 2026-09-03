@@ -105,12 +105,10 @@ def test_discount_never_answered_directly():
 
 
 def test_eta_and_delivery_promise_route_to_human():
-    """Anything that would require promising a *date* still hands off."""
+    """A specific calendar date or holiday promise is still a human question."""
     for text in [
         "when will it arrive",
-        "how long until delivery",
-        "estimated delivery date?",
-        "can you guarantee delivery before Christmas",
+        "can you guarantee it before Christmas",
         "lead time please",
     ]:
         intent = classify(text)
@@ -120,18 +118,27 @@ def test_eta_and_delivery_promise_route_to_human():
 
 def test_shipping_policy_questions_are_answered_not_handed_off():
     """Published policy has an answer, so a shopper should get one."""
-    for text in ["do you offer free shipping", "how much is shipping", "curbside?"]:
+    for text in ["do you offer free shipping", "how much is shipping", "curbside?", "how long does shipping take"]:
         intent = classify(text)
         assert intent.label == INTENT_PREPURCHASE_POLICY, text
         assert not intent.is_handoff, text
 
 
-def test_undeliverable_regions_get_the_authoritative_no():
-    """We don't deliver to HI/AK/Guam — the generic policy would mislead."""
-    from sales_policy import TOPIC_RESTRICTED_REGION, detect_topic
+def test_hawaii_alaska_are_quoted_freight_and_guam_is_not_served():
+    from sales_policy import (
+        TOPIC_REMOTE_SHIPPING,
+        TOPIC_RESTRICTED_REGION,
+        detect_topic,
+    )
 
-    for text in ["can you ship to Hawaii", "do you deliver to Alaska", "shipping to Guam"]:
-        assert detect_topic(text) == TOPIC_RESTRICTED_REGION, text
+    assert detect_topic("can you ship to Hawaii") == TOPIC_REMOTE_SHIPPING
+    assert detect_topic("do you deliver to Alaska") == TOPIC_REMOTE_SHIPPING
+    assert detect_topic("shipping to Guam") == TOPIC_RESTRICTED_REGION
+    for text in [
+        "can you ship to Hawaii",
+        "do you deliver to Alaska",
+        "shipping to Guam",
+    ]:
         assert classify(text).label == INTENT_PREPURCHASE_POLICY, text
 
 
@@ -261,7 +268,6 @@ def test_recommend_intent():
 def test_compare_intent():
     for text in [
         "compare OS-Pro Maestro vs Titan Jupiter",
-        "difference between 3D and 4D",
         "which is better, Osaki or Titan",
     ]:
         intent = classify(text)
@@ -396,8 +402,8 @@ def test_tidio_short_triggers_are_classified():
         # Financing has a published answer (Affirm at checkout), so it is
         # answered rather than handed to a rep.
         "financing": INTENT_PREPURCHASE_POLICY,
-        "shipping": INTENT_ETA_SHIPPING,
-        "delivery": INTENT_ETA_SHIPPING,
+        "shipping": INTENT_PREPURCHASE_POLICY,
+        "delivery": INTENT_PREPURCHASE_POLICY,
         "arrive": INTENT_ETA_SHIPPING,
         "tracking": INTENT_ORDER_STATUS,
         "warranty": INTENT_WARRANTY_REDIRECT,

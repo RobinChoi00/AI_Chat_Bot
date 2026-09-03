@@ -38,7 +38,8 @@ def test_blocks_hawaii_free_delivery_policy():
     assert "hawaii" in msg.lower()
     assert "alaska" in msg.lower()
     assert "guam" in msg.lower()
-    assert "do not deliver" in msg.lower()
+    assert "you pay the freight" in msg.lower()
+    assert "do not ship" in msg.lower()
 
 
 def test_blocks_alaska_and_guam_shipping_questions():

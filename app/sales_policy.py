@@ -10,19 +10,25 @@ answers, and handing them to a human is the wrong outcome.
 
 Source of truth
 ---------------
-Every fact below is quoted from the storefront's own published policy pages,
-which are linked in each answer so the customer can verify:
+Every fact below is quoted from the storefront's own published policy pages
+or from the sales team's written rule, and each answer links the page so
+the customer can verify:
 
-  /policies/refund-policy    – 30-day window, RMA, restocking fee
-  /policies/shipping-policy  – curbside vs White Glove, assembly, fees
+  /pages/sales-policy        – 30-day returns, both-way freight, White Glove
+  /pages/shipping-handling   – curbside vs White Glove, lead times
   /pages/warranty            – 3-year standard coverage and extensions
+
+Hawaii / Alaska / Guam
+----------------------
+Sales ships to Hawaii and Alaska; the customer pays freight, quoted by the
+carrier for that model and address. Guam is not served. Do not invent a
+dollar amount.
 
 What this module deliberately will NOT do
 -----------------------------------------
-- Quote a delivery date or transit time. The published policy says carriers
-  coordinate a window and that exact times are unavailable, so promising one
-  would be inventing a fact.
-- Quote a shipping price, an APR, or a financing term. None are published.
+- Quote a calendar delivery date. "Up to 2 weeks" / "up to 3 weeks" is the
+  published ceiling; exact day-of-week requests stay unavailable.
+- Quote a shipping price, an APR, or a financing term.
 - Answer for a customer who already owns a chair or has an order in flight —
   those still route to the warranty and order-status paths, which is why
   ``is_post_purchase`` gates every lookup.
@@ -38,26 +44,32 @@ from store_config import get_storefront_base_url
 TOPIC_RETURNS = "returns"
 TOPIC_WARRANTY_TERMS = "warranty_terms"
 TOPIC_SHIPPING = "shipping"
+TOPIC_REMOTE_SHIPPING = "remote_shipping"
 TOPIC_RESTRICTED_REGION = "restricted_region"
 TOPIC_WHITE_GLOVE = "white_glove"
 TOPIC_FINANCING = "financing"
 TOPIC_SHOWROOM = "showroom"
+TOPIC_MECHANISM = "mechanism"
 
 POLICY_TOPICS = (
     TOPIC_RETURNS,
     TOPIC_WARRANTY_TERMS,
     TOPIC_SHIPPING,
+    TOPIC_REMOTE_SHIPPING,
     TOPIC_RESTRICTED_REGION,
     TOPIC_WHITE_GLOVE,
     TOPIC_FINANCING,
     TOPIC_SHOWROOM,
+    TOPIC_MECHANISM,
 )
 
-# Destinations we do not deliver to. Sourced from the same business rule the
-# warranty scope gate already enforces (``warranty_scope.py``), so both bots
-# tell a shopper the same thing.
+# Guam is not served. Hawaii and Alaska are served with customer-paid freight.
 _RESTRICTED_REGION_RE = re.compile(
-    r"\b(hawaii|hawaiian|honolulu|alaska|alaskan|anchorage|guam|guamanian)\b",
+    r"\b(guam|guamanian)\b|괌",
+    re.IGNORECASE,
+)
+_REMOTE_REGION_RE = re.compile(
+    r"\b(hawaii|hawaiian|honolulu|alaska|alaskan|anchorage)\b|하와이|알래스카",
     re.IGNORECASE,
 )
 
@@ -125,7 +137,8 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"money\s+back|"
             r"trial\s+period|try\s+it\s+(?:at\s+home|for\s+\d+)|"
             r"\brma\b|"
-            r"return\s+window|how\s+long\s+(?:do\s+i\s+have\s+)?to\s+return"
+            r"return\s+window|how\s+long\s+(?:do\s+i\s+have\s+)?to\s+return|"
+            r"반품\s*정책|교환\s*정책"
             r")",
             re.IGNORECASE,
         ),
@@ -179,19 +192,42 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
     (
+        TOPIC_MECHANISM,
+        re.compile(
+            r"("
+            r"(?:what(?:'?s|\s+is)|explain|mean(?:ing)?)\s+"
+            r"(?:a\s+|the\s+|an\s+)?(?:2\s*d|3\s*d|4\s*d|5\s*d|dual[\s-]*roller)|"
+            r"(?:2\s*d|3\s*d|4\s*d|5\s*d)\s*(?:vs\.?|versus|or)\s*(?:2\s*d|3\s*d|4\s*d|5\s*d)|"
+            r"difference\s+between\s+(?:2\s*d|3\s*d|4\s*d|5\s*d)|"
+            r"what(?:'?s|\s+is)\s+(?:2\s*d|3\s*d|4\s*d|5\s*d)\s+massage|"
+            r"dual[\s-]*roller|"
+            r"2\s*d\s+massage|3\s*d\s+massage\s+chairs?|4\s*d\s+massage\s+chairs?|"
+            r"5\s*d\s+(?:massage|mechanism)|"
+            r"(?:2d|3d|4d|5d).{0,12}차이|차이.{0,12}(?:2d|3d|4d|5d)"
+            r")",
+            re.IGNORECASE,
+        ),
+    ),
+    (
         TOPIC_SHIPPING,
         re.compile(
             r"("
-            r"shipping\s+(?:cost|fee|price|rate|polic|charge)|"
+            r"shipping\s+(?:cost|fee|price|rate|polic|charge|time|handle)|"
+            r"how\s+long\s+(?:does\s+)?(?:the\s+)?(?:shipping|delivery)|"
+            r"how\s+long\s+(?:for|until|to)\s+(?:ship|deliver|arrive)|"
+            r"how\s+many\s+weeks|"
             r"how\s+much\s+(?:is|for|does)\s+(?:the\s+)?(?:shipping|delivery)|"
             r"(?:free|paid)\s+(?:shipping|delivery)|"
             r"(?:shipping|delivery)\s+(?:is\s+)?free|"
             r"is\s+(?:shipping|delivery)\s+(?:free|included|extra)|"
             r"(?:do|can)\s+you\s+(?:ship|deliver)\s+to|"
-            r"delivery\s+(?:polic|process|option|method)|"
+            r"delivery\s+(?:polic|process|option|method|time)|"
             r"curbside|"
             r"how\s+(?:is|does)\s+it\s+(?:delivered|ship|arrive)|"
-            r"who\s+delivers"
+            r"who\s+delivers|"
+            r"takes?\s+(?:to\s+)?(?:ship|deliver|arrive)|"
+            r"\bshipping\b|\bdelivery\b|"
+            r"배송|택배"
             r")",
             re.IGNORECASE,
         ),
@@ -204,11 +240,13 @@ def detect_topic(text: str) -> Optional[str]:
     raw = (text or "").strip()
     if not raw or is_post_purchase(raw):
         return None
-    # Checked ahead of the generic shipping answer: the published shipping
-    # policy says nothing about these destinations, so describing curbside
-    # service would imply we deliver there when we do not.
+    # Guam is an explicit no. Hawaii/Alaska ship, but freight is quoted and
+    # paid by the customer — that must not fall into the generic "curbside
+    # included" copy.
     if _RESTRICTED_REGION_RE.search(raw):
         return TOPIC_RESTRICTED_REGION
+    if _REMOTE_REGION_RE.search(raw):
+        return TOPIC_REMOTE_SHIPPING
     for topic, pattern in _TOPIC_PATTERNS:
         if pattern.search(raw):
             return topic
@@ -225,15 +263,16 @@ def _policy_url(domain: str, path: str) -> str:
 
 
 def _returns_answer(domain: str) -> str:
-    url = _policy_url(domain, "policies/refund-policy")
+    url = _policy_url(domain, "pages/sales-policy")
     return (
         "**Returns — 30 days from delivery**\n\n"
-        "- You have **30 days after receiving** the chair to request a return or exchange.\n"
-        "- Keep the **original packaging** — the chair must come back in new, resellable condition.\n"
-        "- A **Return Merchandise Authorization (RMA)** has to be approved by us first.\n"
-        "- **Shipping both ways is the customer's cost**, and this also applies to a "
-        "cancellation once the order has already shipped.\n"
-        "- Non-Titan-brand items carry a **20% restocking fee**. A White Glove fee is non-refundable.\n\n"
+        "- You can return a chair **within 30 days of delivery**, for any reason.\n"
+        "- **You pay both the original outbound shipping and the return shipping.** "
+        "The same applies if you cancel after the order has already shipped.\n"
+        "- The chair must come back in **original packaging**, new and resellable.\n"
+        "- A **Return Merchandise Authorization (RMA)** has to be approved first.\n"
+        "- **White Glove fee is not refundable.**\n"
+        "- Non-Titan-brand items carry a **20% restocking fee**.\n\n"
         f"Full policy: {url}"
     )
 
@@ -255,45 +294,58 @@ def _warranty_terms_answer(domain: str) -> str:
 
 
 def _shipping_answer(domain: str) -> str:
-    url = _policy_url(domain, "policies/shipping-policy")
+    url = _policy_url(domain, "pages/shipping-handling")
     return (
-        "**Delivery — standard curbside included**\n\n"
-        "- Delivered to the **curb or driveway** of your address, and a **signature is required**.\n"
-        "- The carrier contacts you to arrange a **delivery window**. Exact time-of-day "
-        "requests aren't available, so I can't promise a specific date here.\n"
-        "- **Assembly is not included** with standard curbside — the chair ships with "
-        "instructions and the tools you need. White Glove delivery with assembly is "
-        "available for an added fee.\n"
+        "**Delivery — curbside or White Glove**\n\n"
+        "- Standard **curbside** delivery currently takes **up to 2 weeks**.\n"
+        "- **White Glove** (brought inside and assembled) currently takes **up to 3 weeks**.\n"
+        "- The carrier contacts you with a **delivery window**. Exact time-of-day "
+        "requests aren't available, so I can't promise a specific calendar date.\n"
+        "- Curbside is to the **curb or driveway**, and a **signature is required**. "
+        "Assembly is not included — the chair ships with instructions and tools.\n"
         "- Please **inspect the packaging before signing**. Note any visible damage on "
         "the delivery receipt and tell us right away.\n"
-        "- Measure your **doorways, hallways, and stairs** before ordering — I can check "
-        "a specific chair against your doorway width if you tell me the measurement.\n\n"
-        f"Full policy: {url}\n\n"
-        "Shipping cost and coverage depend on your address, and we deliver within "
-        "the continental US. Share your **email** and a specialist will confirm "
-        "both for where you are."
+        "- Measure **doorways, hallways, and stairs** before ordering — tell me a "
+        "doorway width and I'll check fit.\n\n"
+        f"Full details: {url}\n\n"
+        "Shipping cost depends on the model and your address. I won't quote a dollar "
+        "amount here. Share your **zip code** and the model, and a specialist will confirm."
+    )
+
+
+def _remote_shipping_answer(domain: str) -> str:
+    url = _policy_url(domain, "pages/shipping-handling")
+    return (
+        "**Hawaii and Alaska — we do ship, you pay freight**\n\n"
+        "We deliver to Hawaii and Alaska, but **standard included shipping does not "
+        "apply**. You pay the shipping cost.\n\n"
+        "The amount **depends on the chair model and the exact address**, so there "
+        "isn't a published rate I can quote. Sales gets a quote from the carrier "
+        "and then tells you the cost before you order.\n\n"
+        "Share your **email, zip code, and the model** you're looking at and a "
+        "specialist will request that quote.\n\n"
+        f"Delivery options: {url}"
     )
 
 
 def _restricted_region_answer(domain: str) -> str:
-    url = _policy_url(domain, "policies/shipping-policy")
+    url = _policy_url(domain, "pages/shipping-handling")
     return (
-        "**We don't deliver to Hawaii, Alaska, or Guam.**\n\n"
-        "Our delivery network covers the continental US only, so I can't get a "
-        "chair to those locations.\n\n"
-        "If you have a **continental US shipping address** — a freight forwarder or "
-        "a friend or family member's address — we can deliver there and you'd arrange "
-        "the rest. A specialist can talk through that option with you.\n\n"
-        f"Shipping policy: {url}"
+        "**We don't ship to Guam.**\n\n"
+        "Hawaii and Alaska are served (you pay freight, quoted per model and "
+        "address), but Guam is outside our delivery network.\n\n"
+        f"Delivery options: {url}"
     )
 
 
 def _white_glove_answer(domain: str) -> str:
-    url = _policy_url(domain, "policies/shipping-policy")
+    url = _policy_url(domain, "pages/shipping-handling")
     return (
         "**White Glove delivery and assembly**\n\n"
-        "- Standard curbside delivery **does not include assembly**. White Glove adds "
+        "- Currently takes **up to 3 weeks** (standard curbside is up to 2 weeks).\n"
+        "- Standard curbside **does not include assembly**. White Glove adds "
         "in-home delivery plus assembly for an extra fee.\n"
+        "- **The White Glove fee is not refundable.**\n"
         "- The standard team is **two delivery professionals**, and the basic fee covers "
         "a short on-site window for delivery and assembly.\n"
         "- Crews **cannot move your furniture, remove doors, or haul away an old chair** — "
@@ -302,7 +354,7 @@ def _white_glove_answer(domain: str) -> str:
         "additional on-site time, or a redelivery attempt if the chair can't get in.\n"
         "- If a door or staircase is too narrow to complete delivery, an attempt fee may apply — "
         "so measuring first matters. Tell me your **doorway width** and I'll check fit.\n\n"
-        f"Full policy: {url}"
+        f"Full details: {url}"
     )
 
 
@@ -331,14 +383,32 @@ def _showroom_answer(domain: str) -> str:
     )
 
 
+def _mechanism_answer(_domain: str) -> str:
+    return (
+        "**2D / 3D / 4D / 5D / Dual Roller**\n\n"
+        "- **2D** massages along the X and Y axis (up and down).\n"
+        "- **3D** massages on the X, Y, and Z axis (up and down, left and right, "
+        "and in and out).\n"
+        "- **4D** includes the 3D features with rhythmical, speed-varying massage "
+        "patterns for a more lifelike experience.\n"
+        "- **5D** combines all 4D features with enhanced AI body scanning, "
+        "micro-adjustments, or extra fine-tuning.\n"
+        "- **Dual Roller** means two separate mechanisms operate independently — "
+        "usually upper back/shoulders and lower back/hips at the same time.\n\n"
+        "Tell me a model name and I'll confirm which mechanism that chair uses."
+    )
+
+
 _ANSWERS = {
     TOPIC_RETURNS: _returns_answer,
     TOPIC_WARRANTY_TERMS: _warranty_terms_answer,
     TOPIC_SHIPPING: _shipping_answer,
+    TOPIC_REMOTE_SHIPPING: _remote_shipping_answer,
     TOPIC_RESTRICTED_REGION: _restricted_region_answer,
     TOPIC_WHITE_GLOVE: _white_glove_answer,
     TOPIC_FINANCING: _financing_answer,
     TOPIC_SHOWROOM: _showroom_answer,
+    TOPIC_MECHANISM: _mechanism_answer,
 }
 
 

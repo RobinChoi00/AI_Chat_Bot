@@ -83,6 +83,7 @@ from sales_intent import (
 )
 from sales_intent_fallback import named_model_in_text, resolve_unclear
 from sales_policy import (
+    TOPIC_REMOTE_SHIPPING,
     TOPIC_SHIPPING,
     TOPIC_SHOWROOM,
     TOPIC_WHITE_GLOVE,
@@ -1805,7 +1806,7 @@ def _prepurchase_policy_reply(message: str, *, domain: str) -> SalesReply:
         return _unclear_reply()
 
     followups = [QuickReply(label="Recommend a chair", payload="recommend")]
-    if topic in (TOPIC_SHIPPING, TOPIC_WHITE_GLOVE):
+    if topic in (TOPIC_SHIPPING, TOPIC_WHITE_GLOVE, TOPIC_REMOTE_SHIPPING):
         followups.append(
             QuickReply(label="Check doorway fit", payload="recommend:space:narrow")
         )
