@@ -55,6 +55,12 @@ def test_named_model_routes_to_specs(message):
     assert result.label == INTENT_SPECS
 
 
+def test_bare_maestro_token_resolves_to_the_canonical_4d():
+    """The token index used to return Maestro LE because it appeared first."""
+    assert named_model_in_text("tell me about the Maestro") == "Osaki OS-Pro Maestro 4D"
+    assert named_model_in_text("Maestro LE") == "Osaki OS-Pro Maestro LE"
+
+
 @pytest.mark.parametrize(
     "message",
     [

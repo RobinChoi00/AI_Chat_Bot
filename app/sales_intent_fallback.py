@@ -182,16 +182,59 @@ def _model_token_index() -> dict[str, str]:
     return index
 
 
+_SHORT_DISAMBIGUATORS = frozenset({"le", "xl", "xt", "4d", "3d", "2d", "v2"})
+
+
 def named_model_in_text(text: str) -> Optional[str]:
-    """Return a catalog model name when the message clearly names one."""
+    """Return a catalog model name when the message clearly names one.
+
+    Distinctive tokens ("maestro", "highpointe") only answer "is a model
+    named here?". The actual name comes from ``resolve_product``, which
+    already knows that bare "Maestro" is the 4D. Short suffixes like LE
+    are kept on the phrase so "Maestro LE" still resolves correctly.
+    """
     index = _model_token_index()
     if not index:
         return None
-    for token in re.findall(r"[a-z0-9]+", (text or "").lower()):
-        hit = index.get(token)
-        if hit:
-            return hit
-    return None
+    words = re.findall(r"[a-z0-9]+", (text or "").lower())
+    phrases: list[str] = []
+    for i, word in enumerate(words):
+        if word not in index:
+            continue
+        chunk = [word]
+        for nxt in words[i + 1 : i + 3]:
+            if nxt in _SHORT_DISAMBIGUATORS or nxt in index:
+                chunk.append(nxt)
+            else:
+                break
+        if len(chunk) > 1:
+            phrases.append(" ".join(chunk))
+        phrases.append(word)
+    if not phrases:
+        return None
+
+    try:
+        from sales_catalog import resolve_product
+    except ImportError:  # pragma: no cover
+        return _model_token_index().get(phrases[-1])
+
+    distinctive = [w for w in words if w in index or w in _SHORT_DISAMBIGUATORS]
+    best_name: Optional[str] = None
+    best_score = -1
+    seen: set[str] = set()
+    for phrase in phrases:
+        if phrase in seen:
+            continue
+        seen.add(phrase)
+        product = resolve_product(phrase)
+        if product is None:
+            continue
+        hay = f"{product.display_name} {product.title}".lower()
+        score = sum(1 for token in distinctive if token in hay)
+        if score > best_score:
+            best_score = score
+            best_name = product.display_name or product.title
+    return best_name
 
 
 def rule_fallback(text: str) -> Optional[SalesIntent]:

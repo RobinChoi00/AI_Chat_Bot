@@ -735,6 +735,9 @@ def test_tell_me_about_a_named_model_returns_its_specs(client):
     assert body["intent"] == "specs"
     assert "maestro" in body["reply"].lower()
     assert "which model would you like specs for" not in body["reply"].lower()
+    # Bare "Maestro" is the 4D, not whichever Maestro variant is first in the index.
+    assert "maestro 4d" in body["reply"].lower()
+    assert "maestro le" not in body["reply"].lower()
     assert body.get("products")
 
 
