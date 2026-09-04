@@ -140,6 +140,8 @@ def test_tidio_turn_runs_sales_agent(client):
     assert body["next_action"] == "reply"
     assert body["session_id"].startswith("tidio:")
     assert body["handoff"] is False
+    assert body["button_1_label"] != "Talk to a human"
+    assert body["button_1_payload"] == "recommend"
 
 
 def test_tidio_turn_shipping_goes_to_warranty(client):
@@ -187,7 +189,7 @@ def test_tidio_turn_body_hints_recommend_not_intensity(client):
     assert body["next_action"] == "reply"
 
 
-def test_tidio_turn_discount_is_silent_handoff(client):
+def test_tidio_turn_discount_answers_facts_before_transfer(client):
     resp = client.post(
         "/api/v1/sales/tidio/turn",
         json={"message": "any discount?"},
@@ -195,8 +197,8 @@ def test_tidio_turn_discount_is_silent_handoff(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["intent"] == "discount"
-    assert body["handoff"] is True
-    assert body["next_action"] == "transfer_operator"
+    assert body["handoff"] is False
+    assert body["next_action"] == "reply"
     assert "%" not in body["reply"]
     assert "promo" not in body["reply"].lower()
 

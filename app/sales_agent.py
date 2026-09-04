@@ -41,7 +41,7 @@ from sales_cases import (
     enrich_implied_prefs,
     lookup_case,
     merge_prefs_from_hints,
-    missing_required,
+    missing_ask,
     rank_case_models,
     secondary_defaults_applied,
     short_do_not_recommend,
@@ -67,7 +67,9 @@ from sales_spec_index import (
 )
 from sales_intent import (
     INTENT_COMPARE,
+    INTENT_DISCOUNT,
     INTENT_GREETING,
+    INTENT_HUMAN,
     INTENT_INTENSITY,
     INTENT_ORDER_STATUS,
     INTENT_PREPURCHASE_POLICY,
@@ -163,6 +165,38 @@ def _fmt_live_price(
     return _fmt_price(low)
 
 
+def _product_closeout(
+    product: ProductSpecs,
+    *,
+    domain: str,
+) -> tuple[str, list[QuickReply], dict]:
+    """Why this chair, the product link, and an email-me CTA."""
+    why = " / ".join(
+        bit for bit in (product.massage_mechanism, product.track_type) if bit
+    )
+    url = product_page_url(domain, product.handle or "")
+    lines: list[str] = []
+    if why:
+        lines.append(f"**Why it stands out:** {why}.")
+    if url:
+        lines.append(f"Shop: {url}")
+    lines.append("Want this emailed to you? Tap **Email me this pick**.")
+    extra = "\n\n" + "\n".join(lines)
+    quick: list[QuickReply] = []
+    if url and url.startswith("https://"):
+        quick.append(QuickReply(label="Shop this chair", payload=f"open:{url}"))
+    quick.append(QuickReply(label="Email me this pick", payload="lead:save_pick"))
+    summary = f"{product.display_name} — {_fmt_price(product.price_usd)}"
+    if url:
+        summary += f"\n{url}"
+    patch = {
+        "pending_primary": product.display_name,
+        "pending_product_url": url,
+        "pending_pick_summary": summary,
+    }
+    return extra, quick, patch
+
+
 def _menu_quick_replies() -> list[QuickReply]:
     """Default set of quick-reply buttons — always present as an escape hatch."""
     return [
@@ -175,11 +209,10 @@ def _menu_quick_replies() -> list[QuickReply]:
 
 
 _MENU_INTRO = (
-    "Hi! I'm the Osaki shopping assistant. I can help with **model "
-    "recommendations, pricing, specs, and availability**.\n\n"
-    "• Already ordered — **shipping / tracking / parts / repair**: "
-    "I'll share Warranty Department contact info\n"
-    "• **Cancel / refund / discount**: I can connect you with an agent\n\n"
+    "Hi! I'm the Osaki shopping assistant. Tell me your **height** and what "
+    "you want the chair to help with, and I'll pick three models.\n\n"
+    "I can also check a **price**, **specs**, **stock**, **shipping**, and "
+    "the **return policy** right here.\n\n"
     "What would you like to do?"
 )
 
@@ -203,6 +236,165 @@ def _guess_model_from_text(text: str) -> Optional[ProductSpecs]:
 # ---------------------------------------------------------------------------
 # Response builders per intent
 # ---------------------------------------------------------------------------
+
+
+def _ask_question_before_human() -> SalesReply:
+    return SalesReply(
+        reply=(
+            "Before I connect you, tell me **the one thing** you need answered. "
+            "I can finish price, specs, stock, shipping, returns, or a "
+            "recommendation right here.\n\n"
+            "A specialist is only needed after that for **discounts**, a "
+            "**custom freight quote**, or an **order you already placed**."
+        ),
+        intent="human_offer",
+        handoff=False,
+        quick_replies=[
+            QuickReply(label="Recommend a chair", payload="recommend"),
+            QuickReply(label="Check a price", payload="price"),
+            QuickReply(label="Shipping times", payload="ask:shipping"),
+            QuickReply(label="Return policy", payload="ask:returns"),
+            QuickReply(label="Still connect me to sales", payload="human:confirm"),
+        ],
+        tools_used=["human.offer"],
+        prefs_patch={"human_offered": True, "awaiting_pre_human_question": True},
+        flow_stage="menu",
+    )
+
+
+def _shopping_facts_lines() -> list[str]:
+    return [
+        "- **Shipping:** up to **2 weeks** curbside, **3 weeks** White Glove.",
+        "- **Returns:** 30 days from delivery; you pay shipping both ways; "
+        "White Glove fee is not refundable.",
+        "- **Financing:** Affirm at checkout (I won't quote a rate).",
+        "- **Hawaii / Alaska:** we ship, you pay freight (quoted per model and zip).",
+        "- **Guam:** we don't ship.",
+    ]
+
+
+def _discount_facts_reply(message: str, prefs: Optional[dict], *, domain: str) -> SalesReply:
+    """Published facts only — never a % — then a specialist can negotiate."""
+    product = _guess_model_from_text(message or "")
+    if product is None:
+        named = ((prefs or {}).get("pending_primary") or "").strip()
+        if named:
+            product = resolve_product(named)
+    lines = [
+        "I can't quote a **discount, coupon, or sale price** here — a "
+        "specialist has to do that.\n",
+        "Here is everything I *can* confirm now:",
+    ]
+    if product is not None:
+        snap = fetch_live_stock(product.handle, domain=domain)
+        lines.append(
+            f"\n**{product.display_name}** — {_fmt_live_price(snap, product.price_usd)} "
+            f"({stock_badge(snap)})"
+        )
+    lines.append("")
+    lines.extend(_shopping_facts_lines())
+    return SalesReply(
+        reply="\n".join(lines),
+        intent=INTENT_DISCOUNT,
+        handoff=False,
+        quick_replies=[
+            QuickReply(label="Recommend a chair", payload="recommend"),
+            QuickReply(label="Check a price", payload="price"),
+            QuickReply(label="Still connect me to sales", payload="human:confirm"),
+        ],
+        tools_used=["human.complete", "policy.discount_facts"],
+        products=[product.as_public_dict()] if product is not None else [],
+        flow_stage="menu",
+    )
+
+
+def _attach_human_footer(inner: SalesReply) -> SalesReply:
+    """Keep the real answer, then let the shopper dismiss or still connect."""
+    footer = (
+        "\n\n---\n"
+        "If that covers it, you're set. Tap **Still connect me to sales** only "
+        "for a discount, a freight quote, or an order you already placed."
+    )
+    inner.reply = (inner.reply or "").rstrip() + footer
+    inner.handoff = False
+    inner.handoff_reason = None
+    kept = [
+        q
+        for q in inner.quick_replies
+        if q.payload not in {"human", "human:confirm"}
+    ]
+    kept.append(QuickReply(label="That's all I needed", payload="menu"))
+    kept.append(QuickReply(label="Still connect me to sales", payload="human:confirm"))
+    inner.quick_replies = kept
+    inner.tools_used = list(inner.tools_used or []) + ["human.complete"]
+    patch = dict(inner.prefs_patch or {})
+    patch["human_offered"] = True
+    patch["awaiting_pre_human_question"] = False
+    inner.prefs_patch = patch
+    if not inner.flow_stage:
+        inner.flow_stage = "menu"
+    return inner
+
+
+def _prefs_for_inner(prefs: Optional[dict]) -> dict:
+    out = dict(prefs or {})
+    out.pop("awaiting_pre_human_question", None)
+    out.pop("human_offered", None)
+    return out
+
+
+def _complete_then_offer_human(
+    *,
+    prefs: Optional[dict],
+    domain: str,
+    reason: str = "human",
+) -> SalesReply:
+    """Answer the shopper's actual question before any sales-agent transfer."""
+    data = prefs or {}
+    question = str(data.get("last_shopper_question") or "").strip()
+    summary = str(data.get("pending_pick_summary") or "").strip()
+
+    if reason == "discount" or (
+        question and classify(question).label == INTENT_DISCOUNT
+    ):
+        return _attach_human_footer(
+            _discount_facts_reply(question, data, domain=domain)
+        )
+
+    if question:
+        inner_intent = classify(question)
+        recovered = (
+            resolve_unclear(question)
+            if inner_intent.label == INTENT_UNCLEAR
+            else None
+        )
+        label = recovered.label if recovered is not None else inner_intent.label
+        if label not in HANDOFF_INTENTS and label != INTENT_HUMAN:
+            inner = respond(
+                question,
+                domain=domain,
+                prefs=_prefs_for_inner(data),
+                before_handoff=True,
+            )
+            if inner.intent not in {INTENT_UNCLEAR, INTENT_GREETING, "human_offer"}:
+                return _attach_human_footer(inner)
+
+    if summary:
+        primary = str(data.get("pending_primary") or "your pick").strip()
+        return _attach_human_footer(
+            SalesReply(
+                reply=f"Here's the pick I already have for you:\n\n{summary}",
+                intent=INTENT_RECOMMEND,
+                quick_replies=[
+                    QuickReply(label=f"See {primary[:28]}", payload="tier:1"),
+                    QuickReply(label="Email me these picks", payload="lead:save_pick"),
+                ],
+                tools_used=["human.complete"],
+                flow_stage="recommend",
+            )
+        )
+
+    return _ask_question_before_human()
 
 
 def _handoff_reply(intent: SalesIntent) -> SalesReply:
@@ -287,18 +479,19 @@ def _price_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
     reply = (
         f"**{product.display_name}** — {price_txt}.\n\n"
         f"{availability}\n\n"
-        f"{price_source} For any other offer, I can connect "
-        "you with our sales team."
+        f"{price_source}"
     )
+    extra, close_quick, close_patch = _product_closeout(product, domain=domain)
     public = product.as_public_dict()
     if live is not None and live.price_usd is not None:
         public["price_usd"] = live.price_usd
         public["price_max_usd"] = live.price_max_usd
         public["stock"] = stock_badge(live)
     return SalesReply(
-        reply=reply,
+        reply=reply + extra,
         intent=INTENT_PRICE,
         quick_replies=[
+            *close_quick,
             QuickReply(label=f"Specs for {product.display_name}", payload=f"specs:{product.handle}"),
             QuickReply(label="Compare with another model", payload="compare"),
             QuickReply(label="Talk to a human", payload="human"),
@@ -308,6 +501,7 @@ def _price_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
             *(["shopify.price_inventory"] if live is not None else []),
         ],
         products=[public],
+        prefs_patch=close_patch,
     )
 
 
@@ -359,16 +553,19 @@ def _stock_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
             f"**{product.display_name}** is **not in our active catalog** right now. "
             "A rep can confirm restock timing — I won't guess a date."
         )
+    extra, close_quick, close_patch = _product_closeout(product, domain=domain)
     return SalesReply(
-        reply=reply,
+        reply=reply + extra,
         intent=INTENT_STOCK,
         quick_replies=[
+            *close_quick,
             QuickReply(label="Check the price", payload=f"price:{product.handle}"),
             QuickReply(label="See similar models", payload="recommend"),
             QuickReply(label="Talk to a human", payload="human"),
         ],
         tools_used=tools,
         products=[product.as_public_dict()],
+        prefs_patch=close_patch,
     )
 
 
@@ -391,7 +588,7 @@ def _yes_no_spec(value: str) -> str:
     return value.strip()
 
 
-def _specs_reply(message: str) -> SalesReply:
+def _specs_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
     product = _guess_model_from_text(message)
     if product is None:
         return SalesReply(
@@ -457,16 +654,19 @@ def _specs_reply(message: str) -> SalesReply:
             lines.append(f"- **Doorway (disassembled)**: {fit.door_dis_in:g} in")
         if fit.wall_clearance_in is not None:
             lines.append(f"- **Wall clearance**: {fit.wall_clearance_in:g} in")
+    extra, close_quick, close_patch = _product_closeout(product, domain=domain)
     return SalesReply(
-        reply="\n".join(lines),
+        reply="\n".join(lines) + extra,
         intent=INTENT_SPECS,
         quick_replies=[
+            *close_quick,
             QuickReply(label="Check the price", payload=f"price:{product.handle}"),
             QuickReply(label="Compare with another model", payload="compare"),
             QuickReply(label="Talk to a human", payload="human"),
         ],
         tools_used=["catalog.resolve_product"],
         products=[public],
+        prefs_patch=close_patch,
     )
 
 
@@ -657,7 +857,8 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
         return SalesReply(
             reply=(
                 "Happy to recommend a chair. What's the **user height**?\n\n"
-                "I'll match fit first, then show **Value / Mid / Premium** options."
+                "Then I'll ask what you want the chair to help with and show "
+                "**Value / Mid / Premium** options."
             ),
             intent=INTENT_RECOMMEND,
             quick_replies=[*_HEIGHT_REPLIES, QuickReply(label="Talk to a human", payload="human")],
@@ -1151,8 +1352,8 @@ def _tiered_case_recommend_reply(
         lines.append("")
 
     lines.append(
-        "Reply **1 / 2 / 3** for that chair, email these picks, "
-        "or ask to visit the Carrollton showroom."
+        "Reply **1 / 2 / 3** for that chair, or email these picks. "
+        "If a doorway is tight or you weigh over 220 lb, tell me and I'll re-check fit."
     )
 
     primary = tier_leads[0]
@@ -1446,7 +1647,8 @@ def _catalog_tier_recommend_reply(message: str, request: RecommendationRequest) 
         return SalesReply(
             reply=(
                 "Happy to recommend a chair. What's the **user height**?\n\n"
-                "I'll match fit first, then show **Value / Mid / Premium** options."
+                "Then I'll ask what you want the chair to help with and show "
+                "**Value / Mid / Premium** options."
             ),
             intent=INTENT_RECOMMEND,
             quick_replies=[
@@ -1573,7 +1775,7 @@ def _recommend_reply(
     ):
         return _clarify_doorway_fit(merged)
 
-    missing = missing_required(merged)
+    missing = missing_ask(merged)
     if missing:
         return _clarify_recommend(missing[0], merged)
 
@@ -1825,9 +2027,9 @@ def _prepurchase_policy_reply(message: str, *, domain: str) -> SalesReply:
 def _unclear_reply() -> SalesReply:
     return SalesReply(
         reply=(
-            "I want to make sure I answer you correctly instead of guessing. "
-            "Pick what you'd like to do, or type your question in a bit more "
-            "detail (e.g. *\"price of the OS-Pro Maestro\"*)."
+            "I can help with a recommendation, a price, specs, stock, or "
+            "shipping — I just need a bit more. Tap one of these, or type a "
+            "model name (e.g. *\"price of the OS-Pro Maestro\"*)."
         ),
         intent=INTENT_UNCLEAR,
         quick_replies=_menu_quick_replies(),
@@ -1872,9 +2074,7 @@ _PAYLOAD_ROUTES = {
     "stock": lambda msg: _stock_reply(msg),
     "specs": lambda msg: _specs_reply(msg),
     "intensity": lambda msg: _intensity_reply(msg),
-    "human": lambda _msg: _handoff_reply(
-        SalesIntent(label="human", confidence="high", handoff=True)
-    ),
+    "human": lambda _msg: _ask_question_before_human(),
 }
 
 
@@ -1919,8 +2119,9 @@ def _capture_pick_lead(email: str, prefs: Optional[dict], *, domain: str) -> Sal
     primary = ((prefs or {}).get("pending_primary") or "your pick").strip()
     url = ((prefs or {}).get("pending_product_url") or "").strip()
     lines = [
-        f"Thanks — I saved **{email}** with your pick (**{primary}**) for the sales team.",
-        "Someone will follow up (usually next business day for pricing / delivery / discounts).",
+        f"Thanks — I saved **{email}** with your pick (**{primary}**).",
+        "You'll get a confirmation email, and someone from sales will follow up "
+        "(usually next business day).",
     ]
     if url:
         lines.append(f"\nMeanwhile you can review it here: {url}")
@@ -2048,6 +2249,8 @@ def _payload_reply(
         return _stock_reply(message or payload, domain=domain)
     if root == "price":
         return _price_reply(message or payload, domain=domain)
+    if root == "specs":
+        return _specs_reply(message or payload, domain=domain)
     if root == "lead":
         action = parts[1].strip().lower() if len(parts) > 1 else "save_pick"
         if action in {"save_pick", "email", "email_pick"}:
@@ -2056,6 +2259,23 @@ def _payload_reply(
             if email:
                 return _capture_pick_lead(email, prefs, domain=domain)
             return _ask_email_for_pick(prefs)
+    if root == "ask" and len(parts) >= 2:
+        topic = parts[1].strip().lower()
+        if topic == "shipping":
+            return _prepurchase_policy_reply(
+                "how long does shipping take", domain=domain
+            )
+        if topic == "returns":
+            return _prepurchase_policy_reply(
+                "what is your return policy", domain=domain
+            )
+    if root == "human":
+        confirm = len(parts) > 1 and parts[1].strip().lower() == "confirm"
+        if confirm:
+            return _handoff_reply(
+                SalesIntent(label="human", confidence="high", handoff=True)
+            )
+        return _complete_then_offer_human(prefs=prefs, domain=domain, reason="human")
     if root == "feedback" and len(parts) >= 2:
         return _feedback_reply(parts[1].strip().lower(), prefs)
     if root == "open" and len(parts) >= 2:
@@ -2340,12 +2560,36 @@ def _tier_digit_reply(message: str, prefs: Optional[dict]) -> Optional[SalesRepl
     return _tier_followup_reply(int(digit.group(1)) - 1, prefs)
 
 
+def _should_remember_question(message: str, payload: Optional[str]) -> bool:
+    if payload:
+        return False
+    text = (message or "").strip()
+    if len(text) < 4 or extract_email(text):
+        return False
+    if re.fullmatch(r"[1-3][).:\s]*", text):
+        return False
+    label = classify(text).label
+    if label in {INTENT_HUMAN, INTENT_GREETING}:
+        return False
+    return True
+
+
+def _remember_question(result: SalesReply, message: str, payload: Optional[str]) -> SalesReply:
+    if not _should_remember_question(message, payload):
+        return result
+    patch = dict(result.prefs_patch or {})
+    patch["last_shopper_question"] = message.strip()[:500]
+    result.prefs_patch = patch
+    return result
+
+
 def respond(
     message: str,
     *,
     payload: Optional[str] = None,
     domain: str = "osakiusa.com",
     prefs: Optional[dict] = None,
+    before_handoff: bool = False,
 ) -> SalesReply:
     """Return a SalesReply for one customer message (+ optional button payload).
 
@@ -2355,12 +2599,41 @@ def respond(
 
     ``prefs`` is ``sales_sessions.collected_data`` (recommend answers accumulate
     across turns via ``prefs_patch`` on the reply).
+
+    ``before_handoff`` replays a stored question so we can answer it fully
+    without treating "talk to a human" as the question.
     """
     # Awaiting email after "Email me this pick" — capture before other intents.
     if (prefs or {}).get("awaiting_email_for_pick"):
         email = extract_email(message or "")
         if email:
             return _finalize_flow_stage(_capture_pick_lead(email, prefs, domain=domain))
+
+    # They asked for a person, then typed the real question.
+    if (
+        not before_handoff
+        and (prefs or {}).get("awaiting_pre_human_question")
+        and (message or "").strip()
+        and (payload or "") not in {"human", "human:confirm"}
+    ):
+        intent = classify(message or "")
+        if intent.label == INTENT_HUMAN:
+            return _finalize_flow_stage(_handoff_reply(intent))
+        if intent.label in HANDOFF_INTENTS and intent.label != INTENT_DISCOUNT:
+            return _finalize_flow_stage(_handoff_reply(intent))
+        if intent.label == INTENT_DISCOUNT:
+            return _finalize_flow_stage(
+                _attach_human_footer(
+                    _discount_facts_reply(message, prefs, domain=domain)
+                )
+            )
+        inner = respond(
+            message,
+            domain=domain,
+            prefs=_prefs_for_inner(prefs),
+            before_handoff=True,
+        )
+        return _finalize_flow_stage(_attach_human_footer(inner))
 
     # After a tier list, bare "1"/"2"/"3" opens that chair (chat + Tidio).
     if not payload:
@@ -2371,7 +2644,9 @@ def respond(
     if payload:
         forced = _payload_reply(payload, message, domain=domain, prefs=prefs)
         if forced is not None:
-            return _finalize_flow_stage(forced)
+            return _remember_question(
+                _finalize_flow_stage(forced), message, payload
+            )
 
     intent = classify(message or "")
 
@@ -2382,13 +2657,30 @@ def respond(
         if recovered is not None:
             intent = recovered
 
+    if not before_handoff and intent.label == INTENT_HUMAN:
+        return _finalize_flow_stage(
+            _complete_then_offer_human(prefs=prefs, domain=domain, reason="human")
+        )
+
+    if not before_handoff and intent.label == INTENT_DISCOUNT:
+        return _remember_question(
+            _finalize_flow_stage(
+                _complete_then_offer_human(
+                    prefs=prefs, domain=domain, reason="discount"
+                )
+            ),
+            message,
+            payload,
+        )
+
     if intent.label in HANDOFF_INTENTS:
         return _finalize_flow_stage(_handoff_reply(intent))
 
     if intent.label == INTENT_PREPURCHASE_POLICY:
-        return _finalize_flow_stage(
+        result = _finalize_flow_stage(
             _prepurchase_policy_reply(message, domain=domain)
         )
+        return _remember_question(result, message, payload)
 
     if intent.label == INTENT_GREETING:
         return _finalize_flow_stage(_greeting_reply())
@@ -2397,16 +2689,44 @@ def respond(
         return _finalize_flow_stage(_order_status_reply(message))
 
     if intent.label == INTENT_PRICE:
-        return _finalize_flow_stage(_price_reply(message, domain=domain))
+        return _remember_question(
+            _finalize_flow_stage(_price_reply(message, domain=domain)),
+            message,
+            payload,
+        )
     if intent.label == INTENT_STOCK:
-        return _finalize_flow_stage(_stock_reply(message, domain=domain))
+        return _remember_question(
+            _finalize_flow_stage(_stock_reply(message, domain=domain)),
+            message,
+            payload,
+        )
     if intent.label == INTENT_SPECS:
-        return _finalize_flow_stage(_specs_reply(message))
+        return _remember_question(
+            _finalize_flow_stage(_specs_reply(message, domain=domain)),
+            message,
+            payload,
+        )
     if intent.label == INTENT_RECOMMEND:
-        return _finalize_flow_stage(_recommend_reply(message, domain=domain, prefs=prefs))
+        return _remember_question(
+            _finalize_flow_stage(
+                _recommend_reply(message, domain=domain, prefs=prefs)
+            ),
+            message,
+            payload,
+        )
     if intent.label == INTENT_COMPARE:
-        return _finalize_flow_stage(_compare_reply(message))
+        return _remember_question(
+            _finalize_flow_stage(_compare_reply(message)),
+            message,
+            payload,
+        )
     if intent.label == INTENT_INTENSITY:
-        return _finalize_flow_stage(_intensity_reply(message))
+        return _remember_question(
+            _finalize_flow_stage(_intensity_reply(message)),
+            message,
+            payload,
+        )
 
-    return _finalize_flow_stage(_unclear_reply())
+    return _remember_question(
+        _finalize_flow_stage(_unclear_reply()), message, payload
+    )

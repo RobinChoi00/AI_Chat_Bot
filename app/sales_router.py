@@ -45,7 +45,6 @@ except ImportError:  # pragma: no cover
 from pii_redact import mask_email, mask_phone
 from sales_agent import SalesReply, respond
 from sales_conversion import record_order, require_shopify_signature
-from sales_intent import HANDOFF_INTENTS
 from sales_leads import capture_lead, schedule_lead_delivery
 from sales_models import (
     SalesLead,
@@ -156,7 +155,7 @@ def _reply_to_response(reply: SalesReply, session_id: str) -> SalesChatResponse:
     return SalesChatResponse(
         reply=reply.reply,
         intent=reply.intent,
-        handoff=reply.handoff or reply.intent in HANDOFF_INTENTS,
+        handoff=bool(reply.handoff),
         handoff_reason=reply.handoff_reason,
         quick_replies=[
             QuickReplyDTO(label=q.label, payload=q.payload) for q in reply.quick_replies

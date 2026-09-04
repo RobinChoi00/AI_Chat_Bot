@@ -111,6 +111,11 @@ def deliver_lead(
 
     if ok:
         _mark_lead_status(lead_id, status="sent", error=None)
+        _send_shopper_receipt(
+            email=email,
+            interest_summary=interest_summary,
+            domain=domain,
+        )
         return
     _record_failure(lead_id=lead_id, domain=domain, error="smtp_returned_false")
 
@@ -149,6 +154,34 @@ def _resolve_transport():
             logger.warning("sales lead capture: email transport unavailable")
             return None
     return send_sales_lead_email
+
+
+def _send_shopper_receipt(
+    *,
+    email: Optional[str],
+    interest_summary: Optional[str],
+    domain: str,
+) -> None:
+    """Best-effort confirmation to the shopper. Never fails the sales notify."""
+    to_addr = (email or "").strip()
+    if not to_addr:
+        return
+    try:
+        from main import send_sales_shopper_receipt_email  # type: ignore
+    except ImportError:
+        try:
+            from app.main import send_sales_shopper_receipt_email  # type: ignore
+        except ImportError:
+            logger.warning("sales shopper receipt: email transport unavailable")
+            return
+    try:
+        send_sales_shopper_receipt_email(
+            to_addr,
+            (interest_summary or "").strip() or _FALLBACK_SUMMARY,
+            domain or "",
+        )
+    except Exception:
+        logger.exception("sales shopper receipt failed")
 
 
 def _mark_lead_status(lead_id: int, *, status: str, error: Optional[str]) -> None:

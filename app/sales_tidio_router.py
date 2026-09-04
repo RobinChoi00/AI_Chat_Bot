@@ -36,8 +36,6 @@ from pydantic import BaseModel, Field
 
 from sales_agent import respond
 from sales_intent import (
-    INTENT_DISCOUNT,
-    INTENT_HUMAN,
     WARRANTY_ROUTE_INTENTS,
 )
 from sales_leads import capture_lead, schedule_lead_delivery
@@ -172,9 +170,7 @@ def _strip_md(text: str) -> str:
 def _next_action(intent: str, handoff: bool) -> str:
     if intent in WARRANTY_ROUTE_INTENTS:
         return "warranty_redirect"
-    if intent in (INTENT_DISCOUNT, INTENT_HUMAN) or (
-        handoff and intent not in WARRANTY_ROUTE_INTENTS
-    ):
+    if handoff and intent not in WARRANTY_ROUTE_INTENTS:
         return "transfer_operator"
     return "reply"
 

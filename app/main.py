@@ -158,6 +158,46 @@ def send_sales_lead_email(customer_email: str, query_content: str, product_info:
         logger.error(f"🚨 [Email Unknown Error] {e}")
     return False
 
+
+def send_sales_shopper_receipt_email(
+    customer_email: str, query_content: str, domain: str
+) -> bool:
+    """Tell the shopper we received their request. Best-effort, never raises."""
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        logger.error("🚨 [Email Error] EMAIL_SENDER or EMAIL_PASSWORD is not set in .env")
+        return False
+    to_addr = (customer_email or "").strip()
+    if not to_addr or "@" not in to_addr:
+        return False
+
+    subject = "We received your Osaki request"
+    summary = (query_content or "").strip() or "your chair request"
+    body = (
+        "Thanks for chatting with the Osaki shopping assistant.\n\n"
+        "We saved your request and a specialist will follow up, usually the "
+        "next business day.\n\n"
+        f"Here's what we have:\n{summary}\n\n"
+        "If you didn't request this, you can ignore this email.\n\n"
+        "-- Osaki USA --"
+    )
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = to_addr
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.send_message(msg)
+        logger.info("✅ [Email Sent] Shopper receipt → %s", to_addr)
+        return True
+    except Exception as exc:
+        logger.exception("Shopper receipt email failed: %s", exc)
+        return False
+
 load_dotenv(override=True)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(funcName)s] %(message)s')

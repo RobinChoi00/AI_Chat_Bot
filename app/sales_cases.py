@@ -413,8 +413,13 @@ def merge_prefs_from_hints(
     return out
 
 
-# Must ask these first — body fit + doorway. Budget is NOT a gate: we
-# recommend across Value / Mid / Premium tiers once these are known.
+# Must ask these first. Weight and space default so we can show three chairs
+# after two answers; the shopper can correct them if fit is tight.
+ASK_PREF_KEYS = (
+    "height",
+    "goal",
+)
+
 CORE_PREF_KEYS = (
     "height",
     "weight",
@@ -436,6 +441,13 @@ _SECONDARY_DEFAULTS = {
     "intensity": "Balanced",
     "foot": "Not Important",
 }
+
+_CORE_DEFAULTS = {
+    "weight": "181–220 lb",
+    "space": "No Space Constraint",
+}
+
+DEFAULTABLE_PREF_KEYS = ("weight", "space", "intensity", "foot")
 
 # Soft intensity from massage goal when the shopper didn't say gentle/strong.
 _GOAL_INTENSITY = {
@@ -462,17 +474,28 @@ def missing_required(prefs: dict[str, str]) -> list[str]:
     return [k for k in REQUIRED_PREF_KEYS if not (prefs or {}).get(k)]
 
 
+def missing_ask(prefs: dict[str, str]) -> list[str]:
+    """Questions we actually ask. Weight/space are defaulted, not quizzed."""
+    return [k for k in ASK_PREF_KEYS if not (prefs or {}).get(k)]
+
+
 def missing_core(prefs: dict[str, str]) -> list[str]:
     return [k for k in CORE_PREF_KEYS if not (prefs or {}).get(k)]
 
 
 def enrich_implied_prefs(prefs: dict[str, str]) -> dict[str, str]:
-    """Fill axes implied by other answers, then secondary defaults after core four."""
+    """Fill axes implied by other answers, then defaults after height + goal."""
     out = dict(prefs or {})
     goal = (out.get("goal") or "").strip()
     if goal == "Foot & Calf" and "foot" not in out:
         # Asking foot again after they chose Foot & Calf as the main goal is noise.
         out["foot"] = "Important"
+    # Two-question path: height + goal is enough to pick three chairs.
+    if out.get("height") and out.get("goal"):
+        if not out.get("weight"):
+            out["weight"] = _CORE_DEFAULTS["weight"]
+        if not out.get("space"):
+            out["space"] = _CORE_DEFAULTS["space"]
     # Once height/weight/space/goal are known, skip intensity/foot questions.
     if all(out.get(k) for k in CORE_PREF_KEYS):
         if not out.get("intensity"):
@@ -485,11 +508,10 @@ def enrich_implied_prefs(prefs: dict[str, str]) -> dict[str, str]:
 def secondary_defaults_applied(
     before: dict[str, str], after: dict[str, str]
 ) -> list[str]:
-    """Return secondary keys that were filled by enrich_implied_prefs defaults."""
+    """Return keys that were filled by enrich_implied_prefs defaults."""
     applied: list[str] = []
-    for key in SECONDARY_PREF_KEYS:
+    for key in DEFAULTABLE_PREF_KEYS:
         if not (before or {}).get(key) and (after or {}).get(key):
-            # Foot implied by Foot & Calf goal is intentional, still a skip.
             applied.append(key)
     return applied
 

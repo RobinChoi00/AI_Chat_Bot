@@ -22,6 +22,7 @@ from sales_cases import (  # noqa: E402
     height_bucket,
     lookup_case,
     merge_prefs_from_hints,
+    missing_ask,
     missing_core,
     missing_required,
     rank_case_models,
@@ -120,6 +121,21 @@ def test_enrich_implied_foot_from_goal():
     assert prefs["foot"] == "Important"
     # Core incomplete → do not invent intensity yet.
     assert "intensity" not in prefs
+
+
+def test_enrich_after_height_and_goal_defaults_weight_and_space():
+    before = {
+        "height": 'Tall (6\'0"–6\'2")',
+        "goal": "Lower Back",
+    }
+    assert missing_ask(before) == []
+    filled = enrich_implied_prefs(before)
+    assert filled["weight"] == "181–220 lb"
+    assert filled["space"] == "No Space Constraint"
+    assert filled["intensity"] == "Strong"
+    assert missing_required(filled) == []
+    assert "weight" in secondary_defaults_applied(before, filled)
+    assert "space" in secondary_defaults_applied(before, filled)
 
 
 def test_enrich_applies_secondary_defaults_after_core_four():

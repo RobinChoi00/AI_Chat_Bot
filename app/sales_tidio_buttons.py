@@ -41,9 +41,12 @@ _PREFIX_PRIORITY: list[tuple[str, int]] = [
     ("recommend:", 70),
     ("specs:", 80),
     ("stock:", 85),
-    ("human", 35),
     ("menu", 95),
 ]
+
+# Never lead with this. Tidio's numbered menu and button_1_label used to put
+# "Talk to a human" first because it was ranked higher than Recommend.
+_HUMAN_PAYLOADS = frozenset({"human", "human:confirm"})
 
 
 def tidio_max_buttons() -> int:
@@ -95,11 +98,18 @@ def prioritize_quick_replies(
         seen.add(key)
         cleaned.append({"label": label[:80], "payload": payload[:200]})
 
+    human = [q for q in cleaned if q["payload"].strip().lower() in _HUMAN_PAYLOADS]
+    others = [q for q in cleaned if q["payload"].strip().lower() not in _HUMAN_PAYLOADS]
     ranked = sorted(
-        enumerate(cleaned),
+        enumerate(others),
         key=lambda pair: (_priority(pair[1]["payload"]), pair[0]),
     )
-    return [q for _, q in ranked][:cap]
+    kept = [q for _, q in ranked]
+    if human:
+        kept = kept[: max(0, cap - 1)]
+        kept.append(human[0])
+        return kept
+    return kept[:cap]
 
 
 def flatten_buttons_for_flow(buttons: list[dict[str, str]]) -> dict[str, Any]:
@@ -148,9 +158,9 @@ def append_numbered_menu(reply_plain: str, buttons: list[dict[str, str]]) -> str
 _DEFAULT_MENU_BUTTONS: list[dict[str, str]] = [
     {"label": "Recommend a chair", "payload": "recommend"},
     {"label": "Availability / stock", "payload": "stock"},
-    {"label": "Talk to a human", "payload": "human"},
     {"label": "Check a price", "payload": "price"},
     {"label": "Compare two models", "payload": "compare"},
+    {"label": "Talk to a human", "payload": "human"},
 ]
 
 

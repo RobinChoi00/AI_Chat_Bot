@@ -101,10 +101,14 @@ def after_hours_blurb() -> str:
 
 
 def format_defaults_note(applied: list[str], prefs: dict[str, str]) -> Optional[str]:
-    """Short note when we skipped intensity/foot questions."""
+    """Short note when we skipped weight/space/intensity/foot questions."""
     if not applied:
         return None
     bits = []
+    if "weight" in applied and prefs.get("weight"):
+        bits.append(f"weight {prefs['weight']}")
+    if "space" in applied and prefs.get("space"):
+        bits.append("no doorway constraint")
     if "intensity" in applied and prefs.get("intensity"):
         bits.append(prefs["intensity"].lower())
     if "foot" in applied and prefs.get("foot"):

@@ -29,7 +29,18 @@ def test_prioritize_caps_and_prefers_shop():
     assert len(out) == 5
     assert out[0]["payload"].startswith("open:")
     assert any(b["payload"] == "lead:save_pick" for b in out)
+    assert out[-1]["payload"] == "human"
     assert out[-1]["payload"] != "menu" or len(out) < 6
+
+
+def test_talk_to_a_human_is_never_the_first_choice():
+    """Tidio numbers the ranked list. Human at rank 35 used to become 1)."""
+    from sales_agent import _menu_quick_replies
+
+    out = prioritize_quick_replies(_menu_quick_replies(), limit=5)
+    assert out[0]["payload"] != "human"
+    assert out[-1]["payload"] == "human"
+    assert out[0]["payload"] == "recommend"
 
 
 def test_flatten_and_numbered_menu():
