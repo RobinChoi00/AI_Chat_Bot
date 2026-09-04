@@ -872,6 +872,7 @@ def build_customer_receipt_body(
     model_name: str = "",
     issue_type: str = "",
     freshdesk_url: str = "",
+    status_url: str = "",
 ) -> str:
     """Plain-text receipt after a warranty case is submitted for team follow-up."""
     lines = [
@@ -894,6 +895,16 @@ def build_customer_receipt_body(
             "",
         ]
     )
+    if status_url:
+        lines.append("Check your case status anytime:")
+        lines.append(f"  {status_url}")
+        lines.append("")
+    else:
+        lines.append(
+            "Check status anytime in the warranty chat: tap Check my case "
+            "and enter this reference plus your email."
+        )
+        lines.append("")
     if freshdesk_url:
         lines.append("You do not need to open a link — we will email you updates.")
         lines.append("")
@@ -910,6 +921,15 @@ def build_customer_receipt_body(
     return "\n".join(lines)
 
 
+def _status_page_url() -> str:
+    import os  # noqa: WPS433
+
+    base = (os.getenv("WARRANTY_PUBLIC_APP_URL") or "").strip().rstrip("/")
+    if not base:
+        return ""
+    return f"{base}/warranty/status"
+
+
 def send_customer_receipt_email(
     *,
     to_email: str,
@@ -917,6 +937,7 @@ def send_customer_receipt_email(
     model_name: str = "",
     issue_type: str = "",
     freshdesk_url: str = "",
+    status_url: str = "",
 ) -> bool:
     """Send a customer-facing receipt with the case reference."""
     if not EMAIL_SENDER or not EMAIL_PASSWORD:
@@ -932,6 +953,7 @@ def send_customer_receipt_email(
         model_name=model_name,
         issue_type=issue_type,
         freshdesk_url=freshdesk_url,
+        status_url=(status_url or "").strip() or _status_page_url(),
     )
 
     msg = MIMEMultipart()
@@ -965,23 +987,29 @@ def maybe_send_customer_receipt_email(
     turns: Optional[Sequence[Any]] = None,
     case_reference: str = "",
     freshdesk_url: str = "",
+    force: bool = False,
 ) -> tuple[bool, Optional[str]]:
     """
     Send a one-time receipt when a case is submitted for human follow-up.
 
     Returns (sent, skip_reason).
+    ``force`` is set when the customer just submitted contact/evidence, so a
+    self-help terminal (``send_info``) can still get a confirmation email.
     """
     collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
     if str(collected.get("receipt_email_sent") or "").strip() == "1":
         return False, "already_sent"
 
     status = str(getattr(ticket, "status", "") or "").strip().lower()
-    if status not in {
+    eligible = {
         "awaiting_admin_review",
         "awaiting_evidence",
         "admin_reviewing",
         "need_more_information",
-    }:
+    }
+    if force:
+        eligible = eligible | {"send_info"}
+    if status not in eligible:
         return False, "status_not_eligible"
 
     to_email = resolve_customer_email(ticket, turns=turns)
@@ -1009,9 +1037,10 @@ def maybe_send_customer_receipt_email(
         issue_type=str(getattr(ticket, "issue_type", "") or ""),
         freshdesk_url=fd_url,
     )
+    if hasattr(ticket, "set_collected"):
+        ticket.set_collected("case_reference", case_ref)
     if sent:
         ticket.set_collected("receipt_email_sent", "1")
-        ticket.set_collected("case_reference", case_ref)
         return True, None
     if not EMAIL_SENDER or not EMAIL_PASSWORD:
         return False, "smtp_not_configured"

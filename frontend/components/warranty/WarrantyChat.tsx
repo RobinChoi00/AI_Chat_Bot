@@ -49,6 +49,7 @@ import {
 } from "@/lib/welcomeMessage";
 import ChatRecordingNoticeBanner from "./ChatRecordingNoticeBanner";
 import ChatEmailGate from "./ChatEmailGate";
+import WarrantyCaseLookup from "./WarrantyCaseLookup";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 
 import { resolveWarrantyStoreDomain } from "@/lib/warrantyStoreDomain";
@@ -84,14 +85,20 @@ function selfHelpClosing(issueType?: string | null): string {
   return SELF_HELP_CLOSING;
 }
 
-function teamFollowUpThankYou(issueType?: string | null): string {
+function teamFollowUpThankYou(
+  issueType?: string | null,
+  caseReference?: string | null
+): string {
+  const ref = caseReference?.trim()
+    ? ` Your case reference is **${caseReference.trim()}**. We emailed a confirmation.`
+    : "";
   if (issueType === "installation") {
-    return "Thank you — our team will follow up with installation support within 24 hours.";
+    return `Thank you — our team will follow up with installation support within 24 hours.${ref}`;
   }
   if (issueType === "delivery") {
-    return "Thank you — our team will review this delivery case (damage, missing parts, or tracking) and follow up within 24 hours.";
+    return `Thank you — our team will review this delivery case (damage, missing parts, or tracking) and follow up within 24 hours.${ref}`;
   }
-  return "Thank you — our team will review this product issue and follow up within 24 hours.";
+  return `Thank you — our team will review this product issue and follow up within 24 hours.${ref}`;
 }
 
 const DEFECT_MODEL_PROMPT =
@@ -165,6 +172,10 @@ export default function WarrantyChat({
   const [optionsUsed, setOptionsUsed] = useState(false);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [contactSubmitted, setContactSubmitted] = useState(false);
+  const [showCaseLookup, setShowCaseLookup] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).has("check");
+  });
   const [helpConsent, setHelpConsent] = useState<"yes" | "no" | null>(null);
   const [resolutionStage, setResolutionStage] = useState<"review" | "outcome">("review");
   const [optionsPanelExpanded, setOptionsPanelExpanded] = useState(true);
@@ -1167,6 +1178,15 @@ export default function WarrantyChat({
             )}
             <button
               type="button"
+              onClick={() => setShowCaseLookup((open) => !open)}
+              disabled={loading}
+              className="rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 disabled:opacity-50"
+              title="Check an existing warranty case"
+            >
+              Check case
+            </button>
+            <button
+              type="button"
               onClick={restartSession}
               disabled={loading}
               className="rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 disabled:opacity-50"
@@ -1175,6 +1195,19 @@ export default function WarrantyChat({
               Start over
             </button>
           </div>
+        </div>
+      )}
+
+      {embed && !warrantyState?.ticket_id && (
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-gray-100 bg-white px-3 py-1.5">
+          <p className="text-xs text-gray-500">Warranty chat</p>
+          <button
+            type="button"
+            onClick={() => setShowCaseLookup((open) => !open)}
+            className="rounded-full border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+          >
+            Check case
+          </button>
         </div>
       )}
 
@@ -1206,6 +1239,15 @@ export default function WarrantyChat({
           )}
           <button
             type="button"
+            onClick={() => setShowCaseLookup((open) => !open)}
+            disabled={loading}
+            className="rounded-full border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 disabled:opacity-50"
+            title="Check an existing warranty case"
+          >
+            Check case
+          </button>
+          <button
+            type="button"
             onClick={restartSession}
             disabled={loading}
             className="rounded-full border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 disabled:opacity-50"
@@ -1214,6 +1256,25 @@ export default function WarrantyChat({
             Start over
           </button>
           </div>
+        </div>
+      )}
+
+      {showCaseLookup && (
+        <div className="mx-4 mt-3 shrink-0 rounded-xl border border-gray-200 bg-white px-4 py-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-sm font-medium text-gray-900">Check an existing case</p>
+            <button
+              type="button"
+              onClick={() => setShowCaseLookup(false)}
+              className="text-xs text-gray-500 hover:text-gray-800"
+            >
+              Close
+            </button>
+          </div>
+          <WarrantyCaseLookup
+            compact
+            initialCaseReference={caseReference || ""}
+          />
         </div>
       )}
 
@@ -1468,7 +1529,12 @@ export default function WarrantyChat({
               setContactSubmitted(true);
               setMessages((prev) => [
                 ...prev,
-                assistantMessage(teamFollowUpThankYou(warrantyState?.issue_type)),
+                assistantMessage(
+                  teamFollowUpThankYou(
+                    warrantyState?.issue_type,
+                    warrantyState?.case_reference
+                  )
+                ),
               ]);
             }}
             onUploadSuccess={(filename) => {
@@ -1476,7 +1542,7 @@ export default function WarrantyChat({
               setMessages((prev) => [
                 ...prev,
                 assistantMessage(
-                  `Thank you — "${filename}" has been received. ${teamFollowUpThankYou(warrantyState?.issue_type)}`
+                  `Thank you — "${filename}" has been received. ${teamFollowUpThankYou(warrantyState?.issue_type, warrantyState?.case_reference)}`
                 ),
               ]);
             }}
@@ -1532,9 +1598,27 @@ export default function WarrantyChat({
       {(contactSubmitted || helpConsent === "no") && (
         <div className="shrink-0 border-t border-gray-100 bg-white px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-center">
           {contactSubmitted && (
-            <p className="text-sm text-gray-600">
-              Your case has been submitted. Our team will be in touch.
-            </p>
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium text-gray-800">
+                Your case has been submitted.
+              </p>
+              {caseReference && (
+                <p className="text-sm text-gray-700">
+                  Case reference:{" "}
+                  <span className="font-mono font-semibold">{caseReference}</span>
+                </p>
+              )}
+              <p className="text-sm text-gray-600">
+                We emailed a confirmation. Our team will be in touch.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowCaseLookup(true)}
+                className="text-sm font-medium text-brand-600 underline hover:text-brand-800"
+              >
+                Check this case
+              </button>
+            </div>
           )}
           <WarrantyTeamContactFooter className="mt-4 text-left" />
           <button

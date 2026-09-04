@@ -157,6 +157,19 @@ export interface WarrantyContactResponse {
   evidence_type: string;
   evidence_na: boolean;
   email_notified?: boolean;
+  case_reference?: string | null;
+  receipt_email_sent?: boolean;
+}
+
+export interface WarrantyStatusLookupResponse {
+  found: boolean;
+  case_reference: string;
+  status: string;
+  status_label: string;
+  next_step: string;
+  model_name?: string | null;
+  issue_type?: string | null;
+  customer_message?: string | null;
 }
 
 // ------------------------------------------------------------
@@ -183,6 +196,8 @@ export interface EvidenceUploadResponse {
   customer_email?: string;
   mime_type?: string;
   file_size_bytes: number;
+  case_reference?: string | null;
+  receipt_email_sent?: boolean;
 }
 
 // ------------------------------------------------------------

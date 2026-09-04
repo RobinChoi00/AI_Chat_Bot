@@ -444,6 +444,10 @@ class TestWarrantyContactEndpoint:
             "warranty_email.notify_email_only_contact_async",
             lambda **kwargs: notify_calls.append(kwargs),
         )
+        monkeypatch.setattr(
+            "warranty_email.send_customer_receipt_email",
+            lambda **_k: False,
+        )
 
         ticket_id = self._terminal_ticket()
         response = client.post(
@@ -470,6 +474,37 @@ class TestWarrantyContactEndpoint:
         assert ticket.get_collected().get("evidence_na") == "1"
         assert len(transcript_calls) == 1
         assert len(notify_calls) == 1
+        assert str(body.get("case_reference") or "").startswith("WR-")
+
+    def test_email_only_contact_sends_customer_receipt(self, client, monkeypatch):
+        receipt_calls = []
+        monkeypatch.setattr(
+            "warranty_email.send_warranty_transcript_email",
+            lambda **_k: True,
+        )
+        monkeypatch.setattr(
+            "warranty_email.notify_email_only_contact_async",
+            lambda **_k: None,
+        )
+        monkeypatch.setattr(
+            "warranty_email.send_customer_receipt_email",
+            lambda **kwargs: receipt_calls.append(kwargs) or True,
+        )
+        monkeypatch.setattr("warranty_email.EMAIL_SENDER", "bot@example.com")
+        monkeypatch.setattr("warranty_email.EMAIL_PASSWORD", "secret")
+
+        ticket_id = self._terminal_ticket()
+        response = client.post(
+            f"/api/v1/warranty/{ticket_id}/contact",
+            json={"customer_email": "buyer@example.com", "evidence_na": True},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["receipt_email_sent"] is True
+        assert body["case_reference"].startswith("WR-")
+        assert len(receipt_calls) == 1
+        assert receipt_calls[0]["to_email"] == "buyer@example.com"
+        assert receipt_calls[0]["case_reference"].startswith("WR-")
 
     def test_contact_rejected_before_terminal(self, client):
         from warranty_workflow import WarrantyEngine

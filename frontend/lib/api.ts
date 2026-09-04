@@ -14,6 +14,7 @@ import type {
   TroubleshootingOutcome,
   WarrantySessionResponse,
   WarrantyContactResponse,
+  WarrantyStatusLookupResponse,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -459,6 +460,37 @@ export async function notifyWarrantyEmail(
  *
  * CONTRACT: POST /api/v1/warranty/{ticket_id}/contact
  */
+/**
+ * Look up a submitted warranty case with the shareable WR- reference + email.
+ *
+ * CONTRACT: POST /api/v1/warranty/status
+ */
+export async function lookupWarrantyCaseStatus(
+  caseReference: string,
+  email: string
+): Promise<WarrantyStatusLookupResponse> {
+  const url = `${getApiBase()}/api/v1/warranty/status`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      case_reference: caseReference,
+      email,
+    }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      detail = err.detail ?? detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<WarrantyStatusLookupResponse>;
+}
+
 export async function submitWarrantyContact(
   ticketId: string,
   customerEmail: string

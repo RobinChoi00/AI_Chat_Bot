@@ -364,6 +364,16 @@ def test_build_customer_receipt_body_includes_case_ref():
     assert "buyer@example.com" in body
     assert "OS-4000T" in body
     assert "What happens next" in body
+    assert "Check status anytime" in body
+
+
+def test_build_customer_receipt_body_includes_status_url():
+    body = build_customer_receipt_body(
+        case_reference="WR-20260724-ABCDEF",
+        customer_email="buyer@example.com",
+        status_url="https://app.example.com/warranty/status",
+    )
+    assert "https://app.example.com/warranty/status" in body
 
 
 def test_maybe_send_customer_receipt_email_idempotent(monkeypatch):
@@ -387,4 +397,24 @@ def test_maybe_send_customer_receipt_email_idempotent(monkeypatch):
     ok2, reason2 = maybe_send_customer_receipt_email(ticket=ticket)
     assert ok2 is False
     assert reason2 == "already_sent"
+    assert len(sent) == 1
+
+
+def test_maybe_send_customer_receipt_force_allows_send_info(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        "warranty_email.send_customer_receipt_email",
+        lambda **kwargs: sent.append(kwargs) or True,
+    )
+    ticket = FakeTicket()
+    ticket.status = "send_info"
+    ticket.set_collected("customer_contact_email", "buyer@example.com")
+
+    ok, reason = maybe_send_customer_receipt_email(ticket=ticket)
+    assert ok is False
+    assert reason == "status_not_eligible"
+
+    ok2, reason2 = maybe_send_customer_receipt_email(ticket=ticket, force=True)
+    assert ok2 is True
+    assert reason2 is None
     assert len(sent) == 1

@@ -144,6 +144,7 @@ _ALLOWED_MIME_PREFIXES = {
 _MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 _UPLOAD_RATE = os.getenv("WARRANTY_UPLOAD_RATE_LIMIT", "10/hour")
+_STATUS_LOOKUP_RATE = os.getenv("WARRANTY_STATUS_LOOKUP_RATE_LIMIT", "20/hour")
 
 # Backend-to-backend admin credential. Browser clients never receive this key.
 _ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
@@ -345,6 +346,8 @@ async def upload_evidence(
         terminal_node_id=terminal_node_id,
     )
 
+    receipt = _try_customer_receipt(ticket_id, force=True)
+
     return {
         "evidence_id":       ev.id,
         "ticket_id":         ticket_id,
@@ -355,6 +358,8 @@ async def upload_evidence(
         "email_saved":       True,
         "mime_type":         mime,
         "file_size_bytes":   file_size,
+        "case_reference":    receipt.get("case_reference"),
+        "receipt_email_sent": receipt.get("sent"),
     }
 
 
@@ -461,6 +466,8 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         case_summary_source=summary_payload.get("source", ""),
     )
 
+    receipt = _try_customer_receipt(ticket_id, force=True)
+
     return {
         "ticket_id": ticket_id,
         "customer_email": _masked_public_email(normalized_email),
@@ -470,6 +477,8 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         "email_notified": True,
         "case_summary": case_summary,
         "case_summary_source": summary_payload.get("source", ""),
+        "case_reference": receipt.get("case_reference"),
+        "receipt_email_sent": receipt.get("sent"),
     }
 
 
@@ -1643,7 +1652,6 @@ def _finalize_answer_response(
         "awaiting_evidence",
     ):
         from warranty_freshdesk_case import schedule_freshdesk_case_creation  # noqa: WPS433
-        from warranty_email import maybe_send_customer_receipt_email  # noqa: WPS433
 
         freshdesk_result = schedule_freshdesk_case_creation(ticket_id)
         if freshdesk_result.get("freshdesk_ticket_id"):
@@ -1660,27 +1668,19 @@ def _finalize_answer_response(
                 "case_reference": freshdesk_result.get("case_reference"),
             }
 
-        # Customer receipt (idempotent) — works even when Freshdesk create is skipped.
-        with warranty_db_session() as db:
-            ticket_row = (
-                db.query(WarrantyTicket)
-                .filter(WarrantyTicket.ticket_id == ticket_id)
-                .first()
-            )
-            if ticket_row:
-                turns = engine.get_turns(ticket_id)
-                receipt_sent, receipt_skip = maybe_send_customer_receipt_email(
-                    ticket=ticket_row,
-                    turns=turns,
-                    case_reference=str(
-                        (freshdesk_result or {}).get("case_reference") or ""
-                    ),
-                    freshdesk_url=str((freshdesk_result or {}).get("freshdesk_url") or ""),
-                )
-                if receipt_sent:
-                    payload["receipt_email_sent"] = True
-                elif receipt_skip:
-                    payload["receipt_email_skip_reason"] = receipt_skip
+        receipt = _try_customer_receipt(
+            ticket_id,
+            case_reference=str((freshdesk_result or {}).get("case_reference") or ""),
+            freshdesk_url=str((freshdesk_result or {}).get("freshdesk_url") or ""),
+        )
+        if receipt.get("sent"):
+            payload["receipt_email_sent"] = True
+        elif receipt.get("skip_reason"):
+            payload["receipt_email_skip_reason"] = receipt.get("skip_reason")
+        if receipt.get("case_reference"):
+            payload.setdefault("ticket", {})
+            if isinstance(payload.get("ticket"), dict):
+                payload["ticket"]["case_reference"] = receipt["case_reference"]
 
     return payload
 
@@ -1693,6 +1693,43 @@ def _case_reference_for(ticket) -> str:
     if stored:
         return stored
     return case_reference_for_ticket(ticket)
+
+
+def _try_customer_receipt(
+    ticket_id: str,
+    *,
+    case_reference: str = "",
+    freshdesk_url: str = "",
+    force: bool = False,
+) -> Dict[str, Any]:
+    """Persist the shareable case reference and send a one-time customer receipt."""
+    from warranty_case_ref import persist_case_reference  # noqa: WPS433
+    from warranty_email import maybe_send_customer_receipt_email  # noqa: WPS433
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    engine = _lazy_engine()
+    with warranty_db_session() as db:
+        ticket_row = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        if ticket_row is None:
+            return {"sent": False, "skip_reason": "no_ticket", "case_reference": None}
+        case_ref = persist_case_reference(ticket_row, case_reference)
+        turns = engine.get_turns(ticket_id)
+        sent, skip = maybe_send_customer_receipt_email(
+            ticket=ticket_row,
+            turns=turns,
+            case_reference=case_ref,
+            freshdesk_url=freshdesk_url,
+            force=force,
+        )
+        return {
+            "sent": bool(sent),
+            "skip_reason": skip,
+            "case_reference": case_ref,
+        }
 
 
 def _serialize_ticket_state(
@@ -1842,6 +1879,47 @@ def _get_open_session_ticket(engine, session_id: str):
             .order_by(WarrantyTicket.created_at.desc())
             .first()
         )
+
+
+class WarrantyStatusLookupRequest(BaseModel):
+    """Public case-status lookup — case reference plus the email on the case."""
+
+    case_reference: str
+    email: str
+
+
+@router.post("/api/v1/warranty/status", tags=["warranty"])
+@limiter.limit(_STATUS_LOOKUP_RATE)
+async def lookup_warranty_case_status(request: Request, body: WarrantyStatusLookupRequest):
+    """
+    Let a customer check a submitted case with WR- reference + email.
+
+    Same 404 is returned for unknown references and email mismatches so the
+    endpoint cannot be used to enumerate cases.
+    """
+    from warranty_case_ref import parse_case_reference  # noqa: WPS433
+    from warranty_email import extract_email  # noqa: WPS433
+    from warranty_status import LOOKUP_NOT_FOUND, lookup_public_case  # noqa: WPS433
+
+    if parse_case_reference(body.case_reference) is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Enter a case reference like WR-20260904-ABCDEF.",
+        )
+    if not extract_email(body.email or ""):
+        raise HTTPException(
+            status_code=422,
+            detail="Enter the email address you used when you submitted the case.",
+        )
+
+    payload = lookup_public_case(
+        case_reference=body.case_reference,
+        email=body.email,
+        engine=_lazy_engine(),
+    )
+    if payload is None:
+        raise HTTPException(status_code=404, detail=LOOKUP_NOT_FOUND)
+    return payload
 
 
 @router.get("/api/v1/warranty/session/{session_id}", tags=["warranty"])
