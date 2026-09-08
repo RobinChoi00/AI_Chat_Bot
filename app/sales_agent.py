@@ -55,7 +55,10 @@ from sales_cta import (
     is_sales_after_hours,
     is_strong_buy_path,
     product_page_url,
+    showroom_address,
     showroom_blurb,
+    showroom_hours,
+    showroom_window_label,
 )
 from sales_shopify_stock import LiveStockSnapshot, fetch_live_stock, stock_badge
 from sales_spec_index import (
@@ -65,6 +68,7 @@ from sales_spec_index import (
     wall_ok,
     weight_ok,
 )
+from sales_visitor_memory import has_resume_memory
 from sales_intent import (
     INTENT_COMPARE,
     INTENT_DISCOUNT,
@@ -165,19 +169,144 @@ def _fmt_live_price(
     return _fmt_price(low)
 
 
+_UNPUBLISHED_SPEC = frozenset(
+    {"", "-", "—", "–", ".", "n/a", "na", "none", "null", "unknown", "no data"}
+)
+_TIER_ROLE_BITS = (
+    "under ~$3k for this fit",
+    "mid-range step-up",
+    "top of the published range",
+)
+
+
+def _spec_is_published(value: object) -> bool:
+    text = str(value or "").strip()
+    return bool(text) and text.lower() not in _UNPUBLISHED_SPEC
+
+
+def _auto_programs_bit(raw: str) -> Optional[str]:
+    if not _spec_is_published(raw):
+        return None
+    match = re.match(r"^(\d+)", str(raw).strip())
+    if not match:
+        return None
+    return f"{match.group(1)} auto programs"
+
+
+def _airbag_bit(raw: str) -> Optional[str]:
+    if not _spec_is_published(raw):
+        return None
+    match = re.match(r"^(\d+)", str(raw).strip())
+    if not match:
+        return None
+    return f"{match.group(1)} airbags"
+
+
+def _chair_highlight_bits(product: ProductSpecs) -> list[str]:
+    """Catalog facts only — skip empty / '-' fields."""
+    bits: list[str] = []
+    if _spec_is_published(product.massage_mechanism):
+        bits.append(product.massage_mechanism.strip())
+    if _spec_is_published(product.track_type):
+        bits.append(product.track_type.strip())
+    fit = lookup_fit_spec(product.display_name)
+    if fit is not None:
+        if fit.max_user_lb is not None:
+            bits.append(f"{fit.max_user_lb:g} lb max")
+        if fit.door_asm_in is not None:
+            bits.append(f'{fit.door_asm_in:g}" doorway')
+    return bits[:4]
+
+
+def _chair_highlight_line(product: ProductSpecs) -> str:
+    return " · ".join(_chair_highlight_bits(product))
+
+
+def _product_attr_tags(product: Optional[ProductSpecs]) -> dict[str, str]:
+    if product is None:
+        return {}
+    tags: dict[str, str] = {}
+    if _spec_is_published(product.massage_mechanism):
+        tags["mech"] = product.massage_mechanism.strip()
+    if _spec_is_published(product.track_type):
+        tags["track"] = product.track_type.strip()
+    auto = _auto_programs_bit(product.auto_programs)
+    if auto:
+        tags["auto"] = auto
+    air = _airbag_bit(product.airbag)
+    if air:
+        tags["air"] = air
+    zg = (product.zero_gravity or "").strip()
+    if _spec_is_published(zg) and zg.lower() not in {"no", "false", "0"}:
+        tags["zg"] = zg if "zero" in zg.lower() else f"{zg} zero gravity"
+    heat = (product.heating or "").strip()
+    if _spec_is_published(heat) and heat.lower() not in {"no", "false", "0"}:
+        tags["heat"] = f"heat ({heat})" if "," in heat or heat.lower() != "yes" else "heat"
+    foot = (product.foot_roller or "").strip()
+    if _spec_is_published(foot) and foot.lower() not in {"no", "false", "0"}:
+        tags["foot"] = "foot/calf rollers"
+    return tags
+
+
+def _contrast_tier_blurbs(
+    products: list[Optional[ProductSpecs]],
+    *,
+    prefs: dict[str, str],
+    doorway_ins: list[Optional[float]],
+) -> list[str]:
+    """One distinct fact-line per tier — do not repeat the same goal phrase."""
+    tag_rows = [_product_attr_tags(p) for p in products]
+    counts: dict[tuple[str, str], int] = {}
+    for tags in tag_rows:
+        for key, value in tags.items():
+            counts[(key, value)] = counts.get((key, value), 0) + 1
+
+    key_order = ("mech", "track", "auto", "zg", "heat", "air", "foot")
+    compact = (prefs.get("space") or "") in {"Narrow Doorway", "Small Room"}
+    blurbs: list[str] = []
+    for idx, tags in enumerate(tag_rows):
+        bits: list[str] = []
+        unique = [
+            (key, tags[key])
+            for key in key_order
+            if key in tags and counts.get((key, tags[key]), 0) == 1
+        ]
+        for _key, value in unique:
+            if value not in bits:
+                bits.append(value)
+            if len(bits) >= 2:
+                break
+        if len(bits) < 2:
+            for key in ("mech", "track"):
+                value = tags.get(key)
+                if value and value not in bits:
+                    bits.append(value)
+                if len(bits) >= 2:
+                    break
+        door = doorway_ins[idx] if idx < len(doorway_ins) else None
+        if compact and door is not None:
+            door_bit = f'~{door:g}" doorway'
+            if door_bit not in bits:
+                bits.append(door_bit)
+        if prefs.get("goal") == "Foot & Calf" and tags.get("foot") and tags["foot"] not in bits:
+            bits.append(tags["foot"])
+        if len(bits) < 2 and idx < len(_TIER_ROLE_BITS):
+            bits.append(_TIER_ROLE_BITS[idx])
+        blurbs.append(" · ".join(bits[:3]))
+    return blurbs
+
+
 def _product_closeout(
     product: ProductSpecs,
     *,
     domain: str,
 ) -> tuple[str, list[QuickReply], dict]:
     """Why this chair, the product link, and an email-me CTA."""
-    why = " / ".join(
-        bit for bit in (product.massage_mechanism, product.track_type) if bit
-    )
+    why = _chair_highlight_line(product)
     url = product_page_url(domain, product.handle or "")
     lines: list[str] = []
     if why:
-        lines.append(f"**Why it stands out:** {why}.")
+        lines.append(why + ".")
     if url:
         lines.append(f"Shop: {url}")
     lines.append("Want this emailed to you? Tap **Email me this pick**.")
@@ -575,7 +704,14 @@ _SPEC_QUESTION_PATTERNS: tuple[tuple[re.Pattern[str], str, str], ...] = (
     (re.compile(r"\bairbags?\b", re.I), "airbag", "Airbags"),
     (re.compile(r"\bfoot\s*rollers?\b|\bcalf\s*rollers?\b", re.I), "foot_roller", "Foot/calf roller"),
     (re.compile(r"\b(?:sl|l|s)[\s-]?track\b|\btrack\s*type\b", re.I), "track_type", "Track"),
-    (re.compile(r"\b(?:2|3|4)\s*d\b|\bmechanism\b", re.I), "massage_mechanism", "Mechanism"),
+    (
+        re.compile(
+            r"\bmechanism\b|\b(?:2|3|4)\s*d\s+(?:roller|massage|mechanism)",
+            re.I,
+        ),
+        "massage_mechanism",
+        "Mechanism",
+    ),
 )
 
 
@@ -619,10 +755,12 @@ def _specs_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
         lines.append("")
         for label, key in asked:
             val = str(specs.get(key) or "").strip()
-            if key in {"zero_gravity", "heating", "airbag", "foot_roller"}:
+            if not _spec_is_published(val):
+                lines.append(f"- **{label}**: not listed")
+            elif key in {"zero_gravity", "heating", "airbag", "foot_roller"}:
                 lines.append(f"- **{label}**: {_yes_no_spec(val)}")
             else:
-                lines.append(f"- **{label}**: {val or '—'}")
+                lines.append(f"- **{label}**: {val}")
         lines.append("\nFull quick specs:")
 
     for label, key in (
@@ -636,7 +774,7 @@ def _specs_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
         ("Massage styles", "massage_styles"),
     ):
         val = str(specs.get(key) or "").strip()
-        if val:
+        if _spec_is_published(val):
             lines.append(f"- **{label}**: {val}")
     if fit is not None:
         fit_public = {
@@ -978,52 +1116,10 @@ def _why_case_pick_lines(
     return lines
 
 
-def _short_tier_blurb(
-    product: Optional[ProductSpecs],
-    *,
-    prefs: dict[str, str],
-    reason: str = "",
-    doorway_in: Optional[float] = None,
-) -> Optional[str]:
-    """One short line under each tier pick — chat-scannable, no case-book dump."""
-    bits: list[str] = []
-    if product is not None:
-        for bit in (product.massage_mechanism, product.track_type):
-            if bit and bit not in bits:
-                bits.append(bit)
-        if doorway_in is not None and prefs.get("space") in {
-            "Narrow Doorway",
-            "Small Room",
-        }:
-            bits.append(f'~{doorway_in:g}" doorway')
-        if "yes" in (product.foot_roller or "").lower() and prefs.get("goal") == "Foot & Calf":
-            bits.append("foot/calf rollers")
-        elif (
-            prefs.get("goal")
-            and product.track_type in {"L-Track", "SL-Track"}
-            and len(bits) < 3
-        ):
-            if prefs["goal"] in {
-                "Lower Back",
-                "Upper Back",
-                "Neck & Shoulders",
-                "Full-Body Relaxation",
-            }:
-                bits.append(f"fits {prefs['goal'].lower()}")
-    if bits:
-        return " · ".join(bits[:3])
-    cleaned = re.sub(
-        r"^Lead with this model in [^:]+:\s*",
-        "",
-        (reason or "").strip(),
-        flags=re.I,
-    )
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    if not cleaned:
-        return None
-    if len(cleaned) > 90:
-        cleaned = cleaned[:87].rstrip(" ,;") + "…"
-    return cleaned
+def _short_height_label(height: str) -> str:
+    text = (height or "").strip()
+    inner = re.search(r"\(([^)]+)\)", text)
+    return inner.group(1).strip() if inner else text
 
 
 _DOORWAY_IN_RE = re.compile(
@@ -1243,17 +1339,13 @@ def _tiered_case_recommend_reply(
         prefs.get("goal"),
     ]
     fit_label = ", ".join(b for b in fit_bits if b) or "your answers"
-    lines = [
-        f"Based on **{fit_label}**, here are three options:",
-        "",
-    ]
+    header = f"Based on **{fit_label}**, here are three options:"
 
     public_products: list[dict] = []
     used_models: set[str] = set()
-    tier_leads: list[dict] = []
+    picked: list[dict] = []
     stock_checked = False
     prefer_compact = _compact_space(prefs)
-    n = 0
 
     for tier_label, budgets in TIER_BUDGETS:
         candidates = _collect_tier_candidates(
@@ -1297,50 +1389,69 @@ def _tiered_case_recommend_reply(
             product.handle if product else None
         )
         url = product_page_url(domain, store_handle or "") if store_handle else None
-        n += 1
         display = (product.display_name if product else None) or pick_name
         live_price = getattr(snap, "price_usd", None) if snap is not None else None
         catalog_price = product.price_usd if product else None
         show_price = live_price if live_price is not None else catalog_price
-        price = _fmt_live_price(snap, catalog_price)
-        stock_bit = f" · *{badge}*" if badge else ""
-
-        lines.append(f"**{n}. {tier_label}** — **{display}** · {price}{stock_bit}")
-        blurb = _short_tier_blurb(
-            product,
-            prefs=prefs,
-            reason=reason,
-            doorway_in=doorway_in,
+        picked.append(
+            {
+                "tier": tier_label,
+                "pick_name": pick_name,
+                "product": product,
+                "snap": snap,
+                "doorway_in": doorway_in,
+                "badge": badge,
+                "url": url,
+                "display": display,
+                "show_price": show_price,
+                "price": _fmt_live_price(snap, catalog_price),
+                "reason": reason,
+            }
         )
-        if blurb:
-            lines.append(blurb)
-        if url:
-            lines.append(url)
+
+    if not picked:
+        return _no_fit_recommend_reply(prefs, defaults_applied=defaults_applied)
+
+    blurbs = _contrast_tier_blurbs(
+        [row["product"] for row in picked],
+        prefs=prefs,
+        doorway_ins=[row["doorway_in"] for row in picked],
+    )
+    lines = [header, ""]
+    tier_leads: list[dict] = []
+    for n, row in enumerate(picked, start=1):
+        stock_bit = f" · *{row['badge']}*" if row["badge"] else ""
+        lines.append(
+            f"**{n}. {row['tier']}** — **{row['display']}** · {row['price']}{stock_bit}"
+        )
+        if n <= len(blurbs) and blurbs[n - 1]:
+            lines.append(blurbs[n - 1])
+        if row["url"]:
+            lines.append(row["url"])
+        product = row["product"]
         if product is not None:
             card = product.as_public_dict()
-            if show_price is not None:
-                card["price_usd"] = show_price
+            if row["show_price"] is not None:
+                card["price_usd"] = row["show_price"]
+            snap = row["snap"]
             if snap is not None and getattr(snap, "price_max_usd", None) is not None:
                 card["price_max_usd"] = snap.price_max_usd
-            if url:
-                card["product_url"] = url
-            if badge:
-                card["stock"] = badge
+            if row["url"]:
+                card["product_url"] = row["url"]
+            if row["badge"]:
+                card["stock"] = row["badge"]
             public_products.append(card)
         lines.append("")
         tier_leads.append(
             {
-                "tier": tier_label,
-                "model": pick_name,
-                "display": display,
+                "tier": row["tier"],
+                "model": row["pick_name"],
+                "display": row["display"],
                 "handle": product.handle if product else None,
-                "url": url,
-                "stock": badge,
+                "url": row["url"],
+                "stock": row["badge"],
             }
         )
-
-    if not tier_leads:
-        return _no_fit_recommend_reply(prefs, defaults_applied=defaults_applied)
 
     defaults_note = format_defaults_note(defaults_applied or [], prefs)
     if defaults_note:
@@ -1943,11 +2054,169 @@ def _order_status_reply(_message: str) -> SalesReply:
     )
 
 
-def _greeting_reply() -> SalesReply:
+def _short_chair_label(name: str) -> str:
+    text = (name or "").strip()
+    for prefix in ("Osaki ", "Titan "):
+        if text.lower().startswith(prefix.lower()):
+            text = text[len(prefix) :].strip()
+            break
+    if len(text) <= 22:
+        return text
+    return text[:22].rstrip()
+
+
+def _greeting_reply(prefs: Optional[dict] = None) -> SalesReply:
+    data = prefs or {}
+    if data.get("visitor_resume_declined") or data.get("visitor_resume_accepted"):
+        return SalesReply(
+            reply=_MENU_INTRO,
+            intent=INTENT_GREETING,
+            quick_replies=_menu_quick_replies(),
+        )
+    if not has_resume_memory(data):
+        return SalesReply(
+            reply=_MENU_INTRO,
+            intent=INTENT_GREETING,
+            quick_replies=_menu_quick_replies(),
+        )
+
+    primary = str(data.get("pending_primary") or "").strip()
+    rec = data.get("recommend_prefs") or {}
+    if not isinstance(rec, dict):
+        rec = {}
+    height = str(rec.get("height") or "").strip()
+    goal = str(rec.get("goal") or "").strip()
+
+    if primary:
+        lines = [f"Still looking at the **{primary}**?"]
+        if height and goal:
+            lines.append(
+                f"Last fit was {_short_height_label(height)} for **{goal}**."
+            )
+        lines.append("Pick up there, see three price tiers, or start over.")
+    else:
+        lines = [
+            f"Welcome back. Last fit was {_short_height_label(height)} for **{goal}**.",
+            "Want those three picks again, or start over?",
+        ]
+
+    quick: list[QuickReply] = []
+    if primary:
+        quick.append(
+            QuickReply(
+                label=f"Continue: {_short_chair_label(primary)}",
+                payload="resume:continue",
+            )
+        )
+    if height and goal:
+        quick.append(
+            QuickReply(label="Show my three picks", payload="resume:picks")
+        )
+    quick.append(QuickReply(label="Start over", payload="resume:reset"))
+    quick.append(QuickReply(label="Talk to a human", payload="human"))
+    return SalesReply(
+        reply="\n".join(lines),
+        intent=INTENT_GREETING,
+        quick_replies=quick,
+        tools_used=["visitor.resume_offer"],
+        prefs_patch={"visitor_resume_offered": True},
+        flow_stage="menu",
+    )
+
+
+def _resume_continue_reply(prefs: Optional[dict], *, domain: str) -> SalesReply:
+    primary = str((prefs or {}).get("pending_primary") or "").strip()
+    product = resolve_product(primary) if primary else None
+    if product is None and primary:
+        product = _guess_model_from_text(primary)
+    if product is None:
+        return _resume_picks_reply(prefs, domain=domain)
+
+    _, close_quick, close_patch = _product_closeout(product, domain=domain)
+    url = str(close_patch.get("pending_product_url") or "").strip()
+    rec = (prefs or {}).get("recommend_prefs") or {}
+    has_fit = isinstance(rec, dict) and bool(
+        str(rec.get("height") or "").strip() and str(rec.get("goal") or "").strip()
+    )
+    highlight = _chair_highlight_line(product)
+    lines = [
+        f"Still looking at the **{product.display_name}** — "
+        f"{_fmt_price(product.price_usd)}."
+    ]
+    if highlight:
+        lines.append(highlight + ".")
+    if url:
+        lines.append(f"Shop: {url}")
+    lines.append(
+        "Shop this one, see other price tiers, or open the full spec sheet."
+    )
+
+    quick: list[QuickReply] = []
+    if url.startswith("https://"):
+        quick.append(QuickReply(label="Shop this chair", payload=f"open:{url}"))
+    if has_fit:
+        quick.append(
+            QuickReply(label="Other price tiers", payload="resume:picks")
+        )
+    else:
+        quick.append(
+            QuickReply(label="Recommend other chairs", payload="recommend")
+        )
+    if product.handle:
+        quick.append(
+            QuickReply(label="Full specs", payload=f"specs:{product.handle}")
+        )
+    quick.extend(close_quick)
+    deduped: list[QuickReply] = []
+    seen: set[str] = set()
+    for item in quick:
+        key = item.payload.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    deduped.append(QuickReply(label="Talk to a human", payload="human"))
+
+    patch = dict(close_patch)
+    patch["visitor_resume_accepted"] = True
+    return SalesReply(
+        reply="\n".join(lines),
+        intent=INTENT_SPECS,
+        quick_replies=deduped,
+        tools_used=["visitor.resume_continue", "catalog.resolve_product"],
+        products=[product.as_public_dict()],
+        prefs_patch=patch,
+        flow_stage="shop",
+    )
+
+
+def _resume_picks_reply(prefs: Optional[dict], *, domain: str) -> SalesReply:
+    result = _recommend_reply("recommend", domain=domain, prefs=prefs)
+    patch = dict(result.prefs_patch or {})
+    patch["visitor_resume_accepted"] = True
+    result.prefs_patch = patch
+    result.tools_used = (result.tools_used or []) + ["visitor.resume_picks"]
+    return result
+
+
+def _resume_reset_reply() -> SalesReply:
     return SalesReply(
         reply=_MENU_INTRO,
         intent=INTENT_GREETING,
         quick_replies=_menu_quick_replies(),
+        tools_used=["visitor.resume_reset"],
+        prefs_patch={
+            "visitor_resume_declined": True,
+            "visitor_resume_accepted": False,
+            "visitor_resume_offered": False,
+            "recommend_prefs": None,
+            "pending_primary": "",
+            "pending_product_url": "",
+            "pending_pick_summary": "",
+            "pending_tier_picks": [],
+            "visitor_memory_hydrated": False,
+        },
+        flow_stage="menu",
     )
 
 
@@ -2012,7 +2281,11 @@ def _prepurchase_policy_reply(message: str, *, domain: str) -> SalesReply:
         followups.append(
             QuickReply(label="Check doorway fit", payload="recommend:space:narrow")
         )
-    if topic != TOPIC_SHOWROOM:
+    if topic == TOPIC_SHOWROOM:
+        followups.insert(
+            0, QuickReply(label="Request a visit", payload="cta:showroom:book")
+        )
+    else:
         followups.append(QuickReply(label="Visit showroom", payload="cta:showroom"))
     followups.append(QuickReply(label="Talk to a human", payload="human"))
 
@@ -2067,7 +2340,6 @@ def _list_reply() -> SalesReply:
 
 
 _PAYLOAD_ROUTES = {
-    "menu": lambda _msg: _greeting_reply(),
     "list": lambda _msg: _list_reply(),
     "compare": lambda msg: _compare_reply(msg),
     "price": lambda msg: _price_reply(msg),
@@ -2190,21 +2462,146 @@ def _financing_cta_reply(url: str, prefs: Optional[dict]) -> SalesReply:
     )
 
 
-def _showroom_cta_reply(prefs: Optional[dict]) -> SalesReply:
+def _showroom_cta_reply(prefs: Optional[dict], *, domain: str) -> SalesReply:
     primary = ((prefs or {}).get("pending_primary") or "").strip()
-    extra = f"\n\nYour current pick: **{primary}**." if primary else ""
     url = ((prefs or {}).get("pending_product_url") or "").strip()
     quick = [
-        QuickReply(label="Email me this pick", payload="lead:save_pick"),
+        QuickReply(label="Request a visit", payload="cta:showroom:book"),
         QuickReply(label="Talk to a human", payload="human"),
     ]
     if url.startswith("https://"):
-        quick.insert(0, QuickReply(label="Shop this chair", payload=f"open:{url}"))
+        quick.insert(1, QuickReply(label="Shop this chair", payload=f"open:{url}"))
     return SalesReply(
-        reply=showroom_blurb() + extra,
-        intent=INTENT_RECOMMEND,
+        reply=showroom_blurb(domain=domain, primary=primary),
+        intent=INTENT_PREPURCHASE_POLICY,
         quick_replies=quick,
         tools_used=["cta.showroom"],
+        flow_stage="shop",
+    )
+
+
+def _showroom_book_windows_reply() -> SalesReply:
+    hours = showroom_hours()
+    return SalesReply(
+        reply=(
+            "Which window should I **request**?\n\n"
+            f"Showroom hours: **{hours}**.\n"
+            "Sales will confirm — this is not a locked appointment."
+        ),
+        intent=INTENT_PREPURCHASE_POLICY,
+        quick_replies=[
+            QuickReply(
+                label="Weekday morning",
+                payload="cta:showroom:window:weekday_am",
+            ),
+            QuickReply(
+                label="Weekday afternoon",
+                payload="cta:showroom:window:weekday_pm",
+            ),
+            QuickReply(
+                label="Saturday",
+                payload="cta:showroom:window:saturday",
+            ),
+            QuickReply(label="I'll type a time", payload="cta:showroom:type"),
+            QuickReply(label="Talk to a human", payload="human"),
+        ],
+        tools_used=["cta.showroom_book"],
+        flow_stage="lead",
+        prefs_patch={
+            "awaiting_showroom_window": False,
+            "awaiting_showroom_email": False,
+        },
+    )
+
+
+def _showroom_type_time_reply() -> SalesReply:
+    hours = showroom_hours()
+    return SalesReply(
+        reply=(
+            f"Type a day and time that fits **{hours}**.\n\n"
+            "I'll send it as a request — sales still confirms the slot."
+        ),
+        intent=INTENT_PREPURCHASE_POLICY,
+        quick_replies=[
+            QuickReply(label="Back to windows", payload="cta:showroom:book"),
+            QuickReply(label="Talk to a human", payload="human"),
+        ],
+        tools_used=["cta.showroom_book"],
+        flow_stage="lead",
+        prefs_patch={"awaiting_showroom_window": True, "awaiting_showroom_email": False},
+    )
+
+
+def _showroom_ask_email_reply(prefs: Optional[dict], *, window: str) -> SalesReply:
+    window = (window or "").strip() or "a time sales will confirm"
+    primary = ((prefs or {}).get("pending_primary") or "").strip()
+    extra = f" for the **{primary}**" if primary else ""
+    return SalesReply(
+        reply=(
+            f"Got it — I'll request **{window}**{extra} at the Carrollton showroom.\n\n"
+            "Type your **email** so sales can confirm. "
+            "This is a request, not a booked appointment."
+        ),
+        intent="lead_capture",
+        quick_replies=[
+            QuickReply(label="Back to windows", payload="cta:showroom:book"),
+            QuickReply(label="Talk to a human", payload="human"),
+        ],
+        tools_used=["cta.showroom_book"],
+        flow_stage="lead",
+        prefs_patch={
+            "awaiting_showroom_window": False,
+            "awaiting_showroom_email": True,
+            "pending_showroom_window": window,
+        },
+    )
+
+
+def _capture_showroom_visit(
+    email: str, prefs: Optional[dict], *, domain: str
+) -> SalesReply:
+    window = str((prefs or {}).get("pending_showroom_window") or "").strip() or (
+        "a time sales will confirm"
+    )
+    primary = ((prefs or {}).get("pending_primary") or "").strip()
+    url = ((prefs or {}).get("pending_product_url") or "").strip()
+    summary_lines = [
+        "Showroom visit request (not a confirmed appointment)",
+        f"Store: {domain}",
+        f"Requested window: {window}",
+        f"Address: {showroom_address()}",
+    ]
+    if primary:
+        summary_lines.append(f"Chair: {primary}")
+    if url:
+        summary_lines.append(f"Product URL: {url}")
+    summary = "\n".join(summary_lines)
+    lines = [
+        f"Sent a **visit request** for **{window}** at the Carrollton showroom.",
+        f"I saved **{email}** so sales can confirm — this is **not** a locked appointment.",
+    ]
+    if is_sales_after_hours():
+        lines.append(after_hours_blurb())
+    return SalesReply(
+        reply="\n".join(lines),
+        intent="lead_capture",
+        handoff=False,
+        quick_replies=[
+            QuickReply(label="Back to menu", payload="menu"),
+            QuickReply(label="Recommend a chair", payload="recommend"),
+            QuickReply(label="Talk to a human", payload="human"),
+        ],
+        tools_used=["cta.showroom_book", "lead.capture"],
+        flow_stage="lead",
+        prefs_patch={
+            "awaiting_showroom_email": False,
+            "awaiting_showroom_window": False,
+        },
+        lead_capture={
+            "email": email,
+            "interest_summary": summary,
+            "reason": "showroom_visit",
+        },
     )
 
 
@@ -2217,6 +2614,17 @@ def _payload_reply(
 ) -> Optional[SalesReply]:
     parts = (payload or "").split(":")
     root = parts[0].strip().lower() if parts else ""
+    if root == "menu":
+        return _greeting_reply(prefs)
+    if root == "resume":
+        action = parts[1].strip().lower() if len(parts) > 1 else ""
+        if action == "continue":
+            return _resume_continue_reply(prefs, domain=domain)
+        if action == "picks":
+            return _resume_picks_reply(prefs, domain=domain)
+        if action == "reset":
+            return _resume_reset_reply()
+        return _greeting_reply(prefs)
     if root == "tier" and len(parts) >= 2:
         try:
             n = int(re.sub(r"\D", "", parts[1]) or "0")
@@ -2285,14 +2693,30 @@ def _payload_reply(
     if root == "cta":
         action = parts[1].strip().lower() if len(parts) > 1 else ""
         if action == "showroom":
-            return _showroom_cta_reply(prefs)
+            sub = parts[2].strip().lower() if len(parts) > 2 else ""
+            if sub == "book":
+                return _showroom_book_windows_reply()
+            if sub == "type":
+                return _showroom_type_time_reply()
+            if sub == "window":
+                code = parts[3].strip().lower() if len(parts) > 3 else ""
+                label = showroom_window_label(code)
+                if not label:
+                    return _showroom_book_windows_reply()
+                email = extract_email(message or "")
+                patched = dict(prefs or {})
+                patched["pending_showroom_window"] = label
+                if email:
+                    return _capture_showroom_visit(email, patched, domain=domain)
+                return _showroom_ask_email_reply(patched, window=label)
+            return _showroom_cta_reply(prefs, domain=domain)
         if action == "financing":
             url = payload.split(":", 2)[2].strip() if len(parts) >= 3 else ""
             if not url.startswith("https://"):
                 url = ((prefs or {}).get("pending_product_url") or "").strip()
             if url.startswith("https://"):
                 return _financing_cta_reply(url, prefs)
-            return _showroom_cta_reply(prefs)
+            return _showroom_cta_reply(prefs, domain=domain)
     factory = _PAYLOAD_ROUTES.get(root)
     if factory is None:
         return None
@@ -2319,6 +2743,20 @@ def _finalize_flow_stage(result: SalesReply) -> SalesReply:
         patch = dict(result.prefs_patch or {})
         patch["last_rateable_intent"] = result.intent
         result.prefs_patch = patch
+
+    human_payloads = {"human", "human:confirm"}
+    human = [
+        q
+        for q in result.quick_replies
+        if q.payload.strip().lower() in human_payloads
+    ]
+    others = [
+        q
+        for q in result.quick_replies
+        if q.payload.strip().lower() not in human_payloads
+    ]
+    if human:
+        result.quick_replies = others + [human[0]]
 
     return result
 
@@ -2609,6 +3047,30 @@ def respond(
         if email:
             return _finalize_flow_stage(_capture_pick_lead(email, prefs, domain=domain))
 
+    if (prefs or {}).get("awaiting_showroom_email"):
+        email = extract_email(message or "")
+        if email:
+            return _finalize_flow_stage(
+                _capture_showroom_visit(email, prefs, domain=domain)
+            )
+
+    if (
+        (prefs or {}).get("awaiting_showroom_window")
+        and not (payload or "").strip()
+        and (message or "").strip()
+    ):
+        email = extract_email(message or "")
+        window = (message or "").strip()[:200]
+        patched = dict(prefs or {})
+        patched["pending_showroom_window"] = window
+        if email:
+            return _finalize_flow_stage(
+                _capture_showroom_visit(email, patched, domain=domain)
+            )
+        return _finalize_flow_stage(
+            _showroom_ask_email_reply(patched, window=window)
+        )
+
     # They asked for a person, then typed the real question.
     if (
         not before_handoff
@@ -2683,7 +3145,7 @@ def respond(
         return _remember_question(result, message, payload)
 
     if intent.label == INTENT_GREETING:
-        return _finalize_flow_stage(_greeting_reply())
+        return _finalize_flow_stage(_greeting_reply(prefs))
 
     if intent.label == INTENT_ORDER_STATUS:
         return _finalize_flow_stage(_order_status_reply(message))

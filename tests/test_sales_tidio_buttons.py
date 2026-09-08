@@ -33,6 +33,26 @@ def test_prioritize_caps_and_prefers_shop():
     assert out[-1]["payload"] != "menu" or len(out) < 6
 
 
+def test_prioritize_keeps_resume_continue_and_human_last():
+    out = prioritize_quick_replies(
+        [
+            {"label": "Continue: Maestro 4D", "payload": "resume:continue"},
+            {"label": "Show my three picks", "payload": "resume:picks"},
+            {"label": "Start over", "payload": "resume:reset"},
+            {"label": "Talk to a human", "payload": "human"},
+        ],
+        limit=5,
+    )
+    assert out[0]["payload"] == "resume:continue"
+    assert out[-1]["payload"] == "human"
+    assert [b["payload"] for b in out] == [
+        "resume:continue",
+        "resume:picks",
+        "resume:reset",
+        "human",
+    ]
+
+
 def test_talk_to_a_human_is_never_the_first_choice():
     """Tidio numbers the ranked list. Human at rank 35 used to become 1)."""
     from sales_agent import _menu_quick_replies

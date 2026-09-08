@@ -216,7 +216,9 @@ def _run_sales_turn(
         tidio_visitor_id=contact_id,
     )
     from sales_models import get_session_collected, merge_session_collected
+    from sales_visitor_memory import hydrate_visitor_memory
 
+    hydrate_visitor_memory(session_id, contact_id)
     prefs = get_session_collected(session_id)
     last_buttons = normalize_stored_buttons(prefs.get("last_quick_replies"))
 

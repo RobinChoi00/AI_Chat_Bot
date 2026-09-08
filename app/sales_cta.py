@@ -26,6 +26,12 @@ _OPEN_HOUR = int(os.getenv("SALES_BUSINESS_OPEN_HOUR", "9"))
 _CLOSE_HOUR = int(os.getenv("SALES_BUSINESS_CLOSE_HOUR", "18"))
 
 _SHOWROOM_ADDRESS = "1001 W Crosby Rd, Carrollton, TX 75006"
+_SHOWROOM_HOURS = "Mon-Fri, 9:30 AM - 6:30 PM / Sat, 10:00 AM - 4:00 PM CST"
+_SHOWROOM_WINDOWS = {
+    "weekday_am": "weekday morning (9:30 AM–12:00 PM CST)",
+    "weekday_pm": "weekday afternoon (12:00–6:30 PM CST)",
+    "saturday": "Saturday (10:00 AM–4:00 PM CST)",
+}
 
 
 def product_page_url(domain: str, handle: str) -> Optional[str]:
@@ -60,15 +66,61 @@ def showroom_address() -> str:
         return _SHOWROOM_ADDRESS
 
 
-def showroom_blurb() -> str:
+def showroom_hours() -> str:
+    try:
+        from config import SUPPORT_BUSINESS_HOURS  # type: ignore
+
+        text = (SUPPORT_BUSINESS_HOURS or "").strip()
+        if text:
+            return text
+    except Exception:
+        pass
+    return _SHOWROOM_HOURS
+
+
+def showroom_maps_url() -> str:
+    from urllib.parse import quote_plus
+
+    return "https://maps.google.com/?q=" + quote_plus(showroom_address())
+
+
+def showroom_phone(domain: str = "") -> str:
+    try:
+        from config import SALES_PHONE_BY_DOMAIN  # type: ignore
+    except Exception:
+        return "+1-888-501-5988"
+    lowered = (domain or "").lower()
+    if "titanchair" in lowered or "osakichair" in lowered:
+        return str(SALES_PHONE_BY_DOMAIN.get("titanchair") or "")
+    if "osakimassage" in lowered:
+        return str(SALES_PHONE_BY_DOMAIN.get("osakimassagechair") or "")
+    return str(SALES_PHONE_BY_DOMAIN.get("osakiusa") or "+1-888-501-5988")
+
+
+def showroom_window_label(code: str) -> Optional[str]:
+    key = (code or "").strip().lower()
+    return _SHOWROOM_WINDOWS.get(key)
+
+
+def showroom_blurb(*, domain: str = "", primary: str = "") -> str:
     addr = showroom_address()
-    return (
-        f"You're welcome to visit our **showroom** in Carrollton, TX:\n"
-        f"{addr}\n\n"
-        "Please call ahead so we can confirm availability. "
-        "On-site specialists can walk you through fit, financing at checkout, "
-        "and current promotions (I won't invent discount amounts here)."
+    hours = showroom_hours()
+    phone = showroom_phone(domain)
+    lines = [
+        "You're welcome to visit our **showroom** in Carrollton, TX:",
+        addr,
+        f"**Hours:** {hours}",
+    ]
+    if phone:
+        lines.append(f"**Call:** {phone}")
+    lines.append(f"Map: {showroom_maps_url()}")
+    if (primary or "").strip():
+        lines.append(f"\nYour current pick: **{primary.strip()}**.")
+    lines.append(
+        "\nI can send a **visit request** to sales — they confirm the time. "
+        "I won't lock a calendar slot from this chat."
     )
+    return "\n".join(lines)
 
 
 def extract_email(text: str) -> Optional[str]:

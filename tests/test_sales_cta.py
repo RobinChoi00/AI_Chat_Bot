@@ -20,6 +20,9 @@ from sales_cta import (  # noqa: E402
     is_strong_buy_path,
     product_page_url,
     showroom_blurb,
+    showroom_hours,
+    showroom_maps_url,
+    showroom_window_label,
 )
 
 
@@ -92,3 +95,13 @@ def test_defaults_note_and_showroom():
     assert note is not None
     assert "balanced" in note.lower()
     assert "Carrollton" in showroom_blurb()
+    blurb = showroom_blurb(domain="osakiusa.com")
+    assert "9:30" in blurb
+    assert "Saturday" in blurb or "Sat" in blurb
+    assert "888-501-5988" in blurb
+    assert "visit request" in blurb.lower()
+    assert "maps.google.com" in showroom_maps_url()
+    assert "Crosby" in showroom_maps_url() or "crosby" in showroom_maps_url().lower()
+    assert showroom_window_label("saturday") is not None
+    assert "10:00" in (showroom_window_label("saturday") or "")
+    assert showroom_hours()

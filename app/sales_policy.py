@@ -186,6 +186,7 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"visit\s+(?:you|your|the)|come\s+see|"
             r"where\s+are\s+you\s+located|your\s+address|"
             r"(?:business|store|opening)\s+hours|what\s+are\s+your\s+hours|"
+            r"(?:book|schedule|make)\s+(?:a\s+)?(?:showroom\s+)?(?:visit|appointment|tour)|"
             r"매장|쇼룸"
             r")",
             re.IGNORECASE,
@@ -371,15 +372,20 @@ def _financing_answer(domain: str) -> str:
 
 
 def _showroom_answer(domain: str) -> str:
-    from sales_cta import showroom_address
+    from sales_cta import showroom_address, showroom_hours, showroom_maps_url, showroom_phone
 
+    phone = showroom_phone(domain)
+    phone_line = f"- **Call:** {phone}\n" if phone else ""
     return (
         "**Visit our showroom**\n\n"
-        f"{showroom_address()}\n\n"
-        "You're welcome to come try the chairs in person. Please **call ahead** so we can "
-        "confirm which models are on the floor and that a specialist is free for you.\n\n"
-        "If you'd rather narrow it down first, tell me your height, weight, and what you "
-        "want the chair to help with, and I'll shortlist a few to try."
+        f"- **Address:** {showroom_address()}\n"
+        f"- **Hours:** {showroom_hours()}\n"
+        f"{phone_line}"
+        f"- **Map:** {showroom_maps_url()}\n\n"
+        "Tap **Request a visit** and I'll email sales your preferred window. "
+        "They confirm the time — I won't lock a calendar slot from this chat.\n\n"
+        "If you'd rather narrow it down first, tell me your **height** and what "
+        "you want the chair to help with."
     )
 
 

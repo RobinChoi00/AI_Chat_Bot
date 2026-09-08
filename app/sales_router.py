@@ -197,7 +197,9 @@ async def sales_chat(
     )
 
     from sales_models import get_session_collected, merge_session_collected
+    from sales_visitor_memory import hydrate_visitor_memory
 
+    hydrate_visitor_memory(body.session_id, body.tidio_visitor_id)
     prefs = get_session_collected(body.session_id)
     from sales_tidio_buttons import (
         normalize_stored_buttons,

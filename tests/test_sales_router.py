@@ -663,6 +663,81 @@ def test_tiered_recommend_includes_product_links_when_in_stock(client, monkeypat
     )
     assert showroom.status_code == 200
     assert "Carrollton" in showroom.json()["reply"]
+    assert "Hours" in showroom.json()["reply"] or "9:30" in showroom.json()["reply"]
+    show_payloads = [q["payload"] for q in showroom.json()["quick_replies"]]
+    assert "cta:showroom:book" in show_payloads
+    assert show_payloads[-1] == "human"
+
+
+def test_showroom_visit_request_emails_sales_without_locking_a_slot(client):
+    sid = "s-showroom-book"
+    info = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "where is your showroom",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert info.status_code == 200
+    assert "9:30" in info.json()["reply"]
+    assert "cta:showroom:book" in [q["payload"] for q in info.json()["quick_replies"]]
+
+    windows = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "",
+            "payload": "cta:showroom:book",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert windows.status_code == 200
+    win_payloads = [q["payload"] for q in windows.json()["quick_replies"]]
+    assert "cta:showroom:window:saturday" in win_payloads
+    assert win_payloads[-1] == "human"
+    assert "not a locked appointment" in windows.json()["reply"].lower() or (
+        "not" in windows.json()["reply"].lower() and "confirm" in windows.json()["reply"].lower()
+    )
+
+    ask = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "",
+            "payload": "cta:showroom:window:saturday",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert ask.status_code == 200
+    assert "email" in ask.json()["reply"].lower()
+    assert "not a booked appointment" in ask.json()["reply"].lower()
+
+    done = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "visitor@example.com",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert done.status_code == 200
+    body = done.json()
+    assert body["handoff"] is False
+    assert "visitor@example.com" in body["reply"]
+    assert "request" in body["reply"].lower()
+    assert "not" in body["reply"].lower() and "appointment" in body["reply"].lower()
+    assert "lead.capture" in body.get("tools_used", [])
+
+    from sales_models import SalesLead
+    from warranty_models import warranty_db_session
+
+    with warranty_db_session() as db:
+        rows = db.query(SalesLead).filter(SalesLead.session_id == sid).all()
+        assert len(rows) == 1
+        assert rows[0].reason == "showroom_visit"
+        assert rows[0].email == "visitor@example.com"
+        assert "not a confirmed appointment" in (rows[0].interest_summary or "").lower()
 
 
 def test_narrow_door_asks_doorway_inches(client):
@@ -871,6 +946,8 @@ def test_tell_me_about_a_named_model_returns_its_specs(client):
     assert body.get("products")
     assert any(q["payload"] == "lead:save_pick" for q in body["quick_replies"])
     assert "email me this pick" in body["reply"].lower()
+    assert "Heating:" not in body["reply"]
+    assert "Full quick specs" not in body["reply"]
 
 
 def test_chat_requires_message_or_payload(client):

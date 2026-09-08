@@ -70,6 +70,7 @@ from sales_policy import (  # noqa: E402
         ("where is your showroom", TOPIC_SHOWROOM),
         ("can I try one in person", TOPIC_SHOWROOM),
         ("what are your hours", TOPIC_SHOWROOM),
+        ("book a showroom visit", TOPIC_SHOWROOM),
     ],
 )
 def test_prepurchase_questions_route_to_their_topic(message, topic):
@@ -185,6 +186,14 @@ def test_mechanism_answer_explains_each_axis():
     assert "dual roller" in answer
     assert "x and y" in answer
     assert "in and out" in answer
+
+
+def test_showroom_answer_lists_hours_and_is_not_a_booking():
+    answer = policy_answer(TOPIC_SHOWROOM, "osakiusa.com")
+    assert "9:30" in answer
+    assert "Carrollton" in answer
+    assert "request" in answer.lower()
+    assert "lock a calendar slot" in answer.lower()
 
 
 def test_financing_answer_quotes_no_rate_or_term():
