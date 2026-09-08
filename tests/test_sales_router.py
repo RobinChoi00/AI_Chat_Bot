@@ -1195,3 +1195,142 @@ def test_warranty_button_appears_when_relevant(client):
     assert "warranty" in body["reply"].lower()
     labels = [q["label"].lower() for q in body["quick_replies"]]
     assert any("email" in label or "menu" in label for label in labels)
+
+
+def _compare_handles():
+    from sales_compare import lookup_shop_models  # noqa: WPS433
+
+    maestro_4d = lookup_shop_models("Maestro 4D").unique
+    paragon = lookup_shop_models("Paragon").unique
+    if maestro_4d is None or paragon is None:
+        pytest.skip("Maestro 4D / Paragon missing from the Shopify export")
+    return maestro_4d, paragon
+
+
+def test_compare_asks_which_maestro_instead_of_guessing(client):
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-compare-family",
+            "message": "compare Maestro vs Paragon",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    reply = body["reply"].lower()
+    assert "which" in reply and "maestro" in reply
+    assert "won't guess" in reply or "will not guess" in reply or "don't guess" in reply
+    payloads = [q["payload"] for q in body["quick_replies"]]
+    assert any(p.startswith("compare:pick:") for p in payloads)
+    assert payloads[-1] == "human"
+    assert "jupiter" not in reply
+
+
+def test_compare_short_names_and_missing_jupiter(client):
+    maestro_4d, paragon = _compare_handles()
+    sid = "s-compare-short"
+    compared = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "Maestro 4D vs Paragon",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert compared.status_code == 200
+    body = compared.json()
+    reply = body["reply"]
+    assert maestro_4d.display_name in reply
+    assert paragon.display_name in reply
+    assert "mechanism" in reply.lower()
+    payloads = [q["payload"] for q in body["quick_replies"]]
+    assert "compare:recommend" in payloads
+    assert payloads[-1] == "human"
+    assert "jupiter" not in reply.lower()
+
+    missing = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-compare-jupiter",
+            "message": "Maestro 4D vs Jupiter",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert missing.status_code == 200
+    miss_reply = missing.json()["reply"].lower()
+    assert "not on the current store catalog" in miss_reply
+    assert maestro_4d.display_name.lower() in miss_reply
+
+
+def test_compare_and_then_recommend_stays_inside_the_pair(client):
+    maestro_4d, paragon = _compare_handles()
+    sid = "s-compare-pick"
+    first = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "Maestro 4D and Paragon",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert first.status_code == 200
+    assert "compare:recommend" in {
+        q["payload"] for q in first.json()["quick_replies"]
+    }
+
+    asked = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "",
+            "payload": "compare:recommend",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert asked.status_code == 200
+    ask_reply = asked.json()["reply"].lower()
+    assert "height" in ask_reply
+    assert maestro_4d.display_name.lower() in ask_reply
+    assert paragon.display_name.lower() in ask_reply
+    assert "value / mid / premium" not in ask_reply
+
+    client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "",
+            "payload": "recommend:height:average",
+            "domain": "osakiusa.com",
+        },
+    )
+    picked = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": sid,
+            "message": "",
+            "payload": "recommend:goal:neck",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert picked.status_code == 200
+    pick_reply = picked.json()["reply"].lower()
+    assert (
+        "published fit" in pick_reply
+        or "too close" in pick_reply
+    )
+    assert "value (under" not in pick_reply
+    assert maestro_4d.display_name.lower() in pick_reply or paragon.display_name.lower() in pick_reply
+
+
+def test_compare_prompt_does_not_use_jupiter(client):
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-compare-prompt",
+            "message": "compare two models",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert resp.status_code == 200
+    assert "jupiter" not in resp.json()["reply"].lower()

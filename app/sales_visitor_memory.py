@@ -25,6 +25,7 @@ RESUME_COPY_KEYS = (
     "pending_product_url",
     "pending_pick_summary",
     "pending_tier_picks",
+    "pending_compare_pair",
 )
 
 _MAX_AGE_DAYS = 30

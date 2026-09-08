@@ -519,12 +519,8 @@ def recommend(req: RecommendationRequest, limit: int = 3) -> list[ProductSpecs]:
     ranked.sort(key=lambda pair: _recommend_sort_key(pair, req))
     return [product for product, _ in ranked[:limit]]
 
-def compare(a_text: str, b_text: str) -> Optional[dict]:
-    """Structured comparison between two models — deterministic, no LLM."""
-    left = resolve_product(a_text)
-    right = resolve_product(b_text)
-    if not left or not right:
-        return None
+def compare_products(left: ProductSpecs, right: ProductSpecs) -> dict:
+    """Structured spec/price diff for two already-resolved catalog rows."""
     return {
         "left": left.as_public_dict(),
         "right": right.as_public_dict(),
@@ -541,3 +537,12 @@ def compare(a_text: str, b_text: str) -> Optional[dict]:
             "foot_roller": (left.foot_roller, right.foot_roller),
         },
     }
+
+
+def compare(a_text: str, b_text: str) -> Optional[dict]:
+    """Structured comparison between two models — deterministic, no LLM."""
+    left = resolve_product(a_text)
+    right = resolve_product(b_text)
+    if not left or not right:
+        return None
+    return compare_products(left, right)

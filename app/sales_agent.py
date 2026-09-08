@@ -26,12 +26,22 @@ from typing import Optional
 from sales_catalog import (
     ProductSpecs,
     RecommendationRequest,
-    compare,
+    compare_products,
     list_active_products,
     parse_recommendation_hints,
     price_tier_label,
     recommend,
     resolve_product,
+)
+from sales_compare import (
+    is_which_of_pair,
+    lookup_shop_models,
+    looks_like_compare_pair,
+    pair_fit_reasons,
+    pair_fit_scores,
+    product_by_handle,
+    short_model_label,
+    split_compare_terms,
 )
 from sales_cases import (
     TIER_BUDGETS,
@@ -1903,29 +1913,140 @@ def _recommend_reply(
 
 
 
-_VS_RE = re.compile(r"\b(vs\.?|versus|compared\s+to|difference\s+between)\b", re.IGNORECASE)
+_COMPARE_SPEC_FIELDS = (
+    ("Mechanism", "mechanism"),
+    ("Track", "track"),
+    ("Zero gravity", "zero_gravity"),
+    ("Heating", "heating"),
+    ("Foot roller", "foot_roller"),
+)
 
 
-def _split_compare_terms(message: str) -> Optional[tuple[str, str]]:
-    if not message:
-        return None
-    parts = _VS_RE.split(message, maxsplit=1)
-    if len(parts) >= 3:
-        left, _sep, right = parts[0], parts[1], parts[2]
-        left = left.strip(" ?,.")
-        right = right.strip(" ?,.")
-        if left and right:
-            return left, right
-    return None
+def _clear_compare_state() -> dict:
+    return {
+        "awaiting_compare_pick": "",
+        "pending_compare_left": "",
+        "pending_compare_right": "",
+        "pending_compare_left_query": "",
+        "pending_compare_right_query": "",
+        "pending_compare_candidates": [],
+        "pending_compare_pair": [],
+        "awaiting_compare_recommend": False,
+    }
 
 
-def _compare_reply(message: str) -> SalesReply:
-    pair = _split_compare_terms(message)
-    if pair is None:
+def _compare_example_prompt() -> str:
+    left = lookup_shop_models("Maestro 4D").unique
+    right = lookup_shop_models("Paragon").unique
+    if left is not None and right is not None:
+        return (
+            f'Try *"{short_model_label(left)} vs {short_model_label(right)}"* '
+            "or *\"Maestro LE vs Champ II\"*."
+        )
+    return 'Try *"Maestro 4D vs Paragon"* — short names are fine.'
+
+
+def _compare_spec_lines(diff: dict) -> list[str]:
+    lines: list[str] = []
+    for label, key in _COMPARE_SPEC_FIELDS:
+        pair = diff.get(key) or ("", "")
+        left_val, right_val = pair[0], pair[1]
+        if not _spec_is_published(left_val) and not _spec_is_published(right_val):
+            continue
+        lines.append(
+            f"- **{label}**: {left_val or '—'} vs {right_val or '—'}"
+        )
+    delta = diff.get("price_delta_usd")
+    if delta is not None:
+        if abs(delta) < 1:
+            lines.append("- **Price gap**: same published price.")
+        else:
+            direction = "more" if delta > 0 else "less"
+            lines.append(
+                f"- **Price gap**: the second is about ${abs(delta):,.0f} {direction}."
+            )
+    differing = [
+        label.lower()
+        for label, key in _COMPARE_SPEC_FIELDS
+        if (diff.get(key) or ("", ""))[0] != (diff.get(key) or ("", ""))[1]
+        and (
+            _spec_is_published((diff.get(key) or ("", ""))[0])
+            or _spec_is_published((diff.get(key) or ("", ""))[1])
+        )
+    ]
+    if not differing and abs(delta or 0) < 1:
+        lines.append(
+            "\n**Bottom line:** These two sit in the same tier on published "
+            "specs/price — a rep can help you choose by feel/fit."
+        )
+    elif differing:
+        lines.append("\n**Biggest differences:** " + ", ".join(differing) + ".")
+    return lines
+
+
+def _compare_resolved_reply(
+    left: ProductSpecs,
+    right: ProductSpecs,
+    *,
+    domain: str,
+) -> SalesReply:
+    result = compare_products(left, right)
+    diff = result["diff"]
+    left_url = product_page_url(domain, left.handle)
+    right_url = product_page_url(domain, right.handle)
+    lines = [
+        f"**{left.display_name}** — {_fmt_price(left.price_usd)}",
+        f"**{right.display_name}** — {_fmt_price(right.price_usd)}",
+        "",
+        *_compare_spec_lines(diff),
+    ]
+    quick: list[QuickReply] = []
+    if left_url:
+        quick.append(
+            QuickReply(
+                label=f"Shop {short_model_label(left, limit=18)}",
+                payload=f"open:{left_url}",
+            )
+        )
+    if right_url:
+        quick.append(
+            QuickReply(
+                label=f"Shop {short_model_label(right, limit=18)}",
+                payload=f"open:{right_url}",
+            )
+        )
+    quick.append(
+        QuickReply(label="Recommend which one", payload="compare:recommend")
+    )
+    quick.append(QuickReply(label="Talk to a human", payload="human"))
+    patch = _clear_compare_state()
+    patch["pending_compare_pair"] = [left.handle, right.handle]
+    patch["pending_compare_left"] = left.handle
+    patch["pending_compare_right"] = right.handle
+    return SalesReply(
+        reply="\n".join(lines),
+        intent=INTENT_COMPARE,
+        quick_replies=quick,
+        tools_used=["catalog.compare"],
+        products=[result["left"], result["right"]],
+        prefs_patch=patch,
+    )
+
+
+def _compare_missing_reply(
+    *,
+    found: Optional[ProductSpecs],
+    missing_query: str,
+    found_slot: str,
+    other_query: str,
+    domain: str,
+) -> SalesReply:
+    if found is None:
         return SalesReply(
             reply=(
-                "Sure — which two models? Try *\"OS-Pro Maestro LE vs Titan Pro "
-                "Jupiter LE\"* and I'll line up the specs."
+                f"**{missing_query}** is not on the current store catalog — "
+                "it may be an older or warranty-only name. "
+                "Which two chairs we sell now should I compare?"
             ),
             intent=INTENT_COMPARE,
             quick_replies=[
@@ -1934,15 +2055,272 @@ def _compare_reply(message: str) -> SalesReply:
                 QuickReply(label="Talk to a human", payload="human"),
             ],
             tools_used=["catalog.compare"],
+            prefs_patch=_clear_compare_state(),
         )
+    other_slot = "right" if found_slot == "left" else "left"
+    patch = _clear_compare_state()
+    patch["awaiting_compare_pick"] = other_slot
+    patch[f"pending_compare_{found_slot}"] = found.handle
+    patch[f"pending_compare_{found_slot}_query"] = found.display_name
+    patch[f"pending_compare_{other_slot}_query"] = other_query
+    return SalesReply(
+        reply=(
+            f"I have **{found.display_name}**. **{missing_query}** is not on "
+            "the current store catalog — it may be an older or warranty-only "
+            "name.\n\nType another model we sell now, or tap **See all models**."
+        ),
+        intent=INTENT_COMPARE,
+        quick_replies=[
+            QuickReply(label="See all models", payload="list"),
+            QuickReply(label="Recommend a chair", payload="recommend"),
+            QuickReply(label="Talk to a human", payload="human"),
+        ],
+        tools_used=["catalog.compare"],
+        products=[found.as_public_dict()],
+        prefs_patch=patch,
+    )
 
-    result = compare(*pair)
-    if result is None:
+
+def _ask_compare_which(
+    slot: str,
+    query: str,
+    matches: list[ProductSpecs],
+    *,
+    prefs: Optional[dict],
+    left_q: str,
+    right_q: str,
+    left_handle: str = "",
+    right_handle: str = "",
+) -> SalesReply:
+    listed = "\n".join(f"- **{item.display_name}**" for item in matches)
+    quick: list[QuickReply] = []
+    for item in matches[:3]:
+        quick.append(
+            QuickReply(
+                label=short_model_label(item),
+                payload=f"compare:pick:{item.handle}",
+            )
+        )
+    if len(matches) > 3:
+        extra = "\n".join(f"- **{item.display_name}**" for item in matches[3:])
+        listed = listed + "\n" + extra
+    quick.append(QuickReply(label="Talk to a human", payload="human"))
+    patch = {
+        "awaiting_compare_pick": slot,
+        "pending_compare_left_query": left_q,
+        "pending_compare_right_query": right_q,
+        "pending_compare_left": left_handle,
+        "pending_compare_right": right_handle,
+        "pending_compare_candidates": [
+            {"handle": item.handle, "display": item.display_name}
+            for item in matches
+        ],
+        "awaiting_compare_recommend": False,
+    }
+    return SalesReply(
+        reply=(
+            f"Which **{query}** do you mean?\n\n{listed}\n\n"
+            "I won't guess the family member."
+        ),
+        intent=INTENT_COMPARE,
+        quick_replies=quick,
+        tools_used=["catalog.compare"],
+        products=[item.as_public_dict() for item in matches[:3]],
+        prefs_patch=patch,
+    )
+
+
+def _finish_compare_pair(
+    left: Optional[ProductSpecs],
+    right: Optional[ProductSpecs],
+    *,
+    left_q: str,
+    right_q: str,
+    prefs: Optional[dict],
+    domain: str,
+) -> SalesReply:
+    if left is not None and right is not None:
+        if left.handle == right.handle:
+            return SalesReply(
+                reply=(
+                    f"Those both resolve to **{left.display_name}**. "
+                    "Name a second chair to compare it with."
+                ),
+                intent=INTENT_COMPARE,
+                quick_replies=[
+                    QuickReply(label="See all models", payload="list"),
+                    QuickReply(label="Talk to a human", payload="human"),
+                ],
+                tools_used=["catalog.compare"],
+                prefs_patch={
+                    "awaiting_compare_pick": "right",
+                    "pending_compare_left": left.handle,
+                    "pending_compare_left_query": left.display_name,
+                    "pending_compare_right": "",
+                    "pending_compare_right_query": "",
+                    "pending_compare_candidates": [],
+                    "awaiting_compare_recommend": False,
+                },
+            )
+        return _compare_resolved_reply(left, right, domain=domain)
+    if left is None and right is None:
         return SalesReply(
             reply=(
-                "I couldn't confidently match one of those model names to our "
-                "catalog. Could you retype the exact model names, or tap "
-                "**See all models**?"
+                f"I couldn't match **{left_q}** or **{right_q}** to the current "
+                "store catalog. Short names are fine — they just have to be "
+                "chairs we sell now."
+            ),
+            intent=INTENT_COMPARE,
+            quick_replies=[
+                QuickReply(label="See all models", payload="list"),
+                QuickReply(label="Recommend a chair", payload="recommend"),
+                QuickReply(label="Talk to a human", payload="human"),
+            ],
+            tools_used=["catalog.compare"],
+            prefs_patch=_clear_compare_state(),
+        )
+    if left is None:
+        return _compare_missing_reply(
+            found=right,
+            missing_query=left_q,
+            found_slot="right",
+            other_query=left_q,
+            domain=domain,
+        )
+    return _compare_missing_reply(
+        found=left,
+        missing_query=right_q,
+        found_slot="left",
+        other_query=right_q,
+        domain=domain,
+    )
+
+
+def _resolve_compare_side(
+    query: str,
+    *,
+    slot: str,
+    other: Optional[ProductSpecs],
+    other_query: str,
+    left_q: str,
+    right_q: str,
+    prefs: Optional[dict],
+    domain: str,
+) -> Optional[SalesReply]:
+    """Return a reply when this side is not a unique match; None if unique."""
+    looked = lookup_shop_models(query)
+    if looked.vague:
+        return SalesReply(
+            reply=(
+                f"**{query or 'that'}** is too vague — I need a model nickname "
+                f"like Maestro or Paragon. {_compare_example_prompt()}"
+            ),
+            intent=INTENT_COMPARE,
+            quick_replies=[
+                QuickReply(label="See all models", payload="list"),
+                QuickReply(label="Talk to a human", payload="human"),
+            ],
+            tools_used=["catalog.compare"],
+        )
+    if len(looked.matches) > 1:
+        left_handle = (
+            other.handle if other is not None and slot == "right" else ""
+        )
+        right_handle = (
+            other.handle if other is not None and slot == "left" else ""
+        )
+        return _ask_compare_which(
+            slot,
+            query,
+            list(looked.matches),
+            prefs=prefs,
+            left_q=left_q,
+            right_q=right_q,
+            left_handle=left_handle,
+            right_handle=right_handle,
+        )
+    return None
+
+
+def _compare_reply(
+    message: str,
+    *,
+    prefs: Optional[dict] = None,
+    domain: str = "osakiusa.com",
+) -> SalesReply:
+    pair = split_compare_terms(message)
+    if pair is None:
+        return SalesReply(
+            reply=(
+                "Sure — which two models? Short names are fine. "
+                f"{_compare_example_prompt()}"
+            ),
+            intent=INTENT_COMPARE,
+            quick_replies=[
+                QuickReply(label="See all models", payload="list"),
+                QuickReply(label="Recommend a chair", payload="recommend"),
+                QuickReply(label="Talk to a human", payload="human"),
+            ],
+            tools_used=["catalog.compare"],
+            prefs_patch=_clear_compare_state(),
+        )
+
+    left_q, right_q = pair
+    left_lookup = lookup_shop_models(left_q)
+    right_lookup = lookup_shop_models(right_q)
+    left = left_lookup.unique
+    right = right_lookup.unique
+
+    blocked = _resolve_compare_side(
+        left_q,
+        slot="left",
+        other=right,
+        other_query=right_q,
+        left_q=left_q,
+        right_q=right_q,
+        prefs=prefs,
+        domain=domain,
+    )
+    if blocked is not None:
+        return blocked
+    blocked = _resolve_compare_side(
+        right_q,
+        slot="right",
+        other=left,
+        other_query=left_q,
+        left_q=left_q,
+        right_q=right_q,
+        prefs=prefs,
+        domain=domain,
+    )
+    if blocked is not None:
+        return blocked
+    return _finish_compare_pair(
+        left,
+        right,
+        left_q=left_q,
+        right_q=right_q,
+        prefs=prefs,
+        domain=domain,
+    )
+
+
+def _apply_compare_pick(
+    handle: str,
+    prefs: Optional[dict],
+    *,
+    domain: str,
+) -> SalesReply:
+    picked = product_by_handle(handle) or resolve_product(handle)
+    data = prefs or {}
+    slot = str(data.get("awaiting_compare_pick") or "left").strip().lower()
+    if slot not in {"left", "right"}:
+        slot = "left"
+    if picked is None:
+        return SalesReply(
+            reply=(
+                "I couldn't match that tap to a current store chair. "
+                f"{_compare_example_prompt()}"
             ),
             intent=INTENT_COMPARE,
             quick_replies=[
@@ -1952,58 +2330,243 @@ def _compare_reply(message: str) -> SalesReply:
             tools_used=["catalog.compare"],
         )
 
-    left = result["left"]
-    right = result["right"]
-    diff = result["diff"]
-    lines = [
-        f"**{left['model']}** — {_fmt_price(left['price_usd'])}",
-        f"**{right['model']}** — {_fmt_price(right['price_usd'])}",
-        "",
-        f"- **Mechanism**: {diff['mechanism'][0] or '—'} vs {diff['mechanism'][1] or '—'}",
-        f"- **Track**: {diff['track'][0] or '—'} vs {diff['track'][1] or '—'}",
-        f"- **Zero gravity**: {diff['zero_gravity'][0] or '—'} vs {diff['zero_gravity'][1] or '—'}",
-        f"- **Heating**: {diff['heating'][0] or '—'} vs {diff['heating'][1] or '—'}",
-        f"- **Foot roller**: {diff['foot_roller'][0] or '—'} vs {diff['foot_roller'][1] or '—'}",
-    ]
-    if diff["price_delta_usd"] is not None:
-        delta = diff["price_delta_usd"]
-        if abs(delta) < 1:
-            lines.append("- **Price gap**: same published price.")
-        else:
-            direction = "more" if delta > 0 else "less"
-            lines.append(
-                f"- **Price gap**: the second is about ${abs(delta):,.0f} {direction}."
+    left_q = str(data.get("pending_compare_left_query") or "").strip()
+    right_q = str(data.get("pending_compare_right_query") or "").strip()
+    left_handle = str(data.get("pending_compare_left") or "").strip()
+    right_handle = str(data.get("pending_compare_right") or "").strip()
+    if slot == "left":
+        left_handle = picked.handle
+        left_q = picked.display_name
+    else:
+        right_handle = picked.handle
+        right_q = picked.display_name
+
+    left = product_by_handle(left_handle) if left_handle else None
+    right = product_by_handle(right_handle) if right_handle else None
+    if left is None and right is None:
+        left, right = (picked, None) if slot == "left" else (None, picked)
+
+    if left is None and right_q:
+        looked = lookup_shop_models(right_q)
+        if looked.unique:
+            right = looked.unique
+        elif len(looked.matches) > 1:
+            return _ask_compare_which(
+                "right",
+                right_q,
+                list(looked.matches),
+                prefs=data,
+                left_q=left_q or picked.display_name,
+                right_q=right_q,
+                left_handle=picked.handle,
+            )
+    if right is None and left_q:
+        looked = lookup_shop_models(left_q)
+        if looked.unique:
+            left = looked.unique
+        elif len(looked.matches) > 1:
+            return _ask_compare_which(
+                "left",
+                left_q,
+                list(looked.matches),
+                prefs=data,
+                left_q=left_q,
+                right_q=right_q or picked.display_name,
+                right_handle=picked.handle,
             )
 
-    differing = [
-        name
-        for name, key in (
-            ("mechanism", "mechanism"),
-            ("track", "track"),
-            ("zero gravity", "zero_gravity"),
-            ("heating", "heating"),
-            ("foot roller", "foot_roller"),
+    return _finish_compare_pair(
+        left,
+        right,
+        left_q=left_q or (left.display_name if left else ""),
+        right_q=right_q or (right.display_name if right else ""),
+        prefs=data,
+        domain=domain,
+    )
+
+
+def _compare_digit_reply(message: str, prefs: Optional[dict], *, domain: str) -> Optional[SalesReply]:
+    if not (prefs or {}).get("awaiting_compare_pick"):
+        return None
+    digit = re.fullmatch(r"([1-9])[).:\s]*", (message or "").strip())
+    if not digit:
+        return None
+    cands = (prefs or {}).get("pending_compare_candidates") or []
+    if not isinstance(cands, list):
+        return None
+    idx = int(digit.group(1)) - 1
+    if not (0 <= idx < len(cands)):
+        return None
+    handle = str((cands[idx] or {}).get("handle") or "").strip()
+    if not handle:
+        return None
+    return _apply_compare_pick(handle, prefs, domain=domain)
+
+
+def _clarify_compare_recommend(
+    missing: str,
+    rec: dict[str, str],
+    left: ProductSpecs,
+    right: ProductSpecs,
+) -> SalesReply:
+    result = _clarify_recommend(missing, rec)
+    names = f"**{left.display_name}** and **{right.display_name}**"
+    if missing == "height":
+        result.reply = (
+            f"To choose between {names}, what's the **user height**?\n\n"
+            "I'll pick from these two using published fit specs — "
+            "not which one feels better."
         )
-        if (diff.get(key) or ("", ""))[0] != (diff.get(key) or ("", ""))[1]
+    elif missing == "goal":
+        result.reply = (
+            f"What's the **main focus** so I can choose between {names}?"
+        )
+    patch = dict(result.prefs_patch or {})
+    patch["recommend_prefs"] = rec
+    patch["awaiting_compare_recommend"] = True
+    patch["pending_compare_pair"] = [left.handle, right.handle]
+    result.prefs_patch = patch
+    result.tools_used = (result.tools_used or []) + ["catalog.compare"]
+    return result
+
+
+def _compare_recommend_reply(
+    message: str,
+    *,
+    payload: Optional[str] = None,
+    prefs: Optional[dict] = None,
+    domain: str = "osakiusa.com",
+) -> SalesReply:
+    data = prefs or {}
+    handles = data.get("pending_compare_pair") or []
+    if not isinstance(handles, list) or len(handles) < 2:
+        left = product_by_handle(str(data.get("pending_compare_left") or ""))
+        right = product_by_handle(str(data.get("pending_compare_right") or ""))
+    else:
+        left = product_by_handle(str(handles[0] or ""))
+        right = product_by_handle(str(handles[1] or ""))
+    if left is None or right is None:
+        return SalesReply(
+            reply=(
+                "I need two current store chairs first. "
+                f"{_compare_example_prompt()}"
+            ),
+            intent=INTENT_COMPARE,
+            quick_replies=[
+                QuickReply(label="See all models", payload="list"),
+                QuickReply(label="Talk to a human", payload="human"),
+            ],
+            tools_used=["catalog.compare"],
+            prefs_patch={"awaiting_compare_recommend": False},
+        )
+
+    rec = dict(data.get("recommend_prefs") or {})
+    request = parse_recommendation_hints(message or "")
+    if payload:
+        rec = apply_payload_codes(rec, payload)
+    rec = merge_prefs_from_hints(
+        rec,
+        height_in=request.height_in,
+        weight_lb=request.weight_lb,
+        budget_usd=request.budget_usd,
+        focus_areas=request.focus_areas,
+        free_text=request.free_text or message,
+    )
+    rec = enrich_implied_prefs(rec)
+    missing = missing_ask(rec)
+    if missing:
+        return _clarify_compare_recommend(missing[0], rec, left, right)
+
+    left_score, right_score = pair_fit_scores(left, right, {"recommend_prefs": rec})
+    if abs(left_score - right_score) < 0.75:
+        result = compare_products(left, right)
+        lines = [
+            f"Published fit is too close to call between **{left.display_name}** "
+            f"and **{right.display_name}**.",
+            "",
+            *_compare_spec_lines(result["diff"]),
+            "",
+            "I won't invent which one feels better — a specialist can sit you "
+            "in both at the showroom.",
+        ]
+        left_url = product_page_url(domain, left.handle)
+        right_url = product_page_url(domain, right.handle)
+        quick: list[QuickReply] = []
+        if left_url:
+            quick.append(
+                QuickReply(
+                    label=f"Shop {short_model_label(left, limit=18)}",
+                    payload=f"open:{left_url}",
+                )
+            )
+        if right_url:
+            quick.append(
+                QuickReply(
+                    label=f"Shop {short_model_label(right, limit=18)}",
+                    payload=f"open:{right_url}",
+                )
+            )
+        quick.append(QuickReply(label="Talk to a human", payload="human"))
+        return SalesReply(
+            reply="\n".join(lines),
+            intent=INTENT_COMPARE,
+            quick_replies=quick,
+            tools_used=["catalog.compare", "cases.tiered"],
+            products=[result["left"], result["right"]],
+            prefs_patch={
+                "recommend_prefs": rec,
+                "pending_compare_pair": [left.handle, right.handle],
+                "awaiting_compare_recommend": False,
+            },
+        )
+
+    winner, other = (left, right) if left_score >= right_score else (right, left)
+    reasons = pair_fit_reasons(winner, other, {"recommend_prefs": rec})
+    url = product_page_url(domain, winner.handle)
+    other_url = product_page_url(domain, other.handle)
+    lines = [
+        f"Between these two, **{winner.display_name}** is the better "
+        f"**published fit** for **{rec.get('height') or 'your height'}**"
+        + (f" and **{rec.get('goal')}**" if rec.get("goal") else "")
+        + ".",
+        "",
     ]
-    if not differing and abs(diff.get("price_delta_usd") or 0) < 1:
+    if reasons:
+        lines.extend(f"- {bit}" for bit in reasons)
+    else:
         lines.append(
-            "\n**Bottom line:** These two sit in the same tier on published "
-            "specs/price — a rep can help you choose by feel/fit."
+            "- Catalog track, mechanism, and listed capacity line up better "
+            "on this one."
         )
-    elif differing:
-        lines.append(
-            "\n**Biggest differences:** " + ", ".join(differing) + "."
+    lines.append(
+        "\nThat is catalog fit, not which chair feels stronger in person."
+    )
+    if url:
+        lines.append(f"\nShop: {url}")
+    quick = []
+    if url:
+        quick.append(QuickReply(label="Shop this chair", payload=f"open:{url}"))
+    if other_url:
+        quick.append(
+            QuickReply(
+                label=f"Shop {short_model_label(other, limit=18)}",
+                payload=f"open:{other_url}",
+            )
         )
+    quick.append(QuickReply(label="Talk to a human", payload="human"))
     return SalesReply(
         reply="\n".join(lines),
         intent=INTENT_COMPARE,
-        quick_replies=[
-            QuickReply(label="Recommend which one", payload="recommend"),
-            QuickReply(label="Talk to a human", payload="human"),
-        ],
-        tools_used=["catalog.compare"],
-        products=[left, right],
+        quick_replies=quick,
+        tools_used=["catalog.compare", "cases.tiered"],
+        products=[winner.as_public_dict(), other.as_public_dict()],
+        prefs_patch={
+            "recommend_prefs": rec,
+            "pending_primary": winner.display_name,
+            "pending_product_url": url,
+            "pending_compare_pair": [left.handle, right.handle],
+            "awaiting_compare_recommend": False,
+        },
     )
 
 
@@ -2215,6 +2778,9 @@ def _resume_reset_reply() -> SalesReply:
             "pending_pick_summary": "",
             "pending_tier_picks": [],
             "visitor_memory_hydrated": False,
+            "awaiting_compare_pick": "",
+            "pending_compare_pair": [],
+            "awaiting_compare_recommend": False,
         },
         flow_stage="menu",
     )
@@ -2341,7 +2907,7 @@ def _list_reply() -> SalesReply:
 
 _PAYLOAD_ROUTES = {
     "list": lambda _msg: _list_reply(),
-    "compare": lambda msg: _compare_reply(msg),
+    "compare": lambda msg: _compare_reply(msg),  # prefs/domain filled in _payload_reply
     "price": lambda msg: _price_reply(msg),
     "stock": lambda msg: _stock_reply(msg),
     "specs": lambda msg: _specs_reply(msg),
@@ -2633,25 +3199,49 @@ def _payload_reply(
         if 1 <= n <= 3:
             return _tier_followup_reply(n - 1, prefs, domain=domain)
         return None
-    if root == "compare" and len(parts) >= 4 and parts[1].strip().lower() == "tiers":
-        try:
-            left_n = int(parts[2])
-            right_n = int(parts[3])
-        except ValueError:
-            return None
-        return _compare_pending_tiers_reply(prefs, left_n, right_n)
-    if root == "recommend":
-        if len(parts) >= 2 and parts[1].strip().lower() == "again":
-            return _recommend_reply(
-                "recommend",
-                domain=domain,
-                prefs=prefs,
+    if root == "compare":
+        action = parts[1].strip().lower() if len(parts) > 1 else ""
+        if action == "tiers" and len(parts) >= 4:
+            try:
+                left_n = int(parts[2])
+                right_n = int(parts[3])
+            except ValueError:
+                return None
+            return _compare_pending_tiers_reply(
+                prefs, left_n, right_n, domain=domain
             )
+        if action == "pick" and len(parts) >= 3:
+            return _apply_compare_pick(
+                ":".join(parts[2:]), prefs, domain=domain
+            )
+        if action == "recommend":
+            return _compare_recommend_reply(
+                message or "",
+                payload=payload,
+                prefs=prefs,
+                domain=domain,
+            )
+        return _compare_reply(message or "", prefs=prefs, domain=domain)
+    if root == "recommend":
+        action = parts[1].strip().lower() if len(parts) > 1 else ""
+        full_recommend = action in {"", "again"}
+        if (prefs or {}).get("awaiting_compare_recommend") and not full_recommend:
+            return _compare_recommend_reply(
+                message or "",
+                payload=payload,
+                prefs=prefs,
+                domain=domain,
+            )
+        patched = dict(prefs or {})
+        if full_recommend:
+            patched["awaiting_compare_pick"] = ""
+            patched["awaiting_compare_recommend"] = False
+            patched["pending_compare_candidates"] = []
         return _recommend_reply(
             message or "recommend",
             payload=payload,
             domain=domain,
-            prefs=prefs,
+            prefs=patched,
         )
     if root == "stock":
         return _stock_reply(message or payload, domain=domain)
@@ -2904,6 +3494,8 @@ def _compare_pending_tiers_reply(
     prefs: Optional[dict],
     left_n: int,
     right_n: int,
+    *,
+    domain: str = "osakiusa.com",
 ) -> Optional[SalesReply]:
     """Compare two pending tier picks by 1-based indexes."""
     picks = (prefs or {}).get("pending_tier_picks") or []
@@ -2918,14 +3510,15 @@ def _compare_pending_tiers_reply(
         return None
     left_name = left_pick.get("model") or left_pick.get("display") or ""
     right_name = right_pick.get("model") or right_pick.get("display") or ""
-    result = compare(left_name, right_name)
-    if result is None:
-        # Fall back to handles.
-        result = compare(
-            left_pick.get("handle") or left_name,
-            right_pick.get("handle") or right_name,
-        )
-    if result is None:
+    left_prod = (
+        product_by_handle(str(left_pick.get("handle") or ""))
+        or resolve_product(left_name)
+    )
+    right_prod = (
+        product_by_handle(str(right_pick.get("handle") or ""))
+        or resolve_product(right_name)
+    )
+    if left_prod is None or right_prod is None:
         return SalesReply(
             reply=(
                 f"I couldn't line up **{left_pick.get('display') or left_name}** vs "
@@ -2941,35 +3534,24 @@ def _compare_pending_tiers_reply(
             flow_stage="recommend",
         )
 
+    result = compare_products(left_prod, right_prod)
     left = result["left"]
     right = result["right"]
-    diff = result["diff"]
     lt = (left_pick.get("tier") or "Option A").split("(")[0].strip()
     rt = (right_pick.get("tier") or "Option B").split("(")[0].strip()
     lines = [
         f"**{lt}: {left['model']}** — {_fmt_price(left['price_usd'])}",
         f"**{rt}: {right['model']}** — {_fmt_price(right['price_usd'])}",
         "",
-        f"- **Mechanism**: {diff['mechanism'][0] or '—'} vs {diff['mechanism'][1] or '—'}",
-        f"- **Track**: {diff['track'][0] or '—'} vs {diff['track'][1] or '—'}",
-        f"- **Zero gravity**: {diff['zero_gravity'][0] or '—'} vs {diff['zero_gravity'][1] or '—'}",
-        f"- **Heating**: {diff['heating'][0] or '—'} vs {diff['heating'][1] or '—'}",
-        f"- **Foot roller**: {diff['foot_roller'][0] or '—'} vs {diff['foot_roller'][1] or '—'}",
+        *_compare_spec_lines(result["diff"]),
+        "",
+        "Reply **1** for Value, **2** for Mid, or ask me which of these two "
+        "fits better.",
     ]
-    if diff["price_delta_usd"] is not None:
-        delta = diff["price_delta_usd"]
-        if abs(delta) >= 1:
-            direction = "more" if delta > 0 else "less"
-            lines.append(
-                f"- **Price gap**: {rt} is about ${abs(delta):,.0f} {direction}."
-            )
-    lines.append(
-        "\nReply **1** for Value, **2** for Mid (or the tier you want), "
-        "or ask a specialist to help you choose."
-    )
     quick = [
         QuickReply(label=f"Choose {lt}", payload=f"tier:{left_n}"),
         QuickReply(label=f"Choose {rt}", payload=f"tier:{right_n}"),
+        QuickReply(label="Recommend which one", payload="compare:recommend"),
         QuickReply(label="Back to list", payload="recommend:again"),
         QuickReply(label="Talk to a human", payload="human"),
     ]
@@ -2983,6 +3565,10 @@ def _compare_pending_tiers_reply(
         prefs_patch={
             "pending_tier_picks": picks,
             "recommend_prefs": (prefs or {}).get("recommend_prefs") or {},
+            "pending_compare_pair": [left_prod.handle, right_prod.handle],
+            "pending_compare_left": left_prod.handle,
+            "pending_compare_right": right_prod.handle,
+            "awaiting_compare_recommend": False,
         },
     )
 
@@ -3097,6 +3683,56 @@ def respond(
         )
         return _finalize_flow_stage(_attach_human_footer(inner))
 
+    if not payload:
+        compare_digit = _compare_digit_reply(message, prefs, domain=domain)
+        if compare_digit is not None:
+            return _remember_question(
+                _finalize_flow_stage(compare_digit), message, payload
+            )
+
+    if (
+        not payload
+        and (prefs or {}).get("awaiting_compare_pick")
+        and (message or "").strip()
+    ):
+        if split_compare_terms(message or ""):
+            return _remember_question(
+                _finalize_flow_stage(
+                    _compare_reply(message, prefs=prefs, domain=domain)
+                ),
+                message,
+                payload,
+            )
+        looked = lookup_shop_models(message or "")
+        if looked.unique is not None:
+            return _remember_question(
+                _finalize_flow_stage(
+                    _apply_compare_pick(
+                        looked.unique.handle, prefs, domain=domain
+                    )
+                ),
+                message,
+                payload,
+            )
+        if len(looked.matches) > 1:
+            slot = str((prefs or {}).get("awaiting_compare_pick") or "left")
+            return _remember_question(
+                _finalize_flow_stage(
+                    _ask_compare_which(
+                        slot,
+                        looked.query or (message or "").strip(),
+                        list(looked.matches),
+                        prefs=prefs,
+                        left_q=str((prefs or {}).get("pending_compare_left_query") or ""),
+                        right_q=str((prefs or {}).get("pending_compare_right_query") or ""),
+                        left_handle=str((prefs or {}).get("pending_compare_left") or ""),
+                        right_handle=str((prefs or {}).get("pending_compare_right") or ""),
+                    )
+                ),
+                message,
+                payload,
+            )
+
     # After a tier list, bare "1"/"2"/"3" opens that chair (chat + Tidio).
     if not payload:
         tier_reply = _tier_digit_reply(message, prefs)
@@ -3162,13 +3798,37 @@ def respond(
             message,
             payload,
         )
+    if looks_like_compare_pair(message or ""):
+        return _remember_question(
+            _finalize_flow_stage(
+                _compare_reply(message, prefs=prefs, domain=domain)
+            ),
+            message,
+            payload,
+        )
     if intent.label == INTENT_SPECS:
         return _remember_question(
             _finalize_flow_stage(_specs_reply(message, domain=domain)),
             message,
             payload,
         )
+
     if intent.label == INTENT_RECOMMEND:
+        pair_handles = (prefs or {}).get("pending_compare_pair") or []
+        if (prefs or {}).get("awaiting_compare_recommend") or (
+            isinstance(pair_handles, list)
+            and len(pair_handles) >= 2
+            and is_which_of_pair(message or "")
+        ):
+            return _remember_question(
+                _finalize_flow_stage(
+                    _compare_recommend_reply(
+                        message, prefs=prefs, domain=domain
+                    )
+                ),
+                message,
+                payload,
+            )
         return _remember_question(
             _finalize_flow_stage(
                 _recommend_reply(message, domain=domain, prefs=prefs)
@@ -3178,7 +3838,9 @@ def respond(
         )
     if intent.label == INTENT_COMPARE:
         return _remember_question(
-            _finalize_flow_stage(_compare_reply(message)),
+            _finalize_flow_stage(
+                _compare_reply(message, prefs=prefs, domain=domain)
+            ),
             message,
             payload,
         )
