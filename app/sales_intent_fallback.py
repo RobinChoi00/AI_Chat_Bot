@@ -47,6 +47,8 @@ from sales_intent import (
     INTENT_WARRANTY_REDIRECT,
     HANDOFF_INTENTS,
     SalesIntent,
+    looks_like_price_gap,
+    recommend_matched_dollar_only,
 )
 
 logger = logging.getLogger(__name__)
@@ -146,6 +148,18 @@ _BROWSE_HELP_RE = re.compile(
 )
 
 # "Tell me more" phrasing — the shopper wants product detail.
+_DOORWAY_ONLY_RE = re.compile(
+    r"("
+    r"\bdoorway\b|\bdoor\s+width\b|"
+    r"(?:door|doorway).{0,24}\d{2}(?:\.\d)?\s*(?:\"|in(?:ch(?:es)?)?)|"
+    r"\d{2}(?:\.\d)?\s*(?:\"|in(?:ch(?:es)?)?)\s*(?:door|doorway)|"
+    r"fit\s+through\s+(?:a\s+)?(?:\d+|my\s+door)|"
+    r"will\s+it\s+fit\s+(?:through|in)\s+(?:the\s+)?door"
+    r")",
+    re.IGNORECASE,
+)
+
+
 _TELL_ME_MORE_RE = re.compile(
     r"("
     r"tell\s+me\s+(?:more|about)|"
@@ -196,15 +210,26 @@ def named_model_in_text(text: str) -> Optional[str]:
     index = _model_token_index()
     if not index:
         return None
-    words = re.findall(r"[a-z0-9]+", (text or "").lower())
+    try:
+        from sales_catalog import rewrite_shopper_typos
+    except ImportError:  # pragma: no cover
+        rewritten = text or ""
+    else:
+        rewritten = rewrite_shopper_typos(text or "")
+    words = re.findall(r"[a-z0-9]+", rewritten.lower())
     phrases: list[str] = []
     for i, word in enumerate(words):
+        nxt = words[i + 1] if i + 1 < len(words) else ""
+        # "Grande XL" is a real chair even though bare "grande" is too vague.
+        if word in _AMBIGUOUS_MODEL_TOKENS and nxt in _SHORT_DISAMBIGUATORS:
+            phrases.append(f"{word} {nxt}")
+            continue
         if word not in index:
             continue
         chunk = [word]
-        for nxt in words[i + 1 : i + 3]:
-            if nxt in _SHORT_DISAMBIGUATORS or nxt in index:
-                chunk.append(nxt)
+        for extra in words[i + 1 : i + 3]:
+            if extra in _SHORT_DISAMBIGUATORS or extra in index:
+                chunk.append(extra)
             else:
                 break
         if len(chunk) > 1:
@@ -247,11 +272,20 @@ def rule_fallback(text: str) -> Optional[SalesIntent]:
     # chair instead of showing the menu again.
     model = named_model_in_text(raw)
     if model:
+        try:
+            from sales_catalog import looks_like_color_question
+        except ImportError:  # pragma: no cover
+            color_ask = False
+        else:
+            color_ask = looks_like_color_question(raw)
         return SalesIntent(
-            label=INTENT_SPECS,
+            label=INTENT_STOCK if color_ask else INTENT_SPECS,
             confidence="medium",
             matched_terms=(model.lower(),),
         )
+
+    if _DOORWAY_ONLY_RE.search(raw):
+        return SalesIntent(label=INTENT_RECOMMEND, confidence="medium")
 
     if _BROWSE_HELP_RE.search(raw):
         return SalesIntent(label=INTENT_RECOMMEND, confidence="medium")
@@ -295,7 +329,9 @@ Pick the single best label for the CUSTOMER MESSAGE:
 - specs: asking what a chair has, does, or is like
 - recommend: wants help choosing a chair, or describes their body/needs/budget
 - compare: weighing two or more chairs against each other
-- discount: asking for a deal, promo, price match, or financing terms
+- discount: asking for a deal, promo, price match, financing, or why our
+  price is higher than Costco / Amazon / Walmart. A dollar amount plus
+  "more than" is discount, not a budget.
 - eta_shipping: asking about delivery timing, cost, or destinations
 - order_status: asking where an existing order or package is
 - warranty_redirect: a chair they own is broken, faulty, or needs service
@@ -371,6 +407,33 @@ def resolve_unclear(text: str) -> Optional[SalesIntent]:
     if ruled is not None:
         return ruled
     return llm_fallback(text)
+
+
+def revise_recommend(intent: SalesIntent, text: str) -> Optional[SalesIntent]:
+    """Catch recommend that was only a dollar amount or a competitor price gap.
+
+    The regex path is first-pass. A high-confidence ``recommend`` from
+    ``$1000`` never used to reach ``resolve_unclear``. This second look only
+    returns a different *label* — never customer-facing copy.
+    """
+    if intent is None or intent.label != INTENT_RECOMMEND:
+        return None
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    if looks_like_price_gap(raw):
+        return SalesIntent(
+            label=INTENT_DISCOUNT,
+            confidence="high",
+            handoff=True,
+            matched_terms=("revise_recommend",),
+        )
+    if not recommend_matched_dollar_only(intent.matched_terms):
+        return None
+    recovered = llm_fallback(raw)
+    if recovered is not None and recovered.label != INTENT_RECOMMEND:
+        return recovered
+    return None
 
 
 def clear_caches() -> None:

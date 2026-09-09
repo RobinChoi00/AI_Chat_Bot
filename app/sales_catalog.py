@@ -66,9 +66,10 @@ class ProductSpecs:
     foot_roller: str
     auto_programs: str
     massage_styles: str
+    colors: tuple[str, ...] = ()
 
     def as_public_dict(self) -> dict:
-        return {
+        public = {
             "model": self.display_name,
             "vendor": self.vendor,
             "price_usd": self.price_usd,
@@ -84,6 +85,9 @@ class ProductSpecs:
                 "massage_styles": self.massage_styles,
             },
         }
+        if self.colors:
+            public["colors"] = list(self.colors)
+        return public
 
 
 def _mech(value: str) -> str:
@@ -114,6 +118,158 @@ def _is_massage_chair(row: dict) -> bool:
     return typ == "massage chair" or "massage chair" in cat
 
 
+_COLOR_OPTION_NAMES = frozenset({"color", "colour"})
+_COLOR_CANON = {
+    "black": "Black",
+    "brown": "Brown",
+    "dark brown": "Dark Brown",
+    "white": "White",
+    "beige": "Beige",
+    "grey": "Gray",
+    "gray": "Gray",
+    "ivory": "Ivory",
+    "espresso": "Espresso",
+    "charcoal": "Charcoal",
+    "taupe": "Taupe",
+}
+_COLOR_RE = re.compile(
+    r"\b(dark\s+brown|black|brown|white|beige|grey|gray|ivory|espresso|charcoal|taupe)\b",
+    re.I,
+)
+_TYPO_TOKEN = {
+    "tital": "titan",
+    "titen": "titan",
+    "tytan": "titan",
+    "osacki": "osaki",
+    "oskai": "osaki",
+    "maesto": "maestro",
+    "maetro": "maestro",
+    "paragun": "paragon",
+    "paragonn": "paragon",
+}
+_LOOKUP_FILLER = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "in",
+        "for",
+        "with",
+        "please",
+        "color",
+        "colour",
+        "available",
+        "model",
+        "chair",
+        "massage",
+        "do",
+        "does",
+        "did",
+        "you",
+        "your",
+        "have",
+        "has",
+        "had",
+        "can",
+        "could",
+        "would",
+        "should",
+        "get",
+        "got",
+        "want",
+        "this",
+        "that",
+        "any",
+        "some",
+        "one",
+        "it",
+        "is",
+        "are",
+        "was",
+        "were",
+    }
+)
+
+
+def rewrite_shopper_typos(text: str) -> str:
+    """Fix a few storefront typos (Tital → Titan) without fuzzy-matching Jupiter."""
+
+    def _repl(match: re.Match[str]) -> str:
+        word = match.group(0)
+        mapped = _TYPO_TOKEN.get(word.lower())
+        if not mapped:
+            return word
+        if word.isupper():
+            return mapped.upper()
+        if word[:1].isupper():
+            return mapped[:1].upper() + mapped[1:]
+        return mapped
+
+    return re.sub(r"[A-Za-z]+", _repl, text or "")
+
+
+def parse_asked_color(text: str) -> Optional[str]:
+    """Return a canonical color when the shopper named one — never Black Friday."""
+    raw = text or ""
+    if re.search(r"\bblack\s+friday\b", raw, re.I):
+        raw = re.sub(r"\bblack\s+friday\b", " ", raw, flags=re.I)
+    match = _COLOR_RE.search(raw)
+    if not match:
+        return None
+    return _COLOR_CANON.get(match.group(1).lower())
+
+
+def looks_like_color_question(text: str) -> bool:
+    return parse_asked_color(text) is not None
+
+
+def _strip_lookup_noise(text: str) -> str:
+    raw = rewrite_shopper_typos(text or "")
+    raw = re.sub(r"\bblack\s+friday\b", " ", raw, flags=re.I)
+    raw = _COLOR_RE.sub(" ", raw)
+    tokens = [
+        token
+        for token in re.findall(r"[A-Za-z0-9]+", raw)
+        if token.lower() not in _LOOKUP_FILLER
+    ]
+    return " ".join(tokens)
+
+
+def _row_colors(row: dict) -> tuple[str, ...]:
+    found: list[str] = []
+    seen: set[str] = set()
+    for index in (1, 2, 3):
+        name = str(row.get(f"Option{index} Name") or "").strip().lower()
+        value = str(row.get(f"Option{index} Value") or "").strip()
+        if name not in _COLOR_OPTION_NAMES or not value:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append(value)
+    return tuple(found)
+
+
+def is_public_browse_pick(product: ProductSpecs) -> bool:
+    """True for storefront chairs we may show as anonymous price examples."""
+    if product.status.lower() != "active" or product.price_usd is None:
+        return False
+    hay = f"{product.title} {product.display_name} {product.handle}".lower()
+    if "costco" in hay:
+        return False
+    if "quest-3d" in hay or "quest 3d" in hay or hay.endswith("quest 3d"):
+        return False
+    return True
+
+
+def color_is_listed(product: ProductSpecs, color: str) -> list[str]:
+    wanted = (color or "").strip().lower()
+    if not wanted:
+        return []
+    return [item for item in product.colors if wanted in item.lower()]
+
+
 @lru_cache(maxsize=1)
 def load_product_index() -> tuple[ProductSpecs, ...]:
     """One record per Shopify handle, deduplicated across variant rows."""
@@ -124,6 +280,7 @@ def load_product_index() -> tuple[ProductSpecs, ...]:
     prices = load_catalog_base_prices()
 
     by_handle: dict[str, dict] = {}
+    colors_by_handle: dict[str, list[str]] = {}
     with _CSV_PATH.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         current_handle = ""
@@ -139,6 +296,13 @@ def load_product_index() -> tuple[ProductSpecs, ...]:
                     continue
                 if not merged.get(key) and str(value or "").strip():
                     merged[key] = value
+            bucket = colors_by_handle.setdefault(current_handle, [])
+            seen_colors = {item.lower() for item in bucket}
+            for color in _row_colors(row):
+                if color.lower() in seen_colors:
+                    continue
+                seen_colors.add(color.lower())
+                bucket.append(color)
 
     entries: list[ProductSpecs] = []
     for handle, row in by_handle.items():
@@ -182,6 +346,7 @@ def load_product_index() -> tuple[ProductSpecs, ...]:
                 )
                 or ""
             ).strip(),
+            colors=tuple(colors_by_handle.get(handle) or ()),
         )
         entries.append(specs)
 
@@ -196,7 +361,7 @@ def load_product_index() -> tuple[ProductSpecs, ...]:
 
 def resolve_product(text: str) -> Optional[ProductSpecs]:
     """Find the single best ProductSpecs record for a free-text model input."""
-    raw = (text or "").strip()
+    raw = _strip_lookup_noise(text or "")
     if len(raw) < 2:
         return None
 
@@ -234,18 +399,41 @@ def resolve_product(text: str) -> Optional[ProductSpecs]:
 
     # Token overlap: require most distinctive tokens (ignore brand noise).
     tokens = [t for t in re.findall(r"[a-z0-9]+", raw.lower()) if len(t) >= 3]
-    tokens = [t for t in tokens if t not in {"osaki", "titan", "massage", "chair", "pro", "the"}]
+    tokens = [
+        t
+        for t in tokens
+        if t not in {"osaki", "titan", "massage", "chair", "pro", "the"} | _LOOKUP_FILLER
+    ]
     if len(tokens) >= 1:
-        best: Optional[ProductSpecs] = None
-        best_score = 0
+        scored: list[tuple[int, ProductSpecs]] = []
+        need = max(1, len(tokens) - 1)
         for record in products:
-            hay = f"{record.title} {record.display_name} {record.handle}".lower()
-            score = sum(1 for t in tokens if t in hay)
-            if score > best_score and score >= max(1, len(tokens) - 1):
-                best = record
-                best_score = score
-        if best is not None:
-            return best
+            hay_tokens = set(
+                re.findall(
+                    r"[a-z0-9]+",
+                    f"{record.title} {record.display_name} {record.handle}".lower(),
+                )
+            )
+            score = sum(1 for t in tokens if t in hay_tokens)
+            if score >= need:
+                scored.append((score, record))
+        if scored:
+            best_score = max(item[0] for item in scored)
+            top = [record for score, record in scored if score == best_score]
+            if "xl" in tokens:
+                xl_hits = [
+                    record
+                    for record in top
+                    if "xl" in f"{record.title} {record.display_name} {record.handle}".lower()
+                ]
+                if xl_hits:
+                    top = xl_hits
+            if len(top) == 1:
+                return top[0]
+            # Prefer the shortest display name among remaining ties (Grande XL
+            # over a longer XL family member when scores match).
+            top.sort(key=lambda rec: (len(rec.display_name), rec.display_name))
+            return top[0]
     return None
 
 
@@ -253,6 +441,9 @@ def resolve_product(text: str) -> Optional[ProductSpecs]:
 _CASE_MODEL_ALIASES: dict[str, str] = {
     _normalize_key("Osaki aI 4D Yoga Flex"): "Osaki 4D Yoga Flex",
     _normalize_key("Grande XL-Big and Tall"): "Titan Grande XL",
+    _normalize_key("Grande XL"): "Titan Grande XL",
+    _normalize_key("Titan XL 3D"): "Titan Grande XL",
+    _normalize_key("Tital XL 3D"): "Titan Grande XL",
     _normalize_key("OS-3D AI Vito"): "Osaki OS-3D AI Vito",
     _normalize_key("Titan Rejuv 4D"): "Titan Rejūv 4D",
     _normalize_key("Ventura 3D"): "Osaki Ventura 3D",
@@ -269,8 +460,6 @@ def list_active_products() -> list[ProductSpecs]:
 
 
 _TALL_MIN_IN = 74  # 6'2"+ → prefer L-Track / SL-Track & 4D
-_TALL_HINT_RE = re.compile(r"\b(tall|large|big\s+guy|nba|basketball)\b", re.I)
-_PETITE_HINT_RE = re.compile(r"\b(petite|small|short|tiny|wife|mom|mother|elder(?:ly)?)\b", re.I)
 _BACK_HINT_RE = re.compile(
     r"\b("
     r"back|spine|lower\s+back|sciatica|posture|"
@@ -358,10 +547,8 @@ def parse_recommendation_hints(text: str) -> RecommendationRequest:
 
     req.budget_usd = _parse_budget_usd(raw)
 
-    if _TALL_HINT_RE.search(raw) and not req.height_in:
-        req.height_in = 76
-    if _PETITE_HINT_RE.search(raw) and not req.height_in:
-        req.height_in = 62
+    # Bare "tall" / "petite" is not a measured height. Ask instead of guessing
+    # Extra Tall (6'3"+) or Petite (<5'4").
 
     focus = []
     if _BACK_HINT_RE.search(raw):

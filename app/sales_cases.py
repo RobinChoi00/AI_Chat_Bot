@@ -212,6 +212,51 @@ def height_bucket(height_in: Optional[int]) -> Optional[str]:
     return HEIGHTS[3]
 
 
+def height_from_shopper_answer(text: str) -> Optional[str]:
+    """Map a height *answer* after we asked. Do not call on an opener like 'tall guy'."""
+    raw = (text or "").strip().lower()
+    if not raw:
+        return None
+    if re.search(r"not\s+sure|idk\b|i\s+don'?t\s+know|\bdunno\b|\bno\s+idea\b", raw):
+        return HEIGHTS[1]
+    if re.search(r"petite|under\s*5\s*['’]?\s*4|shorter\s+than\s*5", raw):
+        return HEIGHTS[0]
+    if re.search(r"extra\s+tall|6\s*['’]?\s*3\s*\+|over\s*6\s*['’]?\s*3", raw):
+        return HEIGHTS[3]
+    if re.search(r"\b(average|medium)\b", raw):
+        return HEIGHTS[1]
+    if re.fullmatch(r"tall", raw) or re.search(r"the\s+tall\s+(?:one|range)", raw):
+        return HEIGHTS[2]
+    inches = _height_inches_from_answer(raw)
+    return height_bucket(inches)
+
+
+def _height_inches_from_answer(raw: str) -> Optional[int]:
+    ft_in = re.search(
+        r"([4-7])\s*(?:'|’|ft|feet)\s*(\d{1,2})?\s*(?:\"|in|inches)?",
+        raw,
+        re.I,
+    )
+    if ft_in:
+        feet = int(ft_in.group(1))
+        inches = int(ft_in.group(2) or 0)
+        if inches <= 11:
+            return feet * 12 + inches
+    spaced = re.search(r"\b([4-7])\s+([0-9]|1[01])\b", raw)
+    if spaced:
+        return int(spaced.group(1)) * 12 + int(spaced.group(2))
+    if re.fullmatch(r"\d{2}", raw):
+        value = int(raw)
+        if 54 <= value <= 84:
+            return value
+    tall_in = re.search(r"\b(\d{2})\s*(?:\"|in(?:ch(?:es)?)?)\s*tall\b", raw, re.I)
+    if tall_in:
+        value = int(tall_in.group(1))
+        if 54 <= value <= 84:
+            return value
+    return None
+
+
 def weight_bucket(weight_lb: Optional[int]) -> Optional[str]:
     if weight_lb is None:
         return None
@@ -291,9 +336,9 @@ def foot_bucket(text: str = "", focus_areas: Optional[list[str]] = None) -> Opti
 
 def space_bucket(text: str = "") -> Optional[str]:
     raw = (text or "").lower()
-    if re.search(r"\b(narrow\s+door|doorway|tight\s+door)\b", raw):
+    if re.search(r"\b(narrow\s+door|doorway|tight\s+door|narrow\s+hall(?:way)?|tight\s+hall(?:way)?)\b", raw):
         return "Narrow Doorway"
-    if re.search(r"\b(small\s+room|apartment|tight\s+space|wall\s+clearance)\b", raw):
+    if re.search(r"\b(small\s+room|apartment|tight\s+space|wall\s+clearance|small\s+apartment)\b", raw):
         return "Small Room"
     if re.search(r"\b(plenty\s+of\s+space|large\s+room|no\s+space\s+issue)\b", raw):
         return "No Space Constraint"
@@ -447,7 +492,7 @@ _CORE_DEFAULTS = {
     "space": "No Space Constraint",
 }
 
-DEFAULTABLE_PREF_KEYS = ("weight", "space", "intensity", "foot")
+DEFAULTABLE_PREF_KEYS = ("height", "weight", "space", "intensity", "foot")
 
 # Soft intensity from massage goal when the shopper didn't say gentle/strong.
 _GOAL_INTENSITY = {

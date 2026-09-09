@@ -18,12 +18,21 @@ import pytest
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(APP_DIR))
 
-from sales_intent import INTENT_RECOMMEND, INTENT_SPECS, INTENT_UNCLEAR, classify  # noqa: E402
+from sales_intent import (  # noqa: E402
+    INTENT_DISCOUNT,
+    INTENT_RECOMMEND,
+    INTENT_SPECS,
+    INTENT_STOCK,
+    INTENT_UNCLEAR,
+    SalesIntent,
+    classify,
+)
 from sales_intent_fallback import (  # noqa: E402
     llm_fallback,
     named_model_in_text,
-    rule_fallback,
     resolve_unclear,
+    revise_recommend,
+    rule_fallback,
 )
 
 
@@ -59,6 +68,22 @@ def test_bare_maestro_token_resolves_to_the_canonical_4d():
     """The token index used to return Maestro LE because it appeared first."""
     assert named_model_in_text("tell me about the Maestro") == "Osaki OS-Pro Maestro 4D"
     assert named_model_in_text("Maestro LE") == "Osaki OS-Pro Maestro LE"
+
+
+def test_grande_xl_is_a_named_model():
+    name = named_model_in_text("Grande XL in black")
+    if name is None:
+        pytest.skip("Grande XL missing from the Shopify export")
+    assert "grande" in name.lower() or "xl" in name.lower()
+    result = rule_fallback("Grande XL in black")
+    assert result is not None
+    assert result.label == INTENT_STOCK
+
+
+def test_doorway_only_routes_to_recommend():
+    result = rule_fallback("will it fit through a 30 inch door")
+    assert result is not None
+    assert result.label == INTENT_RECOMMEND
 
 
 @pytest.mark.parametrize(
@@ -212,3 +237,21 @@ def test_llm_is_only_asked_for_a_route(monkeypatch):
     system = client.chat.completions.seen["messages"][0]["content"].lower()
     assert "never answer the customer" in system
     assert client.chat.completions.seen["temperature"] == 0
+
+
+def test_revise_recommend_sends_costco_gap_to_discount():
+    fake = SalesIntent(
+        label=INTENT_RECOMMEND,
+        confidence="high",
+        matched_terms=("$1000",),
+    )
+    revised = revise_recommend(
+        fake, "Why is this chair $1000 more than on the Costco site"
+    )
+    assert revised is not None
+    assert revised.label == INTENT_DISCOUNT
+
+
+def test_revise_recommend_leaves_real_fit_requests():
+    intent = classify("can you recommend a chair for a tall guy")
+    assert revise_recommend(intent, "can you recommend a chair for a tall guy") is None

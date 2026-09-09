@@ -50,6 +50,11 @@ TOPIC_WHITE_GLOVE = "white_glove"
 TOPIC_FINANCING = "financing"
 TOPIC_SHOWROOM = "showroom"
 TOPIC_MECHANISM = "mechanism"
+TOPIC_REFURBISHED = "refurbished"
+TOPIC_TRADE_IN = "trade_in"
+TOPIC_LEASE = "lease"
+TOPIC_INTERNATIONAL = "international"
+TOPIC_LIMITS = "limits"
 
 POLICY_TOPICS = (
     TOPIC_RETURNS,
@@ -57,8 +62,13 @@ POLICY_TOPICS = (
     TOPIC_SHIPPING,
     TOPIC_REMOTE_SHIPPING,
     TOPIC_RESTRICTED_REGION,
+    TOPIC_INTERNATIONAL,
     TOPIC_WHITE_GLOVE,
     TOPIC_FINANCING,
+    TOPIC_REFURBISHED,
+    TOPIC_TRADE_IN,
+    TOPIC_LEASE,
+    TOPIC_LIMITS,
     TOPIC_SHOWROOM,
     TOPIC_MECHANISM,
 )
@@ -70,6 +80,14 @@ _RESTRICTED_REGION_RE = re.compile(
 )
 _REMOTE_REGION_RE = re.compile(
     r"\b(hawaii|hawaiian|honolulu|alaska|alaskan|anchorage)\b|하와이|알래스카",
+    re.IGNORECASE,
+)
+_INTERNATIONAL_RE = re.compile(
+    r"("
+    r"\b(canada|canadian|mexico|mexican|overseas|international)\b|"
+    r"\b(united\s+kingdom|\buk\b|europe|european|australia|australian)\b|"
+    r"ship(?:ping)?\s+to\s+(?:canada|mexico|europe|uk|britain|australia)"
+    r")",
     re.IGNORECASE,
 )
 
@@ -119,6 +137,7 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"set\s*[\-\s]?up\s+(?:service|fee|cost|included)|"
             r"put\s+it\s+together|"
             r"carry\s+(?:it\s+)?(?:up|upstairs)|stairs?\s+(?:carry|fee)|"
+            r"(?:third|second|fourth)\s+floor|walk[\s-]?up|"
             r"bring\s+it\s+(?:in|inside|upstairs)|"
             r"take\s+away\s+(?:my\s+)?old|haul\s+away"
             r")",
@@ -167,9 +186,74 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"monthly\s+payment|pay\s+monthly|payment\s+plan|"
             r"pay\s+over\s+time|installments?|"
             r"affirm|klarna|afterpay|"
+            r"\bapr\b|interest\s+rate|"
             r"lease\s+to\s+own|rent\s+to\s+own|"
             r"can\s+i\s+split\s+the\s+(?:cost|payment)|"
             r"할부"
+            r")",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        TOPIC_REFURBISHED,
+        re.compile(
+            r"("
+            r"refurbish(?:ed)?|open[\s-]?box|scratch\s+and\s+dent|"
+            r"used\s+(?:chair|massage)|second[\s-]?hand|"
+            r"outlet\s+(?:chair|model)|floor\s+model|"
+            r"do\s+you\s+sell\s+used"
+            r")",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        TOPIC_TRADE_IN,
+        re.compile(
+            r"("
+            r"trade[\s-]?ins?|"
+            r"trade\s+(?:in|my|an?)\s+(?:my\s+)?(?:old\s+)?(?:chair|one)|"
+            r"buy\s+(?:my|an?)\s+old\s+chair|"
+            r"haul\s+away\s+(?:my\s+)?old"
+            r")",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        TOPIC_LEASE,
+        re.compile(
+            r"("
+            r"(?:do\s+you|can\s+i|can\s+you)\s+lease|"
+            r"\blease(?:s|d|ing)?\s+(?:a\s+)?(?:chair|one)|"
+            r"chair\s+lease|"
+            r"equipment\s+lease"
+            r")",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        TOPIC_LIMITS,
+        re.compile(
+            r"("
+            r"pet[\s-]?friendly|scratch(?:es|ing)?|"
+            r"\b(?:cat|cats|dog|dogs|kitten|puppy)\b|"
+            r"gift\s*wrap|gift\s+receipt|gift\s+card|hide\s+(?:the\s+)?price|"
+            r"speak\s+spanish|in\s+spanish|espa[nñ]ol|puedo\s+comprar|"
+            r"commercial\s+use|\bsalon\b|\bspa\s+use\b|wholesale|dealer\s+pric|"
+            r"tax\s+exempt|resale\s+cert|"
+            r"rental\s+program|\brent(?:al|s)?\s+a\s+chair|"
+            r"outdoor|patio|porch|"
+            r"medical\s+device|fda\s+approv|"
+            r"pregnan(?:t|cy)|for\s+(?:kids?|children|toddlers?)|"
+            r"safe\s+(?:for\s+)?(?:kids?|children|pregnancy)|"
+            r"pacemaker|after\s+(?:a\s+)?(?:hip\s+)?surgery|"
+            r"\bhsa\b|\bfsa\b|flex(?:ible)?\s+spend|insurance\s+cover|"
+            r"how\s+loud|decibel|\bnois(?:y|e)\b|"
+            r"voltage|special\s+outlet|what\s+outlet|110\s*v|220\s*v|"
+            r"paypal|apple\s+pay|google\s+pay|\bvenmo\b|"
+            r"sales\s+tax|how\s+much\s+tax|"
+            r"made\s+in|country\s+of\s+origin|"
+            r"how\s+long\s+(?:do\s+they|does\s+it|will\s+it)\s+last|lifespan|"
+            r"p\.?\s*o\.?\s*box|po\s+box"
             r")",
             re.IGNORECASE,
         ),
@@ -187,6 +271,12 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"where\s+are\s+you\s+located|your\s+address|"
             r"(?:business|store|opening)\s+hours|what\s+are\s+your\s+hours|"
             r"(?:book|schedule|make)\s+(?:a\s+)?(?:showroom\s+)?(?:visit|appointment|tour)|"
+            r"open\s+(?:on\s+)?(?:sun(?:day)?s?|sat(?:urday)?s?|today)|"
+            r"are\s+you\s+open|"
+            r"(?:sunday|saturday)\s+(?:hours|open)|"
+            r"(?:can\s+i|do\s+you)\s+pick\s*up|"
+            r"\bpickup\b|"
+            r"pick\s+up\s+(?:today|now|a\s+chair|from)|"
             r"매장|쇼룸"
             r")",
             re.IGNORECASE,
@@ -248,7 +338,18 @@ def detect_topic(text: str) -> Optional[str]:
         return TOPIC_RESTRICTED_REGION
     if _REMOTE_REGION_RE.search(raw):
         return TOPIC_REMOTE_SHIPPING
+    if _INTERNATIONAL_RE.search(raw):
+        return TOPIC_INTERNATIONAL
+    skip_shipping = bool(
+        re.search(
+            r"shipping\s+weight|boxed\s+(?:size|weight|dimensions)|package\s+weight",
+            raw,
+            re.I,
+        )
+    )
     for topic, pattern in _TOPIC_PATTERNS:
+        if skip_shipping and topic == TOPIC_SHIPPING:
+            continue
         if pattern.search(raw):
             return topic
     return None
@@ -371,11 +472,24 @@ def _financing_answer(domain: str) -> str:
     )
 
 
-def _showroom_answer(domain: str) -> str:
+def _showroom_answer(domain: str, message: str = "") -> str:
     from sales_cta import showroom_address, showroom_hours, showroom_maps_url, showroom_phone
 
     phone = showroom_phone(domain)
     phone_line = f"- **Call:** {phone}\n" if phone else ""
+    extra: list[str] = []
+    raw = message or ""
+    if re.search(r"\bsun(?:day)?s?\b", raw, re.I):
+        extra.append(
+            "Sunday isn't listed in the published hours, so I won't promise "
+            "we're open that day."
+        )
+    if re.search(r"pick\s*up|\bpickup\b", raw, re.I):
+        extra.append(
+            "I won't confirm a chair is ready for same-day pickup from this "
+            "chat. A specialist can check showroom stock."
+        )
+    extra_block = ("\n\n" + " ".join(extra)) if extra else ""
     return (
         "**Visit our showroom**\n\n"
         f"- **Address:** {showroom_address()}\n"
@@ -383,9 +497,191 @@ def _showroom_answer(domain: str) -> str:
         f"{phone_line}"
         f"- **Map:** {showroom_maps_url()}\n\n"
         "Tap **Request a visit** and I'll email sales your preferred window. "
-        "They confirm the time — I won't lock a calendar slot from this chat.\n\n"
+        "They confirm the time — I won't lock a calendar slot from this chat."
+        f"{extra_block}\n\n"
         "If you'd rather narrow it down first, tell me your **height** and what "
         "you want the chair to help with."
+    )
+
+
+def _refurbished_answer(_domain: str) -> str:
+    return (
+        "We sell **new** chairs from the current store catalog. I don't have "
+        "refurbished, open-box, or used inventory to quote here.\n\n"
+        "A specialist can tell you if anything like that exists outside this "
+        "chat — share your **email** if you want that follow-up."
+    )
+
+
+def _trade_in_answer(_domain: str) -> str:
+    return (
+        "We **don't take trade-ins**, and delivery crews **don't haul away** "
+        "an old chair.\n\n"
+        "A specialist can still help you choose a new one — share your "
+        "**email** if you want that follow-up."
+    )
+
+
+def _international_answer(domain: str) -> str:
+    url = _policy_url(domain, "pages/shipping-handling")
+    return (
+        "**US delivery from this storefront**\n\n"
+        "Hawaii and Alaska are served (**you pay freight**, quoted per model and "
+        "address). **Guam is not served.**\n\n"
+        "I don't have a published Canada / Mexico / overseas rate I can quote "
+        "here. A specialist can confirm whether they can quote that address — "
+        "share your **email** and the destination.\n\n"
+        f"US delivery options: {url}"
+    )
+
+
+def _limits_kind(message: str) -> str:
+    raw = message or ""
+    if re.search(
+        r"gift\s*wrap|gift\s+receipt|gift\s+card|hide\s+(?:the\s+)?price", raw, re.I
+    ):
+        return "gift"
+    if re.search(
+        r"speak\s+spanish|in\s+spanish|espa[nñ]ol|puedo\s+comprar", raw, re.I
+    ):
+        return "language"
+    if re.search(
+        r"commercial\s+use|\bsalon\b|\bspa\s+use\b|wholesale|dealer\s+pric|"
+        r"tax\s+exempt|resale\s+cert",
+        raw,
+        re.I,
+    ):
+        return "commercial"
+    if re.search(r"rental\s+program|\brent(?:al|s)?\s+a\s+chair", raw, re.I):
+        return "rental"
+    if re.search(r"outdoor|patio|porch", raw, re.I):
+        return "outdoor"
+    if re.search(
+        r"medical\s+device|fda\s+approv|pregnan(?:t|cy)|"
+        r"for\s+(?:kids?|children|toddlers?)|safe\s+(?:for\s+)?(?:kids?|children|pregnancy)|"
+        r"pacemaker|after\s+(?:a\s+)?(?:hip\s+)?surgery|"
+        r"\bhsa\b|\bfsa\b|flex(?:ible)?\s+spend|insurance\s+cover",
+        raw,
+        re.I,
+    ):
+        return "medical"
+    if re.search(r"how\s+loud|decibel|\bnois(?:y|e)\b", raw, re.I):
+        return "noise"
+    if re.search(r"voltage|special\s+outlet|what\s+outlet|110\s*v|220\s*v", raw, re.I):
+        return "power"
+    if re.search(r"paypal|apple\s+pay|google\s+pay|\bvenmo\b", raw, re.I):
+        return "payments"
+    if re.search(r"sales\s+tax|how\s+much\s+tax", raw, re.I):
+        return "tax"
+    if re.search(r"made\s+in|country\s+of\s+origin", raw, re.I):
+        return "origin"
+    if re.search(
+        r"how\s+long\s+(?:do\s+they|does\s+it|will\s+it)\s+last|\blifespan\b",
+        raw,
+        re.I,
+    ):
+        return "lifespan"
+    if re.search(r"p\.?\s*o\.?\s*box|po\s+box", raw, re.I):
+        return "pobox"
+    return "pets"
+
+
+def _limits_answer(_domain: str, message: str = "") -> str:
+    kind = _limits_kind(message)
+    if kind == "gift":
+        return (
+            "I **can't hide a published price** or offer gift wrap from this chat.\n\n"
+            "I can send a model link, or a specialist can help with a gift order — "
+            "share your **email**."
+        )
+    if kind == "language":
+        return (
+            "This shopping chat is in **English**. I won't guess in another language.\n\n"
+            "A specialist can help — share your **email**."
+        )
+    if kind == "commercial":
+        return (
+            "The chairs on this storefront are sold as **home** massage chairs. "
+            "I don't have a published commercial, salon, or wholesale program here.\n\n"
+            "A specialist can confirm — share your **email**."
+        )
+    if kind == "rental":
+        return (
+            "We **don't rent** chairs, and I don't have a wholesale list in this chat.\n\n"
+            "**Affirm** pay-over-time is available at checkout. I won't quote a rate."
+        )
+    if kind == "outdoor":
+        return (
+            "These chairs are sold for **indoor home use**. I won't recommend one "
+            "for a patio or outdoor space."
+        )
+    if kind == "medical":
+        return (
+            "I **won't give medical advice**, and these chairs are **not listed as "
+            "medical devices**.\n\n"
+            "For pregnancy, children, or a medical condition, ask your clinician. "
+            "A specialist can still help you shop if a doctor says a home massage "
+            "chair is OK."
+        )
+    if kind == "noise":
+        return (
+            "I don't have a **published decibel rating** I can quote.\n\n"
+            "The Carrollton showroom is the honest way to judge noise, or a "
+            "specialist can follow up — share your **email**."
+        )
+    if kind == "power":
+        return (
+            "I don't have a published **voltage / outlet** spec I can quote here.\n\n"
+            "This storefront is for US checkout. A specialist can confirm the plug "
+            "for your address — share your **email** and zip code."
+        )
+    if kind == "payments":
+        return (
+            "Checkout shows the payment methods this storefront accepts. "
+            "I can confirm **Affirm** for pay-over-time. I won't list other "
+            "processors from memory, and I won't quote a rate.\n\n"
+            "A specialist can confirm what's on the payment page — share your "
+            "**email**."
+        )
+    if kind == "tax":
+        return (
+            "**Sales tax** is calculated at checkout for the ship-to address. "
+            "I won't quote a rate from this chat."
+        )
+    if kind == "origin":
+        return (
+            "I don't have a published **country-of-origin** line I can quote "
+            "per model here.\n\n"
+            "A specialist can pull that from the carton or spec sheet — share "
+            "your **email** and the model."
+        )
+    if kind == "lifespan":
+        return (
+            "I don't have a published **lifespan in years** I can quote. "
+            "What I can confirm is the **3-year** standard warranty, with optional "
+            "4- and 5-year plans at purchase. Ask about warranty terms if you "
+            "want those published details."
+        )
+    if kind == "pobox":
+        return (
+            "I won't confirm **PO Box** delivery from this chat. Share your "
+            "**email**, zip code, and the model, and a specialist can check "
+            "whether that address is serviceable."
+        )
+    return (
+        "I don't have a published **pet-proof** or scratch-resistance spec. "
+        "These are indoor home chairs.\n\n"
+        "A specialist can talk materials if that's the deciding factor — "
+        "share your **email**."
+    )
+
+
+def _lease_answer(_domain: str) -> str:
+    return (
+        "We **don't lease** chairs.\n\n"
+        "**Affirm** pay-over-time is available at checkout on our store. "
+        "You'll see the monthly amount there — I won't quote a rate here.\n\n"
+        "Want a specialist to walk through checkout options? Share your **email**."
     )
 
 
@@ -411,14 +707,25 @@ _ANSWERS = {
     TOPIC_SHIPPING: _shipping_answer,
     TOPIC_REMOTE_SHIPPING: _remote_shipping_answer,
     TOPIC_RESTRICTED_REGION: _restricted_region_answer,
+    TOPIC_INTERNATIONAL: _international_answer,
     TOPIC_WHITE_GLOVE: _white_glove_answer,
     TOPIC_FINANCING: _financing_answer,
+    TOPIC_REFURBISHED: _refurbished_answer,
+    TOPIC_TRADE_IN: _trade_in_answer,
+    TOPIC_LEASE: _lease_answer,
+    TOPIC_LIMITS: _limits_answer,
     TOPIC_SHOWROOM: _showroom_answer,
     TOPIC_MECHANISM: _mechanism_answer,
 }
 
 
-def policy_answer(topic: str, domain: str = "") -> Optional[str]:
+def policy_answer(topic: str, domain: str = "", message: str = "") -> Optional[str]:
     """Render the published answer for a pre-purchase policy topic."""
     builder = _ANSWERS.get(topic)
-    return builder(domain) if builder else None
+    if builder is None:
+        return None
+    if topic == TOPIC_SHOWROOM:
+        return _showroom_answer(domain, message=message)
+    if topic == TOPIC_LIMITS:
+        return _limits_answer(domain, message=message)
+    return builder(domain)

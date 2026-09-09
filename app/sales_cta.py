@@ -159,6 +159,8 @@ def format_defaults_note(applied: list[str], prefs: dict[str, str]) -> Optional[
     bits = []
     if "weight" in applied and prefs.get("weight"):
         bits.append(f"weight {prefs['weight']}")
+    if "height" in applied and prefs.get("height"):
+        bits.append(f"height {prefs['height']}")
     if "space" in applied and prefs.get("space"):
         bits.append("no doorway constraint")
     if "intensity" in applied and prefs.get("intensity"):

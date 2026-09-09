@@ -20,6 +20,7 @@ from sales_cases import (  # noqa: E402
     cases_available,
     enrich_implied_prefs,
     height_bucket,
+    height_from_shopper_answer,
     lookup_case,
     merge_prefs_from_hints,
     missing_ask,
@@ -52,7 +53,15 @@ def test_brand_for_domain():
     assert brand_for_domain("unknown") == "titan"
 
 
-def test_bucket_mappers():
+def test_height_from_shopper_answer_only_maps_answers():
+    assert height_from_shopper_answer("not sure") == 'Average (5\'4"–5\'11")'
+    assert height_from_shopper_answer("idk") == 'Average (5\'4"–5\'11")'
+    assert height_from_shopper_answer("5'10") == 'Average (5\'4"–5\'11")'
+    assert height_from_shopper_answer("6 2") == 'Tall (6\'0"–6\'2")'
+    assert height_from_shopper_answer("70") == 'Average (5\'4"–5\'11")'
+    assert height_from_shopper_answer("tall") == 'Tall (6\'0"–6\'2")'
+    assert height_from_shopper_answer("petite") == 'Petite (<5\'4")'
+    assert height_from_shopper_answer("") is None
     assert height_bucket(62) == 'Petite (<5\'4")'
     assert height_bucket(68) == 'Average (5\'4"–5\'11")'
     assert height_bucket(73) == 'Tall (6\'0"–6\'2")'

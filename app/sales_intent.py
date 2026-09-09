@@ -76,7 +76,8 @@ WARRANTY_ROUTE_INTENTS = frozenset(
 # ---------------------------------------------------------------------------
 
 _GREETING_EN_RE = re.compile(
-    r"^(hi|hello|hey|good\s+(morning|afternoon|evening)|howdy|"
+    r"^(hi|hello|hey)(\s+there)?[!.?\s]*$|"
+    r"^(good\s+(morning|afternoon|evening)|howdy|"
     r"thanks|thank\s+you|thx|bye|goodbye|help)[!.?\s]*$",
     re.IGNORECASE,
 )
@@ -143,8 +144,9 @@ _CANCEL_REFUND_RE = re.compile(
 
 # --- Discount / negotiation — AI never invents % ------------------------
 _DISCOUNT_RE = re.compile(
+    r"(?:"
     r"\b("
-    r"discount|promo(?:tion)?|coupon(?:\s+code)?|promo\s*code|"
+    r"discount(?:s)?|promo(?:tion|s)?|coupon(?:s|\s+code)?|promo\s*code|"
     # Bare "sale"/"deal" for Tidio — not "sales" (as in sales team).
     r"sale|deals?|"
     r"any\s+(?:deal|deals|sale|sales|offer|offers)|"
@@ -154,7 +156,28 @@ _DISCOUNT_RE = re.compile(
     r"can\s+i\s+get\s+(?:it\s+)?cheaper|"
     r"financing|monthly\s+payment|payment\s+plan|"
     r"할인|쿠폰|프로모"
-    r")\b",
+    r")\b|"
+    r"코스트코|왜\s*더\s*비싸"
+    r")",
+    re.IGNORECASE,
+)
+
+# Competitor / "why is this $1000 more" — never a recommend budget.
+_PRICE_GAP_RE = re.compile(
+    r"("
+    r"\bcostco\b|"
+    r"\bwalmart\b|"
+    r"on\s+amazon|"
+    r"amazon\.com|"
+    r"amazon\s+site|"
+    r"more\s+expensive|"
+    r"cheaper\s+(?:on|at|than)|"
+    r"price\s+(?:gap|difference)|"
+    r"why\s+is\s+(?:this|it|your).{0,40}more|"
+    r"\$\s*\d[\d,]{2,5}\s+more|"
+    r"\d[\d,]{2,5}\s+(?:dollars?\s+)?more\s+than|"
+    r"코스트코|왜\s*더\s*비싸"
+    r")",
     re.IGNORECASE,
 )
 
@@ -212,6 +235,7 @@ _HUMAN_RE = re.compile(
 _PRICE_RE = re.compile(
     r"\b("
     r"price|cost|how\s+much|what'?s?\s+the\s+price|how\s+expensive|msrp|list\s+price|"
+    r"cheapest|least\s+expensive|most\s+expensive|lowest\s+price|"
     r"가격|얼마"
     r")\b",
     re.IGNORECASE,
@@ -220,6 +244,7 @@ _PRICE_RE = re.compile(
 _STOCK_RE = re.compile(
     r"\b("
     r"in\s+stock|out\s+of\s+stock|available|availability|backorder|back\s+order|"
+    r"discontinued|still\s+made|still\s+sell(?:ing)?|"
     r"can\s+i\s+(?:buy|order)\s+(?:it|this|one)\s+(?:now|today)|"
     r"do\s+you\s+have\s+(?:it|this|one|the)\s+.*(?:in\s+stock|available)?|"
     r"재고|입고"
@@ -231,15 +256,21 @@ _RECOMMEND_RE = re.compile(
     r"(?:"
     r"\b(?:"
     r"recommend|suggestion|which\s+(?:chair|model)|what\s+(?:chair|model).*should|"
+    r"help\s+me\s+(?:pick|choose|decide|find|select)|"
+    r"first[\s-]?time\s+buyer|best[\s-]?sellers?|most\s+popular|"
+    r"looking\s+for\s+a(?:n)?\s+(?:chair|massage)|"
     r"best\s+chair(?:\s+for)?|good\s+chair\s+for|fit\s+for\s+me|good\s+for\s+(?:tall|short|back|neck)|"
     r"my\s+height|my\s+weight|i\s+am\s+\d+\s*(?:ft|feet|cm|kg|lb|lbs|pounds|inches|'|\"|tall)|"
+    r"small\s+apartment|narrow\s+hallway|tight\s+space|"
+    r"two\s+chairs|his\s+and\s+hers|his\s*[&/]\s*hers|\ba\s+couple\b|"
+    r"for\s+my\s+office|chair\s+for.{0,16}office|"
     r"budget|추천"
     r")\b|"
-    # Budget bands — allow "$5k" / "under $ 7k" (space after $) / "around 6k"
+    # Budget bands only — never a bare "$1000 more than Costco".
     r"(?:^|[\s,])(?:under|around|about|near|max|up\s+to|below)\s*(?:\$|usd)?\s*\d{1,2}\s*k\b|"
     r"(?:^|[\s,])(?:under|around|about|near|max|up\s+to|below)\s*(?:\$|usd)?\s*\d{3,5}\b|"
-    r"(?:^|[\s,])\$\s*\d{1,2}\s*k\b|"
-    r"(?:^|[\s,])\$\s*\d{3,5}\b"
+    r"(?:^|[\s,])(?:budget|spend(?:ing)?)\s*(?:of|is|around|under|about)?\s*(?:\$|usd)?\s*\d{3,5}\b|"
+    r"(?:^|[\s,])\$\s*\d{1,2}\s*k\b"
     r")",
     re.IGNORECASE,
 )
@@ -256,8 +287,12 @@ _COMPARE_RE = re.compile(
 _SPECS_RE = re.compile(
     r"\b("
     r"spec(?:s|ification)?|features?|dimensions?|sizes?|weight\s+capacity|weight\s+limit|"
-    r"height\s+range|track\s+type|s-?track|l-?track|sl-?track|zero\s+gravity|"
-    r"3d|4d|airbags?|heating|foot\s+rollers?|calf\s+rollers?|bluetooth"
+    r"max(?:imum)?\s+user\s+weight|user\s+weight|how\s+wide|how\s+heavy|"
+    r"shipping\s+weight|boxed\s+(?:size|weight|dimensions)|chair\s+weight|"
+    r"how\s+much.{0,48}\bweigh|"
+    r"recline|width|height\s+range|track\s+type|s-?track|l-?track|sl-?track|zero\s+gravity|"
+    r"3d|4d|airbags?|heat(?:ing|er)?|foot\s+rollers?|calf\s+rollers?|bluetooth|"
+    r"app\s+control|wi[\s-]?fi|body\s+scan|leather|upholstery"
     r")\b",
     re.IGNORECASE,
 )
@@ -324,6 +359,8 @@ _KOREAN_INTENT_TOKENS: tuple[tuple[str, str], ...] = (
     #    "세기가 얼마나 세나요" is labelled intensity rather than price.
     ("세기", INTENT_INTENSITY),
     ("강도", INTENT_INTENSITY),
+    ("코스트코", INTENT_DISCOUNT),
+    ("왜 더 비싸", INTENT_DISCOUNT),
     ("비교", INTENT_COMPARE),
     ("차이", INTENT_COMPARE),
     ("재고", INTENT_STOCK),
@@ -379,6 +416,21 @@ class SalesIntent:
 
 def _matched(pattern: re.Pattern, text: str) -> tuple[str, ...]:
     return tuple(m.group(0).strip().lower() for m in pattern.finditer(text))
+
+
+def looks_like_price_gap(text: str) -> bool:
+    """True when the shopper is comparing our price to Costco/Amazon/etc."""
+    return bool(_PRICE_GAP_RE.search(text or ""))
+
+
+_BARE_DOLLAR_TERM = re.compile(r"^\$?\s*\d[\d,]{2,5}$")
+
+
+def recommend_matched_dollar_only(matched_terms: tuple[str, ...]) -> bool:
+    """True when recommend fired only because a $amount looked like a budget."""
+    if not matched_terms:
+        return False
+    return all(_BARE_DOLLAR_TERM.fullmatch((term or "").strip()) for term in matched_terms)
 
 
 def _prepurchase_policy_topic(text: str) -> Optional[str]:
@@ -447,8 +499,9 @@ def classify(text: str) -> SalesIntent:
             matched_terms=hits,
         )
 
-    # 4) Discount / promo → human handoff. AI never quotes a % on its own.
-    hits = _matched(_DISCOUNT_RE, raw)
+    # 4) Discount / promo / competitor price-gap → specialist. Never treat
+    #    "$1000 more than Costco" as a recommend budget.
+    hits = _matched(_DISCOUNT_RE, raw) or _matched(_PRICE_GAP_RE, raw)
     if hits:
         return SalesIntent(
             label=INTENT_DISCOUNT,
@@ -504,6 +557,19 @@ def classify(text: str) -> SalesIntent:
     specs_hits = _matched(_SPECS_RE, raw)
 
     if price_hits:
+        # "how much does it weigh" is a spec, not a storefront price.
+        if re.search(
+            r"how\s+much.{0,48}\bweigh|"
+            r"\b(?:chair|product|shipping|boxed)\s+weight\b|"
+            r"how\s+heavy",
+            raw,
+            re.I,
+        ):
+            return SalesIntent(
+                label=INTENT_SPECS,
+                confidence="medium",
+                matched_terms=specs_hits or price_hits,
+            )
         return SalesIntent(label=INTENT_PRICE, confidence="high", matched_terms=price_hits)
     if stock_hits:
         return SalesIntent(label=INTENT_STOCK, confidence="high", matched_terms=stock_hits)
@@ -513,6 +579,13 @@ def classify(text: str) -> SalesIntent:
     # who shares physical details wants a recommendation, not a lecture on
     # massage strength.
     if recommend_hits or body_fit_hits:
+        if looks_like_price_gap(raw):
+            return SalesIntent(
+                label=INTENT_DISCOUNT,
+                confidence="high",
+                handoff=True,
+                matched_terms=_matched(_PRICE_GAP_RE, raw) or recommend_hits,
+            )
         return SalesIntent(
             label=INTENT_RECOMMEND,
             confidence="high",

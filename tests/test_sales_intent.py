@@ -93,11 +93,16 @@ def test_parts_and_technician_route_to_warranty_team():
 def test_discount_never_answered_directly():
     for text in [
         "any discount available?",
+        "any discounts",
+        "discounts?",
         "do you have a promo code",
         "can you do better on the price",
         "price match with amazon",
         "coupon code please",
         "할인 되나요",
+        "Why is this chair $1000 more than on the Costco site",
+        "why is this more expensive than Costco",
+        "cheaper on Amazon",
     ]:
         intent = classify(text)
         assert intent.label == INTENT_DISCOUNT, text
@@ -236,6 +241,8 @@ def test_price_intent():
         "how much is the Osaki OS-Pro Maestro LE",
         "price of the Titan Jupiter",
         "what's the cost of this chair",
+        "what's the cheapest chair",
+        "most expensive chair",
         "가격 알려주세요",
     ]:
         intent = classify(text)
@@ -258,11 +265,23 @@ def test_recommend_intent():
         "can you recommend a chair for a tall guy",
         "which chair should I buy",
         "best chair for back pain",
+        "help me pick one",
+        "best seller",
+        "most popular",
+        "for my office",
+        "small apartment",
+        "narrow hallway",
+        "two chairs for a couple",
         "I am 6'2\" and 220 lb",
         "추천 부탁해요",
     ]:
         intent = classify(text)
         assert intent.label == INTENT_RECOMMEND, text
+
+
+def test_budget_bands_still_recommend_not_price_gap():
+    for text in ["under $5k", "under $7k", "around 6k", "budget 5000"]:
+        assert classify(text).label == INTENT_RECOMMEND, text
 
 
 def test_compare_intent():
@@ -279,6 +298,11 @@ def test_specs_intent():
         "does it have zero gravity",
         "what's the weight capacity",
         "L-track or S-track?",
+        "how much does it weigh",
+        "how much does the Grande XL weigh",
+        "does it recline",
+        "max user weight",
+        "bluetooth?",
         "features of this chair",
     ]:
         intent = classify(text)
@@ -360,6 +384,7 @@ def test_tidio_short_triggers_are_classified():
         "hello": INTENT_GREETING,
         "hi": INTENT_GREETING,
         "hey": INTENT_GREETING,
+        "hey there": INTENT_GREETING,
         "good morning": INTENT_GREETING,
         "good afternoon": INTENT_GREETING,
         "help": INTENT_GREETING,

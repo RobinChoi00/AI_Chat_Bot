@@ -103,3 +103,22 @@ def test_resolve_falls_back_to_default_menu_when_session_lost():
     assert resolve_button_choice("2", None) == "stock"
     assert resolve_button_choice("recommend", None) == "recommend"
     assert resolve_button_choice("Recommend a chair", None) == "recommend"
+
+
+def test_recommend_results_keep_email_not_compare_under_tidio_cap():
+    out = prioritize_quick_replies(
+        [
+            {"label": "Value: Champ", "payload": "tier:1"},
+            {"label": "Mid: Maestro", "payload": "tier:2"},
+            {"label": "Premium: Paragon", "payload": "tier:3"},
+            {"label": "Compare Value vs Mid", "payload": "compare:tiers:1:2"},
+            {"label": "Email me these picks", "payload": "lead:save_pick"},
+            {"label": "Talk to a human", "payload": "human"},
+        ],
+        limit=5,
+    )
+    payloads = [b["payload"] for b in out]
+    assert payloads[:3] == ["tier:1", "tier:2", "tier:3"]
+    assert "lead:save_pick" in payloads
+    assert payloads[-1] == "human"
+    assert "compare:tiers:1:2" not in payloads

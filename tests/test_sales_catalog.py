@@ -23,8 +23,10 @@ sys.path.insert(0, str(APP_DIR))
 from sales_catalog import (  # noqa: E402
     RecommendationRequest,
     compare,
+    is_public_browse_pick,
     list_active_products,
     load_product_index,
+    parse_asked_color,
     parse_recommendation_hints,
     recommend,
     resolve_product,
@@ -62,6 +64,33 @@ def test_resolve_product_unknown_returns_none():
     assert resolve_product("blender 9000") is None
 
 
+def test_resolve_grande_xl_and_tital_typo(catalog):
+    grande = resolve_product("Grande XL in black")
+    typo = resolve_product("Tital xl 3d")
+    if grande is None and typo is None:
+        pytest.skip("Grande XL missing from the Shopify export")
+    hit = grande or typo
+    assert "grande" in hit.display_name.lower() or "xl" in hit.display_name.lower()
+    if grande is not None and typo is not None:
+        assert grande.handle == typo.handle
+
+
+def test_parse_asked_color_skips_black_friday():
+    assert parse_asked_color("Grande XL in black") == "Black"
+    assert parse_asked_color("black Friday sale") is None
+
+
+def test_quest_3d_is_not_a_browse_anchor(catalog):
+    quest = [
+        p
+        for p in catalog
+        if "quest 3d" in f"{p.title} {p.display_name} {p.handle}".lower()
+    ]
+    if not quest:
+        pytest.skip("Quest 3D not in this export")
+    assert all(not is_public_browse_pick(p) for p in quest)
+
+
 def test_resolve_case_workbook_aliases(catalog):
     # Common sales-workbook shorthand should still resolve into the Shopify index.
     champ = resolve_product("Osaki OS-Champ")
@@ -74,6 +103,12 @@ def test_parse_hints_extracts_height_and_weight():
     req = parse_recommendation_hints("I am 6'2\" and 230 lb, back pain")
     assert req.height_in == 74
     assert req.weight_lb == 230
+    assert "back" in req.focus_areas
+
+
+def test_parse_hints_does_not_invent_extra_tall_from_tall():
+    req = parse_recommendation_hints("recommend a chair for a tall guy with back pain")
+    assert req.height_in is None
     assert "back" in req.focus_areas
 
 

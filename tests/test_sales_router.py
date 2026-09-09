@@ -257,6 +257,30 @@ def test_discount_gets_published_facts_before_a_specialist(client):
     assert any(q["payload"] == "human:confirm" for q in body["quick_replies"])
 
 
+def test_costco_price_gap_is_discount_not_recommend(client):
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-costco",
+            "message": "Why is this chair $1000 more than on the Costco site",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["intent"] == "discount"
+    assert body["handoff"] is False
+    reply = body["reply"].lower()
+    assert "height" not in reply
+    assert "value / mid / premium" not in reply
+    assert "different" in reply and "model" in reply
+    assert "costco" not in reply
+    assert "amazon" not in reply
+    assert "walmart" not in reply
+    assert "%" not in body["reply"]
+    assert any(q["payload"] == "human:confirm" for q in body["quick_replies"])
+
+
 def test_unclear_returns_menu_not_a_guess(client):
     resp = client.post(
         "/api/v1/sales/chat",
@@ -1334,3 +1358,141 @@ def test_compare_prompt_does_not_use_jupiter(client):
     )
     assert resp.status_code == 200
     assert "jupiter" not in resp.json()["reply"].lower()
+
+
+def test_compare_family_vs_jupiter_says_missing_first(client):
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-compare-family-jupiter",
+            "message": "Maestro vs Jupiter",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert resp.status_code == 200
+    reply = resp.json()["reply"].lower()
+    assert "not on the current store catalog" in reply
+    assert "jupiter" in reply
+    assert "which" in reply and "maestro" in reply
+    assert "dont know" not in reply
+
+
+def test_compare_hides_unpublished_foot_roller_junk(client, monkeypatch):
+    monkeypatch.setattr("sales_agent.fetch_live_stock", lambda *a, **k: None)
+    maestro_4d, paragon = _compare_handles()
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-compare-junk",
+            "message": f"{maestro_4d.display_name} vs {paragon.display_name}",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert resp.status_code == 200
+    assert "dont know" not in resp.json()["reply"].lower()
+    assert "don't know" not in resp.json()["reply"].lower()
+
+
+def test_tall_guy_asks_height_instead_of_guessing(client, monkeypatch):
+    monkeypatch.setenv("SALES_INTENT_LLM", "0")
+    monkeypatch.setattr("sales_agent.fetch_live_stock", lambda *a, **k: None)
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-tall-ask",
+            "message": "tall guy with back pain",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["intent"] == "recommend"
+    reply = body["reply"].lower()
+    assert "height" in reply
+    assert "6'3" not in reply and '6\'3"' not in body["reply"]
+    assert "extra tall" not in reply
+
+
+def test_color_named_model_does_not_dump_menu(client, monkeypatch):
+    monkeypatch.setenv("SALES_INTENT_LLM", "0")
+    monkeypatch.setattr("sales_agent.fetch_live_stock", lambda *a, **k: None)
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-color",
+            "message": "Grande XL in black",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    reply = body["reply"].lower()
+    assert body["intent"] != "unclear"
+    assert "checkout" in reply
+    assert "grande" in reply or "xl" in reply
+
+
+def test_recommend_keeps_wait_when_they_ask_black(client, monkeypatch):
+    monkeypatch.setenv("SALES_INTENT_LLM", "0")
+    monkeypatch.setattr("sales_agent.fetch_live_stock", lambda *a, **k: None)
+    sid = "s-rec-black"
+    first = client.post(
+        "/api/v1/sales/chat",
+        json={"session_id": sid, "message": "recommend a chair", "domain": "osakiusa.com"},
+    )
+    assert first.status_code == 200
+    assert "height" in first.json()["reply"].lower()
+    second = client.post(
+        "/api/v1/sales/chat",
+        json={"session_id": sid, "message": "do you have black", "domain": "osakiusa.com"},
+    )
+    assert second.status_code == 200
+    body = second.json()
+    reply = body["reply"].lower()
+    assert body["intent"] != "unclear"
+    assert "checkout" in reply
+    assert "height" in reply
+
+
+def test_sunday_and_doorway_are_not_unclear(client, monkeypatch):
+    monkeypatch.setenv("SALES_INTENT_LLM", "0")
+    sunday = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-sunday",
+            "message": "are you open Sunday",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert sunday.status_code == 200
+    sun = sunday.json()
+    assert sun["intent"] == "prepurchase_policy"
+    assert "Sunday isn't listed" in sun["reply"]
+
+    door = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-door",
+            "message": "30 inch door",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert door.status_code == 200
+    assert door.json()["intent"] != "unclear"
+    assert "door" in door.json()["reply"].lower() or "height" in door.json()["reply"].lower()
+
+
+def test_refurbished_is_an_honest_no(client):
+    resp = client.post(
+        "/api/v1/sales/chat",
+        json={
+            "session_id": "s-refurb",
+            "message": "do you sell refurbished chairs",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["intent"] == "prepurchase_policy"
+    assert body["handoff"] is False
+    assert "new" in body["reply"].lower()

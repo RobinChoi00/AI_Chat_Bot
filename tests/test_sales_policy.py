@@ -20,16 +20,21 @@ import pytest
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(APP_DIR))
 
-from sales_intent import INTENT_PREPURCHASE_POLICY, classify  # noqa: E402
+from sales_intent import INTENT_PREPURCHASE_POLICY, INTENT_RECOMMEND, classify  # noqa: E402
 from sales_policy import (  # noqa: E402
     POLICY_TOPICS,
     TOPIC_FINANCING,
+    TOPIC_INTERNATIONAL,
+    TOPIC_LEASE,
+    TOPIC_LIMITS,
     TOPIC_MECHANISM,
+    TOPIC_REFURBISHED,
     TOPIC_RESTRICTED_REGION,
     TOPIC_REMOTE_SHIPPING,
     TOPIC_RETURNS,
     TOPIC_SHIPPING,
     TOPIC_SHOWROOM,
+    TOPIC_TRADE_IN,
     TOPIC_WARRANTY_TERMS,
     TOPIC_WHITE_GLOVE,
     detect_topic,
@@ -67,10 +72,27 @@ from sales_policy import (  # noqa: E402
         ("do you offer financing", TOPIC_FINANCING),
         ("can I pay monthly", TOPIC_FINANCING),
         ("do you take affirm", TOPIC_FINANCING),
+        ("what's the APR", TOPIC_FINANCING),
         ("where is your showroom", TOPIC_SHOWROOM),
         ("can I try one in person", TOPIC_SHOWROOM),
         ("what are your hours", TOPIC_SHOWROOM),
         ("book a showroom visit", TOPIC_SHOWROOM),
+        ("are you open Sunday", TOPIC_SHOWROOM),
+        ("can I pick up today", TOPIC_SHOWROOM),
+        ("do you sell refurbished chairs", TOPIC_REFURBISHED),
+        ("any open box models", TOPIC_REFURBISHED),
+        ("do you take trade-ins", TOPIC_TRADE_IN),
+        ("can I lease a chair", TOPIC_LEASE),
+        ("ship to Canada", TOPIC_INTERNATIONAL),
+        ("international shipping to Mexico", TOPIC_INTERNATIONAL),
+        ("is it pet friendly", TOPIC_LIMITS),
+        ("do you speak Spanish", TOPIC_LIMITS),
+        ("gift wrap", TOPIC_LIMITS),
+        ("safe during pregnancy", TOPIC_LIMITS),
+        ("do you take PayPal", TOPIC_LIMITS),
+        ("can I use HSA", TOPIC_LIMITS),
+        ("I live on the third floor", TOPIC_WHITE_GLOVE),
+        ("lease to own", TOPIC_FINANCING),
     ],
 )
 def test_prepurchase_questions_route_to_their_topic(message, topic):
@@ -196,11 +218,61 @@ def test_showroom_answer_lists_hours_and_is_not_a_booking():
     assert "lock a calendar slot" in answer.lower()
 
 
+def test_showroom_sunday_does_not_invent_open_hours():
+    answer = policy_answer(
+        TOPIC_SHOWROOM, "osakiusa.com", message="are you open Sunday"
+    )
+    assert "Sunday isn't listed" in answer
+    assert "9:30" in answer
+
+
+def test_showroom_pickup_does_not_confirm_same_day():
+    answer = policy_answer(
+        TOPIC_SHOWROOM, "osakiusa.com", message="can I pick up today"
+    )
+    assert "same-day pickup" in answer.lower()
+
+
+def test_refurbished_trade_in_lease_are_honest_nos():
+    assert "new" in policy_answer(TOPIC_REFURBISHED, "osakiusa.com").lower()
+    assert "don't take trade-ins" in policy_answer(
+        TOPIC_TRADE_IN, "osakiusa.com"
+    ).lower()
+    lease = policy_answer(TOPIC_LEASE, "osakiusa.com")
+    assert "don't lease" in lease.lower()
+    assert "Affirm" in lease
+    assert "%" not in lease
+
+
 def test_financing_answer_quotes_no_rate_or_term():
     answer = policy_answer(TOPIC_FINANCING, "osakiusa.com")
     assert "Affirm" in answer
     assert "%" not in answer
     assert "apr" not in answer.lower()
+
+
+def test_international_does_not_promise_us_curbside():
+    answer = policy_answer(TOPIC_INTERNATIONAL, "osakiusa.com").lower()
+    assert "canada" in answer and "mexico" in answer
+    assert "published" in answer
+    assert "included shipping" not in answer
+
+
+def test_office_is_recommend_not_commercial():
+    assert detect_topic("for my office") is None
+    assert classify("for my office").label == INTENT_RECOMMEND
+
+
+def test_limits_kinds_stay_honest(monkeypatch):
+    pets = policy_answer(TOPIC_LIMITS, "osakiusa.com", message="is it pet friendly")
+    assert "pet-proof" in pets.lower()
+    spanish = policy_answer(TOPIC_LIMITS, "osakiusa.com", message="do you speak Spanish")
+    assert "english" in spanish.lower()
+    paypal = policy_answer(TOPIC_LIMITS, "osakiusa.com", message="do you take PayPal")
+    assert "affirm" in paypal.lower()
+    assert "paypal" not in paypal.lower()
+    hsa = policy_answer(TOPIC_LIMITS, "osakiusa.com", message="can I use HSA")
+    assert "medical" in hsa.lower()
 
 
 @pytest.mark.parametrize("topic", POLICY_TOPICS)
