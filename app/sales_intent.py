@@ -85,10 +85,24 @@ _GREETING_EN_RE = re.compile(
 _GREETING_KO_RE = re.compile(r"(안녕|반가워|고마워|고맙)")
 
 
+_TIDIO_TEMPLATE_RE = re.compile(r"^\{\{\s*[^}]+\s*\}\}$")
+
+
 def _is_greeting(text: str) -> bool:
-    if _GREETING_EN_RE.match(text):
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if _GREETING_EN_RE.match(raw):
         return True
-    return bool(_GREETING_KO_RE.search(text))
+    if _GREETING_KO_RE.search(raw):
+        return True
+    # Tidio Flow sometimes posts the unsubstituted `{{visitor_question}}` chip.
+    if _TIDIO_TEMPLATE_RE.fullmatch(raw):
+        return True
+    # Emoji / sticker-only turns (no letters or digits) are a hello, not a menu dump.
+    if not re.search(r"[A-Za-z0-9가-힣]", raw):
+        return True
+    return False
 
 # --- Warranty / post-purchase support (Tidio Sales AI must redirect these) ---
 _WARRANTY_DEFECT_VERBS = (
@@ -106,6 +120,11 @@ _WARRANTY_REDIRECT_RE = re.compile(
     r"already\s+(?:bought|ordered|purchased|own(?:ed)?)|"
     r"delivered\s+(?:damaged|broken)|damaged\s+(?:on\s+)?arriv|missing\s+part|"
     r"install(?:ation|ing)?\s+(?:help|problem|issue)|assembly\s+(?:help|problem)|"
+    r"(?:need|want|send(?:\s+me)?|email\s+me)\s+(?:a\s+|the\s+)?(?:user\s+)?manual|"
+    r"\buser\s+manual\b|"
+    r"how\s+to\s+connect.{0,32}app|"
+    r"connect.{0,24}(?:osaki|titan)\s+app|"
+    r"(?:osaki|titan)\s+app|"
     r"my\s+chair\s+(?:is|has|won'?t|does\s+not|isn'?t|doesn'?t)|"
     r"보증|워런티|고장|수리|불량"
     r")\b",
@@ -137,7 +156,8 @@ _CANCEL_REFUND_RE = re.compile(
     r"refund(?:\s+my\s+(?:order|purchase|money|payment))?|"
     r"(?:want|need|please)\s+(?:a\s+)?refund|"
     r"return\s+(?:my\s+)?(?:order|chair|purchase|item)|"
-    r"undo\s+(?:my\s+)?(?:order|purchase)"
+    r"undo\s+(?:my\s+)?(?:order|purchase)|"
+    r"(?:switch|change|modify)\s+my\s+order"
     r")\b)|(?:취소|환불|반품)",
     re.IGNORECASE,
 )
@@ -224,6 +244,10 @@ _HUMAN_RE = re.compile(
     r"speak\s+(?:with|to)\s+(?:a\s+)?(?:human|person|rep|agent|sales|someone)|"
     r"connect\s+me\s+(?:to|with)\s+(?:a\s+)?(?:human|person|rep|agent|sales)|"
     r"call\s+me|phone\s+me|human\s+please|real\s+person|"
+    r"have\s+feedback|feedback\s+for\s+you|"
+    r"answer\s+my\s+question\s+above|question\s+above|"
+    r"create\s+an?\s+invoice|need\s+an?\s+invoice|"
+    r"this\s+is\s+ridiculous|"
     # Bare Tidio triggers
     r"agent|representative|human|"
     r"사람|상담원|담당자"
@@ -255,7 +279,8 @@ _STOCK_RE = re.compile(
 _RECOMMEND_RE = re.compile(
     r"(?:"
     r"\b(?:"
-    r"recommend|suggestion|which\s+(?:chair|model)|what\s+(?:chair|model).*should|"
+    r"recommend|suggestion|which\s+(?:chair|model|product)|what\s+(?:chair|model).*should|"
+    r"which\s+(?:product|one)\s+is\s+right|right\s+(?:chair|product|one)\s+for\s+me|"
     r"help\s+me\s+(?:pick|choose|decide|find|select)|"
     r"first[\s-]?time\s+buyer|best[\s-]?sellers?|most\s+popular|"
     r"looking\s+for\s+a(?:n)?\s+(?:chair|massage)|"

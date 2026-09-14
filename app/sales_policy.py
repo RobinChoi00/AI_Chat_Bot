@@ -82,6 +82,26 @@ _REMOTE_REGION_RE = re.compile(
     r"\b(hawaii|hawaiian|honolulu|alaska|alaskan|anchorage)\b|하와이|알래스카",
     re.IGNORECASE,
 )
+_US_ZIP_RE = re.compile(r"\b(\d{5})(?:-\d{4})?\b")
+_ZIP_WORD_RE = re.compile(r"\bzip(?:\s*code)?\b|\bpostal\s+code\b", re.IGNORECASE)
+
+
+def _topic_from_us_zip(text: str) -> Optional[str]:
+    """Map a US zip to Guam / HI-AK freight when the shopper only sent digits."""
+    found: list[str] = []
+    for match in _US_ZIP_RE.finditer(text or ""):
+        zip_code = int(match.group(1))
+        if 96910 <= zip_code <= 96932:
+            found.append(TOPIC_RESTRICTED_REGION)
+        elif 96701 <= zip_code <= 96898 or 99501 <= zip_code <= 99950:
+            found.append(TOPIC_REMOTE_SHIPPING)
+    if TOPIC_RESTRICTED_REGION in found:
+        return TOPIC_RESTRICTED_REGION
+    if TOPIC_REMOTE_SHIPPING in found:
+        return TOPIC_REMOTE_SHIPPING
+    return None
+
+
 _INTERNATIONAL_RE = re.compile(
     r"("
     r"\b(canada|canadian|mexico|mexican|overseas|international)\b|"
@@ -133,6 +153,7 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"("
             r"white\s*glove|"
             r"(?:do\s+you|can\s+you|will\s+you)\s+(?:assemble|set\s*it\s*up|install)|"
+            r"tablet\s+instal|"
             r"\bassembl(?:y|e|ed|ing)\b|"
             r"set\s*[\-\s]?up\s+(?:service|fee|cost|included)|"
             r"put\s+it\s+together|"
@@ -201,7 +222,10 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"refurbish(?:ed)?|open[\s-]?box|scratch\s+and\s+dent|"
             r"used\s+(?:chair|massage)|second[\s-]?hand|"
             r"outlet\s+(?:chair|model)|floor\s+model|"
-            r"do\s+you\s+sell\s+used"
+            r"do\s+you\s+sell\s+used|"
+            r"(?:is|are)\s+(?:this|it|they|these)\s+(?:a\s+)?(?:brand[\s-]?)?new(?:\s+chairs?)?|"
+            r"brand[\s-]?new\s+chairs?|"
+            r"(?:brand[\s-]?)?new\s+or\s+used"
             r")",
             re.IGNORECASE,
         ),
@@ -213,7 +237,10 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"trade[\s-]?ins?|"
             r"trade\s+(?:in|my|an?)\s+(?:my\s+)?(?:old\s+)?(?:chair|one)|"
             r"buy\s+(?:my|an?)\s+old\s+chair|"
-            r"haul\s+away\s+(?:my\s+)?old"
+            r"haul\s+away\s+(?:my\s+)?old|"
+            r"exchange\s+programs?|"
+            r"replace\s+previous\s+models?|"
+            r"upgrade\s+(?:program|my\s+(?:old\s+)?(?:chair|model|one))"
             r")",
             re.IGNORECASE,
         ),
@@ -240,6 +267,9 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"speak\s+spanish|in\s+spanish|espa[nñ]ol|puedo\s+comprar|"
             r"commercial\s+use|\bsalon\b|\bspa\s+use\b|wholesale|dealer\s+pric|"
             r"tax\s+exempt|resale\s+cert|"
+            r"affiliate\s+program|influencer\s+program|referral\s+program|"
+            r"become\s+an?\s+affiliate|"
+            r"\b889\b|government\s+(?:form|contract|purchase)|"
             r"rental\s+program|\brent(?:al|s)?\s+a\s+chair|"
             r"outdoor|patio|porch|"
             r"medical\s+device|fda\s+approv|"
@@ -250,6 +280,14 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"how\s+loud|decibel|\bnois(?:y|e)\b|"
             r"voltage|special\s+outlet|what\s+outlet|110\s*v|220\s*v|"
             r"paypal|apple\s+pay|google\s+pay|\bvenmo\b|"
+            r"(?:amex|american\s+express|visa|mastercard|discover|credit\s+card|debit\s+card|\bcard\b)\s+"
+            r"(?:is\s+)?(?:not\s+going\s+through|declin(?:ed|ing)|won'?t\s+go\s+through|rejected|fail(?:ed|ing))|"
+            r"(?:payment|checkout)\s+(?:won'?t|will\s+not|not)\s+(?:go\s+through|work|process)|"
+            r"card\s+declin|"
+            r"look\s+up.{0,48}friend|friend.{0,48}look\s+up|(?:my|a)\s+friend\s+has|"
+            r"friend'?s\s+(?:chair|model)|"
+            r"how\s+easy.{0,24}move|move\s+(?:the\s+)?chair\s+once|"
+            r"closer\s+or\s+further\s+from\s+a\s+wall|"
             r"sales\s+tax|how\s+much\s+tax|"
             r"made\s+in|country\s+of\s+origin|"
             r"how\s+long\s+(?:do\s+they|does\s+it|will\s+it)\s+last|lifespan|"
@@ -338,6 +376,11 @@ def detect_topic(text: str) -> Optional[str]:
         return TOPIC_RESTRICTED_REGION
     if _REMOTE_REGION_RE.search(raw):
         return TOPIC_REMOTE_SHIPPING
+    zip_topic = _topic_from_us_zip(raw)
+    if zip_topic:
+        return zip_topic
+    if _ZIP_WORD_RE.search(raw) and _US_ZIP_RE.search(raw):
+        return TOPIC_SHIPPING
     if _INTERNATIONAL_RE.search(raw):
         return TOPIC_INTERNATIONAL
     skip_shipping = bool(
@@ -440,8 +483,14 @@ def _restricted_region_answer(domain: str) -> str:
     )
 
 
-def _white_glove_answer(domain: str) -> str:
+def _white_glove_answer(domain: str, message: str = "") -> str:
     url = _policy_url(domain, "pages/shipping-handling")
+    extra = ""
+    if re.search(r"tablet", message or "", re.I):
+        extra = (
+            "\nI won't confirm a separate **tablet-install** service from this "
+            "chat. White Glove is in-home delivery plus assembly of the chair.\n"
+        )
     return (
         "**White Glove delivery and assembly**\n\n"
         "- Currently takes **up to 3 weeks** (standard curbside is up to 2 weeks).\n"
@@ -455,7 +504,8 @@ def _white_glove_answer(domain: str) -> str:
         "- Extra charges can apply for a **third person for stair carry ($120–$300)**, "
         "additional on-site time, or a redelivery attempt if the chair can't get in.\n"
         "- If a door or staircase is too narrow to complete delivery, an attempt fee may apply — "
-        "so measuring first matters. Tell me your **doorway width** and I'll check fit.\n\n"
+        "so measuring first matters. Tell me your **doorway width** and I'll check fit.\n"
+        f"{extra}\n"
         f"Full details: {url}"
     )
 
@@ -546,12 +596,39 @@ def _limits_kind(message: str) -> str:
     ):
         return "language"
     if re.search(
+        r"affiliate\s+program|influencer\s+program|referral\s+program|"
+        r"become\s+an?\s+affiliate",
+        raw,
+        re.I,
+    ):
+        return "affiliate"
+    if re.search(
+        r"\b889\b|government\s+(?:form|contract|purchase)",
+        raw,
+        re.I,
+    ):
+        return "procurement"
+    if re.search(
         r"commercial\s+use|\bsalon\b|\bspa\s+use\b|wholesale|dealer\s+pric|"
         r"tax\s+exempt|resale\s+cert",
         raw,
         re.I,
     ):
         return "commercial"
+    if re.search(
+        r"look\s+up.{0,48}friend|friend.{0,48}look\s+up|(?:my|a)\s+friend\s+has|"
+        r"friend'?s\s+(?:chair|model)",
+        raw,
+        re.I,
+    ):
+        return "friend_model"
+    if re.search(
+        r"how\s+easy.{0,24}move|move\s+(?:the\s+)?chair\s+once|"
+        r"closer\s+or\s+further\s+from\s+a\s+wall",
+        raw,
+        re.I,
+    ):
+        return "relocate"
     if re.search(r"rental\s+program|\brent(?:al|s)?\s+a\s+chair", raw, re.I):
         return "rental"
     if re.search(r"outdoor|patio|porch", raw, re.I):
@@ -569,7 +646,22 @@ def _limits_kind(message: str) -> str:
         return "noise"
     if re.search(r"voltage|special\s+outlet|what\s+outlet|110\s*v|220\s*v", raw, re.I):
         return "power"
-    if re.search(r"paypal|apple\s+pay|google\s+pay|\bvenmo\b", raw, re.I):
+    if re.search(
+        r"paypal|apple\s+pay|google\s+pay|\bvenmo\b|"
+        r"(?:amex|american\s+express|visa|mastercard|discover|credit\s+card|debit\s+card|\bcard\b)\s+"
+        r"(?:is\s+)?(?:not\s+going\s+through|declin(?:ed|ing)|won'?t\s+go\s+through|rejected|fail(?:ed|ing))|"
+        r"(?:payment|checkout)\s+(?:won'?t|will\s+not|not)\s+(?:go\s+through|work|process)|"
+        r"card\s+declin",
+        raw,
+        re.I,
+    ):
+        if re.search(
+            r"not\s+going\s+through|declin|won'?t\s+go\s+through|rejected|fail|"
+            r"not\s+(?:go\s+through|work|process)",
+            raw,
+            re.I,
+        ):
+            return "checkout_issue"
         return "payments"
     if re.search(r"sales\s+tax|how\s+much\s+tax", raw, re.I):
         return "tax"
@@ -599,11 +691,47 @@ def _limits_answer(_domain: str, message: str = "") -> str:
             "This shopping chat is in **English**. I won't guess in another language.\n\n"
             "A specialist can help — share your **email**."
         )
+    if kind == "affiliate":
+        return (
+            "I don't have a published **affiliate** or referral program in this "
+            "chat.\n\n"
+            "A specialist can confirm whether anything exists outside this "
+            "storefront — share your **email**."
+        )
+    if kind == "procurement":
+        return (
+            "I don't have a published **government-procurement** or form-889 "
+            "answer I can quote here.\n\n"
+            "A specialist can follow up — share your **email**."
+        )
     if kind == "commercial":
         return (
             "The chairs on this storefront are sold as **home** massage chairs. "
             "I don't have a published commercial, salon, or wholesale program here.\n\n"
             "A specialist can confirm — share your **email**."
+        )
+    if kind == "friend_model":
+        return (
+            "I can only match chairs on this **store catalog**. I can't look up "
+            "a chair someone else owns unless you share the **model name** as it "
+            "appears on the chair or the box.\n\n"
+            "If you're not sure, tell me your **height** and what you want the "
+            "chair to help with."
+        )
+    if kind == "relocate":
+        return (
+            "I don't have a published rating for how easy a chair is to scoot "
+            "after setup, and I won't invent casters or a move-it-yourself spec.\n\n"
+            "Some models list **wall clearance** — tell me a model name and I'll "
+            "share that number. White Glove crews don't come back later to "
+            "rearrange a room."
+        )
+    if kind == "checkout_issue":
+        return (
+            "I can't see the checkout page from this chat, so I won't guess why "
+            "a card didn't go through, and I won't list processors from memory.\n\n"
+            "A specialist can look at the payment page with you — share your "
+            "**email**."
         )
     if kind == "rental":
         return (
@@ -728,4 +856,6 @@ def policy_answer(topic: str, domain: str = "", message: str = "") -> Optional[s
         return _showroom_answer(domain, message=message)
     if topic == TOPIC_LIMITS:
         return _limits_answer(domain, message=message)
+    if topic == TOPIC_WHITE_GLOVE:
+        return _white_glove_answer(domain, message=message)
     return builder(domain)

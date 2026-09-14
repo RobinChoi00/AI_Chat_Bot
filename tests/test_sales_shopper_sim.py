@@ -533,3 +533,102 @@ def test_goal_and_doorway_buttons_fit_tidio_cap():
     payloads = [b["payload"] for b in goal_caps]
     assert "recommend:goal:lower_back" in payloads
     assert payloads[-1] == "human"
+
+
+def test_production_unclear_phrases_never_dump_the_menu():
+    """Phrases mined from live Tidio logs after the Sep 2026 quality ship."""
+    cases = [
+        (
+            "hello, i am trying to make a purchase but my amex is not going through",
+            "prepurchase_policy",
+            ("checkout", "email"),
+            ("amex", "american express", "visa", "apr"),
+        ),
+        ("👍👍👍😱", "greeting", ("height",), ()),
+        ("{{visitor_question}}", "greeting", ("height",), ()),
+        (
+            "can tou look up the one my friend has",
+            "prepurchase_policy",
+            ("catalog", "model"),
+            (),
+        ),
+        (
+            "do you have exchange programs to replace previous models with newer models?",
+            "prepurchase_policy",
+            ("trade",),
+            (),
+        ),
+        (
+            "do you have an affiliate program",
+            "prepurchase_policy",
+            ("affiliate", "email"),
+            (),
+        ),
+        (
+            "please answer my question above.",
+            "human_offer",
+            ("tell me",),
+            (),
+        ),
+        (
+            "i just have feedback for you",
+            "human",
+            ("email",),
+            (),
+        ),
+        (
+            "96701 is my zip",
+            "prepurchase_policy",
+            ("freight", "you pay"),
+            ("$",),
+        ),
+        (
+            "tablet instalations",
+            "prepurchase_policy",
+            ("white glove", "assembly"),
+            (),
+        ),
+        ("is this a brand new chair?", "prepurchase_policy", ("new",), ("open-box deal",)),
+        ("which product is right for me?", "recommend", ("height",), ()),
+        ("need manual", "warranty_redirect", ("service@osakititan.com",), ()),
+        (
+            "how to connect osaki app to the chair",
+            "warranty_redirect",
+            ("service@osakititan.com",),
+            (),
+        ),
+        ("can i switch my order?", "cancel_refund", ("email",), ()),
+        (
+            "government 889 form",
+            "prepurchase_policy",
+            ("email",),
+            ("compliant", "certified"),
+        ),
+        (
+            "i want to create an invoice for massage chair",
+            "human",
+            ("email",),
+            (),
+        ),
+        (
+            "hi i was wondering how easy it is to move the chair once built. for example if i needed to periodically move it closer or further from a wall",
+            "prepurchase_policy",
+            ("wall clearance",),
+            ("easy to roll",),
+        ),
+    ]
+    failures: list[str] = []
+    for message, intent, required, banned in cases:
+        reply = _turn(message)
+        low = reply.reply.lower()
+        if reply.intent != intent:
+            failures.append(f"intent:{message} [{reply.intent} != {intent}]")
+        if reply.intent == "unclear" or _UNCLEAR_MENU in low:
+            failures.append(f"unclear:{message}")
+        for phrase in required:
+            if phrase.lower() not in low:
+                failures.append(f"missing:{phrase}:{message}")
+        for phrase in banned:
+            if phrase.lower() in low:
+                failures.append(f"banned:{phrase}:{message}")
+    assert not failures, failures

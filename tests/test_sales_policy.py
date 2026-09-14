@@ -82,6 +82,24 @@ from sales_policy import (  # noqa: E402
         ("do you sell refurbished chairs", TOPIC_REFURBISHED),
         ("any open box models", TOPIC_REFURBISHED),
         ("do you take trade-ins", TOPIC_TRADE_IN),
+        (
+            "do you have exchange programs to replace previous models with newer models?",
+            TOPIC_TRADE_IN,
+        ),
+        ("is this a brand new chair?", TOPIC_REFURBISHED),
+        ("is this a new chair", TOPIC_REFURBISHED),
+        ("96701 is my zip", TOPIC_REMOTE_SHIPPING),
+        ("99501 is my zip", TOPIC_REMOTE_SHIPPING),
+        ("96913 is my zip", TOPIC_RESTRICTED_REGION),
+        ("75001 is my zip", TOPIC_SHIPPING),
+        ("tablet instalations", TOPIC_WHITE_GLOVE),
+        ("do you have an affiliate program", TOPIC_LIMITS),
+        ("government 889 form", TOPIC_LIMITS),
+        ("can tou look up the one my friend has", TOPIC_LIMITS),
+        (
+            "hello, i am trying to make a purchase but my amex is not going through",
+            TOPIC_LIMITS,
+        ),
         ("can I lease a chair", TOPIC_LEASE),
         ("ship to Canada", TOPIC_INTERNATIONAL),
         ("international shipping to Mexico", TOPIC_INTERNATIONAL),
@@ -273,6 +291,47 @@ def test_limits_kinds_stay_honest(monkeypatch):
     assert "paypal" not in paypal.lower()
     hsa = policy_answer(TOPIC_LIMITS, "osakiusa.com", message="can I use HSA")
     assert "medical" in hsa.lower()
+    affiliate = policy_answer(
+        TOPIC_LIMITS, "osakiusa.com", message="do you have an affiliate program"
+    )
+    assert "affiliate" in affiliate.lower()
+    checkout = policy_answer(
+        TOPIC_LIMITS,
+        "osakiusa.com",
+        message="hello, i am trying to make a purchase but my amex is not going through",
+    )
+    assert "amex" not in checkout.lower()
+    assert "checkout" in checkout.lower() or "card" in checkout.lower()
+    friend = policy_answer(
+        TOPIC_LIMITS,
+        "osakiusa.com",
+        message="can tou look up the one my friend has",
+    )
+    assert "catalog" in friend.lower()
+    assert "model name" in friend.lower()
+
+
+def test_hawaii_zip_is_remote_freight_not_included_shipping():
+    answer = policy_answer(
+        TOPIC_REMOTE_SHIPPING, "osakiusa.com", message="96701 is my zip"
+    ).lower()
+    assert "hawaii" in answer or "alaska" in answer or "freight" in answer
+    assert "you pay" in answer
+    assert "included shipping does not" in answer
+
+
+def test_tablet_install_does_not_invent_a_tablet_service():
+    answer = policy_answer(
+        TOPIC_WHITE_GLOVE, "osakiusa.com", message="tablet instalations"
+    ).lower()
+    assert "white glove" in answer
+    assert "tablet-install" in answer or "tablet install" in answer
+    assert "3 weeks" in answer
+
+
+def test_want_a_new_chair_is_not_refurbished():
+    assert detect_topic("I want a new chair") is None
+    assert classify("I want a new chair").label != INTENT_PREPURCHASE_POLICY
 
 
 @pytest.mark.parametrize("topic", POLICY_TOPICS)

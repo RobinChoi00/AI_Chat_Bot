@@ -131,6 +131,8 @@ _BROWSE_HELP_RE = re.compile(
     r"help\s+me\s+(?:pick|choose|decide|find|select)|"
     r"(?:not|don'?t)\s+(?:sure|know)\s+(?:which|what|where)|"
     r"which\s+one|"
+    r"which\s+(?:product|chair|model)\s+is\s+right|"
+    r"right\s+(?:chair|product|one)\s+for\s+me|"
     r"too\s+many\s+(?:options|choices|models)|"
     r"what\s+(?:do\s+you|models?\s+do\s+you)\s+(?:have|carry|sell|offer)|"
     r"what'?s?\s+available|"

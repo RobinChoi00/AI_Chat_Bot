@@ -66,6 +66,7 @@ def test_cancel_and_refund_route_to_warranty_team():
         "please refund my purchase",
         "return my chair",
         "cancel my subscription",
+        "can I switch my order?",
         "환불해주세요",
         "취소하고 싶어요",
     ]:
@@ -349,7 +350,7 @@ def test_defect_and_parts_share_warranty_department_copy():
 
 
 def test_greeting_is_greeting():
-    for text in ["hi", "hello!", "안녕하세요"]:
+    for text in ["hi", "hello!", "안녕하세요", "👍👍👍😱", "{{visitor_question}}"]:
         intent = classify(text)
         assert intent.label == INTENT_GREETING, text
 
@@ -435,6 +436,8 @@ def test_tidio_short_triggers_are_classified():
         "broken": INTENT_WARRANTY_REDIRECT,
         "not working": INTENT_WARRANTY_REDIRECT,
         "repair": INTENT_WARRANTY_REDIRECT,
+        "need manual": INTENT_WARRANTY_REDIRECT,
+        "how to connect osaki app to the chair": INTENT_WARRANTY_REDIRECT,
         "parts": INTENT_PARTS_TECHNICIAN,
         "replacement parts": INTENT_PARTS_TECHNICIAN,
         "technician": INTENT_PARTS_TECHNICIAN,

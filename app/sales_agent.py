@@ -527,6 +527,20 @@ def _prefs_for_inner(prefs: Optional[dict]) -> dict:
     return out
 
 
+_BARE_HUMAN_REQUEST_RE = re.compile(
+    r"^(?:please\s+)?(?:"
+    r"talk\s+to\s+(?:a\s+)?(?:human|person|representative|rep|agent|sales|someone)|"
+    r"speak\s+(?:with|to)\s+(?:a\s+)?(?:human|person|rep|agent|sales|someone)|"
+    r"human(?:\s+please)?|agent|representative|real\s+person"
+    r")[!.?\s]*$",
+    re.I,
+)
+_RESTATE_QUESTION_RE = re.compile(
+    r"question\s+above|answer\s+my\s+question",
+    re.I,
+)
+
+
 def _complete_then_offer_human(
     *,
     prefs: Optional[dict],
@@ -539,6 +553,17 @@ def _complete_then_offer_human(
     question = str(data.get("last_shopper_question") or "").strip()
     asked = (message or "").strip() or question
     summary = str(data.get("pending_pick_summary") or "").strip()
+
+    if reason == "human" and asked:
+        if _RESTATE_QUESTION_RE.search(asked):
+            return _ask_question_before_human()
+        if (
+            classify(asked).label == INTENT_HUMAN
+            and not _BARE_HUMAN_REQUEST_RE.match(asked)
+        ):
+            return _handoff_reply(
+                SalesIntent(label=INTENT_HUMAN, confidence="high", handoff=True)
+            )
 
     if reason == "discount" or (
         asked and classify(asked).label == INTENT_DISCOUNT
@@ -4233,7 +4258,9 @@ def respond(
 
     if not before_handoff and intent.label == INTENT_HUMAN:
         return _finalize_flow_stage(
-            _complete_then_offer_human(prefs=prefs, domain=domain, reason="human")
+            _complete_then_offer_human(
+                prefs=prefs, domain=domain, reason="human", message=message
+            )
         )
 
     if not before_handoff and intent.label == INTENT_DISCOUNT:

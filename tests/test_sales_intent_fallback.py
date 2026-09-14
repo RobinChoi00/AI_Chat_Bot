@@ -115,6 +115,7 @@ def test_ambiguous_english_words_are_not_treated_as_models(message):
         "I'm a first time buyer",
         "where do I start",
         "too many options",
+        "which product is right for me?",
     ],
 )
 def test_browse_help_routes_to_recommend(message):
