@@ -106,7 +106,6 @@ const DEFECT_MODEL_PROMPT =
 
 const INITIAL_ISSUE_OPTIONS: AnswerOption[] = [
   { answer_key: "installation", label: "Setup & installation" },
-  { answer_key: "delivery", label: "Delivery & tracking" },
   { answer_key: "defect", label: "Chair malfunction" },
 ];
 

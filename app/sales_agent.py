@@ -387,11 +387,24 @@ _EMAIL_PICK_RE = re.compile(
     re.I,
 )
 
+def _department_phones() -> str:
+    try:
+        from config import department_phone_directory
+
+        return department_phone_directory()
+    except ImportError:
+        return (
+            "**Sales (delivery & orders):** +1-888-848-2630 ext. 2\n"
+            "**Warranty (setup & defects):** +1-888-848-2630 ext. 3"
+        )
+
+
 _MENU_INTRO = (
     "Hi! I'm the Osaki shopping assistant. Tell me **height** and what the "
     "chair should help with — I'll pick three models.\n\n"
     "I can also check **price**, **specs**, **stock**, **shipping**, and "
-    "**returns** here."
+    "**returns** here.\n\n"
+    f"{_department_phones()}"
 )
 
 

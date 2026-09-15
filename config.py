@@ -9,8 +9,19 @@ load_dotenv(override=True)
 # ==========================================
 SUPPORT_BUSINESS_HOURS = "Mon-Fri, 9:30 AM - 6:30 PM / Sat, 10:00 AM - 4:00 PM CST"
 
+SALES_PHONE = "+1-888-848-2630 ext. 2"
 WARRANTY_PHONE = "+1-888-848-2630 ext. 3"
 WARRANTY_BUSINESS_HOURS = "Mon-Fri, 10:00 AM - 6:00 PM CST"
+
+
+def department_phone_directory() -> str:
+    """Customer-facing Sales vs Warranty numbers on the shared main line."""
+    return (
+        f"**Sales (delivery & orders):** {SALES_PHONE}\n"
+        f"**Warranty (setup & defects):** {WARRANTY_PHONE}"
+    )
+
+
 # Shown on after-hours IVR when sales may still answer on weekends (configure per ops).
 SALES_BUSINESS_HOURS = os.environ.get(
     "SALES_BUSINESS_HOURS",
@@ -19,7 +30,7 @@ SALES_BUSINESS_HOURS = os.environ.get(
 
 SALES_PHONE_BY_DOMAIN = {
     "osakiusa":          "+1-888-501-5988",
-    "titanchair":        "1-888-848-2630",
+    "titanchair":        "+1-888-848-2630 ext. 2",
     "osakimassagechair": "+1-214-613-1630",
 }
 
@@ -69,6 +80,7 @@ CHAT_WELCOME_MESSAGE = (
     "(for example, OS-4000T, Solo Flex, or Hypnos 4D).\n\n"
     "Tell me your model, or ask about specs, pricing, orders, delivery, warranty, "
     "or troubleshooting.\n\n"
+    f"{department_phone_directory()}\n\n"
     "---\n\n"
     f"{CHAT_RECORDING_NOTICE}"
 )
@@ -78,7 +90,9 @@ WARRANTY_WELCOME_MESSAGE = (
     "First, which massage chair model do you have? "
     "You can find it on the serial-number sticker on your chair "
     "(for example, OS-4000T, Solo Flex, or Hypnos 4D).\n\n"
-    "Please type your model below. Once we confirm it, we'll guide you through your issue step by step.\n\n"
+    "Please type your model below. Once we confirm it, we'll guide you through "
+    "setup or a defect. For delivery and tracking, call sales.\n\n"
+    f"{department_phone_directory()}\n\n"
     "---\n\n"
     f"{CHAT_RECORDING_NOTICE}"
 )
@@ -95,17 +109,41 @@ def get_contact_msg(routing: str, target_domain: str, language: str = "en") -> s
             if key in domain_lower:
                 phone = number
                 break
+        directory = department_phone_directory()
         if language == "es":
-            return f"Para consultas de ventas, llame al {phone}. Horario: {SUPPORT_BUSINESS_HOURS}."
+            return (
+                f"Para consultas de ventas, llame al {phone}. Horario: {SUPPORT_BUSINESS_HOURS}.\n"
+                f"{directory}"
+            )
         if language == "ko":
-            return f"구매 상담은 {phone}으로 연락해 주세요. 운영 시간: {SUPPORT_BUSINESS_HOURS}."
-        return f"For sales inquiries, please contact us at {phone}. Our business hours are {SUPPORT_BUSINESS_HOURS}."
+            return (
+                f"구매 상담은 {phone}으로 연락해 주세요. 운영 시간: {SUPPORT_BUSINESS_HOURS}.\n"
+                f"{directory}"
+            )
+        return (
+            f"For sales inquiries, please contact us at {phone}. "
+            f"Our business hours are {SUPPORT_BUSINESS_HOURS}.\n"
+            f"{directory}"
+        )
 
+    directory = department_phone_directory()
     if language == "es":
-        return f"Si necesita más ayuda, llame al equipo de garantía al {WARRANTY_PHONE}. Horario de garantía: {WARRANTY_BUSINESS_HOURS}."
+        return (
+            f"Si necesita más ayuda, llame al equipo de garantía al {WARRANTY_PHONE}. "
+            f"Horario de garantía: {WARRANTY_BUSINESS_HOURS}.\n"
+            f"{directory}"
+        )
     if language == "ko":
-        return f"추가 도움이 필요하면 보증팀 {WARRANTY_PHONE}으로 연락해 주세요. 보증팀 운영 시간: {WARRANTY_BUSINESS_HOURS}."
-    return f"If you need further assistance, please contact our warranty team at {WARRANTY_PHONE}. Our warranty hours are {WARRANTY_BUSINESS_HOURS}."
+        return (
+            f"추가 도움이 필요하면 보증팀 {WARRANTY_PHONE}으로 연락해 주세요. "
+            f"보증팀 운영 시간: {WARRANTY_BUSINESS_HOURS}.\n"
+            f"{directory}"
+        )
+    return (
+        f"If you need further assistance, please contact our warranty team at "
+        f"{WARRANTY_PHONE}. Our warranty hours are {WARRANTY_BUSINESS_HOURS}.\n"
+        f"{directory}"
+    )
 
 # 프론트엔드에서 도메인을 넘겨주지 않았을 때 사용할 기본 폴백(Fallback) 도메인
 DEFAULT_TARGET_DOMAIN = "https://titanchair.com"

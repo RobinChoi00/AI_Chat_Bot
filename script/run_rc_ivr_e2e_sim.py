@@ -3,7 +3,8 @@
 Simulate after-hours RC IVR end-to-end without a live phone call.
 
 Runs the same orchestration path as webhooks:
-  call-enter → issue-type menu → digit 3 (defect) → first defect prompt
+  call-enter → department menu (press 3 warranty) → issue-type menu →
+  digit 3 (defect) → first defect prompt
 
 Usage (from project root / EC2):
   python3 script/run_rc_ivr_e2e_sim.py
@@ -64,6 +65,23 @@ def main() -> int:
                 "parameters": {"digits": "3"},
             }
         )
+        handle_command_update(
+            {
+                "sessionId": session_id,
+                "status": "Completed",
+                "command": "Play",
+                "partyId": party_id,
+            }
+        )
+        handle_command_update(
+            {
+                "sessionId": session_id,
+                "status": "Completed",
+                "command": "Collect",
+                "partyId": party_id,
+                "parameters": {"digits": "3"},
+            }
+        )
 
     ctx = get_call_context(session_id)
     if ctx is None:
@@ -84,7 +102,7 @@ def main() -> int:
         print("FAIL: expected defect issue_type")
         return 1
     if not node or node.get("node_id") != "defect_problem_type":
-        print("FAIL: expected defect_problem_type node after digit 3")
+        print("FAIL: expected defect_problem_type node after warranty 3 then issue 3")
         return 1
     print(
         "NOTE: Live phone E2E still needs RC ApplicationExtension + Roman routing."

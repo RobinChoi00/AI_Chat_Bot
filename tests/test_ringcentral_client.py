@@ -28,6 +28,12 @@ def test_forward_payload_uses_phone_when_no_extension(monkeypatch):
     assert rc._forward_payload("") == {"phoneNumber": "+18888482630"}
 
 
+def test_forward_payload_sales_extension_overrides_warranty_queue(monkeypatch):
+    monkeypatch.setattr(rc, "RC_WARRANTY_TRANSFER_EXTENSION", "3")
+    monkeypatch.setattr(rc, "RC_WARRANTY_TRANSFER_TO", "+18888482630")
+    assert rc._forward_payload("", extension="2") == {"extensionNumber": "2"}
+
+
 def test_hangup_uses_delete(monkeypatch):
     class FakeResp:
         status_code = 204

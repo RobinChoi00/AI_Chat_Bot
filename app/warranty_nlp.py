@@ -1200,7 +1200,6 @@ def build_intent_confirmation_message(
 
 _ISSUE_TYPE_LABELS: tuple[tuple[str, str], ...] = (
     ("installation", "Setup & installation"),
-    ("delivery", "Delivery & tracking"),
     ("defect", "Warranty / defect"),
 )
 
@@ -1215,8 +1214,8 @@ def build_clarifying_issue_type_message(
     parts: list[str] = []
     if trimmed:
         parts.append(
-            f'I couldn\'t tell whether **"{trimmed[:120]}"** is installation, '
-            "delivery, or a product defect."
+            f'I couldn\'t tell whether **"{trimmed[:120]}"** is installation '
+            "or a product defect."
         )
     if model_name:
         parts.append(f"For your **{model_name}**, what type of issue can we help with?")

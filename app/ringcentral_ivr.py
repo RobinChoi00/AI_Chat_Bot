@@ -4,20 +4,25 @@ ringcentral_ivr.py
 Orchestrate RingCentral IVR callbacks with WarrantyEngine.
 
 Call flow:
-  on-call-enter (open)   → closed-hours message N/A; play connect script → forward to warranty queue
-  on-call-enter (closed) → after-hours welcome (closed + hours + docs) → issue type menu → …
+  on-call-enter (open)   → play connect script → forward to warranty queue
+  on-call-enter (closed) → department menu (2=sales, 3=warranty)
+                         → press 3: after-hours welcome + issue type menu
+                         → press 2: announce, then forward to sales (ext.2)
   Play complete          → collect DTMF, connect forward, or sales transfer
-  on-call-exit           → SMS + team email (after-hours tickets only)
+  on-call-exit           → SMS + team email (after-hours warranty tickets only)
 
-After-hours: no silent transfer to sales — sales_handoff plays closed message instead.
+After-hours flowchart sales_handoff: no silent transfer — plays closed message instead.
+Department-menu press 2 is an intentional sales transfer (announced).
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from ringcentral_client import (
+    RC_SALES_TRANSFER_EXTENSION,
+    RC_SALES_TRANSFER_TO,
     RC_WARRANTY_TRANSFER_TO,
     collect_digits,
     forward_call,
@@ -27,22 +32,34 @@ from ringcentral_client import (
 from ringcentral_followup import send_phone_call_followups
 from ringcentral_hours import is_warranty_business_hours
 from ringcentral_voice import (
+    DEPT_SALES_DTMF,
+    DEPT_WARRANTY_DTMF,
     IvrPhase,
     REPEAT_DTMF,
     VoiceCallContext,
     build_after_hours_sales_closed_script,
     build_after_hours_welcome_script,
     build_business_hours_connect_script,
+    build_department_menu_script,
     build_menu_script,
     build_question_text_handoff_script,
     build_sales_transfer_script,
     build_terminal_script,
+    department_dtmf_patterns,
     get_call_context,
     menu_dtmf_patterns,
     pop_call_context,
     post_diy_dtmf_patterns,
     resolve_play_uri,
     set_call_context,
+)
+
+# Live forwards leave the Voice App; do not SMS a warranty resume link.
+_SKIP_PHONE_FOLLOWUP_PATHS = frozenset(
+    {
+        "business_hours_live_forward",
+        "department_sales_forward",
+    }
 )
 
 logger = logging.getLogger(__name__)
@@ -93,6 +110,22 @@ def _store_caller_metadata(ticket_id: str, caller: str) -> None:
         ticket.set_collected("channel", "phone")
         if caller:
             ticket.set_collected("caller_phone", caller)
+
+
+def _set_collected(ticket_id: str, key: str, value: str) -> None:
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    if not ticket_id:
+        return
+    with warranty_db_session() as db:
+        ticket = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.ticket_id == ticket_id)
+            .first()
+        )
+        if ticket is None:
+            return
+        ticket.set_collected(key, value)
 
 
 def _log_business_hours_connect(session_id: str, caller: str) -> str:
@@ -146,6 +179,9 @@ def _transfer(ctx: VoiceCallContext, reason: str) -> None:
         ctx.ticket_id,
         reason,
     )
+    if reason == "sales_handoff":
+        _forward_to_sales_queue(ctx)
+        return
     forward_call(
         session_id=ctx.session_id,
         party_id=ctx.party_id,
@@ -165,6 +201,48 @@ def _forward_to_warranty_queue(ctx: VoiceCallContext) -> None:
     ctx.phase = IvrPhase.DONE
     ctx.awaiting_command = None
     set_call_context(ctx)
+
+
+def _forward_to_sales_queue(ctx: VoiceCallContext) -> None:
+    logger.info(
+        "RC IVR connecting to sales queue session=%s ext=%s",
+        ctx.session_id,
+        RC_SALES_TRANSFER_EXTENSION,
+    )
+    forward_call(
+        session_id=ctx.session_id,
+        party_id=ctx.party_id,
+        phone_number=RC_SALES_TRANSFER_TO,
+        extension=RC_SALES_TRANSFER_EXTENSION,
+    )
+    ctx.phase = IvrPhase.DONE
+    ctx.awaiting_command = None
+    set_call_context(ctx)
+
+
+def _play_department_menu(ctx: VoiceCallContext, *, intro_prefix: str = "") -> None:
+    script = f"{intro_prefix}{build_department_menu_script()}"
+    _play_script(ctx, script, phase=IvrPhase.DEPT_MENU)
+
+
+def _start_after_hours_warranty_flow(ctx: VoiceCallContext) -> None:
+    engine = _lazy_engine()
+    node = engine.get_current_node(ctx.ticket_id)
+    if node and node.get("node_id") == "root":
+        engine.submit_answer(ctx.ticket_id, "warranty")
+        node = engine.get_current_node(ctx.ticket_id)
+    if not node:
+        logger.error(
+            "RC IVR failed to advance to issue_type for ticket=%s",
+            ctx.ticket_id,
+        )
+        return
+    intro = (
+        "You selected warranty. "
+        "The next options are for your warranty issue, not the main extensions. "
+        f"{build_after_hours_welcome_script()} "
+    )
+    _present_node(ctx, node, intro_prefix=intro)
 
 
 def _present_node(
@@ -250,30 +328,28 @@ def handle_call_enter(payload: dict[str, Any]) -> None:
     engine = _lazy_engine()
     ticket_id, _root = engine.start_session(session_id, "phone")
     _store_caller_metadata(ticket_id, caller)
-    engine.submit_answer(ticket_id, "warranty")
-    entry_node = engine.get_current_node(ticket_id)
-    if not entry_node:
-        logger.error("RC IVR failed to advance to issue_type for ticket=%s", ticket_id)
-        return
+    _set_collected(ticket_id, "ivr_path", "after_hours_department_menu")
 
     ctx = VoiceCallContext(
         session_id=session_id,
         party_id=party_id,
         ticket_id=ticket_id,
         caller_phone=caller,
+        phase=IvrPhase.DEPT_MENU,
     )
     set_call_context(ctx)
     logger.info(
-        "RC IVR started session=%s ticket=%s node=%s",
+        "RC IVR after-hours department menu session=%s ticket=%s",
         session_id,
         ticket_id,
-        entry_node.get("node_id"),
     )
-    intro = f"{build_after_hours_welcome_script()} "
-    _present_node(ctx, entry_node, intro_prefix=intro)
+    _play_department_menu(ctx)
 
 
 def _replay_current_node(ctx: VoiceCallContext) -> None:
+    if ctx.phase == IvrPhase.DEPT_MENU:
+        _play_department_menu(ctx)
+        return
     engine = _lazy_engine()
     node = engine.get_current_node(ctx.ticket_id)
     if node is None:
@@ -283,6 +359,24 @@ def _replay_current_node(ctx: VoiceCallContext) -> None:
         _present_terminal(ctx, node)
         return
     _present_node(ctx, node)
+
+
+def _handle_department_digit(ctx: VoiceCallContext, digit: str) -> None:
+    if digit == REPEAT_DTMF:
+        _play_department_menu(ctx)
+        return
+    if digit == DEPT_SALES_DTMF:
+        _set_collected(ctx.ticket_id, "ivr_path", "department_sales_forward")
+        _play_script(ctx, build_sales_transfer_script(), phase=IvrPhase.SALES_TRANSFER)
+        return
+    if digit == DEPT_WARRANTY_DTMF:
+        _set_collected(ctx.ticket_id, "ivr_path", "after_hours_warranty")
+        _start_after_hours_warranty_flow(ctx)
+        return
+    _play_department_menu(
+        ctx,
+        intro_prefix="Sorry, that was not a valid option. ",
+    )
 
 
 def _handle_menu_digit(ctx: VoiceCallContext, digit: str) -> None:
@@ -362,7 +456,11 @@ def handle_command_update(payload: dict[str, Any]) -> None:
             pop_call_context(session_id)
             return
         if ctx.phase == IvrPhase.SALES_TRANSFER:
-            _transfer(ctx, "sales_handoff")
+            _forward_to_sales_queue(ctx)
+            pop_call_context(session_id)
+            return
+        if ctx.phase == IvrPhase.DEPT_MENU:
+            _start_collect(ctx, department_dtmf_patterns())
             return
         if ctx.phase == IvrPhase.MENU:
             node = _lazy_engine().get_current_node(ctx.ticket_id) or {}
@@ -381,6 +479,9 @@ def handle_command_update(payload: dict[str, Any]) -> None:
         if not digit:
             script = "We did not receive a selection. Please try again."
             _play_script(ctx, script, phase=ctx.phase)
+            return
+        if ctx.phase == IvrPhase.DEPT_MENU:
+            _handle_department_digit(ctx, digit)
             return
         if ctx.phase == IvrPhase.MENU:
             _handle_menu_digit(ctx, digit)
@@ -408,7 +509,7 @@ def handle_call_exit(payload: dict[str, Any]) -> None:
                     f"RC exit arrived before call state for session={session_id}"
                 )
             collected = ticket.get_collected()
-            if collected.get("ivr_path") == "business_hours_live_forward":
+            if collected.get("ivr_path") in _SKIP_PHONE_FOLLOWUP_PATHS:
                 return
             ctx = VoiceCallContext(
                 session_id=session_id,
@@ -418,6 +519,10 @@ def handle_call_exit(payload: dict[str, Any]) -> None:
                 phase=IvrPhase.DONE,
             )
     if ctx.ticket_id:
+        ticket = _lazy_engine().get_ticket(ctx.ticket_id)
+        collected = ticket.get_collected() if ticket is not None else {}
+        if collected.get("ivr_path") in _SKIP_PHONE_FOLLOWUP_PATHS:
+            return
         logger.info("RC IVR call exit session=%s ticket=%s", session_id, ctx.ticket_id)
         send_phone_call_followups(
             caller_phone=ctx.caller_phone,

@@ -1,9 +1,9 @@
 import WarrantyChat from "@/components/warranty/WarrantyChat";
 
 export const metadata = {
-  title: "Setup · Warranty · Delivery — Osaki & Titan",
+  title: "Setup · Warranty — Osaki & Titan",
   description:
-    "Guided setup, warranty, and delivery help for Osaki and Titan massage chairs.",
+    "Guided setup and warranty help for Osaki and Titan massage chairs. For delivery, call sales at +1-888-848-2630 ext. 2.",
 };
 
 export const viewport = {

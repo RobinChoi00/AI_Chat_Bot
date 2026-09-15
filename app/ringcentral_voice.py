@@ -31,10 +31,13 @@ RC_AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 # After-hours IVR: 0 replays the current prompt (no live agent transfer).
 REPEAT_DTMF = "0"
 POST_DIY_FIXED_DTMF = "1"
+DEPT_SALES_DTMF = "2"
+DEPT_WARRANTY_DTMF = "3"
 
 
 class IvrPhase(str, Enum):
     CONNECTING = "connecting"
+    DEPT_MENU = "dept_menu"
     MENU = "menu"
     POST_DIY = "post_diy"
     SALES_TRANSFER = "sales_transfer"
@@ -206,6 +209,16 @@ def build_after_hours_closure_script() -> str:
     )
 
 
+def build_department_menu_script() -> str:
+    """First prompt after hours: company extensions, not warranty issue types."""
+    return (
+        "Thank you for calling Osaki and Titan. "
+        f"For sales, press {DEPT_SALES_DTMF}. "
+        f"For warranty, press {DEPT_WARRANTY_DTMF}. "
+        f"Press {REPEAT_DTMF} to hear these options again."
+    )
+
+
 def build_after_hours_welcome_script() -> str:
     """Opening message when the warranty line is closed — sets expectations."""
     from ringcentral_hours import (  # noqa: WPS433
@@ -278,6 +291,11 @@ def build_question_text_handoff_script() -> str:
         "When you finish this call we will text you a link to continue. "
         f"Press {REPEAT_DTMF} to hear the previous options again."
     )
+
+
+def department_dtmf_patterns() -> list[str]:
+    """Allowed DTMF keys for the after-hours sales vs warranty menu."""
+    return [DEPT_SALES_DTMF, DEPT_WARRANTY_DTMF, REPEAT_DTMF]
 
 
 def menu_dtmf_patterns(node: dict) -> list[str]:

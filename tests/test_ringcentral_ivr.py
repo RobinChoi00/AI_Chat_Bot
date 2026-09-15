@@ -23,6 +23,29 @@ from ringcentral_voice import IvrPhase, VoiceCallContext, get_call_context  # no
 from warranty_workflow import WarrantyEngine  # noqa: E402
 
 
+def _play_done(session_id: str, party_id: str) -> None:
+    handle_command_update(
+        {
+            "sessionId": session_id,
+            "status": "Completed",
+            "command": "Play",
+            "partyId": party_id,
+        }
+    )
+
+
+def _collect_digit(session_id: str, party_id: str, digit: str) -> None:
+    handle_command_update(
+        {
+            "sessionId": session_id,
+            "status": "Completed",
+            "command": "Collect",
+            "partyId": party_id,
+            "parameters": {"digits": digit},
+        }
+    )
+
+
 @pytest.fixture(autouse=True)
 def _clear_call_contexts():
     from ringcentral_voice import _call_contexts  # noqa: WPS433
@@ -37,7 +60,7 @@ def _clear_call_contexts():
         db.query(RingCentralCallState).delete(synchronize_session=False)
 
 
-def test_handle_call_enter_starts_at_issue_type_menu():
+def test_handle_call_enter_starts_at_department_menu():
     payload = {
         "sessionId": "rc-session-1",
         "inParty": {
@@ -54,16 +77,18 @@ def test_handle_call_enter_starts_at_issue_type_menu():
 
     ctx = get_call_context("rc-session-1")
     assert ctx is not None
-    assert ctx.phase.value == "menu"
+    assert ctx.phase.value == "dept_menu"
 
     node = WarrantyEngine.get_current_node(ctx.ticket_id)
     assert node is not None
-    assert node["node_id"] == "issue_type"
+    assert node["node_id"] == "root"
 
     ticket = WarrantyEngine.get_ticket(ctx.ticket_id)
     assert ticket is not None
     assert ticket.issue_type is None
-    assert ticket.get_collected().get("channel") == "phone"
+    collected = ticket.get_collected()
+    assert collected.get("channel") == "phone"
+    assert collected.get("ivr_path") == "after_hours_department_menu"
 
     mock_play.assert_called_once()
     play_uri = mock_play.call_args.kwargs.get("audio_uri") or mock_play.call_args[1].get(
@@ -87,23 +112,10 @@ def test_issue_type_digit_three_advances_to_defect_menu():
         patch("ringcentral_ivr.resolve_play_uri", return_value="https://example.com/menu.wav"),
     ):
         handle_call_enter(payload)
-        handle_command_update(
-            {
-                "sessionId": "rc-session-defect",
-                "status": "Completed",
-                "command": "Play",
-                "partyId": "party-defect",
-            }
-        )
-        handle_command_update(
-            {
-                "sessionId": "rc-session-defect",
-                "status": "Completed",
-                "command": "Collect",
-                "partyId": "party-defect",
-                "parameters": {"digits": "3"},
-            }
-        )
+        _play_done("rc-session-defect", "party-defect")
+        _collect_digit("rc-session-defect", "party-defect", "3")
+        _play_done("rc-session-defect", "party-defect")
+        _collect_digit("rc-session-defect", "party-defect", "3")
 
     ctx = get_call_context("rc-session-defect")
     assert ctx is not None
@@ -187,7 +199,7 @@ def test_handle_call_enter_during_business_hours_plays_connect_then_forwards():
     assert get_call_context("rc-session-hours") is None
 
 
-def test_handle_call_enter_after_hours_welcome_mentions_closed():
+def test_handle_call_enter_after_hours_explains_extensions_first():
     payload = {
         "sessionId": "rc-session-welcome",
         "inParty": {
@@ -204,9 +216,97 @@ def test_handle_call_enter_after_hours_welcome_mentions_closed():
 
     assert mock_uri.called
     script = mock_uri.call_args[0][0]
+    assert "press 2" in script.lower()
+    assert "press 3" in script.lower()
+    assert "sales" in script.lower()
+    assert "warranty" in script.lower()
+    assert "closed" not in script.lower()
+    assert "installation" not in script.lower()
+
+
+def test_press_three_after_hours_plays_warranty_closed_scripts():
+    payload = {
+        "sessionId": "rc-session-warranty-3",
+        "inParty": {
+            "id": "party-warranty-3",
+            "from": {"phoneNumber": "+15551234567"},
+        },
+    }
+    with (
+        patch("ringcentral_ivr.is_warranty_business_hours", return_value=False),
+        patch("ringcentral_ivr.play_prompt"),
+        patch("ringcentral_ivr.collect_digits"),
+        patch("ringcentral_ivr.resolve_play_uri") as mock_uri,
+    ):
+        handle_call_enter(payload)
+        _play_done("rc-session-warranty-3", "party-warranty-3")
+        _collect_digit("rc-session-warranty-3", "party-warranty-3", "3")
+
+    ctx = get_call_context("rc-session-warranty-3")
+    assert ctx is not None
+    assert ctx.phase.value == "menu"
+    node = WarrantyEngine.get_current_node(ctx.ticket_id)
+    assert node is not None
+    assert node["node_id"] == "issue_type"
+    ticket = WarrantyEngine.get_ticket(ctx.ticket_id)
+    assert ticket is not None
+    assert ticket.get_collected().get("ivr_path") == "after_hours_warranty"
+
+    script = mock_uri.call_args[0][0]
+    assert "you selected warranty" in script.lower()
     assert "closed" in script.lower()
     assert "invoice" in script.lower() or "order number" in script.lower()
     assert "text message" in script.lower()
+    assert "press 1" in script.lower()
+
+
+def test_press_two_after_hours_announces_and_forwards_to_sales():
+    payload = {
+        "sessionId": "rc-session-sales-2",
+        "inParty": {
+            "id": "party-sales-2",
+            "from": {"phoneNumber": "+15551234567"},
+        },
+    }
+    with (
+        patch("ringcentral_ivr.is_warranty_business_hours", return_value=False),
+        patch("ringcentral_ivr.play_prompt"),
+        patch("ringcentral_ivr.collect_digits"),
+        patch("ringcentral_ivr.resolve_play_uri") as mock_uri,
+        patch("ringcentral_ivr.forward_call") as mock_forward,
+        patch("ringcentral_ivr.RC_SALES_TRANSFER_EXTENSION", "2"),
+        patch("ringcentral_ivr.RC_SALES_TRANSFER_TO", ""),
+    ):
+        handle_call_enter(payload)
+        _play_done("rc-session-sales-2", "party-sales-2")
+        _collect_digit("rc-session-sales-2", "party-sales-2", "2")
+
+        script = mock_uri.call_args[0][0]
+        assert "sales" in script.lower()
+        assert "transfer" in script.lower()
+        mock_forward.assert_not_called()
+
+        _play_done("rc-session-sales-2", "party-sales-2")
+
+    mock_forward.assert_called_once_with(
+        session_id="rc-session-sales-2",
+        party_id="party-sales-2",
+        phone_number="",
+        extension="2",
+    )
+    assert get_call_context("rc-session-sales-2") is None
+
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    with warranty_db_session() as db:
+        ticket = (
+            db.query(WarrantyTicket)
+            .filter(WarrantyTicket.session_id == "rc-session-sales-2")
+            .order_by(WarrantyTicket.id.desc())
+            .first()
+        )
+        assert ticket is not None
+        assert ticket.get_collected().get("ivr_path") == "department_sales_forward"
 
 
 def test_menu_repeat_zero_replays_current_prompt():
@@ -300,6 +400,7 @@ def test_sales_handoff_during_open_hours_announces_then_transfers_on_play_done()
 
     assert ctx.phase == IvrPhase.DONE
     mock_forward.assert_called_once()
+    assert get_call_context("rc-sales-open") is None
 
 
 def test_question_text_node_plays_web_handoff_script():

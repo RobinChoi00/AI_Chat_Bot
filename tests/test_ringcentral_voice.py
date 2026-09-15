@@ -12,15 +12,19 @@ APP_DIR = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(APP_DIR))
 
 from ringcentral_voice import (  # noqa: E402
+    DEPT_SALES_DTMF,
+    DEPT_WARRANTY_DTMF,
     IvrPhase,
     REPEAT_DTMF,
     VoiceCallContext,
     build_after_hours_closure_script,
     build_after_hours_welcome_script,
     build_business_hours_connect_script,
+    build_department_menu_script,
     build_menu_script,
     build_sales_transfer_script,
     build_terminal_script,
+    department_dtmf_patterns,
     menu_dtmf_patterns,
     post_diy_dtmf_patterns,
     ensure_audio_file,
@@ -66,6 +70,25 @@ def test_build_after_hours_closure_script_mentions_business_hours():
     assert f"Press {REPEAT_DTMF} to hear this message again" in script
     assert "call back" in script.lower()
     assert "text" in script.lower()
+
+
+def test_build_department_menu_explains_sales_and_warranty_extensions():
+    script = build_department_menu_script()
+    assert f"press {DEPT_SALES_DTMF}" in script.lower()
+    assert f"press {DEPT_WARRANTY_DTMF}" in script.lower()
+    assert "sales" in script.lower()
+    assert "warranty" in script.lower()
+    assert "installation" not in script.lower()
+    assert "defect" not in script.lower()
+    assert f"Press {REPEAT_DTMF} to hear these options again" in script
+
+
+def test_department_dtmf_patterns_are_sales_warranty_or_repeat():
+    assert department_dtmf_patterns() == [
+        DEPT_SALES_DTMF,
+        DEPT_WARRANTY_DTMF,
+        REPEAT_DTMF,
+    ]
 
 
 def test_build_after_hours_welcome_mentions_closed_and_docs():

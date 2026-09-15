@@ -144,7 +144,7 @@ def test_tidio_turn_runs_sales_agent(client):
     assert body["button_1_payload"] == "recommend"
 
 
-def test_tidio_turn_shipping_goes_to_warranty(client):
+def test_tidio_turn_shipping_goes_to_sales_phone(client):
     resp = client.post(
         "/api/v1/sales/tidio/turn",
         json={"message": "when will it arrive?"},
@@ -153,10 +153,11 @@ def test_tidio_turn_shipping_goes_to_warranty(client):
     body = resp.json()
     assert body["intent"] == "eta_shipping"
     assert body["handoff"] is True
-    assert body["next_action"] == "warranty_redirect"
-    assert body["is_warranty_route"] is True
-    assert "service@osakititan.com" in body["reply_plain"].lower()
-    assert "warranty chat icon" not in body["reply_plain"].lower()
+    assert body["next_action"] == "transfer_operator"
+    assert body["is_warranty_route"] is False
+    assert "ext. 2" in body["reply_plain"]
+    assert "ext. 3" in body["reply_plain"]
+    assert "service@osakititan.com" not in body["reply_plain"].lower()
 
 
 def test_tidio_turn_cancel_refund_transfers_to_agent(client):

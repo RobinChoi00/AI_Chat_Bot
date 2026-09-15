@@ -454,12 +454,7 @@ def test_natural_start_clarifying_when_unclear(client, monkeypatch):
     assert data["ticket"]["issue_type"] == ""
 
 
-def test_model_then_issue_via_natural_start(client, monkeypatch):
-    monkeypatch.setattr(
-        "warranty_nlp.interpret_issue_type",
-        lambda text: "delivery" if "tracking" in text.lower() else None,
-    )
-
+def test_model_then_tracking_redirects_to_sales_phone(client):
     session_id = "cust-api-model-then-issue"
     _register_model(client, session_id, model="3D LTX")
     resp = client.post(
@@ -468,12 +463,9 @@ def test_model_then_issue_via_natural_start(client, monkeypatch):
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    # Suggest delivery; customer must tap to enter the path.
-    assert data.get("side_question") is True
-    assert data.get("suggested_issue_type") == "delivery"
-    assert not data["ticket"].get("issue_type")
-    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
-    assert "tap" in data["assistant_message"].lower()
+    assert "ext. 2" in data["assistant_message"]
+    assert "ext. 3" in data["assistant_message"]
+    assert "sales" in data["assistant_message"].lower()
 
 
 def test_submit_answer_button_key_still_advances(client):
@@ -1049,7 +1041,7 @@ def test_smart_start_empty_prefill_does_not_default_to_defect(client, monkeypatc
     session_id = "cust-api-smart-no-defect-fallback"
     resp = client.post(
         f"/api/v1/warranty/session/{session_id}/smart-start",
-        json={"message": "Where is my order?", "domain": "osaki.com"},
+        json={"message": "My chair has a problem", "domain": "osaki.com"},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -1058,21 +1050,7 @@ def test_smart_start_empty_prefill_does_not_default_to_defect(client, monkeypatc
     assert "defect" not in data["smart_start"]["applied_keys"]
 
 
-def test_smart_start_routing_confirmation_when_issue_inferred(client, monkeypatch):
-    import warranty_intake as wi  # noqa: WPS433
-
-    monkeypatch.setattr(
-        wi,
-        "extract_workflow_prefill",
-        lambda **kwargs: {
-            "answer_keys": ["warranty", "delivery"],
-            "model_name": "",
-            "confidence": "high",
-            "summary": "Customer asking about shipping status.",
-            "source": "llm",
-        },
-    )
-
+def test_smart_start_fedex_redirects_to_sales_phone(client):
     session_id = "cust-api-smart-routing-confirm"
     resp = client.post(
         f"/api/v1/warranty/session/{session_id}/smart-start",
@@ -1080,14 +1058,11 @@ def test_smart_start_routing_confirmation_when_issue_inferred(client, monkeypatc
     )
     assert resp.status_code == 200
     data = resp.json()
-    confirm = data["smart_start"]["routing_confirmation"]
-    assert confirm["inferred_issue_type"] == "delivery"
-    assert confirm["requires_confirmation"] is True
-    assert "delivery" in confirm["message"].lower()
-    assert "tap" in confirm["message"].lower()
-    assert data["smart_start"]["applied_keys"] == ["warranty"]
-    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
-    assert not data["ticket"].get("issue_type")
+    msg = data["assistant_message"].lower()
+    assert "ext. 2" in data["assistant_message"]
+    assert "ext. 3" in data["assistant_message"]
+    assert "sales" in msg
+    assert "live shipment" in msg or "delivery" in msg
 
 
 def _start_defect_air_feet(client, session_id: str, model: str = "3D LTX") -> str:

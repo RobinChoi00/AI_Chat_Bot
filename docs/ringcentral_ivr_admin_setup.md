@@ -24,23 +24,28 @@ Our **Automated Voice App** (webhook IVR) only runs when the call is routed to t
 
 ### When warranty is **CLOSED** (evenings, weekends)
 
-1. Main greeting → **Press X for Warranty**.
+1. Main greeting explains extensions: **Press 2 for Sales**, **Press 3 for Warranty**.
 2. Route **directly** to the **Osaki Warranty Voice App** (webhook URLs on EC2) — **do not** send to a hold queue.
-3. **Do not** overflow closed warranty calls to Sales silently.
-4. If you must offer Sales after hours, play this **before** transfer:  
+3. Our app plays the same directory first (`press 2` sales / `press 3` warranty).
+4. **Press 3** → after-hours warranty script (closed + hours + docs) then the issue-type menu.
+5. **Press 2** → announced transfer to sales (ext.2). **Do not** overflow closed warranty calls to Sales silently.
+6. If the main-line IVR must offer Sales after hours, play this **before** transfer:  
    *“Warranty is closed. We are now transferring you to sales for non-warranty questions only.”*
 
 ---
 
 ## Main menu (recommended)
 
+Match published extensions on **888-848-2630**:
+
 | Key | Label | Routes to |
 |-----|--------|-----------|
-| 1 | **Warranty** (installation, delivery, defect) | Warranty Voice App (closed) or warranty queue (open) |
-| 2 | Sales | Sales queue |
-| 3 | Technical support | Tech queue (if distinct from warranty) |
+| 2 | Sales | Sales queue (ext.2) |
+| 3 | Warranty (installation, defect; delivery is sales) | Warranty Voice App (closed) or warranty queue (open) |
 
-> Jose’s feedback: customers often pick Sales for warranty because **Warranty was missing**. Add **Warranty** as its own option.
+> Do **not** use 1=Warranty / 2=Sales / 3=Technical on the main line — callers confuse those keys with ext.2 sales and ext.3 warranty. Our after-hours Voice App also uses 2/3 for the department menu, then a separate issue-type menu after they press 3.
+
+> Jose’s feedback: customers often pick Sales for warranty because **Warranty was missing**. Keep **Warranty** as its own option (key **3**).
 
 ---
 
@@ -75,6 +80,7 @@ Set in EC2 `.env`:
 RC_WEBHOOK_VERIFICATION_TOKEN=<same token as RingCentral Developer Console>
 PUBLIC_BASE_URL=https://api.osakichair.com
 RC_WARRANTY_TRANSFER_EXTENSION=3
+RC_SALES_TRANSFER_EXTENSION=2
 RC_SMS_FROM_NUMBER=<RingCentral SMS-capable E.164 number>
 ```
 
@@ -90,10 +96,10 @@ operator review before the affected call can be considered complete.
 
 | When | Behavior |
 |------|----------|
-| **Closed** | Says department is closed, states hours, next open time, asks for invoice/docs ready, SMS link after call, automated issue menu |
+| **Closed** | Department menu first (2=sales, 3=warranty). Press 3: closed + hours + invoice/docs + SMS link + issue menu. Press 2: announced sales transfer (ext.2) |
 | **Open** | Says connecting to warranty specialist, then forwards |
 | **Sales handoff in flowchart** | Open: announces transfer to sales. Closed: **no** silent sales transfer |
-| **Call end (closed)** | SMS + email to `service@osakititan.com` |
+| **Call end (closed)** | SMS + email to `service@osakititan.com` (skipped after a sales forward) |
 
 ---
 
@@ -109,7 +115,7 @@ docker compose exec -T backend python script/run_rc_ivr_e2e_sim.py
 python3 script/check_rc_ivr_readiness.py --simulate
 ```
 
-This walks: call-enter → issue menu → digit `3` (defect) and asserts a workflow ticket is created with `channel=phone`.
+This walks: call-enter → department menu → digit `3` (warranty) → issue menu → digit `3` (defect) and asserts a workflow ticket is created with `channel=phone`.
 
 Live phone E2E still requires the checklist below (RC activation + Roman routing).
 
@@ -117,7 +123,7 @@ Live phone E2E still requires the checklist below (RC activation + Roman routing
 
 ## Checklist for Roman / phone admin
 
-- [ ] Main IVR has **Warranty** as its own key (not only Sales / Technical).
+- [ ] Main IVR keys match published extensions: **2 = Sales**, **3 = Warranty**.
 - [ ] After hours: Warranty key → **Voice App extension** (not warranty hold queue).
 - [ ] Remove or disable **overflow to Sales** on closed warranty queue.
 - [ ] Any Sales overflow plays **closed + transferring to sales** message first.
@@ -127,18 +133,18 @@ Live phone E2E still requires the checklist below (RC activation + Roman routing
 - [ ] Verify `/rc/health` is `ok` with zero dead-letter events.
 - [ ] Confirm `/rc/health` `last_webhook_received_at` updates after a test call.
 - [ ] Simulate one duplicate callback and one backend restart during a test call.
-- [ ] Test after close: Cong/Jose/Ryan scenario — should hear **closed + hours**, not 5‑minute hold → Sales.
+- [ ] Test after close: first prompt is **press 2 sales / press 3 warranty**; press 3 hears **closed + hours**, not 5‑minute hold → Sales.
 
 ---
 
 ## Test script (after hours)
 
 1. Call warranty line after 6 PM CST (or Saturday).
-2. Press **Warranty**.
-3. Expect within ~30 seconds:  
-   *“Our warranty service department is closed… hours… call back…”*
-4. Complete or hang up → SMS with resume link to caller mobile.
-5. Confirm **no** unexplained transfer to Sales.
+2. Expect first: **For sales, press 2. For warranty, press 3.**
+3. Press **3**.
+4. Expect: *“You selected warranty… Our warranty service department is closed… hours… call back…”* then the issue-type menu.
+5. Complete or hang up → SMS with resume link to caller mobile.
+6. Confirm press **2** announces a transfer to sales (no silent dump).
 
 ---
 

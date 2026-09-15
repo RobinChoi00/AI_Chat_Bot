@@ -710,14 +710,19 @@ def _keyword_workflow_prefill(text: str) -> Optional[dict[str, Any]]:
     # Pre-purchase shipping policy (HI/AK/Guam, free delivery) must not open
     # the post-purchase delivery flowchart.
     try:
-        from warranty_scope import is_pre_purchase_shipping_policy  # noqa: WPS433
+        from warranty_scope import (  # noqa: WPS433
+            is_delivery_inquiry,
+            is_pre_purchase_shipping_policy,
+        )
     except ImportError:
         is_pre_purchase_shipping_policy = lambda _t: False  # type: ignore
+        is_delivery_inquiry = lambda _t: False  # type: ignore
 
     if (
         _has_any(norm, _DELIVERY_WORDS)
         and not _has_any(norm, _INSTALL_WORDS)
         and not is_pre_purchase_shipping_policy(text)
+        and not is_delivery_inquiry(text)
     ):
         return {
             "answer_keys": ["warranty", "delivery"],

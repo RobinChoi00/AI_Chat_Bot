@@ -143,6 +143,15 @@ def test_extract_keyword_power_not_confused_by_chair_substring(monkeypatch):
     assert out["answer_keys"] == ["warranty", "defect", "power"]
 
 
+def test_extract_does_not_prefill_tracking_delivery(monkeypatch):
+    monkeypatch.setattr(warranty_intake, "_openai_client", lambda: None)
+    out = extract_workflow_prefill(
+        free_text="Where is my FedEx tracking number?",
+        nodes=_NODES,
+    )
+    assert "delivery" not in out.get("answer_keys", [])
+
+
 def test_extract_does_not_prefill_hawaii_free_delivery(monkeypatch):
     monkeypatch.setattr(warranty_intake, "_openai_client", lambda: None)
     out = extract_workflow_prefill(

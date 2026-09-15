@@ -53,16 +53,28 @@ def test_blocks_alaska_and_guam_shipping_questions():
         assert decision.reason == "shipping_policy", text
 
 
-def test_allows_post_purchase_delivery_tracking():
+def test_blocks_how_long_shipping_on_warranty_chat():
+    decision = evaluate_warranty_scope("how long does shipping take")
+    assert decision.is_blocked
+    assert decision.reason == "delivery"
+
+
+def test_blocks_post_purchase_delivery_to_sales_phone():
     decision = evaluate_warranty_scope("Where is my FedEx tracking number?")
-    assert decision.in_scope
+    assert decision.is_blocked
+    assert decision.reason == "delivery"
+    msg = build_warranty_scope_refusal(decision.reason)
+    assert "ext. 2" in msg
+    assert "ext. 3" in msg
+    assert "sales" in msg.lower()
 
 
-def test_allows_damaged_delivery_even_if_hawaii_mentioned():
+def test_blocks_damaged_delivery_to_sales_phone():
     decision = evaluate_warranty_scope(
         "My Hawaii shipment arrived damaged and the box was crushed"
     )
-    assert decision.in_scope
+    assert decision.is_blocked
+    assert decision.reason == "delivery"
 
 
 def test_blocks_sales_answer_key():
@@ -71,12 +83,13 @@ def test_blocks_sales_answer_key():
     assert decision.is_blocked
 
 
-def test_filters_sales_from_root_menu():
+def test_filters_sales_and_delivery_from_root_menu():
     node = {
         "node_id": "root",
         "options": [
             {"answer_key": "warranty", "label": "Warranty"},
             {"answer_key": "sales", "label": "Sales"},
+            {"answer_key": "delivery", "label": "Delivery & tracking"},
         ],
     }
     filtered = filter_warranty_menu_options(node)
@@ -84,9 +97,15 @@ def test_filters_sales_from_root_menu():
     assert keys == ["warranty"]
 
 
-def test_refusal_mentions_warranty_only():
+def test_shipping_policy_refusal_lists_both_extensions():
+    msg = build_warranty_scope_refusal("shipping_policy")
+    assert "ext. 2" in msg
+    assert "ext. 3" in msg
+    assert "you pay the freight" in msg.lower()
     msg = build_warranty_scope_refusal()
     assert "warranty support" in msg.lower()
+    assert "ext. 2" in msg
+    assert "ext. 3" in msg
     assert "sales" in msg.lower()
 
 

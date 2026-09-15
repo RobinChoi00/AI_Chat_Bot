@@ -19,9 +19,9 @@ export default function HomePage() {
             className="flex items-center justify-between rounded-xl border border-gray-200 bg-white px-5 py-4 shadow-sm transition hover:border-brand-500 hover:shadow"
           >
             <div className="text-left">
-              <p className="font-semibold text-gray-900">Setup · Warranty · Delivery</p>
+              <p className="font-semibold text-gray-900">Setup · Warranty</p>
               <p className="text-sm text-gray-500">
-                Guided help for installation, defects, and delivery
+                Guided help for installation and defects. Delivery: call sales ext. 2
               </p>
             </div>
             <span className="ml-4 text-2xl">🛡️</span>

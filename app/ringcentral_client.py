@@ -16,7 +16,9 @@ RC_USER_JWT_FILE                   Optional file path (avoids .env paste corrupt
 RC_JWT_PRIVATE_KEY                 Optional PEM path — only if using self-signed JWT
 RC_JWT_CLAIM_SUB                   Extension ID — only with RC_JWT_PRIVATE_KEY
 RC_WARRANTY_TRANSFER_TO          E.164 for ext.3 queue (PSTN/direct number)
-RC_WARRANTY_TRANSFER_EXTENSION     Optional internal extension, e.g. 103
+RC_WARRANTY_TRANSFER_EXTENSION     Optional internal extension, e.g. 3
+RC_SALES_TRANSFER_TO             Optional E.164 for sales queue
+RC_SALES_TRANSFER_EXTENSION      Internal sales extension (default 2)
 RC_SMS_FROM_NUMBER               E.164 outbound SMS sender (Warranty line)
 """
 
@@ -41,6 +43,8 @@ RC_CLIENT_SECRET = os.getenv("RC_CLIENT_SECRET", "")
 RC_JWT_CLAIM_SUB = os.getenv("RC_JWT_CLAIM_SUB", "")
 RC_WARRANTY_TRANSFER_TO = os.getenv("RC_WARRANTY_TRANSFER_TO", "")
 RC_WARRANTY_TRANSFER_EXTENSION = os.getenv("RC_WARRANTY_TRANSFER_EXTENSION", "")
+RC_SALES_TRANSFER_TO = os.getenv("RC_SALES_TRANSFER_TO", "")
+RC_SALES_TRANSFER_EXTENSION = os.getenv("RC_SALES_TRANSFER_EXTENSION", "2")
 RC_SMS_FROM_NUMBER = os.getenv("RC_SMS_FROM_NUMBER", "")
 
 _token_lock = threading.Lock()
@@ -316,20 +320,30 @@ def collect_digits(
     return resp.json() if resp.text else {}
 
 
-def _forward_payload(phone_number: str) -> dict[str, Any]:
+def _forward_payload(
+    phone_number: str,
+    *,
+    extension: Optional[str] = None,
+) -> dict[str, Any]:
     """
     Build a forward body for RC IVR apps.
 
-    Prefer extensionNumber for internal Call Queue (ext.3); fall back to phoneNumber.
+    Prefer extensionNumber for an internal Call Queue; fall back to phoneNumber.
+    Pass extension to target sales (ext.2) instead of the warranty queue.
     """
-    ext = RC_WARRANTY_TRANSFER_EXTENSION.strip()
-    target = (phone_number or RC_WARRANTY_TRANSFER_TO).strip()
+    if extension is None:
+        ext = RC_WARRANTY_TRANSFER_EXTENSION.strip()
+        target = (phone_number or RC_WARRANTY_TRANSFER_TO).strip()
+    else:
+        ext = str(extension).strip()
+        target = (phone_number or "").strip()
     if ext:
         return {"extensionNumber": ext}
     if target:
         return {"phoneNumber": target}
     raise RuntimeError(
-        "Set RC_WARRANTY_TRANSFER_EXTENSION or RC_WARRANTY_TRANSFER_TO."
+        "Set RC_WARRANTY_TRANSFER_EXTENSION or RC_WARRANTY_TRANSFER_TO "
+        "(or pass a sales extension / phone number)."
     )
 
 
@@ -338,12 +352,13 @@ def forward_call(
     session_id: str,
     party_id: str,
     phone_number: str = "",
+    extension: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Transfer the caller to ext.3 queue or another target."""
+    """Transfer the caller to a queue extension or another target."""
     resp = _request(
         "POST",
         _party_url(session_id, party_id, "forward"),
-        json_body=_forward_payload(phone_number),
+        json_body=_forward_payload(phone_number, extension=extension),
     )
     if resp.status_code >= 400:
         logger.error(

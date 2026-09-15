@@ -54,19 +54,18 @@ HANDOFF_INTENTS = frozenset(
         INTENT_PARTS_TECHNICIAN,
         INTENT_DISCOUNT,
         INTENT_ETA_SHIPPING,
-        INTENT_ORDER_STATUS,  # tracking / "where's my order" → Warranty
+        INTENT_ORDER_STATUS,  # tracking / "where's my order" → sales phone
         INTENT_HUMAN,
     }
 )
 
 # Route to Warranty path in Tidio (end flow — not sales Inbox assign).
+# Delivery / tracking is sales (ext. 2), not this warranty redirect.
 # Cancel/refund goes to a sales agent instead (see handoff_message).
 WARRANTY_ROUTE_INTENTS = frozenset(
     {
         INTENT_WARRANTY_REDIRECT,
         INTENT_PARTS_TECHNICIAN,
-        INTENT_ETA_SHIPPING,
-        INTENT_ORDER_STATUS,
     }
 )
 
@@ -640,6 +639,27 @@ def classify(text: str) -> SalesIntent:
 # ---------------------------------------------------------------------------
 
 
+def _phone_directory() -> str:
+    try:
+        from config import department_phone_directory
+
+        return department_phone_directory()
+    except ImportError:
+        return (
+            "**Sales (delivery & orders):** +1-888-848-2630 ext. 2\n"
+            "**Warranty (setup & defects):** +1-888-848-2630 ext. 3"
+        )
+
+
+def _sales_phone() -> str:
+    try:
+        from config import SALES_PHONE
+
+        return SALES_PHONE
+    except ImportError:
+        return "+1-888-848-2630 ext. 2"
+
+
 _WARRANTY_SERVICE_CONTACT = (
     "Hi there\n"
     "\n"
@@ -650,7 +670,7 @@ _WARRANTY_SERVICE_CONTACT = (
     "\n"
     "Warranty Service Email: service@osakititan.com\n"
     "\n"
-    "Phone: 1-888-848-2630 ext.3\n"
+    f"{_phone_directory()}\n"
     "\n"
     "You can also submit ticket directly using below link:\n"
     "\n"
@@ -661,14 +681,24 @@ _WARRANTY_SERVICE_CONTACT = (
     "Thank you."
 )
 
+_SALES_DELIVERY_CONTACT = (
+    "I can't look up live tracking or promise a delivery date from this chat.\n"
+    "\n"
+    f"For **delivery and order status**, please call **sales** at {_sales_phone()}.\n"
+    "\n"
+    f"{_phone_directory()}"
+)
+
 _AGENT_CONNECT = (
     "I'll connect you with our sales team. "
-    "Please share your **email** and they will follow up."
+    "Please share your **email** and they will follow up.\n\n"
+    f"{_phone_directory()}"
 )
 
 _AGENT_CONNECT_CANCEL = (
     "I'll connect you with an agent for cancel / refund help. "
-    "Please share your **email** (and order number if you have it)."
+    "Please share your **email** (and order number if you have it).\n\n"
+    f"{_phone_directory()}"
 )
 
 
@@ -677,17 +707,17 @@ def handoff_message(intent: SalesIntent) -> Optional[str]:
 
     OsakiUSA Sales (Tidio) policy:
       - Never invent discount % or shipping ETAs in this chat.
-      - Defect / parts / technician / shipping / tracking → Warranty
-        Department contact (email / phone / Freshdesk) immediately.
+      - Defect / parts / technician → Warranty Department (email / Freshdesk / ext. 3).
+      - Delivery date / tracking / order status → sales phone (ext. 2).
       - Cancel / refund / return → sales agent.
       - Discount / explicit human request → sales agent (email capture).
     """
     label = intent.label
+    if label in (INTENT_ETA_SHIPPING, INTENT_ORDER_STATUS):
+        return _SALES_DELIVERY_CONTACT
     if label in (
         INTENT_WARRANTY_REDIRECT,
         INTENT_PARTS_TECHNICIAN,
-        INTENT_ETA_SHIPPING,
-        INTENT_ORDER_STATUS,
     ):
         return _WARRANTY_SERVICE_CONTACT
     if label == INTENT_CANCEL_REFUND:
@@ -697,6 +727,7 @@ def handoff_message(intent: SalesIntent) -> Optional[str]:
     if label == INTENT_HUMAN:
         return (
             "I'll connect you with our sales team. "
-            "Please share your **email** (and optionally a phone number)."
+            "Please share your **email** (and optionally a phone number).\n\n"
+            f"{_phone_directory()}"
         )
     return None

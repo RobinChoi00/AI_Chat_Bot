@@ -148,18 +148,28 @@ def test_hawaii_alaska_are_quoted_freight_and_guam_is_not_served():
         assert classify(text).label == INTENT_PREPURCHASE_POLICY, text
 
 
-def test_shipping_and_warranty_handoffs_use_warranty_department_contact():
+def test_eta_and_order_status_handoff_to_sales_phone():
     from sales_intent import SalesIntent, handoff_message
 
-    for label in (
-        INTENT_ETA_SHIPPING,
-        INTENT_ORDER_STATUS,
-        INTENT_WARRANTY_REDIRECT,
-        INTENT_PARTS_TECHNICIAN,
-    ):
+    for label in (INTENT_ETA_SHIPPING, INTENT_ORDER_STATUS):
+        msg = handoff_message(SalesIntent(label=label, confidence="high", handoff=True))
+        assert msg
+        assert "ext. 2" in msg
+        assert "ext. 3" in msg
+        assert "service@osakititan.com" not in msg.lower()
+        assert "%" not in msg
+        assert "business days" not in msg.lower()
+
+
+def test_defect_handoffs_use_warranty_department_contact():
+    from sales_intent import SalesIntent, handoff_message
+
+    for label in (INTENT_WARRANTY_REDIRECT, INTENT_PARTS_TECHNICIAN):
         msg = handoff_message(SalesIntent(label=label, confidence="high", handoff=True))
         assert msg
         assert "service@osakititan.com" in msg.lower()
+        assert "ext. 2" in msg
+        assert "ext. 3" in msg
         assert "warranty chat icon" not in msg.lower()
         assert "freshdesk.com" in msg.lower()
 
@@ -353,6 +363,14 @@ def test_greeting_is_greeting():
     for text in ["hi", "hello!", "안녕하세요", "👍👍👍😱", "{{visitor_question}}"]:
         intent = classify(text)
         assert intent.label == INTENT_GREETING, text
+
+
+def test_greeting_lists_sales_and_warranty_extensions():
+    from sales_agent import respond
+
+    reply = respond("hi", domain="osakiusa.com")
+    assert "ext. 2" in reply.reply
+    assert "ext. 3" in reply.reply
 
 
 def test_empty_text_is_unclear():

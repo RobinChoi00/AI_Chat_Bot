@@ -1,8 +1,9 @@
 """
-Warranty-chat scope gate — installation, delivery, and defect support only.
+Warranty-chat scope gate — setup and defect support only.
 
-The warranty embed is not a general product/sales assistant. Off-topic and
-sales/pricing questions get a fixed refusal without KB lookup or LLM answers.
+The warranty embed is not a general product/sales assistant. Off-topic,
+sales/pricing, and delivery/tracking questions get a fixed refusal (sales
+phone ext. 2) without KB lookup or LLM answers.
 """
 
 from __future__ import annotations
@@ -11,6 +12,17 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Optional
+
+try:
+    from config import SALES_PHONE, department_phone_directory
+except ImportError:  # pragma: no cover — tests still have project root on path
+    SALES_PHONE = "+1-888-848-2630 ext. 2"
+
+    def department_phone_directory() -> str:
+        return (
+            f"**Sales (delivery & orders):** {SALES_PHONE}\n"
+            "**Warranty (setup & defects):** +1-888-848-2630 ext. 3"
+        )
 
 _GREETING_RE = re.compile(
     r"^(hi|hello|hey|good\s+(morning|afternoon|evening)|howdy|"
@@ -85,6 +97,26 @@ _POST_PURCHASE_DELIVERY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Post-purchase delivery / tracking — sales owns this, not the warranty flowchart.
+_DELIVERY_INQUIRY_RE = re.compile(
+    r"("
+    r"\btracking\b|"
+    r"track(?:ing)?\s+(?:number|my)|"
+    r"\bfedex\b|\bups\b|\busps\b|"
+    r"in\s+transit|"
+    r"where(?:'?s|\s+is)\s+my\s+(?:order|chair|package|shipment)|"
+    r"when\s+will\s+it\s+(?:arrive|deliver|ship)|"
+    r"how\s+long.{0,40}(?:ship|deliver|arriv)|"
+    r"late\s+deliver|"
+    r"never\s+arrived|"
+    r"marked\s+delivered|"
+    r"box\s+(?:was\s+)?(?:damage|crushed|opened)|"
+    r"signed\s+(?:cleared|damaged)|"
+    r"^(?:delivery|shipping|tracking)[\s!.?]*$"
+    r")",
+    re.IGNORECASE,
+)
+
 _OFF_TOPIC_RE = [
     re.compile(
         r"\b(write|generate|create|make)\s+(me\s+)?(a\s+)?"
@@ -143,6 +175,7 @@ def build_order_cancel_handoff_message() -> str:
 
 
 def build_warranty_scope_refusal(reason: str = "") -> str:
+    phones = department_phone_directory()
     if (reason or "").strip().lower() == "order_cancel":
         return build_order_cancel_handoff_message()
     if (reason or "").strip().lower() == "shipping_policy":
@@ -151,17 +184,37 @@ def build_warranty_scope_refusal(reason: str = "") -> str:
             "**Hawaii and Alaska:** we do ship there, but **you pay the freight**. "
             "The cost depends on the model and address — sales gets a carrier quote.\n"
             "**Guam:** we do not ship there.\n\n"
-            "For a quote or any other shipping question, please use the main "
-            "website sales chat or contact our sales team."
+            "For a quote or any other shipping question, please call **sales** "
+            f"at {SALES_PHONE}. I won't quote a dollar amount here.\n\n"
+            f"{phones}"
+        )
+    if (reason or "").strip().lower() == "delivery":
+        return (
+            "This chat is for **setup and product defects**.\n\n"
+            "For **delivery and tracking**, please call **sales** at "
+            f"{SALES_PHONE}. I can't look up a live shipment or promise a "
+            "calendar date from this chat.\n\n"
+            f"{phones}"
         )
     return (
-        "This chat is for **warranty support** only — installation, delivery, "
-        "or a chair malfunction.\n\n"
-        "For **sales, pricing, or product recommendations**, please use the "
-        "main website chat or call our sales line.\n\n"
+        "This chat is for **warranty support** only — setup or a chair "
+        "malfunction.\n\n"
+        "For **sales, pricing, product recommendations, or delivery**, "
+        f"please call **sales** at {SALES_PHONE}.\n\n"
+        f"{phones}\n\n"
         "If you have a warranty issue, describe your chair model and what "
-        "you need help with (setup, delivery, or a defect)."
+        "you need help with (setup or a defect)."
     )
+
+
+def is_delivery_inquiry(text: str) -> bool:
+    """True for post-purchase delivery / tracking that sales should take."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if _normalize(raw) == "delivery":
+        return True
+    return bool(_DELIVERY_INQUIRY_RE.search(raw))
 
 
 def is_pre_purchase_shipping_policy(text: str) -> bool:
@@ -239,6 +292,11 @@ def evaluate_warranty_scope(
     if is_pre_purchase_shipping_policy(raw):
         return WarrantyScopeDecision(in_scope=False, reason="shipping_policy")
 
+    # Delivery / tracking is a sales phone path (ext. 2). Leave in-progress
+    # delivery tickets alone so an open case can finish.
+    if is_delivery_inquiry(raw) and (issue_type or "") != "delivery":
+        return WarrantyScopeDecision(in_scope=False, reason="delivery")
+
     try:
         from delivery_intake import detect_delivery_spec_question  # noqa: WPS433
 
@@ -286,9 +344,14 @@ def _looks_like_general_product_question(text: str) -> bool:
 
 
 def filter_warranty_menu_options(node: dict) -> list[dict]:
-    """Hide sales routing from customer-facing warranty menus."""
+    """Hide sales and delivery routing from customer-facing warranty menus."""
     options = list(node.get("options") or [])
     node_id = str(node.get("node_id") or "")
-    if node_id != "root":
+    if node_id not in ("root", "issue_type"):
         return options
-    return [opt for opt in options if _normalize(str(opt.get("answer_key") or "")) != "sales"]
+    hidden = {"sales", "delivery"}
+    return [
+        opt
+        for opt in options
+        if _normalize(str(opt.get("answer_key") or "")) not in hidden
+    ]
