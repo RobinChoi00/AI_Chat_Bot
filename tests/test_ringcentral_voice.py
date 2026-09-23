@@ -14,6 +14,9 @@ sys.path.insert(0, str(APP_DIR))
 from ringcentral_voice import (  # noqa: E402
     DEPT_SALES_DTMF,
     DEPT_WARRANTY_DTMF,
+    ISSUE_DEFECT_DTMF,
+    ISSUE_INSTALL_DTMF,
+    ISSUE_SALES_DTMF,
     IvrPhase,
     REPEAT_DTMF,
     VoiceCallContext,
@@ -22,10 +25,12 @@ from ringcentral_voice import (  # noqa: E402
     build_business_hours_connect_script,
     build_department_menu_script,
     build_menu_script,
+    build_phone_issue_menu_script,
     build_sales_transfer_script,
     build_terminal_script,
     department_dtmf_patterns,
     menu_dtmf_patterns,
+    phone_issue_dtmf_patterns,
     post_diy_dtmf_patterns,
     ensure_audio_file,
     get_call_context,
@@ -87,6 +92,22 @@ def test_department_dtmf_patterns_are_sales_warranty_or_repeat():
     assert department_dtmf_patterns() == [
         DEPT_SALES_DTMF,
         DEPT_WARRANTY_DTMF,
+        REPEAT_DTMF,
+    ]
+
+
+def test_phone_issue_menu_sends_delivery_to_sales():
+    script = build_phone_issue_menu_script()
+    assert f"press {ISSUE_INSTALL_DTMF}" in script.lower()
+    assert f"press {ISSUE_SALES_DTMF}" in script.lower()
+    assert f"press {ISSUE_DEFECT_DTMF}" in script.lower()
+    assert "sales" in script.lower()
+    assert "delivery" in script.lower()
+    assert "press 2 for delivery issue" not in script.lower()
+    assert phone_issue_dtmf_patterns() == [
+        ISSUE_INSTALL_DTMF,
+        ISSUE_SALES_DTMF,
+        ISSUE_DEFECT_DTMF,
         REPEAT_DTMF,
     ]
 

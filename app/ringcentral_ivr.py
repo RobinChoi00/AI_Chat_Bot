@@ -6,7 +6,8 @@ Orchestrate RingCentral IVR callbacks with WarrantyEngine.
 Call flow:
   on-call-enter (open)   → play connect script → forward to warranty queue
   on-call-enter (closed) → department menu (2=sales, 3=warranty)
-                         → press 3: after-hours welcome + issue type menu
+                         → press 3: after-hours welcome + issue menu
+                           (1=setup, 2=sales/delivery, 3=defect)
                          → press 2: announce, then forward to sales (ext.2)
   Play complete          → collect DTMF, connect forward, or sales transfer
   on-call-exit           → SMS + team email (after-hours warranty tickets only)
@@ -34,6 +35,9 @@ from ringcentral_hours import is_warranty_business_hours
 from ringcentral_voice import (
     DEPT_SALES_DTMF,
     DEPT_WARRANTY_DTMF,
+    ISSUE_DEFECT_DTMF,
+    ISSUE_INSTALL_DTMF,
+    ISSUE_SALES_DTMF,
     IvrPhase,
     REPEAT_DTMF,
     VoiceCallContext,
@@ -42,12 +46,14 @@ from ringcentral_voice import (
     build_business_hours_connect_script,
     build_department_menu_script,
     build_menu_script,
+    build_phone_issue_menu_script,
     build_question_text_handoff_script,
     build_sales_transfer_script,
     build_terminal_script,
     department_dtmf_patterns,
     get_call_context,
     menu_dtmf_patterns,
+    phone_issue_dtmf_patterns,
     pop_call_context,
     post_diy_dtmf_patterns,
     resolve_play_uri,
@@ -239,7 +245,6 @@ def _start_after_hours_warranty_flow(ctx: VoiceCallContext) -> None:
         return
     intro = (
         "You selected warranty. "
-        "The next options are for your warranty issue, not the main extensions. "
         f"{build_after_hours_welcome_script()} "
     )
     _present_node(ctx, node, intro_prefix=intro)
@@ -259,7 +264,10 @@ def _present_node(
         _play_script(ctx, build_question_text_handoff_script(), phase=IvrPhase.MENU)
         return
     if node_type in ("question", "instruction"):
-        script = f"{intro_prefix}{build_menu_script(node)}"
+        if node.get("node_id") == "issue_type":
+            script = f"{intro_prefix}{build_phone_issue_menu_script()}"
+        else:
+            script = f"{intro_prefix}{build_menu_script(node)}"
         _play_script(ctx, script, phase=IvrPhase.MENU)
         return
     logger.warning("Unsupported node type %s — transferring", node_type)
@@ -366,8 +374,7 @@ def _handle_department_digit(ctx: VoiceCallContext, digit: str) -> None:
         _play_department_menu(ctx)
         return
     if digit == DEPT_SALES_DTMF:
-        _set_collected(ctx.ticket_id, "ivr_path", "department_sales_forward")
-        _play_script(ctx, build_sales_transfer_script(), phase=IvrPhase.SALES_TRANSFER)
+        _begin_sales_transfer(ctx)
         return
     if digit == DEPT_WARRANTY_DTMF:
         _set_collected(ctx.ticket_id, "ivr_path", "after_hours_warranty")
@@ -377,6 +384,44 @@ def _handle_department_digit(ctx: VoiceCallContext, digit: str) -> None:
         ctx,
         intro_prefix="Sorry, that was not a valid option. ",
     )
+
+
+def _begin_sales_transfer(ctx: VoiceCallContext) -> None:
+    _set_collected(ctx.ticket_id, "ivr_path", "department_sales_forward")
+    _play_script(ctx, build_sales_transfer_script(), phase=IvrPhase.SALES_TRANSFER)
+
+
+def _handle_issue_type_digit(ctx: VoiceCallContext, digit: str) -> None:
+    if digit == REPEAT_DTMF:
+        _replay_current_node(ctx)
+        return
+    if digit == ISSUE_SALES_DTMF:
+        _begin_sales_transfer(ctx)
+        return
+    if digit == ISSUE_INSTALL_DTMF:
+        answer = "installation"
+    elif digit == ISSUE_DEFECT_DTMF:
+        answer = "defect"
+    else:
+        script = (
+            "Sorry, that was not a valid option. "
+            f"{build_phone_issue_menu_script()}"
+        )
+        _play_script(ctx, script, phase=IvrPhase.MENU)
+        return
+
+    engine = _lazy_engine()
+    try:
+        result = engine.submit_answer(ctx.ticket_id, answer)
+    except ValueError as exc:
+        logger.warning("RC IVR invalid issue-type digit %s: %s", digit, exc)
+        script = (
+            "Sorry, that was not a valid option. "
+            f"{build_phone_issue_menu_script()}"
+        )
+        _play_script(ctx, script, phase=IvrPhase.MENU)
+        return
+    _present_node(ctx, result.get("next_node") or {})
 
 
 def _handle_menu_digit(ctx: VoiceCallContext, digit: str) -> None:
@@ -389,6 +434,10 @@ def _handle_menu_digit(ctx: VoiceCallContext, digit: str) -> None:
     if node is None:
         if is_warranty_business_hours():
             _transfer(ctx, "missing_node")
+        return
+
+    if node.get("node_id") == "issue_type":
+        _handle_issue_type_digit(ctx, digit)
         return
 
     if node.get("type") == "question_text":
@@ -466,6 +515,8 @@ def handle_command_update(payload: dict[str, Any]) -> None:
             node = _lazy_engine().get_current_node(ctx.ticket_id) or {}
             if node.get("type") == "question_text":
                 _start_collect(ctx, [REPEAT_DTMF])
+            elif node.get("node_id") == "issue_type":
+                _start_collect(ctx, phone_issue_dtmf_patterns())
             else:
                 _start_collect(ctx, menu_dtmf_patterns(node))
             return

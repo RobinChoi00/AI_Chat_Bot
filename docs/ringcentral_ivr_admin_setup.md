@@ -27,8 +27,8 @@ Our **Automated Voice App** (webhook IVR) only runs when the call is routed to t
 1. Main greeting explains extensions: **Press 2 for Sales**, **Press 3 for Warranty**.
 2. Route **directly** to the **Osaki Warranty Voice App** (webhook URLs on EC2) — **do not** send to a hold queue.
 3. Our app plays the same directory first (`press 2` sales / `press 3` warranty).
-4. **Press 3** → after-hours warranty script (closed + hours + docs) then the issue-type menu.
-5. **Press 2** → announced transfer to sales (ext.2). **Do not** overflow closed warranty calls to Sales silently.
+4. **Press 3** → after-hours warranty script (closed + hours + docs) then the issue menu: **1 setup**, **2 sales/delivery**, **3 defect**.
+5. **Press 2** (department or issue menu) → announced transfer to sales (ext.2). **Do not** overflow closed warranty calls to Sales silently.
 6. If the main-line IVR must offer Sales after hours, play this **before** transfer:  
    *“Warranty is closed. We are now transferring you to sales for non-warranty questions only.”*
 
@@ -43,7 +43,7 @@ Match published extensions on **888-848-2630**:
 | 2 | Sales | Sales queue (ext.2) |
 | 3 | Warranty (installation, defect; delivery is sales) | Warranty Voice App (closed) or warranty queue (open) |
 
-> Do **not** use 1=Warranty / 2=Sales / 3=Technical on the main line — callers confuse those keys with ext.2 sales and ext.3 warranty. Our after-hours Voice App also uses 2/3 for the department menu, then a separate issue-type menu after they press 3.
+> Do **not** use 1=Warranty / 2=Sales / 3=Technical on the main line — callers confuse those keys with ext.2 sales and ext.3 warranty. Our after-hours Voice App uses 2/3 for the department menu. After they press 3, the issue menu keeps **2 = sales/delivery** so it does not collide with the published sales extension.
 
 > Jose’s feedback: customers often pick Sales for warranty because **Warranty was missing**. Keep **Warranty** as its own option (key **3**).
 
@@ -96,7 +96,7 @@ operator review before the affected call can be considered complete.
 
 | When | Behavior |
 |------|----------|
-| **Closed** | Department menu first (2=sales, 3=warranty). Press 3: closed + hours + invoice/docs + SMS link + issue menu. Press 2: announced sales transfer (ext.2) |
+| **Closed** | Department menu first (2=sales, 3=warranty). Press 3: closed + hours + invoice/docs + SMS link + issue menu (1=setup, 2=sales/delivery, 3=defect). Press 2: announced sales transfer (ext.2) |
 | **Open** | Says connecting to warranty specialist, then forwards |
 | **Sales handoff in flowchart** | Open: announces transfer to sales. Closed: **no** silent sales transfer |
 | **Call end (closed)** | SMS + email to `service@osakititan.com` (skipped after a sales forward) |
@@ -142,7 +142,7 @@ Live phone E2E still requires the checklist below (RC activation + Roman routing
 1. Call warranty line after 6 PM CST (or Saturday).
 2. Expect first: **For sales, press 2. For warranty, press 3.**
 3. Press **3**.
-4. Expect: *“You selected warranty… Our warranty service department is closed… hours… call back…”* then the issue-type menu.
+4. Expect: *“You selected warranty… Our warranty service department is closed… hours… call back…”* then *“For setup press 1. For delivery, press 2 to reach sales. For a defect, press 3.”*
 5. Complete or hang up → SMS with resume link to caller mobile.
 6. Confirm press **2** announces a transfer to sales (no silent dump).
 

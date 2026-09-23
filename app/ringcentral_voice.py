@@ -33,6 +33,9 @@ REPEAT_DTMF = "0"
 POST_DIY_FIXED_DTMF = "1"
 DEPT_SALES_DTMF = "2"
 DEPT_WARRANTY_DTMF = "3"
+ISSUE_INSTALL_DTMF = "1"
+ISSUE_SALES_DTMF = "2"
+ISSUE_DEFECT_DTMF = "3"
 
 
 class IvrPhase(str, Enum):
@@ -219,6 +222,16 @@ def build_department_menu_script() -> str:
     )
 
 
+def build_phone_issue_menu_script() -> str:
+    """Warranty issue menu: setup and defect stay here; delivery goes to sales."""
+    return (
+        f"For setup or installation, press {ISSUE_INSTALL_DTMF}. "
+        f"For delivery or order status, press {ISSUE_SALES_DTMF} to reach sales. "
+        f"For a product defect, press {ISSUE_DEFECT_DTMF}. "
+        f"Press {REPEAT_DTMF} to hear these options again."
+    )
+
+
 def build_after_hours_welcome_script() -> str:
     """Opening message when the warranty line is closed — sets expectations."""
     from ringcentral_hours import (  # noqa: WPS433
@@ -296,6 +309,11 @@ def build_question_text_handoff_script() -> str:
 def department_dtmf_patterns() -> list[str]:
     """Allowed DTMF keys for the after-hours sales vs warranty menu."""
     return [DEPT_SALES_DTMF, DEPT_WARRANTY_DTMF, REPEAT_DTMF]
+
+
+def phone_issue_dtmf_patterns() -> list[str]:
+    """Allowed DTMF keys on the phone warranty issue menu."""
+    return [ISSUE_INSTALL_DTMF, ISSUE_SALES_DTMF, ISSUE_DEFECT_DTMF, REPEAT_DTMF]
 
 
 def menu_dtmf_patterns(node: dict) -> list[str]:
