@@ -23,14 +23,14 @@ import json
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Generator, cast
+from typing import Generator, Optional, cast
 
 import pytz
 from sqlalchemy import (
     Column, DateTime, Integer, String, Text,
     create_engine, event,
 )
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import Mapped, declarative_base, mapped_column, sessionmaker
 
 # ---------------------------------------------------------------------------
 # DB setup — same file as main.py, independent engine/session factory
@@ -276,16 +276,18 @@ class RingCentralCallState(Base):
 
     __tablename__ = "ringcentral_call_states"
 
-    id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(String, unique=True, index=True, nullable=False)
-    party_id = Column(String, nullable=False)
-    ticket_id = Column(String, index=True, nullable=False)
-    caller_phone = Column(String, nullable=True)
-    phase = Column(String, nullable=False)
-    awaiting_command = Column(String, nullable=True)
-    last_audio_key = Column(String, nullable=True)
-    created_at = Column(DateTime, default=_now_utc)
-    updated_at = Column(DateTime, default=_now_utc, onupdate=_now_utc)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    session_id: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    party_id: Mapped[str] = mapped_column(String, nullable=False)
+    ticket_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    caller_phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    phase: Mapped[str] = mapped_column(String, nullable=False)
+    awaiting_command: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    last_audio_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now_utc)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, default=_now_utc, onupdate=_now_utc
+    )
 
 
 # ---------------------------------------------------------------------------
