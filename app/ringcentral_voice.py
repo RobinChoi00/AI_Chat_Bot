@@ -297,12 +297,13 @@ def build_after_hours_sales_closed_script() -> str:
 
 
 def build_question_text_handoff_script() -> str:
-    """Phone cannot capture free-text — direct caller to SMS resume link."""
+    """Phone cannot capture free-text — close the call and send the SMS resume link."""
     return (
         "This step needs your order number, tracking details, or other written information, "
         "which is easier on our website. "
         "When you finish this call we will text you a link to continue. "
-        f"Press {REPEAT_DTMF} to hear the previous options again."
+        f"Press {POST_DIY_FIXED_DTMF} to end this call. "
+        f"Press {REPEAT_DTMF} to hear this message again."
     )
 
 

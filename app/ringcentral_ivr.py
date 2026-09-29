@@ -71,6 +71,15 @@ _SKIP_PHONE_FOLLOWUP_PATHS = frozenset(
 logger = logging.getLogger(__name__)
 
 
+def _phone_text_node_is_sales(node: dict) -> bool:
+    """Order / tracking text nodes belong on sales, not a looping warranty IVR."""
+    blob = f"{node.get('node_id') or ''} {node.get('prompt') or ''}".lower()
+    return any(
+        token in blob
+        for token in ("delivery", "tracking", "order number", "invoice", "shipment")
+    )
+
+
 class RetryableRingCentralEvent(RuntimeError):
     """The callback is valid but depends on an earlier event/state write."""
 
@@ -261,7 +270,17 @@ def _present_node(
         _present_terminal(ctx, node)
         return
     if node_type == "question_text":
-        _play_script(ctx, build_question_text_handoff_script(), phase=IvrPhase.MENU)
+        if _phone_text_node_is_sales(node):
+            if is_warranty_business_hours():
+                _play_script(ctx, build_sales_transfer_script(), phase=IvrPhase.SALES_TRANSFER)
+            else:
+                _play_script(
+                    ctx,
+                    build_after_hours_sales_closed_script(),
+                    phase=IvrPhase.POST_DIY,
+                )
+            return
+        _play_script(ctx, build_question_text_handoff_script(), phase=IvrPhase.POST_DIY)
         return
     if node_type in ("question", "instruction"):
         if node.get("node_id") == "issue_type":

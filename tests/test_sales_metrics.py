@@ -164,9 +164,9 @@ def _seed_funnel() -> None:
     """Three shoppers who quit at different points in the interview."""
     now = datetime.now(_CST)
     walks = {
-        "finished": ["ask_height", "ask_weight", "ask_space", "ask_goal", "recommend"],
-        "quit_at_weight": ["ask_height", "ask_weight"],
-        "quit_at_space": ["ask_height", "ask_weight", "ask_space"],
+        "finished": ["ask_height", "ask_goal", "recommend"],
+        "quit_at_goal": ["ask_height", "ask_goal"],
+        "quit_at_height": ["ask_height"],
     }
     with wm.warranty_db_session() as db:
         for sid, stages in walks.items():
@@ -199,15 +199,15 @@ def test_question_funnel_shows_where_shoppers_quit(client):
     funnel = {row["stage"]: row for row in response.json()["question_funnel"]}
 
     assert funnel["ask_height"]["reached"] == 3
-    assert funnel["ask_height"]["dropped"] == 0
+    assert funnel["ask_height"]["dropped"] == 1
 
-    # Weight is where one of the three stops.
-    assert funnel["ask_weight"]["reached"] == 3
-    assert funnel["ask_weight"]["dropped"] == 1
+    assert funnel["ask_goal"]["reached"] == 2
+    assert funnel["ask_goal"]["dropped"] == 1
 
-    # Of the two who answered space, only one reaches the goal question.
-    assert funnel["ask_space"]["reached"] == 2
-    assert funnel["ask_space"]["dropped"] == 1
+    assert funnel["recommend"]["reached"] == 1
+    assert funnel["recommend"]["dropped"] == 0
+    assert "ask_weight" not in funnel
+    assert "ask_space" not in funnel
 
 
 def test_unclear_rate_is_reported(client):

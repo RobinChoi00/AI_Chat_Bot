@@ -161,6 +161,16 @@ def test_extract_does_not_prefill_hawaii_free_delivery(monkeypatch):
     assert "delivery" not in out.get("answer_keys", [])
 
 
+def test_extract_shipping_help_routes_to_sales_not_delivery_flow(monkeypatch):
+    monkeypatch.setattr(warranty_intake, "_openai_client", lambda: None)
+    out = extract_workflow_prefill(
+        free_text="need help with shipping the chair",
+        nodes=_NODES,
+    )
+    assert "delivery" not in out.get("answer_keys", [])
+    assert out.get("route") == "sales_delivery"
+
+
 def test_extract_keyword_footrest_air_without_llm(monkeypatch):
     monkeypatch.setattr(warranty_intake, "_openai_client", lambda: None)
     out = extract_workflow_prefill(

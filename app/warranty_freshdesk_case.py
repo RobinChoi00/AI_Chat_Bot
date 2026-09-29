@@ -930,6 +930,38 @@ def ensure_freshdesk_link(ticket_id: str, *, engine=None) -> Dict[str, Any]:
     )
 
 
+def note_evidence_upload(
+    ticket_id: str,
+    *,
+    filename: str,
+    evidence_type: str,
+    engine=None,
+) -> Dict[str, Any]:
+    """Private Freshdesk note when the customer attaches a file (email still carries the bytes)."""
+    if not _freshdesk_enabled():
+        return {"posted": False, "skipped": True, "reason": "freshdesk_disabled"}
+
+    if engine is None:
+        from warranty_workflow import WarrantyEngine  # noqa: WPS433
+
+        engine = WarrantyEngine
+
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        return {"posted": False, "error": "ticket_not_found"}
+    fd_id = str(ticket.get_collected().get("freshdesk_ticket_id") or "").strip()
+    if not fd_id:
+        return {"posted": False, "skipped": True, "reason": "not_linked"}
+    safe_name = (filename or "upload").strip() or "upload"
+    kind = (evidence_type or "other").strip() or "other"
+    body = (
+        f"Customer uploaded evidence ({kind}): {safe_name}\n"
+        "The file was emailed to the warranty inbox. "
+        "Download it from the warranty admin ticket — this bot does not approve replacements."
+    )
+    return _post_private_note(fd_id, body)
+
+
 def maybe_add_freshdesk_customer_reply(
     ticket_id: str,
     note_text: str,

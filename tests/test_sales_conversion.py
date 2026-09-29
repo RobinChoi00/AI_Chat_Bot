@@ -161,6 +161,26 @@ def test_order_is_attributed_through_a_lead_row(client):
     assert _post_order(client, _order()).json()["matched_by"] == "lead_email"
 
 
+def test_order_is_attributed_to_the_session_that_captured_the_phone(client):
+    with wm.warranty_db_session() as db:
+        db.add(
+            sm.SalesSession(
+                session_id="tidio:phone",
+                domain="osakiusa.com",
+                contact_phone="+1 (555) 010-0199",
+                created_at=datetime.now(),
+            )
+        )
+
+    payload = _order(email="anon-checkout@example.com")
+    payload["phone"] = "15550100199"
+    resp = _post_order(client, payload)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["attributed"] is True
+    assert body["matched_by"] == "session_phone"
+
+
 def test_email_match_is_case_insensitive(client):
     with wm.warranty_db_session() as db:
         db.add(

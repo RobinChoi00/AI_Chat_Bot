@@ -711,25 +711,24 @@ def _keyword_workflow_prefill(text: str) -> Optional[dict[str, Any]]:
     # the post-purchase delivery flowchart.
     try:
         from warranty_scope import (  # noqa: WPS433
-            is_delivery_inquiry,
             is_pre_purchase_shipping_policy,
         )
     except ImportError:
         is_pre_purchase_shipping_policy = lambda _t: False  # type: ignore
-        is_delivery_inquiry = lambda _t: False  # type: ignore
 
     if (
         _has_any(norm, _DELIVERY_WORDS)
         and not _has_any(norm, _INSTALL_WORDS)
         and not is_pre_purchase_shipping_policy(text)
-        and not is_delivery_inquiry(text)
     ):
+        # Never open the delivery flowchart from chat. Sales owns tracking.
         return {
-            "answer_keys": ["warranty", "delivery"],
+            "answer_keys": [],
             "model_name": _extract_model_from_intake(text),
             "confidence": "high",
-            "summary": "Delivery / shipping help.",
+            "summary": "Delivery / shipping — sales phone.",
             "source": "keyword",
+            "route": "sales_delivery",
         }
     if _has_any(norm, _INSTALL_WORDS) and not _has_any(norm, _DELIVERY_WORDS):
         return {

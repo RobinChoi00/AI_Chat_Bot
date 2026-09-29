@@ -346,6 +346,18 @@ async def upload_evidence(
         terminal_node_id=terminal_node_id,
     )
 
+    from warranty_freshdesk_case import (  # noqa: WPS433
+        note_evidence_upload,
+        schedule_freshdesk_case_creation,
+    )
+
+    schedule_freshdesk_case_creation(ticket_id, allow_any_status=True)
+    note_evidence_upload(
+        ticket_id,
+        filename=original_filename,
+        evidence_type=evidence_type,
+    )
+
     receipt = _try_customer_receipt(ticket_id, force=True)
 
     return {
@@ -468,7 +480,13 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
 
     receipt = _try_customer_receipt(ticket_id, force=True)
 
-    return {
+    from warranty_freshdesk_case import schedule_freshdesk_case_creation  # noqa: WPS433
+
+    freshdesk_result = schedule_freshdesk_case_creation(
+        ticket_id, allow_any_status=True
+    )
+
+    payload = {
         "ticket_id": ticket_id,
         "customer_email": _masked_public_email(normalized_email),
         "email_saved": True,
@@ -480,6 +498,14 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         "case_reference": receipt.get("case_reference"),
         "receipt_email_sent": receipt.get("sent"),
     }
+    if freshdesk_result.get("freshdesk_ticket_id"):
+        payload["freshdesk"] = {
+            "case_reference": freshdesk_result.get("case_reference"),
+            "linked": True,
+        }
+    elif freshdesk_result.get("scheduled"):
+        payload["freshdesk_scheduled"] = True
+    return payload
 
 
 class WarrantyCustomerNoteRequest(BaseModel):
@@ -1322,6 +1348,34 @@ def _record_unmapped_phrase(engine, ticket_id: str, node: dict, answer: str) -> 
         row.set_collected("unmapped_phrases", json.dumps(updated))
 
 
+def _open_warranty_menu_ticket(engine, session_id: str, domain: str) -> str:
+    existing = engine.get_active_session_ticket(session_id)
+    if existing is None:
+        ticket_id, _root = engine.start_session(session_id, domain)
+        try:
+            engine.submit_answer(ticket_id, "warranty")
+        except ValueError:
+            pass
+        return str(ticket_id)
+    return str(existing.ticket_id)
+
+
+def _refuse_warranty_scope_payload(
+    engine,
+    session_id: str,
+    domain: str,
+    reason: str,
+) -> Dict[str, Any]:
+    from warranty_scope import build_warranty_scope_refusal  # noqa: WPS433
+
+    ticket_id = _open_warranty_menu_ticket(engine, session_id, domain)
+    return _build_side_question_response(
+        engine,
+        ticket_id,
+        build_warranty_scope_refusal(reason),
+    )
+
+
 def _build_side_question_response(
     engine,
     ticket_id: str,
@@ -2149,7 +2203,7 @@ async def natural_start_warranty(
     if not message:
         raise HTTPException(status_code=422, detail="message must not be empty")
 
-    from warranty_scope import build_warranty_scope_refusal, evaluate_warranty_scope  # noqa: WPS433
+    from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
 
     scope = evaluate_warranty_scope(message)
     if scope.is_blocked:
@@ -2161,19 +2215,8 @@ async def natural_start_warranty(
                 message,
                 body.domain,
             )
-        existing = engine.get_active_session_ticket(session_id)
-        if existing is None:
-            ticket_id, _root = engine.start_session(session_id, body.domain)
-            try:
-                engine.submit_answer(ticket_id, "warranty")
-            except ValueError:
-                pass
-        else:
-            ticket_id = str(existing.ticket_id)
-        return _build_side_question_response(
-            engine,
-            ticket_id,
-            build_warranty_scope_refusal(scope.reason),
+        return _refuse_warranty_scope_payload(
+            engine, session_id, body.domain, scope.reason
         )
 
     from warranty_nlp import (  # noqa: WPS433
@@ -2214,6 +2257,10 @@ async def natural_start_warranty(
             return payload
 
     issue_type = interpret_issue_type(message)
+    if issue_type == "delivery":
+        return _refuse_warranty_scope_payload(
+            engine, session_id, body.domain, "delivery"
+        )
     if ticket is None:
         raise HTTPException(
             status_code=422,
@@ -2293,7 +2340,7 @@ async def smart_start_warranty(
     if not message:
         raise HTTPException(status_code=422, detail="message must not be empty")
 
-    from warranty_scope import build_warranty_scope_refusal, evaluate_warranty_scope  # noqa: WPS433
+    from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
 
     scope = evaluate_warranty_scope(message)
     if scope.is_blocked:
@@ -2305,19 +2352,8 @@ async def smart_start_warranty(
                 message,
                 body.domain,
             )
-        ticket = engine.get_active_session_ticket(session_id)
-        if ticket is None:
-            ticket_id, _root = engine.start_session(session_id, body.domain)
-            try:
-                engine.submit_answer(ticket_id, "warranty")
-            except ValueError:
-                pass
-        else:
-            ticket_id = str(ticket.ticket_id)
-        return _build_side_question_response(
-            engine,
-            ticket_id,
-            build_warranty_scope_refusal(scope.reason),
+        return _refuse_warranty_scope_payload(
+            engine, session_id, body.domain, scope.reason
         )
 
     from warranty_intake import (  # noqa: WPS433
@@ -2344,6 +2380,15 @@ async def smart_start_warranty(
         if key in ("installation", "delivery", "defect"):
             suggested_issue_type = key
             break
+
+    if (
+        str(extraction.get("route") or "") == "sales_delivery"
+        or suggested_issue_type == "delivery"
+        or "delivery" in answer_keys
+    ):
+        return _refuse_warranty_scope_payload(
+            engine, session_id, body.domain, "delivery"
+        )
 
     safe_keys: list[str] = []
     if answer_keys:

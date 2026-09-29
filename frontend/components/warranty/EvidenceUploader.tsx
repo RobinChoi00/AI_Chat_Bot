@@ -66,8 +66,9 @@ export default function EvidenceUploader({
     () => knownEmail || initialCustomerEmail
   );
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  /** Default N/A — most customers submit email only without media. */
-  const [evidenceNa, setEvidenceNa] = useState(true);
+  const requiredEvidence = evidenceRequired.length > 0;
+  /** Required photo/video cases start with upload open; email-only stays N/A. */
+  const [evidenceNa, setEvidenceNa] = useState(!requiredEvidence);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<"success" | "error" | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
@@ -267,7 +268,10 @@ export default function EvidenceUploader({
         <div className="mb-3 space-y-2">
           <p className="text-xs text-gray-600">
             We already have <strong className="text-gray-900">{knownEmail}</strong> for
-            this case. {reachBlurb} Photos and videos are optional.
+            this case. {reachBlurb}{" "}
+            {requiredEvidence
+              ? "Please attach the requested photos or video if you have them."
+              : "Photos and videos are optional."}
           </p>
           <button
             type="button"
@@ -289,7 +293,9 @@ export default function EvidenceUploader({
               : issueType === "delivery"
                 ? "Enter your email so our team can follow up on this delivery case within 24 hours. "
                 : "Enter your email so our warranty team can follow up within 24 hours. "}
-            Photos and videos are optional.
+            {requiredEvidence
+              ? "Please attach the requested photos or video if you have them."
+              : "Photos and videos are optional."}
           </p>
           <div className="mb-3">
             <label className="mb-1 block text-xs text-gray-500">

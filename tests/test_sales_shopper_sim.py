@@ -519,6 +519,27 @@ def test_after_picks_mid_one_and_price_alias():
     assert "$" in price.reply or "price" in price.reply.lower()
 
 
+def test_after_picks_price_stock_use_pending_chair():
+    first = _turn("I'm 5'10 with lower back pain")
+    prefs = _merge({}, first)
+    primary = str(prefs.get("pending_primary") or "")
+    assert primary
+    price = _turn("how much is this chair", prefs)
+    assert price.intent == "price"
+    assert _UNCLEAR_MENU not in price.reply.lower()
+    assert "which model" not in price.reply.lower()
+    assert primary.split()[0].lower() in price.reply.lower() or "$" in price.reply
+    stock = _turn("is it in stock", prefs)
+    assert stock.intent == "stock"
+    assert _UNCLEAR_MENU not in stock.reply.lower()
+    cheaper = _turn("something cheaper", prefs)
+    assert cheaper.intent != "unclear"
+    assert _UNCLEAR_MENU not in cheaper.reply.lower()
+    that = _turn("that one", prefs)
+    assert that.intent != "unclear"
+    assert _UNCLEAR_MENU not in that.reply.lower()
+
+
 def test_goal_and_doorway_buttons_fit_tidio_cap():
     from sales_tidio_buttons import prioritize_quick_replies
 

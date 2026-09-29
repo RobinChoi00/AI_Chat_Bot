@@ -16,10 +16,8 @@ lead row, within an attribution window (30 days by default).
 
 Deliberate limits
 -----------------
-- **Email is the only join key.** A shopper who chats anonymously and then
-  checks out with an address we never saw stays unattributed. We record the
-  order anyway with ``session_id = NULL`` so the attributed share is honest
-  rather than flattering.
+- **Email is the preferred join key.** Phone is a second pass when checkout
+  and a chat lead share the same 10-digit number.
 - **Last touch, not multi touch.** The most recent qualifying session gets
   the credit.
 - **Idempotent.** ``shopify_order_id`` is unique, so webhook retries and the
@@ -33,6 +31,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -43,6 +42,8 @@ logger = logging.getLogger(__name__)
 
 MATCH_SESSION_EMAIL = "session_email"
 MATCH_LEAD_EMAIL = "lead_email"
+MATCH_SESSION_PHONE = "session_phone"
+MATCH_LEAD_PHONE = "lead_phone"
 
 
 def attribution_window_days() -> int:
@@ -107,6 +108,29 @@ def _order_email(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _phone_digits(phone: str) -> str:
+    digits = re.sub(r"\D", "", phone or "")
+    if len(digits) >= 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) >= 10:
+        return digits[-10:]
+    return digits
+
+
+def _order_phone(payload: dict[str, Any]) -> str:
+    for key in ("phone", "contact_phone"):
+        digits = _phone_digits(str(payload.get(key) or ""))
+        if len(digits) == 10:
+            return digits
+    for nested_key in ("customer", "billing_address", "shipping_address"):
+        nested = payload.get(nested_key)
+        if isinstance(nested, dict):
+            digits = _phone_digits(str(nested.get("phone") or ""))
+            if len(digits) == 10:
+                return digits
+    return ""
+
+
 def _order_total(payload: dict[str, Any]) -> Optional[float]:
     for key in ("total_price", "current_total_price", "subtotal_price"):
         raw = payload.get(key)
@@ -138,37 +162,60 @@ def _ordered_at(payload: dict[str, Any]) -> Optional[datetime]:
 def find_attributed_session(
     email: str,
     *,
+    phone: str = "",
     ordered_at: Optional[datetime] = None,
 ) -> tuple[Optional[str], Optional[str]]:
     """Return ``(session_id, matched_by)`` for the chat that earned this order."""
     email = (email or "").strip().lower()
-    if not email:
-        return None, None
-
+    phone_digits = _phone_digits(phone)
     cutoff = (ordered_at or datetime.utcnow()) - timedelta(days=attribution_window_days())
 
     with warranty_db_session() as db:
-        session = (
-            db.query(SalesSession)
-            .filter(SalesSession.contact_email.isnot(None))
-            .filter(SalesSession.created_at >= cutoff)
-            .order_by(SalesSession.created_at.desc())
-            .all()
-        )
-        for row in session:
-            if str(row.contact_email or "").strip().lower() == email:
-                return str(row.session_id), MATCH_SESSION_EMAIL
+        if email:
+            session = (
+                db.query(SalesSession)
+                .filter(SalesSession.contact_email.isnot(None))
+                .filter(SalesSession.created_at >= cutoff)
+                .order_by(SalesSession.created_at.desc())
+                .all()
+            )
+            for row in session:
+                if str(row.contact_email or "").strip().lower() == email:
+                    return str(row.session_id), MATCH_SESSION_EMAIL
 
-        leads = (
-            db.query(SalesLead)
-            .filter(SalesLead.email.isnot(None))
-            .filter(SalesLead.created_at >= cutoff)
-            .order_by(SalesLead.created_at.desc())
-            .all()
-        )
-        for lead in leads:
-            if str(lead.email or "").strip().lower() == email:
-                return str(lead.session_id), MATCH_LEAD_EMAIL
+            leads = (
+                db.query(SalesLead)
+                .filter(SalesLead.email.isnot(None))
+                .filter(SalesLead.created_at >= cutoff)
+                .order_by(SalesLead.created_at.desc())
+                .all()
+            )
+            for lead in leads:
+                if str(lead.email or "").strip().lower() == email:
+                    return str(lead.session_id), MATCH_LEAD_EMAIL
+
+        if len(phone_digits) == 10:
+            session = (
+                db.query(SalesSession)
+                .filter(SalesSession.contact_phone.isnot(None))
+                .filter(SalesSession.created_at >= cutoff)
+                .order_by(SalesSession.created_at.desc())
+                .all()
+            )
+            for row in session:
+                if _phone_digits(str(row.contact_phone or "")) == phone_digits:
+                    return str(row.session_id), MATCH_SESSION_PHONE
+
+            leads = (
+                db.query(SalesLead)
+                .filter(SalesLead.phone.isnot(None))
+                .filter(SalesLead.created_at >= cutoff)
+                .order_by(SalesLead.created_at.desc())
+                .all()
+            )
+            for lead in leads:
+                if _phone_digits(str(lead.phone or "")) == phone_digits:
+                    return str(lead.session_id), MATCH_LEAD_PHONE
 
     return None, None
 
@@ -189,8 +236,11 @@ def record_order(payload: dict[str, Any], *, domain: str = "unknown") -> Optiona
             return None
 
     email = _order_email(payload)
+    phone = _order_phone(payload)
     ordered_at = _ordered_at(payload)
-    session_id, matched_by = find_attributed_session(email, ordered_at=ordered_at)
+    session_id, matched_by = find_attributed_session(
+        email, phone=phone, ordered_at=ordered_at
+    )
 
     with warranty_db_session() as db:
         row = SalesConversion(

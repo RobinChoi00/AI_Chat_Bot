@@ -120,6 +120,7 @@ function resolveSuggestedIssueType(
     resp.suggested_issue_type ||
     "";
   const key = String(raw).trim().toLowerCase();
+  if (key === "delivery") return null;
   return ISSUE_TYPE_KEYS.has(key) ? key : null;
 }
 

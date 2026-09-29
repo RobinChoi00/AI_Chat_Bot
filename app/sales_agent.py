@@ -424,6 +424,70 @@ def _guess_model_from_text(text: str) -> Optional[ProductSpecs]:
     return resolve_product(named) if named else None
 
 
+_CHEAPER_FROM_LIST_RE = re.compile(
+    r"\b("
+    r"(?:something|anything|a|the)\s+cheaper(?:\s+(?:one|option|chair))?"
+    r"|cheaper\s+(?:one|option|chair)"
+    r"|less\s+expensive(?:\s+(?:one|option|chair))?"
+    r"|lower\s+(?:tier|priced?)"
+    r"|budget\s+(?:one|option|pick|chair)"
+    r")\b",
+    re.I,
+)
+_DISCOUNT_KEEP_RE = re.compile(
+    r"\b("
+    r"discount|coupon|promo(?:tion|s)?|sale|deals?|costco|"
+    r"price\s+match|financing|monthly\s+payment"
+    r")\b",
+    re.I,
+)
+
+
+def _focus_product_from_prefs(prefs: Optional[dict]) -> Optional[ProductSpecs]:
+    """Last recommended / opened chair — used when the shopper says 'it' / 'this'."""
+    pending = str((prefs or {}).get("pending_primary") or "").strip()
+    if pending:
+        found = resolve_product(pending) or _guess_model_from_text(pending)
+        if found is not None:
+            return found
+    picks = (prefs or {}).get("pending_tier_picks") or []
+    if isinstance(picks, list) and picks and isinstance(picks[0], dict):
+        return _product_from_tier_pick(picks[0])
+    return None
+
+
+def _resolve_focus_product(
+    message: str,
+    prefs: Optional[dict] = None,
+    *,
+    allow_named: bool = True,
+) -> Optional[ProductSpecs]:
+    """Named model in the message wins; otherwise the pending pick."""
+    if allow_named:
+        named = _guess_model_from_text(message or "")
+        if named is not None:
+            return named
+    idx = _pending_tier_index(message or "", prefs)
+    if idx is not None:
+        picks = (prefs or {}).get("pending_tier_picks") or []
+        if isinstance(picks, list) and idx < len(picks) and isinstance(picks[idx], dict):
+            found = _product_from_tier_pick(picks[idx])
+            if found is not None:
+                return found
+    return _focus_product_from_prefs(prefs)
+
+
+def _wants_cheaper_from_picks(message: str, prefs: Optional[dict]) -> bool:
+    """True when a 3-pick list is up and the shopper wants the Value chair."""
+    picks = (prefs or {}).get("pending_tier_picks") or []
+    if not isinstance(picks, list) or not picks:
+        return False
+    raw = message or ""
+    if _DISCOUNT_KEEP_RE.search(raw):
+        return False
+    return bool(_CHEAPER_FROM_LIST_RE.search(raw))
+
+
 # ---------------------------------------------------------------------------
 # Response builders per intent
 # ---------------------------------------------------------------------------
@@ -678,7 +742,12 @@ def _price_extreme_product(message: str) -> Optional[ProductSpecs]:
     return None
 
 
-def _price_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
+def _price_reply(
+    message: str,
+    *,
+    domain: str = "osakiusa.com",
+    prefs: Optional[dict] = None,
+) -> SalesReply:
     product = _guess_model_from_text(message)
     extreme_note = ""
     if product is None:
@@ -696,6 +765,8 @@ def _price_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
                 extreme_note = (
                     "Highest **published catalog price** I can quote right now:\n\n"
                 )
+    if product is None:
+        product = _resolve_focus_product(message, prefs, allow_named=False)
     if product is None:
         samples = _price_candidates()
         lines = [
@@ -770,8 +841,13 @@ def _price_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
     )
 
 
-def _stock_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
-    product = _guess_model_from_text(message)
+def _stock_reply(
+    message: str,
+    *,
+    domain: str = "osakiusa.com",
+    prefs: Optional[dict] = None,
+) -> SalesReply:
+    product = _resolve_focus_product(message, prefs)
     if product is None:
         return SalesReply(
             reply=(
@@ -890,11 +966,7 @@ def _color_reply(
     prefs: Optional[dict] = None,
 ) -> SalesReply:
     color = parse_asked_color(message)
-    product = _guess_model_from_text(message)
-    if product is None:
-        pending = str((prefs or {}).get("pending_primary") or "").strip()
-        if pending:
-            product = resolve_product(pending) or _guess_model_from_text(pending)
+    product = _resolve_focus_product(message, prefs)
     checkout = "Exact color is confirmed at checkout."
     if product is None:
         asked = f"**{color}**" if color else "that color"
@@ -1085,8 +1157,13 @@ def _yes_no_spec(value: str) -> str:
     return value.strip()
 
 
-def _specs_reply(message: str, *, domain: str = "osakiusa.com") -> SalesReply:
-    product = _guess_model_from_text(message)
+def _specs_reply(
+    message: str,
+    *,
+    domain: str = "osakiusa.com",
+    prefs: Optional[dict] = None,
+) -> SalesReply:
+    product = _resolve_focus_product(message, prefs)
     if product is None:
         return SalesReply(
             reply=(
@@ -2114,7 +2191,12 @@ def _case_recommend_reply(
     )
 
 
-def _catalog_tier_recommend_reply(message: str, request: RecommendationRequest) -> SalesReply:
+def _catalog_tier_recommend_reply(
+    message: str,
+    request: RecommendationRequest,
+    *,
+    domain: str = "osakiusa.com",
+) -> SalesReply:
     """Fallback when practical-case file is missing or incomplete."""
     has_hints = any(
         [request.height_in, request.weight_lb, request.budget_usd, request.focus_areas]
@@ -2185,6 +2267,19 @@ def _catalog_tier_recommend_reply(message: str, request: RecommendationRequest) 
         "\nReply with a number, ask for specs, or connect with a sales specialist."
     )
 
+    primary = picks[0]
+    tier_leads = [
+        {
+            "tier": price_tier_label(product.price_usd) or f"Option {i}",
+            "model": product.display_name,
+            "display": product.display_name,
+            "handle": product.handle,
+            "url": product_page_url(domain, product.handle or ""),
+            "stock": None,
+        }
+        for i, product in enumerate(picks, start=1)
+    ]
+
     return SalesReply(
         reply="\n".join(lines),
         intent=INTENT_RECOMMEND,
@@ -2199,7 +2294,12 @@ def _catalog_tier_recommend_reply(message: str, request: RecommendationRequest) 
         + (["catalog.parse_hints"] if has_hints else []),
         products=[p.as_public_dict() for p in picks],
         flow_stage="recommend",
-        prefs_patch={"awaiting_recommend": False},
+        prefs_patch={
+            "awaiting_recommend": False,
+            "pending_primary": primary.display_name,
+            "pending_product_url": product_page_url(domain, primary.handle or ""),
+            "pending_tier_picks": tier_leads,
+        },
     )
 
 
@@ -2286,7 +2386,7 @@ def _recommend_reply(
     if tiered is not None:
         return tiered
 
-    return _catalog_tier_recommend_reply(message, request)
+    return _catalog_tier_recommend_reply(message, request, domain=domain)
 
 
 
@@ -3679,11 +3779,11 @@ def _payload_reply(
             prefs=patched,
         )
     if root == "stock":
-        return _stock_reply(message or payload, domain=domain)
+        return _stock_reply(message or payload, domain=domain, prefs=prefs)
     if root == "price":
-        return _price_reply(message or payload, domain=domain)
+        return _price_reply(message or payload, domain=domain, prefs=prefs)
     if root == "specs":
-        return _specs_reply(message or payload, domain=domain)
+        return _specs_reply(message or payload, domain=domain, prefs=prefs)
     if root == "lead":
         action = parts[1].strip().lower() if len(parts) > 1 else "save_pick"
         if action in {"save_pick", "email", "email_pick"}:
@@ -4038,7 +4138,9 @@ def _pending_tier_index(message: str, prefs: Optional[dict]) -> Optional[int]:
             0,
             r"\b(the\s+)?(first|value|budget)\b|"
             r"\boption\s*1\b|\bnumber\s*1\b|#\s*1\b|"
-            r"the\s+cheap(?:est)?\s+one",
+            r"the\s+cheap(?:est)?\s+one|"
+            r"something\s+cheaper|a\s+cheaper\s+(?:one|option|chair)|"
+            r"cheaper\s+(?:one|option|chair)|lower\s+tier",
         ),
         (
             1,
@@ -4075,12 +4177,48 @@ def _pending_tier_follow_reply(
     product = _product_from_tier_pick(pick)
     named = product.display_name if product is not None else ""
     if intent_label == INTENT_PRICE and named:
-        return _price_reply(named, domain=domain)
+        return _price_reply(named, domain=domain, prefs=prefs)
     if intent_label == INTENT_STOCK and named:
-        return _stock_reply(named, domain=domain)
+        return _stock_reply(named, domain=domain, prefs=prefs)
     if intent_label == INTENT_SPECS and named:
-        return _specs_reply(named, domain=domain)
+        return _specs_reply(named, domain=domain, prefs=prefs)
     return _tier_followup_reply(idx, prefs, domain=domain)
+
+
+_FOCUS_PRONOUN_RE = re.compile(
+    r"\b(that\s+one|this\s+one|the\s+one\s+you\s+(?:just\s+)?recommended|"
+    r"this\s+chair|that\s+chair)\b|"
+    r"^(it|this|that)[?.!\s]*$",
+    re.I,
+)
+
+
+def _pronoun_follow_reply(
+    message: str,
+    prefs: Optional[dict],
+    *,
+    domain: str,
+) -> Optional[SalesReply]:
+    """'That one' / 'this chair' after a recommendation uses the pending pick."""
+    if not _FOCUS_PRONOUN_RE.search(message or ""):
+        return None
+    picks = (prefs or {}).get("pending_tier_picks") or []
+    primary = str((prefs or {}).get("pending_primary") or "").strip().lower()
+    if isinstance(picks, list):
+        for idx, pick in enumerate(picks):
+            if not isinstance(pick, dict):
+                continue
+            label = str(pick.get("model") or pick.get("display") or "").strip().lower()
+            if primary and label == primary:
+                return _tier_followup_reply(idx, prefs, domain=domain)
+        if picks and isinstance(picks[0], dict) and primary:
+            found = _focus_product_from_prefs(prefs)
+            if found is not None:
+                return _specs_reply(found.display_name, domain=domain, prefs=prefs)
+    found = _focus_product_from_prefs(prefs)
+    if found is None:
+        return None
+    return _specs_reply(found.display_name, domain=domain, prefs=prefs)
 
 
 def _tier_digit_reply(message: str, prefs: Optional[dict]) -> Optional[SalesReply]:
@@ -4276,6 +4414,17 @@ def respond(
             )
         )
 
+    if _wants_cheaper_from_picks(message or "", prefs):
+        cheaper = _pending_tier_follow_reply(
+            "the first one", INTENT_RECOMMEND, prefs, domain=domain
+        )
+        if cheaper is None:
+            cheaper = _tier_followup_reply(0, prefs, domain=domain)
+        if cheaper is not None:
+            return _remember_question(
+                _finalize_flow_stage(cheaper), message, payload
+            )
+
     if not before_handoff and intent.label == INTENT_DISCOUNT:
         return _remember_question(
             _finalize_flow_stage(
@@ -4342,6 +4491,13 @@ def respond(
             _finalize_flow_stage(pending_tier), message, payload
         )
 
+    if intent.label == INTENT_UNCLEAR:
+        pronoun_pick = _pronoun_follow_reply(message or "", prefs, domain=domain)
+        if pronoun_pick is not None:
+            return _remember_question(
+                _finalize_flow_stage(pronoun_pick), message, payload
+            )
+
     color_ask = looks_like_color_question(message or "")
     door_in = _parse_doorway_inches_message(message or "")
     named = _guess_model_from_text(message or "")
@@ -4402,11 +4558,11 @@ def respond(
 
     if waiting and intent.label in {INTENT_PRICE, INTENT_STOCK, INTENT_SPECS}:
         if intent.label == INTENT_PRICE:
-            inner = _price_reply(message, domain=domain)
+            inner = _price_reply(message, domain=domain, prefs=prefs)
         elif intent.label == INTENT_STOCK:
-            inner = _stock_reply(message, domain=domain)
+            inner = _stock_reply(message, domain=domain, prefs=prefs)
         else:
-            inner = _specs_reply(message, domain=domain)
+            inner = _specs_reply(message, domain=domain, prefs=prefs)
         return _remember_question(
             _finalize_flow_stage(
                 _resume_recommend_after_side(inner, prefs, domain=domain)
@@ -4417,13 +4573,13 @@ def respond(
 
     if intent.label == INTENT_PRICE:
         return _remember_question(
-            _finalize_flow_stage(_price_reply(message, domain=domain)),
+            _finalize_flow_stage(_price_reply(message, domain=domain, prefs=prefs)),
             message,
             payload,
         )
     if intent.label == INTENT_STOCK:
         return _remember_question(
-            _finalize_flow_stage(_stock_reply(message, domain=domain)),
+            _finalize_flow_stage(_stock_reply(message, domain=domain, prefs=prefs)),
             message,
             payload,
         )
@@ -4437,7 +4593,7 @@ def respond(
         )
     if intent.label == INTENT_SPECS:
         return _remember_question(
-            _finalize_flow_stage(_specs_reply(message, domain=domain)),
+            _finalize_flow_stage(_specs_reply(message, domain=domain, prefs=prefs)),
             message,
             payload,
         )

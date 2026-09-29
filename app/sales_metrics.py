@@ -68,11 +68,9 @@ def _lazy_orm():
 #: consecutive stages tells us which question is losing people.
 _FUNNEL_STAGES: tuple[tuple[str, str], ...] = (
     ("ask_height", "Height"),
-    ("ask_weight", "Weight"),
-    ("ask_space", "Room / space"),
+    ("ask_goal", "Primary goal"),
     ("ask_doorway", "Doorway width"),
     ("ask_doorway_fit", "Assembled vs disassembled"),
-    ("ask_goal", "Primary goal"),
     ("recommend", "Recommendation shown"),
 )
 

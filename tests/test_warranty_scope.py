@@ -77,6 +77,12 @@ def test_blocks_damaged_delivery_to_sales_phone():
     assert decision.reason == "delivery"
 
 
+def test_blocks_vague_shipping_help_to_sales_phone():
+    decision = evaluate_warranty_scope("need help with shipping the chair")
+    assert decision.is_blocked
+    assert decision.reason == "delivery"
+
+
 def test_blocks_sales_answer_key():
     assert is_sales_workflow_answer("sales")
     decision = evaluate_warranty_scope("sales")

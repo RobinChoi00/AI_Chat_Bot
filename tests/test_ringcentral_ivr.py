@@ -491,16 +491,45 @@ def test_question_text_node_plays_web_handoff_script():
     )
     node = {
         "type": "question_text",
-        "prompt": "Enter your order number",
+        "node_id": "install_model",
+        "prompt": "What is your chair model?",
+        "next": "install_q1",
+    }
+    with (
+        patch("ringcentral_ivr.play_prompt") as mock_play,
+        patch("ringcentral_ivr.resolve_play_uri") as mock_uri,
+        patch("ringcentral_ivr.is_warranty_business_hours", return_value=False),
+    ):
+        _present_node(ctx, node)
+
+    assert ctx.phase == IvrPhase.POST_DIY
+    script = mock_uri.call_args[0][0]
+    assert "website" in script.lower() or "text" in script.lower()
+    assert "press 1" in script.lower()
+    mock_play.assert_called_once()
+
+
+def test_delivery_question_text_transfers_to_sales_when_open():
+    ctx = VoiceCallContext(
+        session_id="rc-qtext-sales",
+        party_id="party-qtext-sales",
+        ticket_id="ticket-qtext-sales",
+        caller_phone="+15551234567",
+    )
+    node = {
+        "type": "question_text",
+        "node_id": "delivery_get_tracking_number",
+        "prompt": "Enter your tracking number",
         "next": "delivery_lookup",
     }
     with (
         patch("ringcentral_ivr.play_prompt") as mock_play,
         patch("ringcentral_ivr.resolve_play_uri") as mock_uri,
+        patch("ringcentral_ivr.is_warranty_business_hours", return_value=True),
     ):
         _present_node(ctx, node)
 
-    assert ctx.phase == IvrPhase.MENU
+    assert ctx.phase == IvrPhase.SALES_TRANSFER
     script = mock_uri.call_args[0][0]
-    assert "website" in script.lower() or "text" in script.lower()
+    assert "sales" in script.lower()
     mock_play.assert_called_once()

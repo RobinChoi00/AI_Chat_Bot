@@ -1065,6 +1065,21 @@ def test_smart_start_fedex_redirects_to_sales_phone(client):
     assert "live shipment" in msg or "delivery" in msg
 
 
+def test_smart_start_shipping_help_redirects_to_sales_phone(client):
+    session_id = "cust-api-smart-shipping-help"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/smart-start",
+        json={"message": "need help with shipping the chair", "domain": "osaki.com"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    msg = data["assistant_message"].lower()
+    assert "ext. 2" in data["assistant_message"]
+    assert "sales" in msg
+    assert data.get("suggested_issue_type") not in {"delivery"}
+    assert "delivery" not in (data.get("smart_start") or {}).get("applied_keys", [])
+
+
 def _start_defect_air_feet(client, session_id: str, model: str = "3D LTX") -> str:
     _register_model(client, session_id, model=model)
     resp = client.post(

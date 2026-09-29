@@ -214,7 +214,30 @@ def is_delivery_inquiry(text: str) -> bool:
         return False
     if _normalize(raw) == "delivery":
         return True
-    return bool(_DELIVERY_INQUIRY_RE.search(raw))
+    if bool(_DELIVERY_INQUIRY_RE.search(raw)):
+        return True
+    # Vague "shipping help" / "delivery status" still belongs to sales, not
+    # the warranty flowchart — unless it's clearly setup/defect or HI/AK policy.
+    if is_pre_purchase_shipping_policy(raw):
+        return False
+    if re.search(
+        r"\b(install|installation|setup|assembly|broken|defect|won't\s+turn|"
+        r"airbag|footrest|remote|error\s*code)\b",
+        raw,
+        re.I,
+    ):
+        return False
+    has_ship = bool(
+        re.search(r"\b(shipping|shipment|delivery|deliveries|tracking)\b", raw, re.I)
+    )
+    has_help = bool(
+        re.search(
+            r"\b(help|status|where|when|late|track|package|order|question|issue)\b",
+            raw,
+            re.I,
+        )
+    )
+    return has_ship and has_help
 
 
 def is_pre_purchase_shipping_policy(text: str) -> bool:
