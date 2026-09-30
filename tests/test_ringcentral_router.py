@@ -54,6 +54,30 @@ def test_rc_health_production_detects_stopped_worker(client, monkeypatch):
     assert res.json()["checks"]["EVENT_WORKER"] is False
 
 
+def test_rc_health_production_detects_missing_resume_secret(client, monkeypatch):
+    production_values = {
+        "APP_ENV": "production",
+        "RC_CLIENT_ID": "client",
+        "RC_CLIENT_SECRET": "secret",
+        "RC_USER_JWT": "jwt",
+        "PUBLIC_BASE_URL": "https://api.example.com",
+        "RC_WARRANTY_TRANSFER_EXTENSION": "3",
+        "RC_SMS_FROM_NUMBER": "+12145550123",
+        "RC_WEBHOOK_VERIFICATION_TOKEN": "verification",
+        "RC_EVENT_WORKER_ENABLED": "true",
+        "ADMIN_SESSION_SECRET": "short",
+    }
+    for key, value in production_values.items():
+        monkeypatch.setenv(key, value)
+
+    dummy = type("Worker", (), {"is_alive": lambda self: True})()
+    with patch("ringcentral_router._worker_thread", dummy):
+        res = client.get("/rc/health")
+
+    assert res.status_code == 503
+    assert res.json()["checks"]["WARRANTY_RESUME"] is False
+
+
 def test_on_call_enter_returns_204(client):
     session_id = f"s-{uuid.uuid4().hex}"
     payload = {

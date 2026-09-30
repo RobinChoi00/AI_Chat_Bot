@@ -38,6 +38,28 @@ ISSUE_SALES_DTMF = "2"
 ISSUE_DEFECT_DTMF = "3"
 
 
+def resume_link_available() -> bool:
+    """SMS/TTS may promise a resume URL only when HMAC signing is configured."""
+    try:
+        from warranty_resume import resume_signing_ready  # noqa: WPS433
+
+        return bool(resume_signing_ready())
+    except Exception:
+        return False
+
+
+def sms_followup_sentence() -> str:
+    """Honest hang-up promise: a clickable link only when we can actually mint one."""
+    if resume_link_available():
+        return (
+            "When you hang up, we will text you a link to continue your case online."
+        )
+    return (
+        "When you hang up, we will text you a case number so you can continue "
+        "on our website."
+    )
+
+
 class IvrPhase(str, Enum):
     CONNECTING = "connecting"
     DEPT_MENU = "dept_menu"
@@ -206,7 +228,7 @@ def build_after_hours_closure_script() -> str:
         f"Warranty phone support is open {hours}. "
         f"Please call back {next_open}. "
         "You can also continue on our website warranty chat anytime. "
-        "When you hang up, we will text you a link to pick up where you left off. "
+        f"{sms_followup_sentence()} "
         f"Press {POST_DIY_FIXED_DTMF} to end this call. "
         f"Press {REPEAT_DTMF} to hear this message again."
     )
@@ -250,7 +272,11 @@ def build_after_hours_welcome_script() -> str:
         f"Please call back {next_open}.",
         "To help us assist you faster, please have your invoice, order number, "
         "serial number photos, or any ticket reference ready before you call.",
-        "After this call you will receive a text message with a link to continue online.",
+        (
+            "After this call you will receive a text message with a link to continue online."
+            if resume_link_available()
+            else "After this call you will receive a text message with your case number."
+        ),
     ]
     if sales_note:
         parts.append(sales_note)
@@ -290,7 +316,7 @@ def build_after_hours_sales_closed_script() -> str:
         "Our warranty service department is closed, so we cannot transfer you to sales for warranty help. "
         f"Warranty phone hours are {hours}. "
         f"Please call back {next_open}, or use our website warranty chat. "
-        "When you hang up, we will text you a link to continue your case online. "
+        f"{sms_followup_sentence()} "
         f"Press {POST_DIY_FIXED_DTMF} to end this call. "
         f"Press {REPEAT_DTMF} to hear this message again."
     )
@@ -301,7 +327,7 @@ def build_question_text_handoff_script() -> str:
     return (
         "This step needs your order number, tracking details, or other written information, "
         "which is easier on our website. "
-        "When you finish this call we will text you a link to continue. "
+        f"{sms_followup_sentence()} "
         f"Press {POST_DIY_FIXED_DTMF} to end this call. "
         f"Press {REPEAT_DTMF} to hear this message again."
     )

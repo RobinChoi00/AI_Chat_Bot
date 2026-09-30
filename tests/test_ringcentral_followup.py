@@ -22,7 +22,7 @@ from ringcentral_followup import (  # noqa: E402
     send_phone_call_followups,
     try_claim_phone_followup,
 )
-from ringcentral_ivr import handle_call_enter, handle_call_exit  # noqa: E402
+from ringcentral_ivr import handle_call_enter, handle_call_exit, handle_command_update  # noqa: E402
 from ringcentral_voice import get_call_context  # noqa: E402
 
 
@@ -221,14 +221,73 @@ def test_handle_call_exit_sends_followup_sms():
 
     with (
         patch("ringcentral_ivr.send_phone_call_followups") as mock_followups,
+        patch("warranty_freshdesk_case.schedule_freshdesk_case_creation") as mock_fd,
     ):
         handle_call_exit({"sessionId": "rc-session-exit"})
 
     mock_followups.assert_called_once()
+    mock_fd.assert_not_called()
     assert mock_followups.call_args.kwargs["caller_phone"] == "+15559876543"
     assert mock_followups.call_args.kwargs["ticket_id"]
     assert mock_followups.call_args.kwargs["session_id"] == "rc-session-exit"
     assert get_call_context("rc-session-exit") is None
+
+
+def _play_done(session_id: str, party_id: str) -> None:
+    handle_command_update(
+        {
+            "sessionId": session_id,
+            "status": "Completed",
+            "command": "Play",
+            "partyId": party_id,
+        }
+    )
+
+
+def _collect_digit(session_id: str, party_id: str, digit: str) -> None:
+    handle_command_update(
+        {
+            "sessionId": session_id,
+            "status": "Completed",
+            "command": "Collect",
+            "partyId": party_id,
+            "parameters": {"digits": digit},
+        }
+    )
+
+
+def test_handle_call_exit_creates_freshdesk_after_warranty_ivr_starts():
+    payload_enter = {
+        "sessionId": "rc-session-fd-exit",
+        "inParty": {
+            "id": "party-fd-exit",
+            "from": {"phoneNumber": "+15559876543"},
+        },
+    }
+    with (
+        patch("ringcentral_ivr.is_warranty_business_hours", return_value=False),
+        patch("ringcentral_ivr.play_prompt"),
+        patch("ringcentral_ivr.collect_digits"),
+        patch("ringcentral_ivr.resolve_play_uri", return_value="https://example.com/a.wav"),
+    ):
+        handle_call_enter(payload_enter)
+        _play_done("rc-session-fd-exit", "party-fd-exit")
+        _collect_digit("rc-session-fd-exit", "party-fd-exit", "3")
+
+    ctx = get_call_context("rc-session-fd-exit")
+    assert ctx is not None
+    ticket_id = ctx.ticket_id
+
+    with (
+        patch("ringcentral_ivr.send_phone_call_followups") as mock_followups,
+        patch("warranty_freshdesk_case.schedule_freshdesk_case_creation") as mock_fd,
+    ):
+        handle_call_exit({"sessionId": "rc-session-fd-exit"})
+
+    mock_followups.assert_called_once()
+    mock_fd.assert_called_once()
+    assert mock_fd.call_args.args[0] == ticket_id
+    assert mock_fd.call_args.kwargs["allow_any_status"] is True
 
 
 def test_failed_followups_remain_retryable():

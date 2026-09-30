@@ -104,6 +104,15 @@ def test_token_requires_min_secret_length(monkeypatch):
         wr.create_resume_token("t", "s")
 
 
+def test_resume_signing_ready(monkeypatch):
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", TEST_SECRET)
+    assert wr.resume_signing_ready() is True
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "short")
+    assert wr.resume_signing_ready() is False
+    monkeypatch.delenv("ADMIN_SESSION_SECRET", raising=False)
+    assert wr.resume_signing_ready() is False
+
+
 # --- HTTP end-to-end -------------------------------------------------------
 
 

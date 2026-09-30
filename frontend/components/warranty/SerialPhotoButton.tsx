@@ -3,9 +3,10 @@
 /**
  * SerialPhotoButton
  *
- * A camera / gallery button rendered above the warranty chat input during the
- * first-intake step. When the customer snaps a photo of the warranty sticker
- * on the base of their chair, we:
+ * A camera / gallery button rendered above the warranty chat input when the
+ * chair model is still missing (first intake, model confirmation, or issue
+ * type without a model). When the customer snaps a photo of the warranty
+ * sticker on the base of their chair, we:
  *
  *   1. POST the image to /api/v1/warranty/ocr/serial (see lib/api.ts)
  *   2. Show a small "Detected: OS-4000T (high confidence). Use this?" bar

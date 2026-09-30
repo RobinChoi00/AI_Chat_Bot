@@ -10,6 +10,7 @@ sys.path.insert(0, str(APP_DIR))
 
 from sales_tidio_buttons import (  # noqa: E402
     append_numbered_menu,
+    dropped_action_hint,
     flatten_buttons_for_flow,
     prioritize_quick_replies,
     resolve_button_choice,
@@ -105,20 +106,46 @@ def test_resolve_falls_back_to_default_menu_when_session_lost():
     assert resolve_button_choice("Recommend a chair", None) == "recommend"
 
 
-def test_recommend_results_keep_email_not_compare_under_tidio_cap():
+def test_recommend_results_keep_compare_not_email_under_tidio_cap():
+    raw = [
+        {"label": "Value: Champ", "payload": "tier:1"},
+        {"label": "Mid: Maestro", "payload": "tier:2"},
+        {"label": "Premium: Paragon", "payload": "tier:3"},
+        {"label": "Compare Value vs Mid", "payload": "compare:tiers:1:2"},
+        {"label": "Email me these picks", "payload": "lead:save_pick"},
+        {"label": "Talk to a human", "payload": "human"},
+    ]
+    out = prioritize_quick_replies(raw, limit=5)
+    payloads = [b["payload"] for b in out]
+    assert payloads[:3] == ["tier:1", "tier:2", "tier:3"]
+    assert "compare:tiers:1:2" in payloads
+    assert payloads[-1] == "human"
+    assert "lead:save_pick" not in payloads
+    hint = dropped_action_hint(raw, out)
+    assert "email" in hint.lower()
+
+
+def test_feedback_chips_survive_tidio_cap_on_rateable_replies():
     out = prioritize_quick_replies(
         [
-            {"label": "Value: Champ", "payload": "tier:1"},
-            {"label": "Mid: Maestro", "payload": "tier:2"},
-            {"label": "Premium: Paragon", "payload": "tier:3"},
-            {"label": "Compare Value vs Mid", "payload": "compare:tiers:1:2"},
-            {"label": "Email me these picks", "payload": "lead:save_pick"},
+            {"label": "Recommend a chair", "payload": "recommend"},
+            {"label": "Visit showroom", "payload": "cta:showroom"},
+            {"label": "That helped", "payload": "feedback:up"},
+            {"label": "Not what I needed", "payload": "feedback:down"},
             {"label": "Talk to a human", "payload": "human"},
+            {"label": "That's all I needed", "payload": "menu"},
         ],
         limit=5,
     )
     payloads = [b["payload"] for b in out]
-    assert payloads[:3] == ["tier:1", "tier:2", "tier:3"]
-    assert "lead:save_pick" in payloads
+    assert "feedback:up" in payloads
+    assert "feedback:down" in payloads
     assert payloads[-1] == "human"
-    assert "compare:tiers:1:2" not in payloads
+    assert "menu" not in payloads
+
+
+def test_typed_helpful_maps_to_feedback_without_chips():
+    assert resolve_button_choice("helpful", None) == "feedback:up"
+    assert resolve_button_choice("That helped", []) == "feedback:up"
+    assert resolve_button_choice("not helpful", None) == "feedback:down"
+    assert resolve_button_choice("Not what I needed", None) == "feedback:down"

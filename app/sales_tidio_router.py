@@ -59,6 +59,7 @@ from sales_tidio import (
 )
 from sales_tidio_buttons import (
     append_numbered_menu,
+    dropped_action_hint,
     flatten_buttons_for_flow,
     normalize_stored_buttons,
     prioritize_quick_replies,
@@ -275,6 +276,9 @@ def _run_sales_turn(
     merge_session_collected(session_id, {"last_quick_replies": buttons})
 
     plain = append_numbered_menu(_strip_md(result.reply), buttons)
+    hint = dropped_action_hint(result.quick_replies, buttons)
+    if hint:
+        plain = f"{plain}\n{hint}"
     action = _next_action(result.intent, result.handoff)
     is_warranty_route = result.intent in WARRANTY_ROUTE_INTENTS
 

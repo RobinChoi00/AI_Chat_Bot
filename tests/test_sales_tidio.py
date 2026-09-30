@@ -237,6 +237,9 @@ def test_tidio_turn_numbered_menu_and_button_resolve(client, monkeypatch):
     assert body.get("flow_stage") == "recommend"
     assert "reply with the number:" in body["reply_plain"].lower()
     assert body["button_1_label"]
+    payloads = [b["payload"] for b in body["quick_replies"]]
+    if "lead:save_pick" not in payloads:
+        assert "email" in body["reply_plain"].lower()
     assert "tidio.buttons" in body.get("tools_used", []) or True  # tools on message log
 
     # Find Email me index if present, else use first button label.

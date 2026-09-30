@@ -1108,6 +1108,11 @@ export default function WarrantyChat({
   const isTextCaptureNode = nodeType === "question_text";
   const atIssueTypeWithoutModel =
     atIssueTypeNode && !warrantyState?.model_name?.trim();
+  const showSerialPhotoButton =
+    needsFirstIntake ||
+    needsModelConfirmation ||
+    atIssueTypeWithoutModel ||
+    (Boolean(pendingDefectStart) && !warrantyState?.model_name?.trim());
 
   // Keep the composer visible for the whole claim chat: buttons still work,
   // and free text can map to an option when the meaning is clear.
@@ -1555,7 +1560,7 @@ export default function WarrantyChat({
           onSubmit={handleSubmit}
           className="shrink-0 border-t border-gray-200 bg-white px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-4"
         >
-          {needsFirstIntake && (
+          {showSerialPhotoButton && (
             <div className="mb-2">
               <SerialPhotoButton
                 disabled={loading || interactionsLocked}

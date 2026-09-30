@@ -10,7 +10,7 @@ Call flow:
                            (1=setup, 2=sales/delivery, 3=defect)
                          → press 2: announce, then forward to sales (ext.2)
   Play complete          → collect DTMF, connect forward, or sales transfer
-  on-call-exit           → SMS + team email (after-hours warranty tickets only)
+  on-call-exit           → SMS + team email; Freshdesk if warranty IVR started
 
 After-hours flowchart sales_handoff: no silent transfer — plays closed message instead.
 Department-menu press 2 is an intentional sales transfer (announced).
@@ -69,6 +69,18 @@ _SKIP_PHONE_FOLLOWUP_PATHS = frozenset(
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _maybe_create_after_hours_freshdesk(ticket_id: str, collected: dict[str, Any]) -> None:
+    """Hang-up after warranty IVR started (press 3) still opens a team case."""
+    if not ticket_id or collected.get("ivr_path") != "after_hours_warranty":
+        return
+    try:
+        from warranty_freshdesk_case import schedule_freshdesk_case_creation  # noqa: WPS433
+
+        schedule_freshdesk_case_creation(ticket_id, allow_any_status=True)
+    except Exception:
+        logger.exception("RC hangup Freshdesk failed ticket=%s", ticket_id)
 
 
 def _phone_text_node_is_sales(node: dict) -> bool:
@@ -594,6 +606,7 @@ def handle_call_exit(payload: dict[str, Any]) -> None:
         if collected.get("ivr_path") in _SKIP_PHONE_FOLLOWUP_PATHS:
             return
         logger.info("RC IVR call exit session=%s ticket=%s", session_id, ctx.ticket_id)
+        _maybe_create_after_hours_freshdesk(ctx.ticket_id, collected)
         send_phone_call_followups(
             caller_phone=ctx.caller_phone,
             ticket_id=ctx.ticket_id,

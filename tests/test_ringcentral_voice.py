@@ -7,6 +7,7 @@ Unit tests for RingCentral voice adapter (no live RC API).
 import sys
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(APP_DIR))
@@ -37,6 +38,7 @@ from ringcentral_voice import (  # noqa: E402
     pop_call_context,
     resolve_play_uri,
     set_call_context,
+    sms_followup_sentence,
 )
 
 
@@ -182,3 +184,23 @@ def test_configured_fallback_audio_is_used_when_tts_fails(monkeypatch):
     monkeypatch.setenv("RC_FALLBACK_AUDIO_URI", fallback)
     monkeypatch.setattr(voice, "ensure_audio_file", lambda _text: (_ for _ in ()).throw(RuntimeError("tts down")))
     assert resolve_play_uri("hello") == fallback
+
+
+def test_sms_followup_sentence_promises_link_only_when_signing_works():
+    with patch("ringcentral_voice.resume_link_available", return_value=True):
+        assert "link" in sms_followup_sentence().lower()
+        welcome = build_after_hours_welcome_script()
+        closure = build_after_hours_closure_script()
+    assert "link" in welcome.lower()
+    assert "link" in closure.lower()
+
+    with patch("ringcentral_voice.resume_link_available", return_value=False):
+        sentence = sms_followup_sentence()
+        welcome = build_after_hours_welcome_script()
+        closure = build_after_hours_closure_script()
+    assert "link" not in sentence.lower()
+    assert "case number" in sentence.lower()
+    assert "link" not in welcome.lower()
+    assert "case number" in welcome.lower()
+    assert "link" not in closure.lower()
+    assert "case number" in closure.lower()

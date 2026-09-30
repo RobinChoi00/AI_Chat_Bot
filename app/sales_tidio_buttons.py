@@ -23,18 +23,23 @@ from urllib.parse import urlparse
 _MAX_BUTTONS = max(1, min(8, int(os.getenv("TIDIO_MAX_QUICK_REPLIES", "5"))))
 
 # Lower = keep first when capping.
+# Recommend results: three tiers + compare + human fill the 5-slot Tidio cap;
+# email is offered as typed text via ``dropped_action_hint`` when it does not fit.
+# Rateable answers: keep CSAT chips ahead of generic menu leftovers.
 _PREFIX_PRIORITY: list[tuple[str, int]] = [
     ("open:", 10),
     ("tier:", 10),
     ("resume:continue", 11),
     ("resume:picks", 11),
     ("resume:", 12),
-    ("compare:pick:", 14),
-    ("compare:tiers:", 15),
-    ("compare:recommend", 16),
+    ("compare:pick:", 13),
+    ("compare:tiers:", 13),
+    ("compare:recommend", 13),
+    ("lead:", 14),
     ("cta:financing", 20),
     ("cta:showroom:book", 9),
     ("cta:showroom:window", 9),
+    ("feedback:", 22),
     ("cta:showroom", 30),
     ("recommend:height:", 50),
     ("recommend:weight:", 50),
@@ -42,7 +47,6 @@ _PREFIX_PRIORITY: list[tuple[str, int]] = [
     ("recommend:doorway_fit:", 51),
     ("recommend:doorway:", 50),
     ("recommend:goal:", 50),
-    ("lead:", 14),
     ("recommend:intensity:", 55),
     ("recommend:foot:", 55),
     ("recommend:", 70),
@@ -54,6 +58,20 @@ _PREFIX_PRIORITY: list[tuple[str, int]] = [
 # Never lead with this. Tidio's numbered menu and button_1_label used to put
 # "Talk to a human" first because it was ranked higher than Recommend.
 _HUMAN_PAYLOADS = frozenset({"human", "human:confirm"})
+
+# Typed CSAT still works when Tidio drops the chips under the 5-button cap.
+_FEEDBACK_TEXT_ALIASES = {
+    "helpful": "feedback:up",
+    "that helped": "feedback:up",
+    "not helpful": "feedback:down",
+    "not what i needed": "feedback:down",
+}
+
+
+def _item_payload(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(item.get("payload") or "").strip()
+    return str(getattr(item, "payload", "") or "").strip()
 
 
 def tidio_max_buttons() -> int:
@@ -117,6 +135,27 @@ def prioritize_quick_replies(
         kept.append(human[0])
         return kept
     return kept[:cap]
+
+
+def dropped_action_hint(original: list[Any], kept: list[dict[str, str]]) -> str:
+    """Plain-text fallback when Tidio had to drop a useful action chip."""
+    orig = {_item_payload(item).lower() for item in original or []}
+    orig.discard("")
+    kept_payloads = {(btn.get("payload") or "").strip().lower() for btn in kept or []}
+    lines: list[str] = []
+    if any(payload.startswith("lead:") for payload in orig) and not any(
+        payload.startswith("lead:") for payload in kept_payloads
+    ):
+        lines.append("Want these emailed? Type your email address in the chat.")
+    if any(payload.startswith("compare:tiers") for payload in orig) and not any(
+        payload.startswith("compare:tiers") for payload in kept_payloads
+    ):
+        lines.append("Reply compare to see Value vs Mid side by side.")
+    if any(payload.startswith("feedback:") for payload in orig) and not any(
+        payload.startswith("feedback:") for payload in kept_payloads
+    ):
+        lines.append("Reply helpful or not helpful if this missed.")
+    return " ".join(lines)
 
 
 def flatten_buttons_for_flow(buttons: list[dict[str, str]]) -> dict[str, Any]:
@@ -211,6 +250,10 @@ def resolve_button_choice(
     for btn in buttons:
         if btn["label"].lower() == lowered:
             return btn["payload"]
+
+    alias = _FEEDBACK_TEXT_ALIASES.get(lowered)
+    if alias:
+        return alias
 
     # Soft match: visitor typed a unique keyword from a label
     hits = [

@@ -64,6 +64,15 @@ def _get_secret() -> bytes:
     return secret.encode("utf-8")
 
 
+def resume_signing_ready() -> bool:
+    """True when HMAC resume URLs can be minted (ADMIN_SESSION_SECRET is valid)."""
+    try:
+        _get_secret()
+        return True
+    except RuntimeError:
+        return False
+
+
 def _b64u_encode(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 

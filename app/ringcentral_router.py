@@ -258,6 +258,9 @@ def rc_health():
         required["RC_WEBHOOK_VERIFICATION_TOKEN"] = bool(
             os.getenv("RC_WEBHOOK_VERIFICATION_TOKEN", "").strip()
         )
+        from warranty_resume import resume_signing_ready  # noqa: WPS433
+
+        required["WARRANTY_RESUME"] = resume_signing_ready()
     stats = event_stats()
     calls = call_state_stats()
     last_webhook = last_webhook_received_at()
