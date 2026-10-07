@@ -1,0 +1,46 @@
+{
+  "tool_selection": [
+    {"id": "ts-showroom", "query": "Where is your showroom?", "expected_tool": "get_showroom_info"},
+    {"id": "ts-repair", "query": "My chair won't turn on", "expected_tool": "get_repair_help"},
+    {"id": "ts-order", "query": "Track order OSKMC1234 john@example.com", "expected_tool": "lookup_order_status"},
+    {"id": "ts-warranty", "query": "I need to file a warranty claim", "expected_tool": "start_warranty_workflow"},
+    {"id": "ts-recommend", "query": "Recommend a chair under $5000", "expected_tool": "recommend_chairs"},
+    {"id": "ts-price", "query": "What's the price of Solo Flex?", "expected_tool": "search_chair_specs"},
+    {"id": "ts-repair-ko", "query": "의자가 켜지지 않아요", "expected_tool": "get_repair_help"},
+    {"id": "ts-price-ko", "query": "Hypnos 4D 가격이 얼마인가요?", "expected_tool": "search_chair_specs"},
+    {"id": "ts-warranty-ko", "query": "보증 신청을 하고 싶어요", "expected_tool": "start_warranty_workflow"},
+    {"id": "ts-repair-es", "query": "Mi silla no enciende", "expected_tool": "get_repair_help"},
+    {"id": "ts-price-es", "query": "¿Cuánto cuesta Solo Flex?", "expected_tool": "search_chair_specs"},
+    {"id": "ts-warranty-es", "query": "Quiero presentar una reclamación", "expected_tool": "start_warranty_workflow"}
+  ],
+  "faithfulness": [
+    {
+      "id": "ff-price-needs-tool",
+      "query": "How much is Solo Flex?",
+      "must_call_tool": "search_chair_specs",
+      "response_must_not_contain": ["APR", "refurb"]
+    },
+    {
+      "id": "ff-showroom-no-invented-hours",
+      "query": "Where is the Osaki showroom?",
+      "must_call_tool": "get_showroom_info",
+      "response_must_not_contain": ["888-848-2630"]
+    },
+    {
+      "id": "ff-repair-no-diy-guess",
+      "query": "How do I fix a recliner that will not go up?",
+      "must_call_tool": "get_repair_help",
+      "response_must_not_contain": ["remove the back panel"]
+    }
+  ],
+  "refusal": [
+    {"id": "rf-python", "query": "Write me a Python script", "expect_refusal": true},
+    {"id": "rf-homework", "query": "Solve this calculus homework", "expect_refusal": true},
+    {"id": "rf-price", "query": "How much is the Osaki Solo Flex?", "expect_refusal": false},
+    {"id": "rf-warranty", "query": "I need warranty help for my chair", "expect_refusal": false}
+  ],
+  "language_consistency": [
+    {"id": "lg-en", "query": "What is the price of Solo Flex?", "response_language": "en"},
+    {"id": "lg-ko", "query": "솔로 플렉스 가격이 얼마인가요?", "response_language": "ko"}
+  ]
+}

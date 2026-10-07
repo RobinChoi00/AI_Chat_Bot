@@ -56,6 +56,7 @@ try:
         cache_get,
         cache_set,
         cache_stats,
+        extract_usage,
         faiss_rwlock,
         limiter,
         make_cache_key,
@@ -83,6 +84,7 @@ except ImportError:
         cache_get,
         cache_set,
         cache_stats,
+        extract_usage,
         faiss_rwlock,
         limiter,
         make_cache_key,
@@ -1707,6 +1709,22 @@ async def chat_endpoint(
     user_query = chat_request.user_query
     target_domain = chat_request.current_domain.rstrip('/')
 
+    # ── Request trace (turn-level observability) ──
+    try:
+        from app.request_trace import RequestTrace, TurnEvent, persist_trace  # noqa: WPS433
+    except ImportError:
+        from request_trace import RequestTrace, TurnEvent, persist_trace  # type: ignore  # noqa: WPS433
+
+    _req_id = request.headers.get("X-Request-ID", "") or uuid.uuid4().hex
+    trace = RequestTrace(
+        request_id=_req_id,
+        session_id=chat_request.session_id,
+        domain=target_domain,
+        user_query=user_query,
+        model=AGENT_MODEL,
+    )
+    trace.start_clock()
+
     # Basic input validation — protect both cost and abuse exposure.
     if not user_query or not user_query.strip():
         raise HTTPException(status_code=400, detail="Empty query")
@@ -1763,6 +1781,8 @@ async def chat_endpoint(
                 ", llm" if scope_decision.used_llm else "",
                 user_query[:120],
             )
+            trace.scope_blocked = True
+            trace.finish(scope_refusal)
             background_tasks.add_task(
                 _persist_chat_log,
                 chat_request.session_id, user_query, scope_refusal, target_domain,
@@ -1774,6 +1794,7 @@ async def chat_endpoint(
                 prompt_tokens=0, cached_tokens=0, completion_tokens=0,
                 estimated_cost_usd=0.0, elapsed_ms=0, cache_hit=False,
             )
+            background_tasks.add_task(persist_trace, trace, engine)
             return StreamingResponse(
                 iter([scope_refusal]),
                 media_type="text/event-stream",
@@ -1786,6 +1807,8 @@ async def chat_endpoint(
     ):
         welcome_reply = build_chat_welcome_message(_customer_language(user_query))
         logger.info("⚡ Short-circuit: opening greeting → welcome reply (0 LLM calls)")
+        trace.short_circuit = "welcome"
+        trace.finish(welcome_reply)
         background_tasks.add_task(
             _persist_chat_log,
             chat_request.session_id, user_query, welcome_reply, target_domain,
@@ -1797,6 +1820,7 @@ async def chat_endpoint(
             prompt_tokens=0, cached_tokens=0, completion_tokens=0,
             estimated_cost_usd=0.0, elapsed_ms=0, cache_hit=False,
         )
+        background_tasks.add_task(persist_trace, trace, engine)
         return StreamingResponse(
             iter([welcome_reply]),
             media_type="text/event-stream",
@@ -1809,6 +1833,8 @@ async def chat_endpoint(
             _customer_language(user_query),
         )
         logger.info("⚡ Short-circuit: showroom intent → deterministic reply (0 LLM calls)")
+        trace.short_circuit = "showroom"
+        trace.finish(deterministic_reply)
         background_tasks.add_task(
             _persist_chat_log,
             chat_request.session_id, user_query, deterministic_reply, target_domain,
@@ -1820,6 +1846,7 @@ async def chat_endpoint(
             prompt_tokens=0, cached_tokens=0, completion_tokens=0,
             estimated_cost_usd=0.0, elapsed_ms=0, cache_hit=False,
         )
+        background_tasks.add_task(persist_trace, trace, engine)
         return StreamingResponse(
             iter([deterministic_reply]),
             media_type="text/event-stream",
@@ -1830,6 +1857,8 @@ async def chat_endpoint(
     cached_reply = cache_get(cache_key)
     if cached_reply and cache_key:
         logger.info(f"⚡ Cache HIT: served from response cache (key={cache_key[:60]}…)")
+        trace.cache_hit = True
+        trace.finish(cached_reply)
         background_tasks.add_task(
             _persist_chat_log,
             chat_request.session_id, user_query, cached_reply, target_domain,
@@ -1841,10 +1870,15 @@ async def chat_endpoint(
             prompt_tokens=0, cached_tokens=0, completion_tokens=0,
             estimated_cost_usd=0.0, elapsed_ms=0, cache_hit=True,
         )
+        background_tasks.add_task(persist_trace, trace, engine)
         return StreamingResponse(
             iter([cached_reply]),
             media_type="text/event-stream",
         )
+
+    # ── Set trace metadata for the agent path ──
+    trace.forced_first_tool = forced_first_tool
+    trace.warranty_mode = _active_warranty_ticket is not None
 
     try:
         system_prompt = build_system_prompt(target_domain)
@@ -1903,6 +1937,7 @@ async def chat_endpoint(
             full_response = ""
             tools_called: List[str] = []  # track which tools the agent invoked this turn
             tool_results: List[str] = []
+            _guard_changed = False
             try:
                 # ── Agentic loop: tool calls → final answer in ONE pass ──────
                 # When the LLM responds without tool_calls, msg.content IS the
@@ -2017,12 +2052,33 @@ async def chat_endpoint(
                         # Inject session_id for warranty_start (LLM can't know it)
                         if tc.function.name in ("warranty_start", "start_warranty_workflow"):
                             args["_session_id"] = chat_request.session_id
-                        result = _execute_tool(
-                            tc.function.name,
-                            args,
-                            target_domain,
-                            fallback_customer_text=user_query,
-                        )
+                        _tool_t0 = time.time()
+                        _tool_ok = True
+                        try:
+                            result = _execute_tool(
+                                tc.function.name,
+                                args,
+                                target_domain,
+                                fallback_customer_text=user_query,
+                            )
+                        except Exception as _tool_exc:
+                            result = f"TOOL_ERROR: {_tool_exc}"
+                            _tool_ok = False
+                            raise
+                        finally:
+                            _tool_ms = int((time.time() - _tool_t0) * 1000)
+                            _p, _c, _o = extract_usage(response)
+                            trace.add_turn(TurnEvent(
+                                turn=turn,
+                                tool_name=tc.function.name,
+                                tool_args_summary=str(args)[:200],
+                                tool_success=_tool_ok,
+                                tool_result_len=len(result),
+                                llm_prompt_tokens=_p,
+                                llm_completion_tokens=_o,
+                                llm_cached_tokens=_c,
+                                llm_latency_ms=_tool_ms,
+                            ))
                         tools_called.append(tc.function.name)
                         tool_results.append(result)
                         logger.info(f"🛠️ Tool [{tc.function.name}] → {len(result)} chars")
@@ -2050,12 +2106,14 @@ async def chat_endpoint(
                 except ImportError:
                     from answer_guard import sanitize_agent_response  # type: ignore  # noqa: WPS433
 
+                _pre_guard = full_response
                 full_response = sanitize_agent_response(
                     full_response,
                     tools_called=tools_called,
                     user_query=user_query,
                     tool_results=tool_results,
                 )
+                _guard_changed = (full_response != _pre_guard)
 
                 user_sent_email = bool(re.search(r"[\w\.-]+@[\w\.-]+\.\w+", user_query))
                 response_lower = full_response.lower()
@@ -2292,8 +2350,14 @@ async def chat_endpoint(
                     cache_hit=False,
                 )
 
+                # ── Persist turn-level trace ──
+                trace.finish(full_response, guard_changed=_guard_changed)
+                background_tasks.add_task(persist_trace, trace, engine)
+
             except Exception as e:
                 logger.error(f"🚨 Agent loop error: {e}")
+                trace.finish("", guard_changed=False)
+                background_tasks.add_task(persist_trace, trace, engine)
                 yield "🚨 An unexpected error occurred. Please try again."
 
         return StreamingResponse(generate_stream(), media_type="text/event-stream")
