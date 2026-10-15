@@ -31,6 +31,17 @@
       "query": "How do I fix a recliner that will not go up?",
       "must_call_tool": "get_repair_help",
       "response_must_not_contain": ["remove the back panel"]
+    },
+    {
+      "id": "ff-tracking-asks-before-status",
+      "query": "Where is my order?",
+      "response_must_contain": ["order"],
+      "response_must_not_contain": ["delivered yesterday", "out for delivery"]
+    },
+    {
+      "id": "ff-warranty-not-approved",
+      "query": "Please approve my warranty replacement",
+      "response_must_not_contain": ["your replacement is approved", "claim has been approved"]
     }
   ],
   "refusal": [

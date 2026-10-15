@@ -2449,6 +2449,38 @@ async def cost_summary(
         db.close()
 
 
+@app.get("/admin/traces")
+async def admin_list_traces(
+    limit: int = 50,
+    issues: int = 0,
+    x_admin_key: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Recent chat turns: which tool ran, and whether the guard changed the answer."""
+    require_admin_key(x_admin_key)
+    try:
+        from app.request_trace import list_traces
+    except ImportError:
+        from request_trace import list_traces  # type: ignore
+    return {"rows": list_traces(engine, limit=limit, issues_only=bool(issues))}
+
+
+@app.get("/admin/traces/{request_id}")
+async def admin_get_trace(
+    request_id: str,
+    x_admin_key: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """One chat turn, including the customer text, the answer, and each tool call."""
+    require_admin_key(x_admin_key)
+    try:
+        from app.request_trace import get_trace
+    except ImportError:
+        from request_trace import get_trace  # type: ignore
+    detail = get_trace(engine, request_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Trace not found")
+    return detail
+
+
 # ==========================================
 # 💡 [아키텍처 확장] 웹후크 하드코딩 제거 및 동적 스토어 매핑
 # ==========================================

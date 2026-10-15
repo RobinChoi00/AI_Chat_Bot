@@ -55,6 +55,12 @@ export default function AdminHeader() {
           >
             Cost & feedback
           </Link>
+          <Link
+            href="/admin/traces"
+            className="rounded-md px-2 py-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+          >
+            Chat traces
+          </Link>
           <button
             onClick={handleLogout}
             disabled={loggingOut}

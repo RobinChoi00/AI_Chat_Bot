@@ -65,6 +65,7 @@ jobs:
       - run: python script/validate_flowchart.py
       - run: python script/smoke_test_warranty_flow.py
       - run: python script/evaluate_answer_quality.py
+      - run: python script/evaluate_llm_quality.py --dry-run
       - run: python -m compileall -q app config.py tests script
 
   frontend:

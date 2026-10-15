@@ -86,6 +86,7 @@ class RequestTrace:
 
     # Post-agent
     guard_sanitized: bool = False
+    final_response: str = ""
     final_response_len: int = 0
     total_latency_ms: int = 0
 
@@ -95,7 +96,9 @@ class RequestTrace:
         self._started_at = time.time()
 
     def finish(self, response_text: str, guard_changed: bool = False) -> None:
-        self.final_response_len = len(response_text)
+        text = response_text or ""
+        self.final_response = text[:2000]
+        self.final_response_len = len(text)
         self.guard_sanitized = guard_changed
         self.total_latency_ms = int((time.time() - self._started_at) * 1000)
 
@@ -115,6 +118,7 @@ class RequestTrace:
             "forced_first_tool": self.forced_first_tool,
             "warranty_mode": self.warranty_mode,
             "guard_sanitized": self.guard_sanitized,
+            "final_response": self.final_response,
             "final_response_len": self.final_response_len,
             "total_latency_ms": self.total_latency_ms,
             "turn_count": len(self.turns),
@@ -145,6 +149,7 @@ CREATE TABLE IF NOT EXISTS request_traces (
     tools_called     TEXT    DEFAULT '[]',
     total_latency_ms INTEGER DEFAULT 0,
     final_response_len INTEGER DEFAULT 0,
+    final_response   TEXT    DEFAULT '',
     turns_json       TEXT    DEFAULT '[]',
     created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
 )
@@ -155,11 +160,23 @@ INSERT INTO request_traces (
     request_id, session_id, domain, model, user_query,
     scope_blocked, cache_hit, short_circuit, forced_first_tool,
     warranty_mode, guard_sanitized, turn_count, tools_called,
-    total_latency_ms, final_response_len, turns_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    total_latency_ms, final_response_len, final_response, turns_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _table_ensured = False
+
+
+def _ensure_trace_schema(cur: Any) -> None:
+    """Create the trace table and add columns introduced after the first deploy."""
+    global _table_ensured  # noqa: PLW0603
+    if _table_ensured:
+        return
+    cur.execute(_TABLE_SQL)
+    existing = {row[1] for row in cur.execute("PRAGMA table_info(request_traces)")}
+    if "final_response" not in existing:
+        cur.execute("ALTER TABLE request_traces ADD COLUMN final_response TEXT DEFAULT ''")
+    _table_ensured = True
 
 
 def persist_trace(trace: RequestTrace, engine: Any) -> None:
@@ -169,10 +186,8 @@ def persist_trace(trace: RequestTrace, engine: Any) -> None:
         raw = engine.raw_connection()
         try:
             cur = raw.cursor()
-            if not _table_ensured:
-                cur.execute(_TABLE_SQL)
-                raw.commit()
-                _table_ensured = True
+            _ensure_trace_schema(cur)
+            raw.commit()
 
             d = trace.to_dict()
             cur.execute(_INSERT_SQL, (
@@ -191,6 +206,7 @@ def persist_trace(trace: RequestTrace, engine: Any) -> None:
                 json.dumps(d["tools_called"]),
                 d["total_latency_ms"],
                 d["final_response_len"],
+                d["final_response"],
                 json.dumps(d["turns"]),
             ))
             raw.commit()
@@ -198,3 +214,109 @@ def persist_trace(trace: RequestTrace, engine: Any) -> None:
             raw.close()
     except Exception:
         logger.exception("Failed to persist request trace")
+
+
+def _rows(engine: Any, sql: str, params: tuple) -> List[tuple]:
+    raw = engine.raw_connection()
+    try:
+        cur = raw.cursor()
+        _ensure_trace_schema(cur)
+        raw.commit()
+        cur.execute(sql, params)
+        return list(cur.fetchall())
+    finally:
+        raw.close()
+
+
+def list_traces(engine: Any, *, limit: int = 50, issues_only: bool = False) -> List[Dict[str, Any]]:
+    """Recent chat traces for the admin page. Empty when the table is new."""
+    limit = max(1, min(int(limit), 200))
+    where = "WHERE guard_sanitized = 1 OR scope_blocked = 1" if issues_only else ""
+    sql = f"""
+        SELECT request_id, session_id, domain, user_query, short_circuit,
+               scope_blocked, cache_hit, guard_sanitized, turn_count,
+               tools_called, total_latency_ms, final_response_len, created_at
+        FROM request_traces
+        {where}
+        ORDER BY id DESC
+        LIMIT ?
+    """
+    try:
+        found = _rows(engine, sql, (limit,))
+    except Exception:
+        logger.exception("Failed to list request traces")
+        return []
+    rows = []
+    for row in found:
+        tools = row[9] or "[]"
+        try:
+            parsed_tools = json.loads(tools)
+        except json.JSONDecodeError:
+            parsed_tools = []
+        rows.append({
+            "request_id": row[0],
+            "session_id": row[1],
+            "domain": row[2],
+            "user_query": row[3] or "",
+            "short_circuit": row[4],
+            "scope_blocked": bool(row[5]),
+            "cache_hit": bool(row[6]),
+            "guard_sanitized": bool(row[7]),
+            "turn_count": row[8] or 0,
+            "tools_called": parsed_tools,
+            "total_latency_ms": row[10] or 0,
+            "final_response_len": row[11] or 0,
+            "created_at": row[12],
+        })
+    return rows
+
+
+def get_trace(engine: Any, request_id: str) -> Optional[Dict[str, Any]]:
+    """One trace, including the answer text and each tool turn."""
+    sql = """
+        SELECT request_id, session_id, domain, model, user_query,
+               scope_blocked, cache_hit, short_circuit, forced_first_tool,
+               warranty_mode, guard_sanitized, turn_count, tools_called,
+               total_latency_ms, final_response_len, final_response,
+               turns_json, created_at
+        FROM request_traces
+        WHERE request_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+    """
+    try:
+        found = _rows(engine, sql, (request_id,))
+    except Exception:
+        logger.exception("Failed to load request trace")
+        return None
+    if not found:
+        return None
+    row = found[0]
+    try:
+        tools = json.loads(row[12] or "[]")
+    except json.JSONDecodeError:
+        tools = []
+    try:
+        turns = json.loads(row[16] or "[]")
+    except json.JSONDecodeError:
+        turns = []
+    return {
+        "request_id": row[0],
+        "session_id": row[1],
+        "domain": row[2],
+        "model": row[3],
+        "user_query": row[4] or "",
+        "scope_blocked": bool(row[5]),
+        "cache_hit": bool(row[6]),
+        "short_circuit": row[7],
+        "forced_first_tool": row[8],
+        "warranty_mode": bool(row[9]),
+        "guard_sanitized": bool(row[10]),
+        "turn_count": row[11] or 0,
+        "tools_called": tools,
+        "total_latency_ms": row[13] or 0,
+        "final_response_len": row[14] or 0,
+        "final_response": row[15] or "",
+        "turns": turns,
+        "created_at": row[17],
+    }

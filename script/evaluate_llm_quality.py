@@ -60,6 +60,14 @@ def validate_structure(cases: Dict[str, Any]) -> List[str]:
                 errors.append(f"{section}[{i}]: missing 'id'")
             if "query" not in case:
                 errors.append(f"{section}[{i}]: missing 'query'")
+            if section == "faithfulness" and not (
+                case.get("must_call_tool")
+                or case.get("response_must_contain")
+                or case.get("response_must_not_contain")
+            ):
+                errors.append(
+                    f"{section}[{i}]: needs a tool or a response constraint so a made-up fact can fail"
+                )
 
     ids = []
     for section in ("tool_selection", "faithfulness", "refusal", "language_consistency"):

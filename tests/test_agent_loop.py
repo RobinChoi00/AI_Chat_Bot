@@ -199,6 +199,38 @@ class TestPersistTrace:
 
         request_trace._table_ensured = False
 
+    def test_roundtrip_keeps_answer_and_tool(self):
+        import tempfile
+        from pathlib import Path
+
+        from sqlalchemy import create_engine
+
+        import request_trace
+        from request_trace import RequestTrace, TurnEvent, get_trace, list_traces, persist_trace
+
+        request_trace._table_ensured = False
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = create_engine(f"sqlite:///{Path(tmp) / 'traces.db'}")
+            trace = RequestTrace(
+                request_id="round-1",
+                session_id="s1",
+                domain="osakiusa.com",
+                user_query="How much is Solo Flex?",
+                model="gpt-4o",
+            )
+            trace.add_turn(TurnEvent(turn=0, tool_name="search_chair_specs", tool_success=True, tool_result_len=120))
+            trace.finish("Solo Flex starts at the listed price.", guard_changed=True)
+            persist_trace(trace, engine)
+
+            issues = list_traces(engine, issues_only=True)
+            assert [row["request_id"] for row in issues] == ["round-1"]
+            detail = get_trace(engine, "round-1")
+            assert detail is not None
+            assert "listed price" in detail["final_response"]
+            assert detail["turns"][0]["tool_name"] == "search_chair_specs"
+            assert detail["guard_sanitized"] is True
+        request_trace._table_ensured = False
+
 
 # -------------------------------------------------------------------
 # 4. LLM eval golden set integrity
