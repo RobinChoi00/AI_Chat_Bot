@@ -1,6 +1,8 @@
 # --- 빌드 컨텍스트 축소 (디스크·시간 절약) ---
 # 호스트에서 만든 가상환경은 이미지에 넣지 않음 — Dockerfile에서 새로 pip install 함.
 .venv/
+# Old vendored PyJWT/cffi. Runtime uses the patched site-packages install.
+app/.vendor/
 venv/
 env/
 
