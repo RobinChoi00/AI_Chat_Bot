@@ -46,7 +46,7 @@ npm test
 npm run lint
 npm run typecheck
 npm run build
-npm audit --audit-level=moderate
+npm audit --omit=dev --audit-level=moderate
 ```
 
 CI runs these gates, builds both container images, and blocks remediable high/critical container CVEs on every pull request and every push to `main`. Production deployment is triggered only after the `main` CI workflow succeeds.

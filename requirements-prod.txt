@@ -51,5 +51,5 @@ tenacity==9.1.4
 cachetools==7.0.5
 
 # --- RingCentral JWT (phone IVR) ---
-PyJWT==2.13.0
+PyJWT==2.15.1
 cryptography==50.0.0

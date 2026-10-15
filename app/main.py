@@ -1110,10 +1110,18 @@ except ImportError:
 app.include_router(ringcentral_router)
 
 # Chat feedback (👍 / 👎) — persisted per session for quality analysis.
-try:
-    from app.chat_feedback import router as chat_feedback_router
-except ImportError:
-    from chat_feedback import router as chat_feedback_router  # type: ignore
+# Tests put both the repo root and app/ on sys.path, so `app.chat_feedback`
+# and `chat_feedback` are different module objects for the same file. Reuse
+# whichever copy already registered the SQLAlchemy table.
+import sys as _sys
+_chat_feedback_mod = _sys.modules.get("chat_feedback") or _sys.modules.get("app.chat_feedback")
+if _chat_feedback_mod is not None:
+    chat_feedback_router = _chat_feedback_mod.router
+else:
+    try:
+        from app.chat_feedback import router as chat_feedback_router
+    except ImportError:
+        from chat_feedback import router as chat_feedback_router  # type: ignore
 app.include_router(chat_feedback_router)
 
 # Warranty resume links — email a signed URL to continue an in-progress case.
