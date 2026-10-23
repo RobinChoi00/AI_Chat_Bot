@@ -605,6 +605,15 @@ _TROUBLESHOOTING_OUTCOMES = frozenset(
 )
 
 
+def _followup_context(ticket, outcome: Optional[str] = None, session_id: Optional[str] = None) -> dict:
+    from warranty_quality import issue_outcome_token, record_outcome_observation
+
+    if outcome:
+        record_outcome_observation(str(ticket.ticket_id), outcome)
+    session_id = session_id or str(getattr(ticket, "session_id", "") or "")
+    return {"followup_token": issue_outcome_token(str(ticket.ticket_id), session_id) if session_id else None}
+
+
 @router.post(
     "/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
     tags=["warranty"],
@@ -675,6 +684,7 @@ async def record_troubleshooting_outcome(
                 "outcome": "resolved",
                 "status": "resolved",
                 "self_service_resolved": True,
+                **_followup_context(ticket, outcome),
             }
         raise HTTPException(status_code=409, detail="This ticket is already resolved.")
     if outcome in {"resolved", "unresolved"} and previous_outcome not in {
@@ -696,6 +706,7 @@ async def record_troubleshooting_outcome(
             "outcome": outcome,
             "status": ticket_status,
             "self_service_resolved": outcome == "resolved",
+            **_followup_context(ticket, outcome),
         }
 
     now_iso = _now_cst_iso()
@@ -752,6 +763,7 @@ async def record_troubleshooting_outcome(
         "outcome": outcome,
         "status": status,
         "self_service_resolved": outcome == "resolved",
+        **_followup_context(ticket, outcome),
     }
 
 
@@ -1885,6 +1897,7 @@ def _serialize_ticket_state(
             ),
             "admin_decision": str(ticket.admin_decision or "").strip() or None,
             "troubleshooting_outcome": troubleshooting_outcome,
+            **_followup_context(ticket, session_id=session_id),
             "current_node": {
                 "node_id":            node_id,
                 "node_type":          node_type,
@@ -2750,7 +2763,7 @@ async def list_warranty_tickets(
         offset=offset,
     )
     return {
-        "total":   len(tickets),
+        "total":   engine.count_tickets(status=status, domain=domain, channel=channel),
         "offset":  offset,
         "tickets": [_serialize_admin_ticket(t) for t in tickets],
     }

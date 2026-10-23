@@ -1,0 +1,220 @@
+"""The quality runner must exercise complete API conversations and fail closed."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import httpx
+import pytest
+
+from script import evaluate_llm_quality as ev
+
+
+def case(surface="general", turns=None):
+    return {"id": "synthetic-test", "surface": surface, "provenance": "synthetic", "turns": turns or [{"message": "A question", "expect": {"contains": ["answer"]}}]}
+
+
+def client_for(handler):
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_uses_actual_runtime_config_name(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "AGENT_MODEL", "configured-model")
+    assert ev._get_model() == "configured-model"
+
+
+def test_legacy_cases_are_converted_with_assertions_and_provenance():
+    source = json.loads(ev.CASES_PATH.read_text())
+    converted = ev.legacy_conversations(source)
+    assert len(converted) == 23
+    assert all(item["provenance"] == "synthetic" and item["surface"] == "general" for item in converted)
+    assert converted[0]["turns"][0]["expect"]["expected_tool"] == "get_showroom_info"
+
+
+def test_repository_fixtures_have_real_assertions_and_multiple_turn_surfaces():
+    source = json.loads(ev.CONVERSATIONS_PATH.read_text())
+    assert ev.validate_conversations(source) == []
+    assert {row["surface"] for row in source["cases"]} == {"general", "sales", "warranty"}
+    assert sum(len(row["turns"]) > 1 for row in source["cases"]) >= 10
+    assert all(row["provenance"] == "synthetic" for row in source["cases"])
+
+
+def test_fixture_validation_rejects_empty_no_assertion_and_duplicate_cases():
+    assert ev.validate_conversations({"cases": []})
+    source = {"cases": [case(), case(turns=[{"message": "hi", "expect": {}}])]}
+    errors = ev.validate_conversations(source)
+    assert any("duplicated" in error for error in errors)
+    assert any("expectations" in error for error in errors)
+
+
+def test_fixture_validation_rejects_vacuous_or_mistyped_assertions():
+    spec = case(turns=[{"message": "hi", "expect": {"contains": "answer", "json_equals": {}, "expected_handoff": "false", "max_products": -1}}])
+    assert len(ev.validate_conversations({"cases": [spec]})) == 4
+
+
+@pytest.mark.parametrize("target", ["https://production.example.com", "http://127.0.0.1@evil.example", "http://localhost:8000/path", "http://user:password@localhost:8000", "file:///tmp/db"])
+def test_unsafe_or_remote_targets_need_explicit_authorization(target):
+    with pytest.raises(ValueError):
+        ev.validate_target(target, False)
+
+
+def test_remote_opt_in_preserves_validation():
+    assert ev.validate_target("https://staging.example.com/", True) == "https://staging.example.com"
+    with pytest.raises(ValueError):
+        ev.validate_target("https://secret@staging.example.com", True)
+
+
+def test_general_route_reads_stream_and_replays_full_history():
+    requests = []
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, headers={"content-type": "text/plain"}, content=b"Complete answer from tools")
+    spec = case(turns=[{"message": "first", "expect": {"contains": ["Complete answer"]}}, {"message": "follow-up", "expect": {"contains": ["Complete answer"]}}])
+    with client_for(handler) as client:
+        result = ev.run_case(spec, client, base_url="http://localhost", domain="osakiusa.com")
+    assert result["passed"]
+    assert all(request.url.path == "/api/v1/chat" for request in requests)
+    bodies = [json.loads(request.content) for request in requests]
+    assert bodies[0]["session_id"].startswith("eval-")
+    assert bodies[0]["session_id"] == bodies[1]["session_id"]
+    assert bodies[1]["chat_history"] == [{"role": "user", "content": "first"}, {"role": "assistant", "content": "Complete answer from tools"}]
+    assert "response_sha256" in result["turns"][0]
+    assert "Complete answer" not in json.dumps(result)  # no raw provider/knowledge text in reports
+
+
+def test_tool_call_alone_cannot_pass_without_final_answer():
+    spec = case(turns=[{"message": "price?", "expect": {"expected_tool": "search_chair_specs"}}])
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"tools_called": ["search_chair_specs"], "model": "candidate"})
+        return httpx.Response(200, content=b"")
+    with client_for(handler) as client:
+        result = ev.run_case(spec, client, base_url="http://localhost", domain="osakiusa.com", admin_key="test-key")
+    assert not result["passed"]
+    assert "empty final response" in result["turns"][0]["errors"]
+
+
+def test_tool_checks_use_authenticated_runtime_evidence_and_model_mismatch_fails():
+    seen = []
+    def handler(request):
+        seen.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"tools_called": ["search_chair_specs"], "model": "old-model"})
+        return httpx.Response(200, content=b"The final grounded answer")
+    with client_for(handler) as client:
+        result = ev.run_case(case(turns=[{"message": "price?", "expect": {"expected_tool": "search_chair_specs"}}]), client, base_url="http://localhost", domain="osakiusa.com", admin_key="test-key", expected_model="candidate")
+    assert not result["passed"]
+    assert seen[1].headers["X-Admin-Key"] == "test-key"
+    assert seen[1].url.path.startswith("/admin/traces/eval-")
+    assert "model differs" in result["turns"][0]["errors"][0]
+    assert "test-key" not in json.dumps(result)
+
+
+def test_sales_reuses_session_and_scores_structured_handoff_and_budget():
+    seen = []
+    def handler(request):
+        seen.append(json.loads(request.content))
+        assert request.url.path == "/api/v1/sales/chat"
+        return httpx.Response(200, json={"reply": "Here is an answer", "intent": "recommend", "handoff": False, "products": [{"price_usd": 4000}]})
+    spec = case("sales", [{"message": "under 5000", "expect": {"expected_intent": "recommend", "max_product_price": 5000}}, {"message": "Actually under 3000", "expect": {"max_product_price": 3000}}])
+    with client_for(handler) as client:
+        result = ev.run_case(spec, client, base_url="http://localhost", domain="osakiusa.com")
+    assert seen[0]["session_id"] == seen[1]["session_id"]
+    assert seen[0]["channel"] == "test"
+    assert result["turns"][0]["passed"]
+    assert not result["turns"][1]["passed"]
+    assert not result["passed"]
+
+
+def test_completed_preference_fixture_cannot_pass_without_recommendations():
+    source = json.loads(ev.CONVERSATIONS_PATH.read_text())
+    spec = next(row for row in source["cases"] if row["id"] == "sales-complete-fit-recommendation")
+    seen = []
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"reply": "An answer without recommendations", "intent": "recommend", "handoff": False, "products": []})
+    with client_for(handler) as client:
+        result = ev.run_case(spec, client, base_url="http://localhost", domain="osakiusa.com")
+    assert len(seen) == 3
+    assert seen[-1]["payload"] == "recommend:goal:full_body"
+    assert not result["passed"]
+    assert "not enough recommended products" in result["turns"][-1]["errors"]
+
+
+def test_warranty_runs_real_session_setup_and_uses_returned_ticket_id():
+    seen = []
+    def handler(request):
+        seen.append(request)
+        if request.url.path.endswith("/consent") or request.url.path.endswith("/contact-email"):
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(200, json={"ticket": {"ticket_id": "generated-ticket", "model_name": "Solo Flex", "status": "in_progress"}})
+    spec = case("warranty", [{"action": "register-model", "body": {"model": "Solo Flex"}, "expect": {"json_equals": {"ticket.model_name": "Solo Flex"}}}, {"action": "answer", "body": {"answer": "defect"}, "expect": {"json_equals": {"ticket.status": "in_progress"}}}])
+    with client_for(handler) as client:
+        result = ev.run_case(spec, client, base_url="http://localhost", domain="osakiusa.com")
+    assert result["passed"]
+    assert seen[0].url.path.endswith("/consent")
+    assert json.loads(seen[1].content)["customer_email"].endswith("@example.invalid")
+    assert seen[2].url.path.endswith("/register-model")
+    assert seen[3].url.path == "/api/v1/warranty/generated-ticket/answer"
+
+
+def test_http_error_is_failure_and_response_body_is_not_leaked():
+    def handler(request):
+        return httpx.Response(500, text="sensitive provider token: do-not-print")
+    with client_for(handler) as client:
+        result = ev.run_case(case(), client, base_url="http://localhost", domain="osakiusa.com")
+    assert not result["passed"]
+    assert "do-not-print" not in json.dumps(result)
+
+
+def test_unrun_turns_are_distinguished_from_failed_turns():
+    def handler(request):
+        return httpx.Response(503)
+    spec = case(turns=[{"message": "first", "expect": {"contains": ["answer"]}}, {"message": "second", "expect": {"contains": ["answer"]}}])
+    with client_for(handler) as client:
+        result = ev.run_case(spec, client, base_url="http://localhost", domain="osakiusa.com")
+    assert len(result["turns"]) == 1
+    assert result["unrun_turns"] == 1
+    assert ev.summarize([result])["unrun_turns"] == 1
+
+
+def test_sse_final_text_is_concatenated():
+    response = httpx.Response(200, headers={"content-type": "text/event-stream"}, content=b'data: {"text":"Grounded "}\n\ndata: {"content":"answer"}\n\ndata: [DONE]\n', request=httpx.Request("POST", "http://localhost/api/v1/chat"))
+    assert ev._read_stream(response) == "Grounded answer"
+
+
+def test_summary_has_percentiles_no_test_failure_and_comparable_baseline():
+    results = [{"id": "a", "passed": True, "turns": [{"latency_ms": 10}, {"latency_ms": 100}]}, {"id": "b", "passed": False, "turns": [{"latency_ms": 20}]}]
+    report = ev.summarize(results, {"cases": [{"id": "a", "passed": True}, {"id": "b", "passed": True}]}, max_p95_ms=50)
+    assert report["status"] == "fail"
+    assert report["regressions"] == ["b"]
+    assert report["latency_ms"] == {"p50": 20, "p95": 100, "samples": 3, "budget_failed": True}
+    assert ev.summarize([])["status"] == "fail"
+    assert ev.summarize(results, {"cases": []})["comparison_errors"]
+
+
+def test_dry_run_does_not_call_http_and_is_not_quality_success(capsys, monkeypatch):
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: pytest.fail("dry-run must not create a network client"))
+    assert ev.main(["--dry-run"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "structure_valid"
+    assert report["quality_evaluated"] is False
+    assert report["total_cases"] == 23 + len(json.loads(ev.CONVERSATIONS_PATH.read_text())["cases"])
+
+
+def test_no_implicit_live_run():
+    with pytest.raises(SystemExit) as result:
+        ev.main([])
+    assert result.value.code == 2
+
+
+def test_incompatible_baseline_is_rejected_before_creating_network_client(tmp_path, capsys, monkeypatch):
+    source = {"cases": [case("sales")]}
+    cases_path = tmp_path / "cases.json"
+    cases_path.write_text(json.dumps(source))
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"mode": "dry_run", "quality_evaluated": False}))
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: pytest.fail("invalid baseline must fail before requests"))
+    assert ev.main(["--live", "--suite", "conversations", "--cases", str(cases_path), "--baseline", str(baseline)]) == 1
+    assert "completed live API evaluation" in capsys.readouterr().out

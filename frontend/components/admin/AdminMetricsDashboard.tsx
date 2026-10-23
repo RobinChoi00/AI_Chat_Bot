@@ -21,7 +21,7 @@ import type {
 
 interface Props {
   data: WarrantyMetricsResponse;
-  days: number;
+  days: number | null;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -52,8 +52,7 @@ function issueLabel(key: string): string {
 }
 
 function formatDay(day: string): string {
-  const [_, month, dom] = day.split("-");
-  return `${month}/${dom}`;
+  return day.slice(0, 10);
 }
 
 function KpiCard({
@@ -175,6 +174,9 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
     data;
 
   const started = totals.started;
+  const allTime = data.range.all_time ?? days === null;
+  const overallResolutionRate = totals.self_service_overall_resolution_rate_pct ??
+    (started > 0 ? Math.round((totals.self_service_resolved / started) * 1000) / 10 : 0);
   const completionTone: "default" | "good" | "warn" | "bad" =
     started === 0
       ? "default"
@@ -186,11 +188,32 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
 
   return (
     <div className="space-y-6">
+      <p className="text-sm text-gray-600">
+        {allTime ? "All stored warranty consultations" : "Stored warranty consultations"}
+        {started > 0 && ` · ${formatDay(data.range.start)} to ${formatDay(data.range.end)}`}
+        . Counts cover saved tickets; visits without a saved consultation and deleted records are not included.
+      </p>
       {/* KPI row */}
       <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <KpiCard
-          label={`Started (last ${days}d)`}
+          label={allTime ? "Consultations (all time)" : `Consultations (last ${days}d)`}
           value={started.toString()}
+        />
+        <KpiCard
+          label="Identified customers"
+          value={totals.unique_identified_customers?.toString() ?? "—"}
+          hint="Distinct email addresses; repeat consultations with the same email count once"
+        />
+        <KpiCard
+          label="Anonymous sessions"
+          value={totals.anonymous_sessions?.toString() ?? "—"}
+          hint="Sessions without an email; these are not verified unique people"
+        />
+        <KpiCard
+          label="Confirmed self-resolution / all consultations"
+          value={`${overallResolutionRate}%`}
+          hint={`${totals.self_service_resolved} customer-confirmed fixes / ${started} consultations; unreported outcomes are unknown`}
+          tone={totals.self_service_resolved > 0 ? "good" : "default"}
         />
         <KpiCard
           label="Completion rate"
@@ -201,7 +224,7 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
         <KpiCard
           label="Contact captured"
           value={`${totals.contact_rate_pct}%`}
-          hint={`${totals.contact_captured} customers left an email`}
+          hint={`${totals.contact_captured} consultations have an email`}
         />
         <KpiCard
           label="Intake email provided"
@@ -210,18 +233,18 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
           tone={(totals.email_gate_provide_rate_pct ?? 0) >= 70 ? "good" : "default"}
         />
         <KpiCard
-          label="All resolved"
+          label="Tickets marked closed"
           value={`${totals.resolved} / ${totals.reached_terminal}`}
           hint={
             totals.reached_terminal > 0
-              ? `${totals.resolved_rate_pct}% of terminal-reached tickets closed`
+              ? `${totals.resolved_rate_pct}% of terminal-reached tickets closed; includes admin decisions and ended sessions, not confirmed fixes`
               : "No terminal-reached tickets yet"
           }
         />
         <KpiCard
-          label="Self-service resolved"
+          label="Self-resolution among reported outcomes"
           value={`${totals.self_service_resolution_rate_pct}%`}
-          hint={`${totals.self_service_resolved} / ${totals.self_service_started} customers who reached the resolution check`}
+          hint={`${totals.self_service_resolved} / ${totals.self_service_started} consultations with a reported troubleshooting outcome`}
           tone={totals.self_service_resolved > 0 ? "good" : "default"}
         />
         <KpiCard
@@ -254,6 +277,11 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
 
       {/* Trend chart */}
       <section>
+        {allTime && (
+          <p className="mb-2 text-xs text-gray-500">
+            Daily trend: most recent {data.range.trend_days ?? daily_started.length} days. Totals above include the full stored history.
+          </p>
+        )}
         <DailyTrend rows={daily_started} />
       </section>
 

@@ -51,6 +51,18 @@ npm audit --omit=dev --audit-level=moderate
 
 CI runs these gates, builds both container images, and blocks remediable high/critical container CVEs on every pull request and every push to `main`. Production deployment is triggered only after the `main` CI workflow succeeds.
 
+## AI quality workflow
+
+The admin portal's `/admin/quality` page separates customer-confirmed outcomes
+from claim closure and supports approval of model-scoped troubleshooting
+guidance. Sales metrics distinguish observed shopper actions from authenticated
+paid orders and net revenue. The evaluation runner tests complete API
+conversations; `--dry-run` validates fixtures without measuring model quality.
+
+See the [AI improvement and model upgrade runbook (Korean)](docs/ai_improvement_runbook.ko.md),
+[Warranty review workflow](docs/warranty_quality_workflow.md), and
+[Sales analytics integration](docs/sales_analytics_integration.md).
+
 ## Production
 
 1. Copy `.env.example` to `.env` on the host and replace every required placeholder.

@@ -120,14 +120,20 @@ export interface TicketDetailResponse {
 // ------------------------------------------------------------
 
 export interface MetricsRange {
-  days: number;
+  days: number | null;
+  all_time?: boolean;
   start: string;
   end: string;
+  trend_start?: string;
+  trend_days?: number;
   abandon_threshold_hours: number;
 }
 
 export interface MetricsTotals {
   started: number;
+  unique_identified_customers?: number;
+  unique_sessions?: number;
+  anonymous_sessions?: number;
   reached_terminal: number;
   completion_rate_pct: number;
   contact_captured: number;
@@ -141,6 +147,7 @@ export interface MetricsTotals {
   self_service_started: number;
   self_service_resolved: number;
   self_service_resolution_rate_pct: number;
+  self_service_overall_resolution_rate_pct?: number;
   escalated_after_self_service: number;
   abandoned: number;
   abandoned_rate_pct: number;
@@ -213,7 +220,25 @@ export interface SalesMetricsResponse {
     lead_forward_failure_rate_pct: number;
     user_turns: number;
     assistant_turns: number;
+    csat_rated?: number;
+    csat_score_pct?: number;
+    paid_orders_seen?: number;
+    orders_attributed?: number;
+    payment_unknown_orders?: number;
+    attributed_revenue_usd?: number;
+    paid_sessions?: number;
+    session_to_order_rate_pct?: number;
   };
+  behavior_funnel?: {
+    event_counts: Record<string, number>;
+    observed_sessions: Record<string, number>;
+    ordered_sessions: Record<string, number>;
+    rates_pct: Record<string, number | null>;
+    denominators: Record<string, number>;
+    measured_sessions?: number;
+    measurement_coverage_pct?: number | null;
+  };
+  attributed_revenue_by_currency?: Record<string, number>;
   by_status: Array<{ status: string; count: number }>;
   by_intent: Array<{ intent: string; count: number }>;
   by_domain: Array<{ domain: string; count: number }>;

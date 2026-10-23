@@ -680,6 +680,7 @@ export async function submitTroubleshootingOutcome(
   outcome: TroubleshootingOutcome;
   status: string;
   self_service_resolved: boolean;
+  followup_token?: string | null;
 }> {
   const url = `${getApiBase()}/api/v1/warranty/${encodeURIComponent(ticketId)}/troubleshooting-outcome`;
   const res = await fetch(url, {
@@ -696,6 +697,25 @@ export async function submitTroubleshootingOutcome(
       // ignore
     }
     throw new Error(detail);
+  }
+  return res.json();
+}
+
+/** Report a later result without submitting a new warranty claim. */
+export async function submitWarrantyFollowup(
+  ticketId: string,
+  token: string,
+  outcome: "fixed" | "still_broken",
+  eventId: string
+): Promise<{ ok: boolean; outcome: "fixed" | "still_broken"; observation_id: number }> {
+  const res = await fetch(`${getApiBase()}/api/v1/warranty/${encodeURIComponent(ticketId)}/follow-up`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, outcome, event_id: eventId }),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.detail || "We could not save your update. Please try again.");
   }
   return res.json();
 }

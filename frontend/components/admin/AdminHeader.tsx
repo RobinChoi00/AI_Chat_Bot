@@ -31,6 +31,7 @@ export default function AdminHeader() {
         </Link>
 
         <nav className="flex items-center gap-2 text-xs">
+          <Link href="/admin/quality" className="rounded-md px-2 py-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900">AI quality</Link>
           <Link
             href="/admin/warranty"
             className="rounded-md px-2 py-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900"

@@ -123,6 +123,7 @@ class TidioTurnResponse(BaseModel):
     handoff_reason: Optional[str] = None
     quick_replies: list[dict[str, str]] = Field(default_factory=list)
     session_id: str
+    analytics_token: Optional[str] = None
     contact_id: Optional[str] = None
     # Flat text for Tidio Flow mappers (markdown stars stripped + numbered menu).
     reply_plain: str = ""
@@ -312,6 +313,8 @@ def _run_sales_turn(
         last_message=result.reply,
         status="handoff" if result.handoff else None,
     )
+    from sales_events import issue_event_token
+
     return {
         "reply": result.reply,
         "reply_plain": plain,
@@ -320,6 +323,7 @@ def _run_sales_turn(
         "handoff_reason": result.handoff_reason,
         "quick_replies": buttons,
         "session_id": session_id,
+        "analytics_token": issue_event_token(session_id, domain),
         "contact_id": contact_id,
         "next_action": action,
         "is_warranty_route": is_warranty_route,

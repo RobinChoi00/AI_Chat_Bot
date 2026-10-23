@@ -243,6 +243,44 @@ List warranty tickets with optional filters.
 
 ---
 
+### Historical ticket navigation and metrics
+
+`GET /admin/warranty/tickets` returns `total` as the count of **all matching
+stored tickets**, independently of `limit` and `offset`. The admin queue uses
+100-ticket pages, preserves status/channel filters, and can navigate through
+the full stored history.
+
+`GET /admin/warranty/metrics?all_time=true` aggregates all stored warranty
+tickets, including records older than 180 days. The optional `domain` filter
+still applies. Omitting `all_time` retains the existing `days=30` API default;
+`days` supports 1–180. The dashboard defaults to **All time** and also offers
+recent-period filters.
+
+| Metric | Definition |
+|---|---|
+| `started` | Number of saved consultations in the selected scope |
+| `unique_identified_customers` | Distinct trimmed, lowercase email addresses, including the legacy contact-email field |
+| `unique_sessions` | Distinct nonempty session IDs |
+| `anonymous_sessions` | Sessions with no email on any ticket in the selected scope; not a verified count of people |
+| `self_service_overall_resolution_rate_pct` | Customer-confirmed self-resolutions divided by all selected consultations |
+| `self_service_resolution_rate_pct` | Customer-confirmed self-resolutions divided by consultations with a reported troubleshooting outcome, including legacy self-resolved decisions |
+
+`resolved` remains a closure count: admin approvals, rejections, and restarted
+or ended sessions may be included. It does not establish that the customer's
+problem was fixed. Missing outcome reports remain unknown.
+
+For lifetime results, `range.days` is null, `range.all_time` is true, and
+`range.start` identifies the earliest matching ticket date. Daily chart data
+is limited to the most recent 180 days, with its scope identified separately
+by `range.trend_start` and `range.trend_days`. Lifetime totals are not clipped
+to this chart window. No personal email addresses are returned in metrics.
+
+These endpoints require the existing admin authentication. Visits that never
+created a warranty ticket and deleted records are not recoverable through
+these queries.
+
+---
+
 ### `GET /admin/warranty/tickets/{ticket_id}`
 
 Full ticket detail including all Q&A turns and evidence files.

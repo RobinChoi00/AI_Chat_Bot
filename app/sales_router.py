@@ -108,6 +108,7 @@ class SalesChatResponse(BaseModel):
     intent: str
     handoff: bool
     handoff_reason: Optional[str] = None
+    analytics_token: Optional[str] = None
     quick_replies: list[QuickReplyDTO] = Field(default_factory=list)
     products: list[dict] = Field(default_factory=list)
     tools_used: list[str] = Field(default_factory=list)
@@ -151,7 +152,9 @@ def _resolve_sales_domain(value: Optional[str]) -> str:
     return domain
 
 
-def _reply_to_response(reply: SalesReply, session_id: str) -> SalesChatResponse:
+def _reply_to_response(reply: SalesReply, session_id: str, domain: str) -> SalesChatResponse:
+    from sales_events import issue_event_token
+
     return SalesChatResponse(
         reply=reply.reply,
         intent=reply.intent,
@@ -163,6 +166,7 @@ def _reply_to_response(reply: SalesReply, session_id: str) -> SalesChatResponse:
         products=reply.products,
         tools_used=reply.tools_used,
         session_id=session_id,
+        analytics_token=issue_event_token(session_id, domain),
     )
 
 
@@ -189,6 +193,12 @@ async def sales_chat(
         )
 
     domain = _resolve_sales_domain(body.domain)
+    # A session belongs to one storefront; never move an existing shopper's
+    # conversation into another store while issuing analytics credentials.
+    with warranty_db_session() as db:
+        existing = db.query(SalesSession).filter(SalesSession.session_id == body.session_id).first()
+        if existing and normalize_storefront_domain(existing.domain) != domain:
+            raise HTTPException(status_code=409, detail="Session belongs to another storefront.")
     session_row = get_or_create_session(
         session_id=body.session_id,
         domain=domain,
@@ -293,7 +303,7 @@ async def sales_chat(
         reply.handoff,
         reply.tools_used,
     )
-    return _reply_to_response(reply, body.session_id)
+    return _reply_to_response(reply, body.session_id, domain)
 
 
 @router.post("/api/v1/sales/lead", response_model=SalesLeadResponse)
@@ -372,11 +382,16 @@ async def shopify_order_webhook(
 ):
     """Close the loop: attribute a Shopify order back to the chat that drove it.
 
-    Registered for ``orders/create`` and/or ``orders/paid``. Duplicate
-    deliveries of the same order are ignored, so subscribing to both is safe.
+    Authenticated order/payment/cancellation/refund events update an idempotent
+    lifecycle. Browser analytics can never report a paid purchase.
     """
     raw = await request.body()
-    domain = _resolve_sales_domain(x_shopify_shop_domain)
+    from sales_conversion import conversion_storefront_domain
+
+    shop_domain = (x_shopify_shop_domain or "").strip()
+    domain = conversion_storefront_domain(shop_domain)
+    if not domain:
+        raise HTTPException(status_code=401, detail="Unrecognized Shopify store.")
     try:
         require_shopify_signature(raw, x_shopify_hmac_sha256 or "", domain)
     except ValueError as exc:
@@ -384,7 +399,9 @@ async def shopify_order_webhook(
         raise HTTPException(status_code=401, detail="Invalid webhook signature.")
 
     topic = (x_shopify_topic or "").strip().lower()
-    if topic and not topic.startswith("orders/"):
+    if topic and topic not in {
+        "orders/create", "orders/paid", "orders/updated", "orders/cancelled", "refunds/create"
+    }:
         return {"ok": True, "ignored": topic}
 
     try:
@@ -394,7 +411,7 @@ async def shopify_order_webhook(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Malformed JSON body.")
 
-    recorded = record_order(payload, domain=domain)
+    recorded = record_order(payload, domain=shop_domain, topic=topic or "orders/create")
     if recorded is None:
         return {"ok": True, "duplicate": True}
     return {

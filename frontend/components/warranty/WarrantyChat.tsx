@@ -51,6 +51,8 @@ import ChatRecordingNoticeBanner from "./ChatRecordingNoticeBanner";
 import ChatEmailGate from "./ChatEmailGate";
 import WarrantyCaseLookup from "./WarrantyCaseLookup";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
+import OutcomeFollowup from "./OutcomeFollowup";
+import { readWarrantyFollowup, saveWarrantyFollowup, type WarrantyFollowupAccess } from "@/lib/warrantyFollowup";
 
 import { resolveWarrantyStoreDomain } from "@/lib/warrantyStoreDomain";
 
@@ -168,6 +170,12 @@ export default function WarrantyChat({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warrantyState, setWarrantyState] = useState<WarrantyTicketState | null>(null);
+  const [savedFollowup, setSavedFollowup] = useState<WarrantyFollowupAccess | null>(() => readWarrantyFollowup(sessionId));
+  const rememberFollowup = useCallback((ticketId: string, token: string, issueType: string) => {
+    const value = { sessionId, ticketId, token, issueType };
+    setSavedFollowup(value);
+    saveWarrantyFollowup(value);
+  }, [sessionId]);
   const [terminalEnrichment, setTerminalEnrichment] = useState<TerminalEnrichment | null>(null);
   const [optionsUsed, setOptionsUsed] = useState(false);
   const [sessionChecked, setSessionChecked] = useState(false);
@@ -268,7 +276,14 @@ export default function WarrantyChat({
   }, [messages, loading, helpConsent, resolutionStage]);
 
   const applySessionResponse = useCallback((resp: WarrantySessionResponse) => {
-    setWarrantyState(resp.ticket);
+    const token = resp.followup_token ?? resp.ticket?.followup_token;
+    if (resp.ticket?.status === "resolved" && token) {
+      rememberFollowup(resp.ticket.ticket_id, token, resp.ticket.issue_type);
+    }
+    setWarrantyState(resp.ticket ? {
+      ...resp.ticket,
+      followup_token: resp.followup_token ?? resp.ticket.followup_token,
+    } : null);
     setTerminalEnrichment(resp.terminal_enrichment ?? null);
     if (resp.suggested_option?.answer_key) {
       setSuggestedOption(resp.suggested_option);
@@ -293,7 +308,7 @@ export default function WarrantyChat({
     }
     setOptionsUsed(false);
     return resp;
-  }, []);
+  }, [rememberFollowup]);
 
   const refreshWarrantyState = useCallback(async () => {
     const resp = await getWarrantySession(sessionId);
@@ -802,10 +817,14 @@ export default function WarrantyChat({
       try {
         const resp = await submitTroubleshootingOutcome(ticketId, outcome);
         const recorded = resp.outcome;
+        if (recorded === "resolved" && resp.followup_token) {
+          rememberFollowup(ticketId, resp.followup_token, warrantyState?.issue_type || "");
+        }
         setWarrantyState((previous) => {
           if (!previous) return previous;
           return {
             ...previous,
+            followup_token: resp.followup_token ?? previous.followup_token,
             status: recorded === "resolved" ? "resolved" : previous.status,
             admin_decision:
               recorded === "resolved" ? "self_resolved" : previous.admin_decision,
@@ -852,7 +871,7 @@ export default function WarrantyChat({
         setLoading(false);
       }
     },
-    [loading, warrantyState?.ticket_id, warrantyState?.issue_type, intakeContactEmail]
+    [loading, warrantyState, intakeContactEmail, rememberFollowup]
   );
 
   const sendMessage = useCallback(
@@ -1330,6 +1349,12 @@ export default function WarrantyChat({
           </p>
         </div>
       )}
+
+      {savedFollowup?.sessionId === sessionId && ["defect", "installation"].includes(savedFollowup.issueType) && (
+          <div className="mx-4 mt-3 shrink-0">
+            <OutcomeFollowup key={savedFollowup.ticketId} ticketId={savedFollowup.ticketId} token={savedFollowup.token} />
+          </div>
+        )}
 
       <div className="chat-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-4">
         {!chatConsentAccepted && (

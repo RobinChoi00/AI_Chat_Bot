@@ -16,6 +16,7 @@ Design contract
 Endpoint
 --------
     GET /admin/warranty/metrics?days=30
+    GET /admin/warranty/metrics?all_time=true
         ⇒ Overall funnel + status/issue_type/domain/terminal breakdowns +
           daily started-count trend + contact submission rate.
 
@@ -28,7 +29,7 @@ Definitions
                            terminal handling).
 - **Contact captured**   – ticket.collected_data has a ``customer_email``.
 - **Admin decided**      – ticket.admin_decision is set.
-- **Resolved**           – ticket.status == "resolved" (admin finalised).
+- **Resolved**           – ticket.status == "resolved" (closed, not necessarily fixed).
 - **Self-service started** – customer recorded a troubleshooting/preparation outcome.
 - **Self-service resolved** – customer confirmed the issue was fixed without team review.
 - **Abandoned**          – status == "in_progress" AND updated_at older than
@@ -49,6 +50,7 @@ from typing import Any, Optional
 
 import pytz
 from fastapi import APIRouter, Header, HTTPException, Query
+from sqlalchemy import func
 from admin_auth import require_admin_key
 
 logger = logging.getLogger(__name__)
@@ -103,12 +105,16 @@ def _percent(part: int, whole: int) -> float:
 @router.get("/admin/warranty/metrics")
 async def warranty_metrics(
     days: int = Query(30, ge=1, le=_MAX_DAYS),
+    all_time: bool = Query(False),
     domain: Optional[str] = None,
     x_admin_key: Optional[str] = Header(default=None),
 ) -> dict[str, Any]:
     """
     Return an aggregated snapshot of the warranty funnel for the last ``days``
-    days (inclusive of today).
+    days (inclusive of today), or all stored tickets when ``all_time=true``.
+    The daily chart is bounded to the most recent 180 days independently of
+    lifetime totals. Identified customers are deduplicated by normalized email;
+    anonymous sessions are reported separately and do not establish person counts.
 
     Response shape
     --------------
@@ -141,7 +147,9 @@ async def warranty_metrics(
     abandon_cutoff = end - timedelta(hours=_ABANDON_THRESHOLD_HOURS)
 
     with warranty_db_session() as db:
-        q = db.query(WarrantyTicket).filter(WarrantyTicket.created_at >= start)
+        q = db.query(WarrantyTicket)
+        if not all_time:
+            q = q.filter(WarrantyTicket.created_at >= start)
         if domain:
             q = q.filter(WarrantyTicket.domain.contains(domain))
         tickets = q.all()
@@ -150,14 +158,27 @@ async def warranty_metrics(
         turn_counts: dict[str, int] = {}
         terminal_turns: list[int] = []
         if tickets:
-            ids = [str(t.ticket_id) for t in tickets]
+            selected_ids = q.with_entities(WarrantyTicket.ticket_id).subquery()
             rows = (
-                db.query(WarrantyTurn.ticket_id)
-                .filter(WarrantyTurn.ticket_id.in_(ids))
+                db.query(WarrantyTurn.ticket_id, func.count())
+                .join(selected_ids, WarrantyTurn.ticket_id == selected_ids.c.ticket_id)
+                .group_by(WarrantyTurn.ticket_id)
                 .all()
             )
-            for (tid,) in rows:
-                turn_counts[tid] = turn_counts.get(tid, 0) + 1
+            turn_counts = {str(tid): count for tid, count in rows}
+
+    if all_time:
+        earliest = min(
+            (_to_cst(t.created_at) or end for t in tickets),
+            default=end,
+        )
+        start = earliest.replace(hour=0, minute=0, second=0, microsecond=0)
+    trend_start = max(
+        start,
+        (end - timedelta(days=_MAX_DAYS - 1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ),
+    )
 
     started = len(tickets)
     reached_terminal = 0
@@ -172,6 +193,9 @@ async def warranty_metrics(
     self_service_started = 0
     self_service_resolved = 0
     escalated_after_self_service = 0
+    identified_customers: set[str] = set()
+    sessions: set[str] = set()
+    identified_sessions: set[str] = set()
 
     status_counts: Counter[str] = Counter()
     issue_totals: defaultdict[str, dict[str, int]] = defaultdict(
@@ -196,10 +220,18 @@ async def warranty_metrics(
         troubleshooting_outcome = str(
             collected.get("troubleshooting_outcome") or ""
         ).strip().lower()
-        has_email = bool(
+        customer_email = (
             str(collected.get("customer_email") or "").strip()
             or str(collected.get("customer_contact_email") or "").strip()
-        )
+        ).lower()
+        has_email = bool(customer_email)
+        session_id = str(t.session_id or "").strip()
+        if session_id:
+            sessions.add(session_id)
+            if has_email:
+                identified_sessions.add(session_id)
+        if has_email:
+            identified_customers.add(customer_email)
         intake_gate = str(collected.get("intake_email_gate_status") or "").strip().lower()
         is_completed = status != "in_progress"
 
@@ -241,19 +273,22 @@ async def warranty_metrics(
             admin_decided += 1
         if status == "resolved":
             resolved += 1
-        if troubleshooting_outcome:
-            self_service_started += 1
-        if (
+        self_resolved = (
             troubleshooting_outcome == "resolved"
             or str(t.admin_decision or "") == "self_resolved"
-        ):
+        )
+        # Older self-resolved tickets may predate troubleshooting_outcome.
+        # Their confirmed outcome belongs in both numerator and denominator.
+        if troubleshooting_outcome or self_resolved:
+            self_service_started += 1
+        if self_resolved:
             self_service_resolved += 1
         if troubleshooting_outcome in {"unresolved", "unable_to_attempt"}:
             escalated_after_self_service += 1
 
     # Ensure every day in the window shows up (even zero-days) for a smooth chart.
     trend: list[dict[str, Any]] = []
-    cursor = start
+    cursor = trend_start
     while cursor <= end:
         d = _iso_day(cursor)
         trend.append(
@@ -276,13 +311,19 @@ async def warranty_metrics(
 
     return {
         "range": {
-            "days": days,
+            "days": None if all_time else days,
+            "all_time": all_time,
             "start": start.isoformat(),
             "end": end.isoformat(),
+            "trend_start": trend_start.isoformat(),
+            "trend_days": len(trend),
             "abandon_threshold_hours": _ABANDON_THRESHOLD_HOURS,
         },
         "totals": {
             "started": started,
+            "unique_identified_customers": len(identified_customers),
+            "unique_sessions": len(sessions),
+            "anonymous_sessions": len(sessions - identified_sessions),
             "reached_terminal": reached_terminal,
             "completion_rate_pct": _percent(reached_terminal, started),
             "contact_captured": contact_captured,
@@ -307,6 +348,10 @@ async def warranty_metrics(
             "self_service_resolution_rate_pct": _percent(
                 self_service_resolved,
                 self_service_started,
+            ),
+            "self_service_overall_resolution_rate_pct": _percent(
+                self_service_resolved,
+                started,
             ),
             "escalated_after_self_service": escalated_after_self_service,
             "abandoned": abandoned,

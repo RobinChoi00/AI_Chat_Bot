@@ -14,16 +14,69 @@ handle first, then common handle variants, then a title search.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
-from dataclasses import dataclass
+import threading
+import time
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import requests
 
-from store_config import get_store_config
+from store_config import get_store_config, normalize_storefront_domain
 
 logger = logging.getLogger(__name__)
+
+_cache_lock = threading.Lock()
+_stock_cache: OrderedDict[tuple[str, str, str, str], tuple[float, Optional["LiveStockSnapshot"]]] = OrderedDict()
+_cache_counters = {"hits": 0, "misses": 0, "fetches": 0, "failures": 0}
+_cache_generation = 0
+_cache_clock = time.monotonic
+
+
+def _bounded_env(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+        return min(maximum, max(minimum, value)) if math.isfinite(value) else default
+    except ValueError:
+        return default
+
+
+def clear_stock_cache() -> None:
+    """Invalidate public product snapshots after a catalog refresh."""
+    global _cache_generation
+    with _cache_lock:
+        _cache_generation += 1
+        _stock_cache.clear()
+        for key in _cache_counters:
+            _cache_counters[key] = 0
+
+
+def stock_cache_status() -> dict[str, Any]:
+    """Non-secret freshness/latency counters for internal diagnostics."""
+    now = _cache_clock()
+    with _cache_lock:
+        ages = [max(0.0, now - created) for created, _ in _stock_cache.values()]
+        ttl = _bounded_env("SALES_STOCK_CACHE_TTL_SECONDS", 30, 0, 300)
+        failure_ttl = min(ttl, _bounded_env("SALES_STOCK_FAILURE_CACHE_TTL_SECONDS", 3, 0, 10))
+        fresh = [snap for created, snap in _stock_cache.values()
+                 if max(0.0, now - created) < (ttl if snap is not None else failure_ttl)]
+        fetched_at = [snap.fetched_at for _, snap in _stock_cache.values()
+                      if snap is not None and snap.fetched_at is not None]
+        return {
+            **_cache_counters,
+            "entries": len(_stock_cache),
+            "oldest_age_seconds": round(max(ages, default=0.0), 2),
+            "fresh_entries": len(fresh),
+            "fresh_unavailable_entries": sum(snap is None for snap in fresh),
+            "latest_fetched_at": max(fetched_at, default=None),
+            "ttl_seconds": ttl,
+            "max_entries": int(_bounded_env("SALES_STOCK_CACHE_MAX_ENTRIES", 256, 1, 2048)),
+        }
 
 _PRODUCT_FIELDS = """
     handle
@@ -73,6 +126,9 @@ class LiveStockSnapshot:
     source: str  # shopify | unavailable
     price_usd: Optional[float] = None
     price_max_usd: Optional[float] = None
+    fetched_at: Optional[str] = None
+    cache_hit: bool = False
+    cache_age_seconds: float = 0.0
 
     @property
     def in_stock(self) -> bool:
@@ -125,16 +181,18 @@ def _handle_candidates(handle: str) -> list[str]:
     return uniq
 
 
-def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> LiveStockSnapshot:
+def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> Optional[LiveStockSnapshot]:
     total = node.get("totalInventory")
     try:
         total_int = int(total) if total is not None else None
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         total_int = None
 
     variant_edges = (((node.get("variants") or {}).get("edges")) or [])
     variant_nodes = [(edge or {}).get("node") or {} for edge in variant_edges]
-    any_available = any(bool(v.get("availableForSale")) for v in variant_nodes)
+    availability = [v.get("availableForSale") for v in variant_nodes]
+    known_availability = [value for value in availability if isinstance(value, bool)]
+    any_available = any(known_availability)
     prices: list[float] = []
     if total_int is None and variant_nodes:
         qty_sum = 0
@@ -146,7 +204,7 @@ def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> LiveSt
             try:
                 qty_sum += int(raw)
                 saw_qty = True
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
         if saw_qty:
             total_int = qty_sum
@@ -155,13 +213,17 @@ def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> LiveSt
         if raw_price is None or raw_price == "":
             continue
         try:
-            prices.append(float(raw_price))
+            price = float(raw_price)
+            if math.isfinite(price) and price >= 0:
+                prices.append(price)
         except (TypeError, ValueError):
             continue
+    if not any_available and len(known_availability) != len(variant_nodes):
+        return None  # Partial availability data cannot establish an out-of-stock state.
     if not variant_nodes:
-        any_available = str(node.get("status") or "").upper() == "ACTIVE" and (
-            total_int is None or total_int > 0
-        )
+        if total_int is None:
+            return None
+        any_available = str(node.get("status") or "").upper() == "ACTIVE" and total_int > 0
 
     handle = str(node.get("handle") or fallback_handle).strip()
     return LiveStockSnapshot(
@@ -173,6 +235,7 @@ def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> LiveSt
         source="shopify",
         price_usd=min(prices) if prices else None,
         price_max_usd=max(prices) if prices else None,
+        fetched_at=datetime.now(timezone.utc).isoformat(),
     )
 
 
@@ -202,7 +265,7 @@ def _graphql(
         logger.exception("sales_shopify_stock: Shopify request failed")
         return None
     if body.get("errors"):
-        logger.warning("sales_shopify_stock: GraphQL errors: %s", body.get("errors"))
+        logger.warning("sales_shopify_stock: GraphQL lookup failed")
         return None
     return body
 
@@ -224,13 +287,18 @@ def _search_by_title(
     # Prefer quoted title search; also try a distinctive token.
     queries = [f'title:"{title}"', title]
     needle = _norm_title(title)
+    title_tokens = re.findall(r"[a-z0-9]{4,}", title.lower())[:3]
+    deadline = time.monotonic() + timeout
     for q in queries:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
         body = _graphql(
             shop_domain=shop_domain,
             token=token,
             query=_PRODUCTS_SEARCH,
             variables={"q": q},
-            timeout=timeout,
+            timeout=remaining,
         )
         if not body:
             continue
@@ -247,7 +315,7 @@ def _search_by_title(
                 score = 100
             elif needle and (needle in cand or cand in needle):
                 score = 80
-            elif needle and all(tok in cand for tok in re.findall(r"[a-z0-9]{4,}", needle)[:3]):
+            elif title_tokens and all(tok in cand for tok in title_tokens):
                 score = 60
             if score > best_score:
                 best = node
@@ -264,7 +332,11 @@ def fetch_live_stock(
     title: Optional[str] = None,
     timeout: float = 8.0,
 ) -> Optional[LiveStockSnapshot]:
-    """Return live inventory for a product handle/title, or None on soft failure."""
+    """Return a fresh store-scoped inventory snapshot, or None on soft failure.
+
+    Snapshots have a short configurable TTL. Expired successful values are never
+    served during an outage; an unavailable response remains unknown.
+    """
     handle = (handle or "").strip()
     if not handle and not (title or "").strip():
         return None
@@ -277,13 +349,52 @@ def fetch_live_stock(
         logger.info("sales_shopify_stock: credentials missing for %s", store_domain)
         return None
 
+    key = (normalize_storefront_domain(store_domain), shop_domain.lower(), handle.lower(), _norm_title(title or ""))
+    ttl = _bounded_env("SALES_STOCK_CACHE_TTL_SECONDS", 30, 0, 300)
+    failure_ttl = min(ttl, _bounded_env("SALES_STOCK_FAILURE_CACHE_TTL_SECONDS", 3, 0, 10))
+    now = _cache_clock()
+    with _cache_lock:
+        generation = _cache_generation
+        cached = _stock_cache.get(key)
+        if cached is not None:
+            created, snap = cached
+            age = max(0.0, now - created)
+            if age < (ttl if snap is not None else failure_ttl):
+                _stock_cache.move_to_end(key)
+                _cache_counters["hits"] += 1
+                return replace(snap, cache_hit=True, cache_age_seconds=round(age, 3)) if snap else None
+            del _stock_cache[key]
+        _cache_counters["misses"] += 1
+
+    timeout = min(15.0, max(0.1, timeout)) if math.isfinite(timeout) else 8.0
+    snap = _fetch_stock_uncached(handle, title=title, shop_domain=shop_domain, token=token, timeout=timeout)
+    with _cache_lock:
+        _cache_counters["fetches"] += 1
+        if snap is None:
+            _cache_counters["failures"] += 1
+        if generation == _cache_generation and (ttl if snap is not None else failure_ttl) > 0:
+            _stock_cache[key] = (_cache_clock(), snap)
+            _stock_cache.move_to_end(key)
+            max_entries = int(_bounded_env("SALES_STOCK_CACHE_MAX_ENTRIES", 256, 1, 2048))
+            while len(_stock_cache) > max_entries:
+                _stock_cache.popitem(last=False)
+    return snap
+
+
+def _fetch_stock_uncached(
+    handle: str, *, title: Optional[str], shop_domain: str, token: str, timeout: float,
+) -> Optional[LiveStockSnapshot]:
+    deadline = time.monotonic() + timeout
     for candidate in _handle_candidates(handle):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
         body = _graphql(
             shop_domain=shop_domain,
             token=token,
             query=_PRODUCT_BY_HANDLE,
             variables={"handle": candidate},
-            timeout=timeout,
+            timeout=remaining,
         )
         if not body:
             continue
@@ -293,18 +404,49 @@ def fetch_live_stock(
 
     # Cross-store handle mismatch → title search (Titan vs OsakiUSA CSV).
     if title:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
         snap = _search_by_title(
             shop_domain=shop_domain,
             token=token,
             title=title,
-            timeout=timeout,
+            timeout=remaining,
         )
         if snap is not None:
             logger.info(
                 "sales_shopify_stock: resolved via title search domain=%s title=%s handle=%s",
-                store_domain,
+                shop_domain,
                 title,
                 snap.handle,
             )
             return snap
     return None
+
+
+def fetch_stock_many(
+    products: list[tuple[str, Optional[str]]], *, domain: Optional[str] = None,
+    timeout: float = 8.0, fetcher=None,
+) -> dict[str, Optional[LiveStockSnapshot]]:
+    """Lookup a bounded product batch concurrently, keeping unknown results.
+
+    Duplicate handles are fetched once; callers retain their original ranking.
+    ``fetcher`` supports existing test/integration overrides without bypassing
+    the production cache. At most eight workers and 32 products are accepted.
+    """
+    unique = dict(products)
+    if len(unique) > 32:
+        raise ValueError("Stock batches support at most 32 products")
+    lookup = fetcher or fetch_live_stock
+    workers = int(_bounded_env("SALES_STOCK_MAX_WORKERS", 4, 1, 8))
+
+    def fetch(item):
+        handle, title = item
+        try:
+            return handle, lookup(handle, domain=domain, title=title, timeout=timeout)
+        except Exception:
+            logger.warning("sales_shopify_stock: batch lookup unavailable")
+            return handle, None
+
+    with ThreadPoolExecutor(max_workers=min(workers, len(unique) or 1)) as pool:
+        return dict(pool.map(fetch, unique.items()))

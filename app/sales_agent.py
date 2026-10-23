@@ -75,7 +75,7 @@ from sales_cta import (
     showroom_hours,
     showroom_window_label,
 )
-from sales_shopify_stock import LiveStockSnapshot, fetch_live_stock, stock_badge
+from sales_shopify_stock import LiveStockSnapshot, fetch_live_stock, fetch_stock_many, stock_badge
 from sales_spec_index import (
     doorway_inches_for_model,
     doorway_ok,
@@ -1675,16 +1675,18 @@ def _choose_tier_pick(
     """Pick best candidate by stock, then doorway when space is tight, then list order."""
     if not candidates:
         return None
+    products = {name: resolve_product(name) for name, _, _ in candidates}
+    lookups = [
+        (product.handle, product.title or product.display_name or name)
+        for name, product in products.items() if product is not None
+    ]
+    snapshots = {}
+    for start in range(0, len(lookups), 32):
+        snapshots.update(fetch_stock_many(lookups[start:start + 32], domain=domain, fetcher=fetch_live_stock))
     scored: list[tuple] = []
     for idx, (name, reason, door_key) in enumerate(candidates):
-        product = resolve_product(name)
-        snap: Optional[LiveStockSnapshot] = None
-        if product is not None:
-            snap = fetch_live_stock(
-                product.handle,
-                domain=domain,
-                title=product.title or product.display_name or name,
-            )
+        product = products[name]
+        snap = snapshots.get(product.handle) if product is not None else None
         door_sort = door_key if prefer_compact else 0.0
         scored.append(
             (
@@ -1980,19 +1982,19 @@ def _case_recommend_reply(
     )
     model_names = [n for n in [lead, *others] if n]
 
+    products = {name: resolve_product(name) for name in model_names}
+    snapshots = fetch_stock_many(
+        [(product.handle, product.title or product.display_name or name)
+         for name, product in products.items() if product is not None],
+        domain=domain, fetcher=fetch_live_stock,
+    )
     resolved: list[tuple[str, Optional[ProductSpecs], Optional[LiveStockSnapshot]]] = []
     stock_checked = False
     for name in model_names:
-        product = resolve_product(name)
-        snap: Optional[LiveStockSnapshot] = None
-        if product is not None:
-            snap = fetch_live_stock(
-                product.handle,
-                domain=domain,
-                title=product.title or product.display_name or name,
-            )
-            if snap is not None:
-                stock_checked = True
+        product = products[name]
+        snap = snapshots.get(product.handle) if product is not None else None
+        if snap is not None:
+            stock_checked = True
         resolved.append((name, product, snap))
 
     def _stock_rank(
