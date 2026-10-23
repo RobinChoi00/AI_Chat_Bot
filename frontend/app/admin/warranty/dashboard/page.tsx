@@ -11,6 +11,10 @@ import Link from "next/link";
 import AdminMetricsDashboard from "@/components/admin/AdminMetricsDashboard";
 import type { WarrantyMetricsResponse } from "@/lib/adminTypes";
 import { getBackendUrl } from "@/lib/backendUrl";
+import MetricCohortFilter from "@/components/admin/MetricCohortFilter";
+import { metricCohort, withMetricCohort } from "@/lib/adminMetricCohort";
+
+export const dynamic = "force-dynamic";
 
 const BACKEND = getBackendUrl();
 
@@ -19,13 +23,13 @@ type AllowedDays = (typeof ALLOWED_DAYS)[number];
 
 function coerceDays(raw: string | undefined): AllowedDays | null {
   if (!raw || raw === "all") return null;
-  const parsed = Number(raw);
-  const found = ALLOWED_DAYS.find((n) => n === parsed);
+  const found = ALLOWED_DAYS.find((n) => String(n) === raw);
   return found ?? null;
 }
 
 async function fetchMetrics(
-  days: number | null
+  days: number | null,
+  cohort: string
 ): Promise<{ data: WarrantyMetricsResponse | null; error: string | null }> {
   const adminKey = process.env.ADMIN_API_KEY;
   if (!adminKey) {
@@ -37,7 +41,7 @@ async function fetchMetrics(
 
   try {
     const res = await fetch(
-      `${BACKEND}/admin/warranty/metrics?${days === null ? "all_time=true" : `days=${days}`}`,
+      withMetricCohort(`${BACKEND}/admin/warranty/metrics?${days === null ? "all_time=true" : `days=${days}`}`, cohort),
       {
         headers: { "X-Admin-Key": adminKey },
         cache: "no-store",
@@ -60,6 +64,9 @@ async function fetchMetrics(
         error: "The backend must be updated before all-time metrics are available.",
       };
     }
+    if (cohort !== "all" && body.cohort_metadata?.selected !== cohort) {
+      return { data: null, error: "The backend must be updated before release-cohort metrics are available." };
+    }
     return { data: body, error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Fetch failed";
@@ -70,11 +77,12 @@ async function fetchMetrics(
 export default async function AdminMetricsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ days?: string }>;
+  searchParams: Promise<{ days?: string; cohort?: string }>;
 }) {
-  const { days: rawDays } = await searchParams;
+  const { days: rawDays, cohort: rawCohort } = await searchParams;
   const days = coerceDays(rawDays);
-  const { data, error } = await fetchMetrics(days);
+  const cohort = metricCohort(rawCohort);
+  const { data, error } = await fetchMetrics(days, cohort);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -89,7 +97,7 @@ export default async function AdminMetricsPage({
           <span className="text-gray-300">|</span>
           <div>
             <h1 className="text-base font-semibold text-gray-900">
-              Warranty usage &amp; resolution
+              Warranty &amp; delivery outcomes
             </h1>
             <p className="text-xs font-medium text-red-600">
               INTERNAL USE ONLY — Do not share this page
@@ -102,7 +110,7 @@ export default async function AdminMetricsPage({
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <span className="text-sm text-gray-600">Time window:</span>
           <Link
-            href="/admin/warranty/dashboard?days=all"
+            href={withMetricCohort("/admin/warranty/dashboard?days=all", cohort)}
             className={`rounded-full px-3 py-1 text-xs font-medium ${
               days === null
                 ? "bg-brand-600 text-white"
@@ -114,7 +122,7 @@ export default async function AdminMetricsPage({
           {ALLOWED_DAYS.map((n) => (
             <Link
               key={n}
-              href={`/admin/warranty/dashboard?days=${n}`}
+              href={withMetricCohort(`/admin/warranty/dashboard?days=${n}`, cohort)}
               className={`rounded-full px-3 py-1 text-xs font-medium ${
                 n === days
                   ? "bg-brand-600 text-white"
@@ -125,6 +133,8 @@ export default async function AdminMetricsPage({
             </Link>
           ))}
         </div>
+
+        <MetricCohortFilter action="/admin/warranty/dashboard" selected={cohort} metadata={data?.cohort_metadata} hiddenFields={{ days: days === null ? "all" : String(days) }} />
 
         {error && (
           <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">

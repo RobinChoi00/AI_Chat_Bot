@@ -14,6 +14,8 @@ interface Props {
   initialCustomerEmail?: string;
   onContactSuccess?: (customerEmail: string, response: WarrantyContactResponse) => void;
   onUploadSuccess?: (filename: string, response: EvidenceUploadResponse) => void;
+  onCustomerEmailConfirmed?: (customerEmail: string) => void;
+  onError?: () => void;
   collapsed?: boolean;
   onToggleCollapsed?: (next: boolean) => void;
   onBack?: () => void;
@@ -53,12 +55,15 @@ export default function EvidenceUploader({
   initialCustomerEmail = "",
   onContactSuccess,
   onUploadSuccess,
+  onCustomerEmailConfirmed,
+  onError,
   collapsed = false,
   onToggleCollapsed,
   onBack,
   backDisabled = false,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const requestInFlight = useRef(false);
   const knownEmail = isValidEmail(initialCustomerEmail)
     ? initialCustomerEmail.trim()
     : "";
@@ -68,8 +73,9 @@ export default function EvidenceUploader({
   );
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const requiredEvidence = evidenceRequired.length > 0;
-  /** Required photo/video cases start with upload open; email-only stays N/A. */
-  const [evidenceNa, setEvidenceNa] = useState(!requiredEvidence);
+  // The server accepts a review request without attachments. Ask for helpful
+  // evidence progressively instead of treating missing photos as a dead end.
+  const [evidenceNa, setEvidenceNa] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<"success" | "error" | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
@@ -102,6 +108,7 @@ export default function EvidenceUploader({
     const ext = "." + file.name.split(".").pop()?.toLowerCase();
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
       setErrorMsg(`File type ${ext} is not allowed. Allowed: ${ALLOWED_EXTENSIONS.join(", ")}`);
+      onError?.();
       setSelectedFile(null);
       if (fileRef.current) fileRef.current.value = "";
       return;
@@ -109,6 +116,7 @@ export default function EvidenceUploader({
 
     if (file.size > MAX_BYTES) {
       setErrorMsg("File is too large. Maximum size is 20 MB.");
+      onError?.();
       setSelectedFile(null);
       if (fileRef.current) fileRef.current.value = "";
       return;
@@ -132,23 +140,27 @@ export default function EvidenceUploader({
     if (!activeEmail || !isValidEmail(activeEmail)) {
       setResult("error");
       setErrorMsg("Please enter a valid email address.");
+      onError?.();
       return null;
     }
     return activeEmail;
   }
 
   async function handleSubmit() {
+    if (requestInFlight.current || result === "success") return;
     const email = validateEmail();
     if (!email) return;
 
     const willUpload = !evidenceNa && selectedFile;
     if (!evidenceNa && !selectedFile) {
       setResult("error");
-      setErrorMsg("Choose a file, or check N/A to submit without a photo/video.");
+      setErrorMsg("Choose a file, or continue without an attachment.");
+      onError?.();
       return;
     }
 
     setSubmitting(true);
+    requestInFlight.current = true;
     setResult(null);
     setErrorMsg("");
 
@@ -156,29 +168,33 @@ export default function EvidenceUploader({
       if (willUpload && selectedFile) {
         const resp = await uploadEvidence(ticketId, evidenceType, selectedFile, email);
         setResult("success");
+        onCustomerEmailConfirmed?.(email);
         onUploadSuccess?.(resp.original_filename, resp);
         setSelectedFile(null);
         if (fileRef.current) fileRef.current.value = "";
       } else {
         const resp = await submitWarrantyContact(ticketId, email);
         setResult("success");
+        onCustomerEmailConfirmed?.(email);
         onContactSuccess?.(email, resp);
       }
     } catch (err: unknown) {
       setResult("error");
       setErrorMsg(err instanceof Error ? err.message : "Submission failed.");
+      onError?.();
     } finally {
+      requestInFlight.current = false;
       setSubmitting(false);
     }
   }
 
   const emailValid = isValidEmail(activeEmail);
   const needsFile = !evidenceNa && !selectedFile;
-  const submitDisabled = submitting || !emailValid || needsFile;
+  const submitDisabled = submitting || result === "success" || !emailValid || needsFile;
 
   if (collapsed) {
     return (
-      <div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-gray-300 bg-gray-50 px-3 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed border-gray-300 bg-gray-50 px-3 py-2">
         <p className="text-xs text-gray-600">
           Contact form is hidden — you can keep chatting below.
         </p>
@@ -208,12 +224,10 @@ export default function EvidenceUploader({
 
   const title =
     issueType === "installation"
-      ? "Final step — send this install case to our team?"
+      ? "Send this installation case for review"
       : issueType === "delivery"
-        ? "Final step — send this delivery case to our team?"
-        : hasKnownEmail
-          ? "Final step — send to our warranty team?"
-          : "Final step — how can we reach you?";
+        ? "Send this delivery case for review"
+        : "Send this case for review";
 
   const reachBlurb =
     issueType === "installation"
@@ -222,23 +236,11 @@ export default function EvidenceUploader({
         ? "Ready to save this delivery case for review of damage, missing parts, or tracking?"
         : "Ready to save this case for our warranty team to review?";
 
-  const submitLabel = submitting
-    ? "Submitting…"
-    : hasKnownEmail
-      ? evidenceNa
-        ? "Yes — notify warranty team"
-        : selectedFile
-          ? "Yes — send with attachment"
-          : "Select a file or check N/A"
-      : evidenceNa
-        ? "Submit email only (N/A)"
-        : selectedFile
-          ? "Submit with attachment"
-          : "Select a file or check N/A";
+  const submitLabel = submitting ? "Saving request…" : result === "success" ? "Request saved" : selectedFile && !evidenceNa ? "Send for review with attachment" : "Send for review";
 
   return (
     <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4">
-      <div className="mb-1 flex items-start justify-between gap-2">
+      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
         <p className="text-sm font-medium text-gray-800">{title}</p>
         <div className="flex shrink-0 items-center gap-1.5">
           {onBack && (
@@ -259,7 +261,7 @@ export default function EvidenceUploader({
               className="rounded-full border border-gray-200 bg-white px-2.5 py-0.5 text-[11px] font-medium text-gray-600 hover:bg-gray-100"
               title="Hide the contact form so you can keep chatting"
             >
-              Hide
+              Add a note instead
             </button>
           )}
         </div>
@@ -326,25 +328,22 @@ export default function EvidenceUploader({
         </>
       )}
 
-      <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2.5 text-sm">
-        <input
-          type="checkbox"
-          checked={evidenceNa}
-          onChange={(e) => handleNaChange(e.target.checked)}
-          className="mt-0.5"
-        />
-        <span>
-          <strong>N/A</strong> — I don&apos;t have photos or videos
-          {hasKnownEmail ? " (notify team only)" : " (submit email only)"}
-        </span>
-      </label>
+      <button
+        type="button"
+        onClick={() => handleNaChange(!evidenceNa)}
+        disabled={submitting || result === "success"}
+        aria-expanded={!evidenceNa}
+        className="mb-3 min-h-[44px] text-left text-sm font-medium text-brand-700 underline underline-offset-2 disabled:opacity-50"
+      >
+        {evidenceNa ? "Add photos or documents (optional)" : "Continue without an attachment"}
+      </button>
 
       {!evidenceNa && (
         <div className="mb-3 rounded-lg border border-gray-200 bg-white p-3">
           <p className="mb-2 text-xs font-medium text-gray-600">Attach photo or video</p>
 
-          <div className="mb-3">
-            <label className="mb-1 block text-xs text-gray-500">Evidence type</label>
+          {evidenceTypeOptions.length > 1 && <div className="mb-3">
+            <label className="mb-1 block text-xs text-gray-500">What are you attaching?</label>
             <select
               value={evidenceType}
               onChange={(e) => setEvidenceType(e.target.value)}
@@ -356,7 +355,7 @@ export default function EvidenceUploader({
                 </option>
               ))}
             </select>
-          </div>
+          </div>}
 
           <div>
             <label className="mb-1 block text-xs text-gray-500">
@@ -383,13 +382,13 @@ export default function EvidenceUploader({
       )}
 
       {errorMsg && (
-        <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
+        <p role="alert" className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
           ❌ {errorMsg}
         </p>
       )}
 
       {result === "success" && (
-        <p className="mb-2 rounded-lg bg-green-50 px-3 py-2 text-xs text-green-700">
+        <p role="status" className="mb-2 rounded-lg bg-green-50 px-3 py-2 text-xs text-green-700">
           ✅ Thank you — {WARRANTY_CONTACT_BLURB}
         </p>
       )}
@@ -398,7 +397,7 @@ export default function EvidenceUploader({
         type="button"
         onClick={handleSubmit}
         disabled={submitDisabled}
-        className={`w-full rounded-lg px-4 py-2.5 text-sm font-medium transition ${
+        className={`min-h-[48px] w-full rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
           submitDisabled
             ? "cursor-not-allowed bg-gray-200 text-gray-400"
             : "bg-brand-600 text-white hover:bg-brand-700 active:scale-[0.98]"

@@ -44,6 +44,15 @@ function metrics(): WarrantyMetricsResponse {
     by_domain: [],
     top_terminals: [],
     daily_started: [],
+    purpose_counts: { repair: 100, delivery: 80, other: 20, unknown: 0 },
+    repair: {
+      consultations: 100, diagnosis_completed: 60, diagnosis_completion_rate_pct: 60,
+      latest_outcomes: { fixed: 10, not_fixed: 40, unable_to_attempt: 10, deferred: 5, unknown: 35 },
+      result_reported: 50, confirmed_fix_rate_all_pct: 10, confirmed_fix_rate_reported_pct: 20,
+      followed_up: 3, reopened_after_fix: 1,
+    },
+    delivery: { consultations: 80, latest_lookup_available: 30, latest_lookup_unavailable: 10, lookup_not_attempted: 40, answered: 20, needs_review: 10, unable_to_attempt: 5, deferred: 15, unknown: 30 },
+    handoffs: { requested: 10, by_department: [{ department: "sales", count: 4 }, { department: "warranty", count: 6 }], by_reason: [{ reason: "customer_request", count: 10 }] },
   };
 }
 
@@ -61,9 +70,9 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-async function render(days?: string) {
+async function render(days?: string, cohort?: string) {
   return renderToStaticMarkup(
-    await AdminMetricsPage({ searchParams: Promise.resolve({ days }) })
+    await AdminMetricsPage({ searchParams: Promise.resolve({ days, cohort }) })
   );
 }
 
@@ -105,10 +114,43 @@ describe("warranty history dashboard", () => {
 
   it("distinguishes confirmed fixes from closures and reports both denominators", async () => {
     const html = await render();
-    expect(html).toContain("10 customer-confirmed fixes / 200 consultations");
-    expect(html).toContain("10 / 50 consultations with a reported troubleshooting outcome");
+    expect(html).toContain("10 confirmed fixes / 100 repair consultations");
+    expect(html).toContain("10 fixed / 50 fixed-or-not-fixed results");
     expect(html).toContain("Tickets marked closed");
     expect(html).toContain("not confirmed fixes");
+    expect(html).toContain("Delivery deferred");
+    expect(html).toContain("Customer confirmed the delivery question was answered");
+    expect(html).toContain("Idle in-progress consultations");
+    expect(html).not.toContain(">Abandoned<");
+    expect(html).not.toContain(">Completion rate<");
+    expect(html).toContain("staff receipt");
+  });
+
+  it("preserves release cohorts in backend requests, date links, and the filter form", async () => {
+    const body = metrics();
+    body.range = { ...body.range, all_time: false, days: 7 };
+    body.cohort_metadata = { selected: "current", current_release: "release-2026-10-23", available_releases: ["release-2026-10-23", "release-old"], measurement_started_at: "2026-10-23T12:00:00Z", legacy_note: "Old releases were not recorded." };
+    fetchMock.mockResolvedValue(Response.json(body));
+    const html = await render("7", "current");
+    expect(fetchMock.mock.calls[0][0]).toBe("http://backend.test/admin/warranty/metrics?days=7&cohort=current");
+    expect(html).toContain('href="/admin/warranty/dashboard?days=all&amp;cohort=current"');
+    expect(html).toContain('href="/admin/warranty/dashboard?days=30&amp;cohort=current"');
+    expect(html).toContain('value="current" selected=""');
+    expect(html).toContain('name="days" value="7"');
+    expect(html).toContain("release-2026-10-23");
+    expect(html).toContain("Legacy records have no verified release");
+    expect(html).not.toContain("test-admin-key");
+  });
+
+  it("does not present unfiltered counts as a requested release cohort", async () => {
+    const html = await render("all", "legacy");
+    expect(html).toContain("backend must be updated before release-cohort metrics");
+    expect(html).not.toContain("10 confirmed fixes / 100 repair consultations");
+  });
+
+  it("does not invent a cohort from malformed query values", async () => {
+    await render("all", "<script>bad</script>");
+    expect(fetchMock.mock.calls[0][0]).toBe("http://backend.test/admin/warranty/metrics?all_time=true");
   });
 
   it("shows configuration failures instead of zero historical usage", async () => {

@@ -12,6 +12,7 @@ interface Props {
   onResolved: () => void;
   onUnresolved: () => void;
   onUnableToAttempt: () => void;
+  onDeferred: () => void;
 }
 
 function normalizeIssueType(value?: string): WarrantyIssueType {
@@ -33,14 +34,14 @@ export function resolutionGateLabels(
   }
   if (issue === "delivery") {
     return {
-      resolved: "Not yet — I’ll come back",
-      unresolved: "Yes — submit my delivery case",
+      resolved: "The delivery update answered my question",
+      unresolved: "Continue to delivery review",
       unable: "I don’t have the photos or paperwork yet",
     };
   }
   const isPreparation = mode === "preparation";
   return {
-    resolved: isPreparation ? "No — I’m all set" : "Yes — it’s working now",
+    resolved: "Yes — it’s working now",
     unresolved: isPreparation
       ? "Yes — continue to team review"
       : "No — the issue is still there",
@@ -58,18 +59,28 @@ export default function TroubleshootingGate({
   onResolved,
   onUnresolved,
   onUnableToAttempt,
+  onDeferred,
 }: Props) {
   const issue = normalizeIssueType(issueType);
   const isPreparation = mode === "preparation" || issue === "delivery";
+
+  if (issue === "delivery") {
+    return <section className="rounded-2xl border border-sky-200 bg-sky-50 p-4" aria-labelledby="delivery-review-title">
+      <h2 id="delivery-review-title" className="text-base font-semibold text-sky-950">Send this delivery case for review?</h2>
+      <p className="mt-1 text-sm text-sky-900">Photos and delivery paperwork help when available. You can continue without them.</p>
+      <button type="button" onClick={onUnresolved} disabled={disabled} className="mt-4 min-h-[48px] w-full rounded-xl bg-sky-700 px-4 py-3 text-sm font-semibold text-white hover:bg-sky-800 disabled:opacity-50">Continue to delivery review</button>
+      <button type="button" onClick={onDeferred} disabled={disabled} className="mt-2 min-h-[44px] w-full text-sm font-medium text-sky-900 underline underline-offset-2 disabled:opacity-50">Not yet — save for later</button>
+    </section>;
+  }
 
   const copy =
     issue === "installation"
       ? {
           reviewBadge: "Setup first",
-          reviewTitle: "Watch the install guide first",
+          reviewTitle: "Review the installation guide",
           reviewBody:
-            "The install video and setup checks are shown above. Many setup issues are resolved after following the guide and reconnecting the air hose.",
-          reviewButton: "I’ve watched the guide and tried the setup",
+            "Follow the resource only if its model label matches your chair. Tell us if you need help with the setup checks.",
+          reviewButton: "I’ve reviewed the guide and tried the setup",
           unable: "I can’t complete setup on my own",
           outcomeTitle: "Is the chair set up correctly now?",
           outcomeBody:
@@ -77,21 +88,7 @@ export default function TroubleshootingGate({
           resolved: "Yes — the chair is set up now",
           unresolved: "No — I still need install help",
         }
-      : issue === "delivery"
-        ? {
-            reviewBadge: "Delivery case",
-            reviewTitle: "Gather photos and delivery paperwork first",
-            reviewBody:
-              "Damage, missing parts, and late or lost shipments need photos and your delivery receipt so our team can file the claim.",
-            reviewButton: "I’ve gathered the photos and paperwork",
-            unable: "I don’t have the photos or paperwork yet",
-            outcomeTitle: "Send this delivery case to our team?",
-            outcomeBody:
-              "We’ll review the delivery issue and follow up with replacement, missing parts, or tracking next steps.",
-            resolved: "Not yet — I’ll come back",
-            unresolved: "Yes — submit my delivery case",
-          }
-        : {
+      : {
             reviewBadge: "Self-service first",
             reviewTitle: isPreparation
               ? "Complete the preparation above first"
@@ -104,12 +101,12 @@ export default function TroubleshootingGate({
               : "I’ve tried all the steps",
             unable: "I can’t safely complete these steps",
             outcomeTitle: isPreparation
-              ? "Do you still need team review?"
+              ? "What would you like to do next?"
               : "Did the steps solve the issue?",
             outcomeBody: isPreparation
               ? "Continue only if you still need the warranty team to review this product issue."
               : "If the chair is working now, we’ll close this request as self-resolved.",
-            resolved: isPreparation ? "No — I’m all set" : "Yes — it’s working now",
+            resolved: "Yes — it’s working now",
             unresolved: isPreparation
               ? "Yes — continue to team review"
               : "No — the issue is still there",
@@ -123,7 +120,7 @@ export default function TroubleshootingGate({
       >
         <div className="mb-2 flex items-center justify-between gap-3">
           <span className="rounded-full bg-sky-700 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-white">
-            Step 1 of 2
+            {isPreparation ? "Team review" : "Try the guidance"}
           </span>
           <span className="text-xs font-medium text-sky-800">{copy.reviewBadge}</span>
         </div>
@@ -152,6 +149,7 @@ export default function TroubleshootingGate({
         >
           {copy.unable}
         </button>
+        <button type="button" onClick={onDeferred} disabled={disabled} className="min-h-[44px] w-full px-3 py-2 text-xs text-sky-800 underline underline-offset-2 disabled:opacity-50">Save for later</button>
       </section>
     );
   }
@@ -163,7 +161,7 @@ export default function TroubleshootingGate({
     >
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className="rounded-full bg-emerald-700 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-white">
-          Step 2 of 2
+          {isPreparation ? "Next step" : "Check the result"}
         </span>
         <span className="text-xs font-medium text-emerald-800">Check the result</span>
       </div>
@@ -174,20 +172,21 @@ export default function TroubleshootingGate({
       <div className="mt-4 flex flex-col gap-2">
         <button
           type="button"
-          onClick={onResolved}
+          onClick={isPreparation ? onUnresolved : onResolved}
           disabled={disabled}
           className="min-h-[48px] w-full rounded-xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {copy.resolved}
+          {isPreparation ? copy.unresolved : copy.resolved}
         </button>
         <button
           type="button"
-          onClick={onUnresolved}
+          onClick={isPreparation ? onResolved : onUnresolved}
           disabled={disabled}
           className="min-h-[48px] w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm font-medium text-gray-700 transition hover:border-gray-400 hover:bg-gray-50 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {copy.unresolved}
+          {isPreparation ? copy.resolved : copy.unresolved}
         </button>
+        <button type="button" onClick={onDeferred} disabled={disabled} className="min-h-[44px] w-full px-3 py-2 text-xs text-emerald-900 underline underline-offset-2 disabled:opacity-50">Save for later</button>
       </div>
     </section>
   );

@@ -53,7 +53,27 @@ export type TroubleshootingOutcome =
   | "steps_completed"
   | "resolved"
   | "unresolved"
-  | "unable_to_attempt";
+  | "unable_to_attempt"
+  | "deferred"
+  | "delivery_answered";
+
+export interface WarrantyPrivacyState {
+  consent_required: boolean;
+  consent_recorded: boolean;
+  email_required_before_help: boolean;
+  email_gate_status: "provided" | "skipped" | "pending" | string;
+  contact_email_available: boolean;
+}
+
+export interface WarrantyTroubleshootingResponse {
+  ticket_id: string;
+  outcome: TroubleshootingOutcome;
+  status: TicketStatus;
+  self_service_resolved: boolean;
+  deferred?: boolean;
+  service_result?: boolean;
+  followup_token?: string | null;
+}
 
 export interface WarrantyNode {
   node_id: string | null;
@@ -81,6 +101,10 @@ export interface WarrantyTicketState {
   admin_decision?: string | null;
   troubleshooting_outcome?: TroubleshootingOutcome | null;
   followup_token?: string | null;
+  review_requested?: boolean;
+  contact_submitted?: boolean;
+  notification_sent?: boolean | null;
+  receipt_email_sent?: boolean;
   current_node: WarrantyNode | null;
 }
 
@@ -155,6 +179,7 @@ export interface ModelConfirmationMetadata {
 export interface WarrantySessionResponse {
   session_id: string;
   ticket: WarrantyTicketState | null;
+  privacy?: WarrantyPrivacyState;
   followup_token?: string | null;
   tracking_summary?: TrackingSummary | null;
   delivery_lookup_required?: boolean;

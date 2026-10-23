@@ -74,6 +74,13 @@ def capture_lead(
             if phone and not session.contact_phone:
                 session.contact_phone = phone
             session.status = "handoff"
+            from customer_journey import register_conversation, record_server_event
+            common = dict(surface='sales', conversation_id=str(session.id), session_id=session_id, domain=domain)
+            register_conversation(db, **common, is_new=False)
+            record_server_event(db, **common, stage='lead', event='completed')
+            if email:
+                record_server_event(db, **common, stage='email', event='completed')
+            record_server_event(db, **common, stage='handoff', event='requested')
 
     return lead_id
 
@@ -104,9 +111,12 @@ def deliver_lead(
 
     try:
         ok = bool(sender(contact_label, "\n".join(details), "", domain or ""))
-    except Exception as exc:  # pragma: no cover — SMTP side-effects
-        logger.exception("sales lead email failed for lead_id=%s", lead_id)
-        _record_failure(lead_id=lead_id, domain=domain, error=str(exc))
+    except Exception as exc:
+        from sales_email_transport import SalesEmailError
+
+        code = exc.code if isinstance(exc, SalesEmailError) else 'transport_exception'
+        logger.warning("sales lead submission failed lead_id=%s code=%s", lead_id, code)
+        _record_failure(lead_id=lead_id, domain=domain, error=code)
         return
 
     if ok:
@@ -144,16 +154,9 @@ def schedule_lead_delivery(
 
 
 def _resolve_transport():
-    """Return ``send_sales_lead_email`` regardless of how the app was imported."""
-    try:
-        from main import send_sales_lead_email  # type: ignore
-    except ImportError:  # pragma: no cover — packaged import layout
-        try:
-            from app.main import send_sales_lead_email  # type: ignore
-        except ImportError:
-            logger.warning("sales lead capture: email transport unavailable")
-            return None
-    return send_sales_lead_email
+    """Resolve a lightweight transport without importing the application."""
+    from sales_email_transport import send_sales_notification
+    return send_sales_notification
 
 
 def _send_shopper_receipt(
@@ -167,21 +170,14 @@ def _send_shopper_receipt(
     if not to_addr:
         return
     try:
-        from main import send_sales_shopper_receipt_email  # type: ignore
-    except ImportError:
-        try:
-            from app.main import send_sales_shopper_receipt_email  # type: ignore
-        except ImportError:
-            logger.warning("sales shopper receipt: email transport unavailable")
-            return
-    try:
-        send_sales_shopper_receipt_email(
+        from sales_email_transport import send_shopper_receipt
+        send_shopper_receipt(
             to_addr,
             (interest_summary or "").strip() or _FALLBACK_SUMMARY,
             domain or "",
         )
     except Exception:
-        logger.exception("sales shopper receipt failed")
+        logger.warning("sales shopper receipt submission failed")
 
 
 def _mark_lead_status(lead_id: int, *, status: str, error: Optional[str]) -> None:
@@ -191,6 +187,12 @@ def _mark_lead_status(lead_id: int, *, status: str, error: Optional[str]) -> Non
             return
         row.forwarded = status
         row.forwarded_error = error
+        session = db.query(SalesSession).filter(SalesSession.session_id == row.session_id).one_or_none()
+        if session is not None and status in {'sent', 'failed'}:
+            from customer_journey import record_server_event
+            record_server_event(db, surface='sales', conversation_id=str(session.id),
+                                session_id=str(row.session_id), domain=str(row.domain or ''),
+                                stage='lead_delivery', event='completed' if status == 'sent' else 'failed')
 
 
 def _record_failure(*, lead_id: int, domain: str, error: str) -> None:

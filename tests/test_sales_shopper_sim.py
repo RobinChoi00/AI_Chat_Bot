@@ -589,14 +589,14 @@ def test_production_unclear_phrases_never_dump_the_menu():
         ),
         (
             "please answer my question above.",
-            "human_offer",
-            ("tell me",),
+            "human",
+            ("specialist",),
             (),
         ),
         (
             "i just have feedback for you",
             "human",
-            ("email",),
+            ("optional",),
             (),
         ),
         (
@@ -630,7 +630,7 @@ def test_production_unclear_phrases_never_dump_the_menu():
         (
             "i want to create an invoice for massage chair",
             "human",
-            ("email",),
+            ("optional",),
             (),
         ),
         (

@@ -151,6 +151,7 @@ export interface MetricsTotals {
   self_service_overall_resolution_rate_pct?: number;
   escalated_after_self_service: number;
   abandoned: number;
+  idle_in_progress?: number;
   abandoned_rate_pct: number;
   median_turns_to_terminal: number;
 }
@@ -186,6 +187,8 @@ export interface MetricsDailyRow {
 }
 
 export interface WarrantyMetricsResponse {
+  cohort_metadata?: MetricCohortMetadata;
+  journey?: JourneyMetrics;
   range: MetricsRange;
   totals: MetricsTotals;
   by_status: MetricsStatusRow[];
@@ -193,6 +196,82 @@ export interface WarrantyMetricsResponse {
   by_domain: MetricsDomainRow[];
   top_terminals: MetricsTerminalRow[];
   daily_started: MetricsDailyRow[];
+  purpose_counts?: { repair: number; delivery: number; other: number; unknown: number };
+  repair?: RepairOutcomeMetrics;
+  delivery?: DeliveryOutcomeMetrics;
+  handoffs?: SupportRequestMetrics;
+}
+
+export interface MetricCohortMetadata {
+  selected: string;
+  current_release: string;
+  available_releases: string[];
+  measurement_started_at: string | null;
+  legacy_note: string;
+}
+
+export interface JourneyMetrics {
+  measured: boolean;
+  measurement_start: "after_recording_consent" | "server_conversation_requests";
+  measurement_started_at: string | null;
+  unlinked_sessions: number;
+  note: string;
+  sessions_observed: number;
+  client_events: number;
+  server_events: number;
+  stages: { stage: string; shown: number; completed: number; skipped: number; failed: number; resumed: number; requested: number; without_completion: number }[];
+}
+
+export interface RepairOutcomeMetrics {
+  consultations: number;
+  diagnosis_completed: number;
+  diagnosis_completion_rate_pct: number | null;
+  latest_outcomes: { fixed: number; not_fixed: number; unable_to_attempt: number; deferred: number; unknown: number };
+  result_reported: number;
+  confirmed_fix_rate_all_pct: number | null;
+  confirmed_fix_rate_reported_pct: number | null;
+  followed_up: number;
+  reopened_after_fix: number;
+}
+
+export interface DeliveryOutcomeMetrics {
+  consultations: number;
+  latest_lookup_available: number;
+  latest_lookup_unavailable: number;
+  lookup_not_attempted: number;
+  answered: number;
+  needs_review: number;
+  unable_to_attempt: number;
+  deferred: number;
+  unknown: number;
+}
+
+export interface SupportRequestMetrics {
+  requested: number;
+  by_reason: { reason: string; count: number }[];
+  by_department: { department: string; count: number }[];
+}
+
+export interface SalesOutcomeMetrics {
+  recommendation: {
+    requested_sessions: number; recommended_sessions: number; no_verified_match_sessions: number;
+    completed_sessions: number; completion_rate_pct: number | null; denominator_sessions: number; note?: string;
+  };
+  human: { requested_sessions: number; explicit_requested_sessions: number; request_rate_pct: number | null; staff_confirmed_sessions: number | null; staff_confirmation_status: string; note?: string };
+  follow_up: {
+    lead_sessions: number; lead_records: number; pending: number; sent: number; failed: number; unknown: number;
+    submission_failure_rate_pct: number | null; staff_confirmed: number | null; note?: string;
+    transport?: { configured: boolean; failure_code: string | null; acceptance_is_staff_confirmation: false; tls_mode?: string; timeout_seconds?: number };
+    failure_codes?: { code: string; count: number }[];
+  };
+  conversation: { answer_provided_sessions: number; active_waiting_sessions: number; idle_missing_followup_sessions: number; human_requested_sessions: number; no_verified_match_sessions: number; unknown_sessions: number; idle_after_hours: number; note?: string };
+  quality: {
+    repeated_unclear_sessions: number; unclear_turns: number; assistant_turns: number;
+    helpful: number; not_helpful: number; rated: number;
+    rated_sessions: number; response_sessions: number; unrated_sessions: number;
+    helpful_rate_pct: number | null; rating_coverage_pct: number | null;
+    repeated_unclear_rate_pct?: number | null;
+  };
 }
 
 // ------------------------------------------------------------
@@ -200,6 +279,14 @@ export interface WarrantyMetricsResponse {
 // ------------------------------------------------------------
 
 export interface SalesMetricsResponse {
+  cohort_metadata?: MetricCohortMetadata;
+  journey?: JourneyMetrics;
+  outcomes?: SalesOutcomeMetrics;
+  question_funnel?: {
+    stage: string; label: string; reached: number; advanced: number; continued: number;
+    active_waiting: number; idle_missing_followup: number; answer_provided: number; human_requested: number;
+    unknown: number; dropped: null; drop_off_pct: null; measurement: string;
+  }[];
   range: {
     period: "all" | "range";
     days: number | null;

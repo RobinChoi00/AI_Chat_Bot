@@ -170,7 +170,7 @@ def test_metrics_funnel_math(client):
         "t4",
         status="awaiting_admin_review",
         issue_type="defect",
-        node_id="defect_replace_terminal",
+        node_id="defect_power_remote_replace_terminal",
         customer_email="c@d.com",
         turns_count=6,
     )
@@ -178,7 +178,7 @@ def test_metrics_funnel_math(client):
         "t5",
         status="resolved",
         issue_type="defect",
-        node_id="defect_replace_terminal",
+        node_id="defect_power_remote_replace_terminal",
         admin_decision="replacement",
         customer_email="e@f.com",
         turns_count=8,
@@ -202,7 +202,7 @@ def test_metrics_funnel_math(client):
     # Only t5 has an admin decision and is resolved
     assert totals["admin_decided"] == 1
     assert totals["resolved"] == 1
-    assert totals["resolved_rate_pct"] == round(1 / 3 * 100.0, 1)
+    assert totals["resolved_rate_pct"] == 20.0
     assert totals["self_service_started"] == 0
     assert totals["self_service_resolved"] == 0
     assert totals["self_service_resolution_rate_pct"] == 0.0
@@ -225,7 +225,7 @@ def test_metrics_funnel_math(client):
     assert issues["installation"]["completion_rate_pct"] == 100.0
 
     top = {row["node_id"]: row["count"] for row in body["top_terminals"]}
-    assert top["defect_replace_terminal"] == 2
+    assert top["defect_power_remote_replace_terminal"] == 2
     assert top["install_send_video"] == 1
     # Only completed tickets contribute to top_terminals
     assert "root" not in top
@@ -258,9 +258,9 @@ def test_metrics_tracks_self_service_resolution_and_escalation(client):
     )
     assert resp.status_code == 200
     totals = resp.json()["totals"]
-    assert totals["self_service_started"] == 3
+    assert totals["self_service_started"] == 2
     assert totals["self_service_resolved"] == 1
-    assert totals["self_service_resolution_rate_pct"] == 33.3
+    assert totals["self_service_resolution_rate_pct"] == 50.0
     assert totals["escalated_after_self_service"] == 2
     assert totals["admin_decided"] == 0
 
@@ -326,6 +326,7 @@ def test_metrics_rejects_out_of_range_days(client):
 def test_lifetime_metrics_includes_old_tickets_but_bounds_daily_chart(client):
     _seed_ticket(
         "historical",
+        node_id="defect_power_remote_replace_terminal",
         created_days_ago=800,
         status="resolved",
         admin_decision="self_resolved",

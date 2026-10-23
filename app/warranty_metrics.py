@@ -23,17 +23,17 @@ Endpoint
 Definitions
 -----------
 - **Started**            – any ticket created in the window.
-- **Reached terminal**   – ``status != "in_progress"``. The workflow always
-                           bumps status *away* from ``in_progress`` when a
-                           terminal node is hit (see ``warranty_workflow.py``
-                           terminal handling).
+- **Reached terminal**   – current node is an actual terminal workflow node;
+                           an early handoff does not complete diagnosis.
 - **Contact captured**   – ticket.collected_data has a ``customer_email``.
-- **Admin decided**      – ticket.admin_decision is set.
+- **Admin decided**      – staff decision is set, excluding automatic closures.
 - **Resolved**           – ticket.status == "resolved" (closed, not necessarily fixed).
-- **Self-service started** – customer recorded a troubleshooting/preparation outcome.
-- **Self-service resolved** – customer confirmed the issue was fixed without team review.
-- **Abandoned**          – status == "in_progress" AND updated_at older than
-                           ``ABANDON_THRESHOLD_HOURS`` (default 6 h).
+- **Self-service started** – latest repair result is fixed or not fixed; progress,
+                             inability and deferred results remain separate.
+- **Self-service resolved** – latest customer repair result confirms a fix.
+- **Idle in progress**   – status == "in_progress" AND updated_at older than
+                           ``ABANDON_THRESHOLD_HOURS`` (default 6 h), without
+                           inferring why the customer stopped.
 
 All timestamps are stored in America/Chicago tz (see ``_now_cst``); we filter
 by ``created_at`` cast to the local tz for consistent "day" bucketing.
@@ -50,7 +50,7 @@ from typing import Any, Optional
 
 import pytz
 from fastapi import APIRouter, Header, HTTPException, Query
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from admin_auth import require_admin_key
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,7 @@ async def warranty_metrics(
     days: int = Query(30, ge=1, le=_MAX_DAYS),
     all_time: bool = Query(False),
     domain: Optional[str] = None,
+    cohort: str = Query("all", max_length=100),
     x_admin_key: Optional[str] = Header(default=None),
 ) -> dict[str, Any]:
     """
@@ -147,12 +148,26 @@ async def warranty_metrics(
     abandon_cutoff = end - timedelta(hours=_ABANDON_THRESHOLD_HOURS)
 
     with warranty_db_session() as db:
-        q = db.query(WarrantyTicket)
+        from customer_journey import apply_cohort, cohort_metadata, journey_summary
+        from warranty_quality import WarrantyOutcomeObservation, _ensure_quality_tables, is_workflow_terminal, summarize_ticket_outcomes
+
+        q = db.query(WarrantyTicket).filter(or_(WarrantyTicket.created_at <= end, WarrantyTicket.created_at.is_(None)))
         if not all_time:
             q = q.filter(WarrantyTicket.created_at >= start)
         if domain:
             q = q.filter(WarrantyTicket.domain.contains(domain))
+        q = apply_cohort(db, q, surface="warranty", id_column=WarrantyTicket.ticket_id, cohort=cohort)
         tickets = q.all()
+        _ensure_quality_tables(db)
+        selected_tickets = q.with_entities(WarrantyTicket.ticket_id).subquery()
+        observations = (db.query(WarrantyOutcomeObservation)
+            .join(selected_tickets, WarrantyOutcomeObservation.ticket_id == selected_tickets.c.ticket_id)
+            .filter(WarrantyOutcomeObservation.observed_at <= end)
+            .order_by(WarrantyOutcomeObservation.observed_at, WarrantyOutcomeObservation.id).all())
+        outcome_summary = summarize_ticket_outcomes(tickets, observations)
+        latest_by_ticket = outcome_summary.pop("_by_ticket")
+        cohort_info = cohort_metadata(db, surface="warranty", selected=cohort)
+        journey = journey_summary(db, surface="warranty", start=None if all_time else start, end=end, domain=domain, cohort=cohort)
 
         # Preload turn counts per ticket in a single query.
         turn_counts: dict[str, int] = {}
@@ -233,7 +248,7 @@ async def warranty_metrics(
         if has_email:
             identified_customers.add(customer_email)
         intake_gate = str(collected.get("intake_email_gate_status") or "").strip().lower()
-        is_completed = status != "in_progress"
+        is_completed = is_workflow_terminal(t)
 
         status_counts[status] += 1
         issue_totals[issue_type]["count"] += 1
@@ -264,26 +279,22 @@ async def warranty_metrics(
             step_count = turn_counts.get(str(t.ticket_id), 0)
             if step_count > 0:
                 terminal_turns.append(step_count)
-        elif updated_local < abandon_cutoff:
+        if status == "in_progress" and updated_local < abandon_cutoff:
             abandoned += 1
 
         if has_email:
             contact_captured += 1
-        if t.admin_decision and str(t.admin_decision) != "self_resolved":
+        if t.admin_decision and str(t.admin_decision) not in {"self_resolved", "abandoned", "delivery_answered"}:
             admin_decided += 1
         if status == "resolved":
             resolved += 1
-        self_resolved = (
-            troubleshooting_outcome == "resolved"
-            or str(t.admin_decision or "") == "self_resolved"
-        )
-        # Older self-resolved tickets may predate troubleshooting_outcome.
-        # Their confirmed outcome belongs in both numerator and denominator.
-        if troubleshooting_outcome or self_resolved:
+        latest = latest_by_ticket[str(t.ticket_id)]
+        self_resolved = latest["purpose"] == "repair" and latest["outcome"] == "fixed"
+        if latest["purpose"] == "repair" and latest["outcome"] in {"fixed", "not_fixed"}:
             self_service_started += 1
         if self_resolved:
             self_service_resolved += 1
-        if troubleshooting_outcome in {"unresolved", "unable_to_attempt"}:
+        if latest["purpose"] == "repair" and latest["outcome"] in {"not_fixed", "unable_to_attempt"}:
             escalated_after_self_service += 1
 
     # Ensure every day in the window shows up (even zero-days) for a smooth chart.
@@ -310,6 +321,10 @@ async def warranty_metrics(
             median_turns = int(round((terminal_turns[mid - 1] + terminal_turns[mid]) / 2))
 
     return {
+        **outcome_summary,
+        "cohort": cohort_info,
+        "cohort_metadata": cohort_info,
+        "journey": journey,
         "range": {
             "days": None if all_time else days,
             "all_time": all_time,
@@ -342,7 +357,7 @@ async def warranty_metrics(
             ),
             "admin_decided": admin_decided,
             "resolved": resolved,
-            "resolved_rate_pct": _percent(resolved, reached_terminal),
+            "resolved_rate_pct": _percent(resolved, started),
             "self_service_started": self_service_started,
             "self_service_resolved": self_service_resolved,
             "self_service_resolution_rate_pct": _percent(
@@ -355,6 +370,7 @@ async def warranty_metrics(
             ),
             "escalated_after_self_service": escalated_after_self_service,
             "abandoned": abandoned,
+            "idle_in_progress": abandoned,
             "abandoned_rate_pct": _percent(abandoned, started),
             "median_turns_to_terminal": median_turns,
         },
@@ -389,4 +405,11 @@ async def warranty_metrics(
             for nid, c in terminal_counts.most_common(10)
         ],
         "daily_started": trend,
+        "measurement_notes": {
+            "workflow_completion": "Stored terminal nodes only; early support requests do not establish diagnosis completion.",
+            "outcomes": "Latest customer repair result; progress, inability, deferral, closure and delivery service are separate.",
+            "idle": "In-progress tickets older than the configured DB-update threshold; not confirmed departures or unique people.",
+            "email": "Provided divided by provided plus skipped; excludes unobserved gate views and is not a conversion rate.",
+            "closure": "Resolved status divided by all consultations; ended sessions and service cases are not confirmed repairs.",
+        },
     }

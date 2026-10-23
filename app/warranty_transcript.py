@@ -105,6 +105,41 @@ def record_warranty_exchange(payload: dict, *, path: str, body: dict, path_param
     return True
 
 
+def record_warranty_journey(payload: dict, *, path: str) -> None:
+    """Record server observations without turning a reply into a success claim."""
+    from customer_journey import register_conversation, record_server_event
+
+    if not isinstance(payload, dict):
+        return
+    state = payload.get('ticket') or {}
+    ticket_id = state.get('ticket_id') if isinstance(state, dict) else None
+    ticket_id = ticket_id or payload.get('ticket_id')
+    if not ticket_id:
+        return
+    with warranty_db_session() as db:
+        ticket = db.query(WarrantyTicket).filter_by(ticket_id=str(ticket_id)).first()
+        if ticket is None:
+            return
+        consent = db.query(WarrantyChatConsent).filter_by(session_id=str(ticket.session_id)).first()
+        if consent is None or consent.accepted_at is None:
+            return
+        args = dict(surface='warranty', conversation_id=str(ticket.ticket_id),
+            session_id=str(ticket.session_id), domain=str(ticket.domain))
+        register_conversation(db, **args)
+        record_server_event(db, **args, stage='response', event='completed')
+        if (payload.get('handoff') or {}).get('requested'):
+            record_server_event(db, **args, stage='handoff', event='requested')
+        if path.rstrip('/').endswith('/delivery-tracking'):
+            available = (payload.get('tracking_summary') or {}).get('available') is True
+            record_server_event(db, **args, stage='delivery', event='completed' if available else 'failed')
+            if available:
+                record_server_event(db, **args, stage='help', event='completed')
+        elif path.rstrip('/').endswith('/troubleshooting-outcome') and payload.get('outcome'):
+            record_server_event(db, **args, stage='outcome', event='completed')
+        elif (payload.get('terminal_enrichment') or {}).get('interaction_mode') == 'troubleshooting' and not payload.get('handoff'):
+            record_server_event(db, **args, stage='help', event='completed')
+
+
 class WarrantyConversationRoute(APIRoute):
     """Capture the final serialized payload, after all route-level overrides."""
 
@@ -122,6 +157,9 @@ class WarrantyConversationRoute(APIRoute):
                 except (ValueError, UnicodeError):
                     pass
             response = await handler(request)
+            if request.url.path.startswith('/api/v1/warranty/'):
+                from customer_journey import current_release
+                response.headers['X-App-Release'] = current_release()
             if capture and 200 <= response.status_code < 300:
                 try:
                     raw = getattr(response, 'body', b'')
@@ -130,6 +168,11 @@ class WarrantyConversationRoute(APIRoute):
                 except Exception as exc:
                     # Recording must not break the customer reply or log its PII.
                     logger.warning('Warranty response recording failed (%s)', type(exc).__name__)
+                try:
+                    payload = json.loads(getattr(response, 'body', b''))
+                    record_warranty_journey(payload, path=request.url.path)
+                except Exception as exc:
+                    logger.warning('Warranty journey recording failed (%s)', type(exc).__name__)
             return response
 
         return record_final_response

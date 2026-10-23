@@ -37,7 +37,8 @@ CASES_PATH = ROOT / "data" / "llm_eval_cases.json"
 CONVERSATIONS_PATH = ROOT / "data" / "ai_conversation_eval_cases.json"
 LEGACY_SECTIONS = ("tool_selection", "faithfulness", "refusal", "language_consistency")
 WARRANTY_ACTIONS = frozenset({"register-model", "confirm-model", "quick-start", "natural-start", "smart-start", "answer", "state"})
-CHECK_KEYS = frozenset({"contains", "contains_any", "not_contains", "json_equals", "expected_intent", "expected_handoff", "expected_tool", "expected_language", "expect_refusal", "min_products", "max_products", "max_product_price", "min_product_capacity_lb", "required_product_mechanism"})
+CHECK_KEYS = frozenset({"contains", "contains_any", "not_contains", "json_equals", "expected_intent", "expected_handoff", "expected_tool", "expected_sources", "expected_language", "expect_refusal", "min_products", "max_products", "max_product_price", "min_product_capacity_lb", "required_product_mechanism"})
+DIALOGUE_CHECK_KEYS = frozenset({"not_contains", "final_contains_any", "max_identical_assistant_replies"})
 
 
 def _get_model() -> str:
@@ -90,6 +91,18 @@ def validate_conversations(payload: dict[str, Any]) -> list[str]:
             errors.append(f"{cid}: provenance must be explicit")
         if case.get("surface") not in {"general", "sales", "warranty"}:
             errors.append(f"{cid}: unsupported surface")
+        if case.get("split", "regression") not in {"regression", "held_out"}:
+            errors.append(f"{cid}: split must be regression or held_out")
+        dialogue = case.get("dialogue_expect", {})
+        if not isinstance(dialogue, dict) or set(dialogue) - DIALOGUE_CHECK_KEYS:
+            errors.append(f"{cid}: unsupported dialogue expectations")
+        elif dialogue:
+            for key in ("not_contains", "final_contains_any"):
+                if key in dialogue and (not isinstance(dialogue[key], list) or not dialogue[key] or not all(isinstance(item, str) and item.strip() for item in dialogue[key])):
+                    errors.append(f"{cid}: {key} must contain nonempty strings")
+            count = dialogue.get("max_identical_assistant_replies")
+            if count is not None and (isinstance(count, bool) or not isinstance(count, int) or count < 1):
+                errors.append(f"{cid}: max_identical_assistant_replies must be a positive integer")
         turns = case.get("turns")
         if not isinstance(turns, list) or not turns:
             errors.append(f"{cid}: turns must not be empty")
@@ -115,6 +128,12 @@ def validate_conversations(payload: dict[str, Any]) -> list[str]:
                         errors.append(f"{cid}/{index}: {key} must be nonnegative")
                 if "required_product_mechanism" in checks and checks["required_product_mechanism"] not in {"2D", "3D", "4D", "5D"}:
                     errors.append(f"{cid}/{index}: required_product_mechanism must name a supported mechanism")
+                if "expected_sources" in checks:
+                    sources = checks["expected_sources"]
+                    if (case.get("surface") != "general" or not isinstance(sources, list) or not sources
+                        or any(not isinstance(item, dict) or not item.get("source_type") or set(item) - {"source_type", "model", "currency"}
+                               or not all(isinstance(value, str) and value.strip() for value in item.values()) for item in sources)):
+                        errors.append(f"{cid}/{index}: expected_sources needs typed source identities on general chat")
             if case.get("surface") == "warranty":
                 if turn.get("action") not in WARRANTY_ACTIONS:
                     errors.append(f"{cid}/{index}: unsupported warranty action")
@@ -210,6 +229,12 @@ def check_answer(text: str, payload: dict[str, Any], checks: dict[str, Any], tra
         matching = [turn for turn in (trace or {}).get("turns", []) if turn.get("tool_name") == checks["expected_tool"]]
         if matching and not any(turn.get("tool_success") is True for turn in matching):
             errors.append("required tool did not execute successfully")
+    if "expected_sources" in checks:
+        evidence = [item for turn in (trace or {}).get("turns", []) if turn.get("tool_success") is True
+                    for item in turn.get("source_evidence", []) if item.get("available") is True]
+        for expected in checks["expected_sources"]:
+            if not any(all(str(item.get(key, "")).casefold() == value.casefold() for key, value in expected.items()) for item in evidence):
+                errors.append("required source/model evidence not observed")
     products = payload.get("products", [])
     if "min_products" in checks and len(products) < checks["min_products"]:
         errors.append("not enough recommended products")
@@ -236,6 +261,25 @@ def check_answer(text: str, payload: dict[str, Any], checks: dict[str, Any], tra
             if str(_lookup(product, "specs.massage_mechanism") or "").upper() != checks["required_product_mechanism"]:
                 errors.append("recommended massage mechanism missing or violates the requirement")
     return errors
+
+
+def check_dialogue(replies: list[str], checks: dict[str, Any]) -> list[str]:
+    """Judge the complete dialogue; retain no raw replies in the report."""
+    errors: list[str] = []
+    combined = "\n".join(replies).casefold()
+    if any(needle.casefold() in combined for needle in checks.get("not_contains", [])):
+        errors.append("dialogue-wide forbidden text appeared")
+    if checks.get("final_contains_any") and (not replies or not any(needle.casefold() in replies[-1].casefold() for needle in checks["final_contains_any"])):
+        errors.append("final dialogue goal was not demonstrated")
+    if "max_identical_assistant_replies" in checks:
+        normalized = [re.sub(r"\s+", " ", reply).strip().casefold() for reply in replies if reply.strip()]
+        if normalized and max(normalized.count(reply) for reply in set(normalized)) > checks["max_identical_assistant_replies"]:
+            errors.append("identical assistant reply loop exceeded limit")
+    return errors
+
+
+def _needs_trace(checks: dict[str, Any], expected_model: str | None = None) -> bool:
+    return bool(checks.get("expected_tool") or checks.get("expected_sources") or expected_model)
 
 
 def _read_stream(response) -> str:
@@ -283,6 +327,7 @@ def run_case(case: dict[str, Any], client, *, base_url: str, domain: str, admin_
     history: list[dict[str, str]] = []
     ticket_id = ""
     results: list[dict[str, Any]] = []
+    replies: list[str] = []
     surface = case["surface"]
     if surface == "warranty":
         try:
@@ -301,7 +346,7 @@ def run_case(case: dict[str, Any], client, *, base_url: str, domain: str, admin_
                 with client.stream("POST", f"{base_url}/api/v1/chat", json=body, headers={"X-Request-ID": request_id}) as response:
                     text = _read_stream(response)
                 payload: dict[str, Any] = {}
-                if turn["expect"].get("expected_tool") or expected_model:
+                if _needs_trace(turn["expect"], expected_model):
                     if not admin_key:
                         raise ValueError("admin trace credential required to verify tool/model evidence")
                     trace = _trace(client, base_url, request_id, admin_key)
@@ -326,6 +371,7 @@ def run_case(case: dict[str, Any], client, *, base_url: str, domain: str, admin_
                 # Evaluate the complete structured UI state, not just LLM prose.
                 text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
             elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+            replies.append(text)
             errors = check_answer(text, payload, turn["expect"], trace)
             observed_model = trace.get("model") if trace else None
             if expected_model and surface == "general" and observed_model != expected_model:
@@ -335,7 +381,8 @@ def run_case(case: dict[str, Any], client, *, base_url: str, domain: str, admin_
             # Do not echo provider errors, response bodies or credential-bearing URLs.
             results.append({"turn": index + 1, "passed": False, "errors": [f"request/evidence failed: {type(exc).__name__}"], "latency_ms": round((time.perf_counter() - started) * 1000, 2)})
             break
-    return {"id": case["id"], "surface": surface, "provenance": case["provenance"], "passed": len(results) == len(case["turns"]) and all(row["passed"] for row in results), "unrun_turns": len(case["turns"]) - len(results), "turns": results}
+    dialogue_errors = check_dialogue(replies, case.get("dialogue_expect", {}))
+    return {"id": case["id"], "surface": surface, "provenance": case["provenance"], "split": case.get("split", "regression"), "passed": len(results) == len(case["turns"]) and all(row["passed"] for row in results) and not dialogue_errors, "dialogue_errors": dialogue_errors, "unrun_turns": len(case["turns"]) - len(results), "turns": results}
 
 
 def percentile(values: list[float], fraction: float) -> float | None:
@@ -364,7 +411,16 @@ def summarize(results: list[dict[str, Any]], baseline: dict[str, Any] | None = N
         rows = [case for case in results if case.get("surface", "unknown") == surface]
         samples = [turn["latency_ms"] for case in rows for turn in case["turns"]]
         surfaces[surface] = {"cases": len(rows), "passed": sum(bool(case["passed"]) for case in rows), "p50_ms": percentile(samples, 0.5), "p95_ms": percentile(samples, 0.95)}
-    return {"status": "pass" if success else "fail", "mode": "live_api", "quality_evaluated": bool(results), "total_cases": len(results), "passed": passed, "failed": len(results) - passed, "unrun_turns": sum(case.get("unrun_turns", 0) for case in results), "pass_rate_pct": round(100 * passed / len(results), 1) if results else 0, "latency_ms": {"p50": percentile(latencies, 0.5), "p95": p95, "samples": len(latencies), "budget_failed": latency_failed}, "surfaces": surfaces, "regressions": regressions, "comparison_errors": comparison_errors, "cases": results}
+    all_errors = [error for case in results for turn in case["turns"] for error in turn.get("errors", [])]
+    failure_counts = {
+        "route_or_handoff": sum(error in {"unexpected intent", "unexpected handoff"} for error in all_errors),
+        "source_evidence": sum("source/model evidence" in error or "required tool" in error for error in all_errors),
+        "fit_or_budget": sum(any(word in error for word in ("capacity", "mechanism", "budget", "product price")) for error in all_errors),
+        "request_or_availability": sum("request/evidence failed" in error or "application error fallback" in error for error in all_errors),
+        "dialogue_goal_or_loop": sum(len(case.get("dialogue_errors", [])) for case in results),
+    }
+    observed = sum("response_sha256" in turn for case in results for turn in case["turns"])
+    return {"status": "pass" if success else "fail", "mode": "live_api", "quality_evaluated": observed > 0, "evaluated_turns": observed, "total_cases": len(results), "passed": passed, "failed": len(results) - passed, "unrun_turns": sum(case.get("unrun_turns", 0) for case in results), "pass_rate_pct": round(100 * passed / len(results), 1) if results else 0, "assertion_failure_counts": failure_counts, "latency_ms": {"p50": percentile(latencies, 0.5), "p95": p95, "samples": len(latencies), "budget_failed": latency_failed}, "surfaces": surfaces, "regressions": regressions, "comparison_errors": comparison_errors, "cases": results}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -376,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allow-remote", action="store_true")
     parser.add_argument("--domain", default="osakiusa.com")
     parser.add_argument("--suite", choices=("all", "legacy", "conversations"), default="all")
+    parser.add_argument("--split", choices=("all", "regression", "held_out"), default="all", help="Keep reviewed regression cases separate from independently curated held-out cases")
     parser.add_argument("--cases", type=Path, default=CONVERSATIONS_PATH)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--baseline", type=Path)
@@ -391,6 +448,10 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"status": "invalid_fixtures", "quality_evaluated": False, "errors": errors}, indent=2))
             return 1
         selected = ([] if args.suite == "conversations" else legacy_conversations(legacy)) + ([] if args.suite == "legacy" else conversations["cases"])
+        if args.split != "all":
+            selected = [case for case in selected if case.get("split", "regression") == args.split]
+        if not selected:
+            raise ValueError("selected evaluation split has no cases; no quality measurement is possible")
         if args.dry_run:
             print(json.dumps({"status": "structure_valid", "mode": "dry_run", "quality_evaluated": False, "total_cases": len(selected), "synthetic_cases": sum(case["provenance"] == "synthetic" for case in selected), "reviewed_anonymized_cases": sum(case["provenance"] == "reviewed_anonymized" for case in selected), "local_config_model": _get_model(), "note": "No model, server, retrieval, stock or customer outcomes were evaluated."}, indent=2))
             return 0
@@ -398,7 +459,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("choose --dry-run or --live; live requests never run implicitly")
         base_url = validate_target(args.base_url, args.allow_remote)
         admin_key = os.environ.get("AI_EVAL_ADMIN_API_KEY", "")
-        if any(case["surface"] == "general" and any(turn["expect"].get("expected_tool") or args.expected_model for turn in case["turns"]) for case in selected) and not admin_key:
+        if any(case["surface"] == "general" and any(_needs_trace(turn["expect"], args.expected_model) for turn in case["turns"]) for case in selected) and not admin_key:
             raise ValueError("AI_EVAL_ADMIN_API_KEY is required for authenticated tool/model trace evidence")
         if args.expected_model and not any(case["surface"] == "general" for case in selected):
             raise ValueError("--expected-model requires general-chat cases with runtime trace evidence")
@@ -417,7 +478,7 @@ def main(argv: list[str] | None = None) -> int:
         with httpx.Client(timeout=args.timeout, follow_redirects=False) as client:
             results = [run_case(case, client, base_url=base_url, domain=args.domain, admin_key=admin_key, expected_model=args.expected_model) for case in selected]
         report = summarize(results, baseline, args.max_p95_ms)
-        report.update({"local_config_model": _get_model(), "expected_runtime_model": args.expected_model, "domain": args.domain, "fixture_sha256": fixture_hash, "limitations": ["Synthetic fixtures are not measured customer success or conversion.", "Language/refusal checks are heuristic; expert review is still required.", "The client cannot override the server model; use a separately configured staging server.", "Fixture HTTP calls create staging records and may call paid external services."]})
+        report.update({"local_config_model": _get_model(), "expected_runtime_model": args.expected_model, "domain": args.domain, "split": args.split, "fixture_sha256": fixture_hash, "limitations": ["Regression fixtures are not an independent held-out estimate of customer success or conversion.", "Language/refusal checks are heuristic; expert review is still required.", "The client cannot override the server model; use a separately configured staging server.", "Fixture HTTP calls create staging records and may call paid external services."]})
         output = json.dumps(report, indent=2, ensure_ascii=False)
         if args.out:
             args.out.parent.mkdir(parents=True, exist_ok=True)

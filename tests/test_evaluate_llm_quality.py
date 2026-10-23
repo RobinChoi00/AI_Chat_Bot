@@ -215,6 +215,59 @@ def test_recorded_tool_failure_cannot_satisfy_tool_execution_check():
     assert 'required tool did not execute successfully' in errors
 
 
+def test_expected_source_requires_successful_available_exact_model_evidence():
+    checks={'expected_sources':[{'source_type':'catalog','model':'Osaki Solo Flex 4D','currency':'USD'}]}
+    correct={'tool_success':True,'source_evidence':[{'source_type':'catalog','model':'Osaki Solo Flex 4D','currency':'USD','available':True}]}
+    assert ev.check_answer('The exact model answer',{},checks,{'turns':[correct]})==[]
+    for wrong in ({**correct,'tool_success':False}, {'tool_success':True,'source_evidence':[{'source_type':'catalog','model':'Different Chair','currency':'USD','available':True}]}, {'tool_success':True,'source_evidence':[{'source_type':'catalog','model':'Osaki Solo Flex 4D','currency':'USD','available':False}]}):
+        assert 'required source/model evidence not observed' in ev.check_answer('Fluent reply',{},checks,{'turns':[wrong]})
+    assert ev.check_answer('Fluent reply',{},checks,None)
+
+
+def test_source_only_expectation_fetches_authenticated_trace():
+    requested=[]
+    def handler(request):
+        requested.append(request)
+        if request.method=='GET':
+            return httpx.Response(200,json={'turns':[{'tool_success':True,'source_evidence':[{'source_type':'catalog','model':'Osaki Solo Flex 4D','available':True}]}]})
+        return httpx.Response(200,content=b'Exact source answer')
+    spec=case(turns=[{'message':'A source question','expect':{'expected_sources':[{'source_type':'catalog','model':'Osaki Solo Flex 4D'}]}}])
+    with client_for(handler) as client:
+        result=ev.run_case(spec,client,base_url='http://localhost',domain='osakiusa.com',admin_key='synthetic-key')
+    assert result['passed']
+    assert requested[1].headers['X-Admin-Key']=='synthetic-key'
+
+
+def test_dialogue_goal_and_loop_checks_fail_even_if_each_turn_passes():
+    spec=case('sales',[{'message':'Question one','expect':{'not_contains':['guaranteed cure']}},
+                       {'message':'Please answer that question','expect':{'not_contains':['guaranteed cure']}}])
+    spec['dialogue_expect']={'max_identical_assistant_replies':1,'final_contains_any':['foot rollers']}
+    with client_for(lambda request:httpx.Response(200,json={'reply':'What is your height?','intent':'recommend'})) as client:
+        result=ev.run_case(spec,client,base_url='http://localhost',domain='osakiusa.com')
+    assert all(turn['passed'] for turn in result['turns'])
+    assert not result['passed']
+    assert set(result['dialogue_errors'])=={'final dialogue goal was not demonstrated','identical assistant reply loop exceeded limit'}
+    assert 'What is your height' not in json.dumps(result)
+
+
+def test_empty_held_out_split_fails_without_network_or_quality_claim(capsys,monkeypatch):
+    monkeypatch.setattr(httpx,'Client',lambda *args,**kwargs:pytest.fail('No cases means no request'))
+    assert ev.main(['--dry-run','--split','held_out'])==1
+    result=json.loads(capsys.readouterr().out)
+    assert result['quality_evaluated'] is False
+    assert 'no cases' in result['error']
+
+
+def test_all_request_failures_do_not_claim_quality_was_measured():
+    spec=case()
+    with client_for(lambda request:httpx.Response(503)) as client:
+        result=ev.run_case(spec,client,base_url='http://localhost',domain='osakiusa.com')
+    summary=ev.summarize([result])
+    assert summary['status']=='fail' and summary['quality_evaluated'] is False
+    assert summary['evaluated_turns']==0
+    assert summary['assertion_failure_counts']['request_or_availability']==1
+
+
 def test_audit_capacity_failure_cannot_pass_on_fluent_wrong_recommendations():
     source=json.loads(ev.CONVERSATIONS_PATH.read_text())
     spec=next(row for row in source['cases'] if row['id']=='reviewed-sales-628-exact-capacity-and-4d')

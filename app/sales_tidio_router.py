@@ -26,6 +26,7 @@ GET  /api/v1/sales/tidio/health
 from __future__ import annotations
 
 import hmac
+import hashlib
 import logging
 import os
 import re
@@ -121,6 +122,7 @@ class TidioTurnResponse(BaseModel):
     intent: str
     handoff: bool
     handoff_reason: Optional[str] = None
+    handoff_state: Optional[str] = None
     quick_replies: list[dict[str, str]] = Field(default_factory=list)
     session_id: str
     analytics_token: Optional[str] = None
@@ -211,6 +213,12 @@ def _run_sales_turn(
     domain: str,
     background_tasks: Optional[BackgroundTasks] = None,
 ) -> dict[str, Any]:
+    from sales_models import SalesSession
+    from warranty_models import warranty_db_session
+    with warranty_db_session() as db:
+        existing = db.query(SalesSession).filter(SalesSession.session_id == session_id).first()
+        if existing and normalize_storefront_domain(existing.domain) != normalize_storefront_domain(domain):
+            raise HTTPException(status_code=409, detail="Session belongs to another storefront.")
     get_or_create_session(
         session_id,
         domain=domain,
@@ -314,6 +322,8 @@ def _run_sales_turn(
         status="handoff" if result.handoff else None,
     )
     from sales_events import issue_event_token
+    from sales_journey import record_reply
+    record_reply(session_id, domain, result)
 
     return {
         "reply": result.reply,
@@ -321,6 +331,7 @@ def _run_sales_turn(
         "intent": result.intent,
         "handoff": result.handoff,
         "handoff_reason": result.handoff_reason,
+        "handoff_state": 'requested' if result.handoff else None,
         "quick_replies": buttons,
         "session_id": session_id,
         "analytics_token": issue_event_token(session_id, domain),
@@ -393,6 +404,10 @@ def _process_human_takeover(payload: dict) -> None:
         last_message="[tidio operator joined]",
         status="handoff",
     )
+    from sales_journey import record_human_confirmation
+    webhook_id = str(payload.get('webhook_id') or '').strip()
+    event_id = 'tidio-operator:' + hashlib.sha256(webhook_id.encode()).hexdigest() if webhook_id else None
+    record_human_confirmation(session_id, tidio_domain(), event_id=event_id)
     logger.info("tidio human takeover session=%s", session_id)
 
 

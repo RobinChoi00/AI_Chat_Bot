@@ -73,6 +73,7 @@ conversations; `--dry-run` validates fixtures without measuring model quality.
 
 See the [AI improvement and model upgrade runbook (Korean)](docs/ai_improvement_runbook.ko.md),
 [customer answer quality and Delivery tracking guide (Korean)](docs/customer_answer_quality.ko.md),
+[measured customer success and release comparison guide (Korean)](docs/measured_customer_success.ko.md),
 [Warranty review workflow](docs/warranty_quality_workflow.md), and
 [Sales analytics integration](docs/sales_analytics_integration.md).
 

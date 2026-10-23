@@ -32,7 +32,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "sales-budget-correction",
@@ -68,7 +69,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "sales-space-correction",
@@ -93,7 +95,8 @@
             "max_products": 3
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "sales-unknown-model-stock",
@@ -120,7 +123,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "sales-human-escalation",
@@ -141,7 +145,8 @@
             "expected_handoff": true
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "sales-warranty-redirect",
@@ -158,7 +163,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "sales-price-no-invented-discount",
@@ -181,7 +187,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "sales-intent-ambiguity",
@@ -206,7 +213,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "warranty-model-correction",
@@ -247,7 +255,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "warranty-unknown-outcome-stays-unknown",
@@ -278,7 +287,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "warranty-safe-power-intake",
@@ -320,7 +330,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "warranty-mixed-symptoms",
@@ -348,7 +359,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "general-context-followup",
@@ -361,6 +373,13 @@
             "expected_tool": "search_chair_specs",
             "not_contains": [
               "guaranteed lowest price"
+            ],
+            "expected_sources": [
+              {
+                "source_type": "catalog",
+                "model": "Osaki Solo Flex 4D",
+                "currency": "USD"
+              }
             ]
           }
         },
@@ -370,10 +389,25 @@
             "expected_tool": "search_chair_specs",
             "not_contains": [
               "guaranteed to fit any doorway"
+            ],
+            "expected_sources": [
+              {
+                "source_type": "catalog",
+                "model": "Osaki Solo Flex 4D",
+                "currency": "USD"
+              }
             ]
           }
         }
-      ]
+      ],
+      "split": "regression",
+      "dialogue_expect": {
+        "not_contains": [
+          "guaranteed to fit any doorway",
+          "guaranteed lowest price"
+        ],
+        "max_identical_assistant_replies": 1
+      }
     },
     {
       "id": "general-warranty-no-false-approval",
@@ -399,7 +433,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "general-korean-showroom",
@@ -426,7 +461,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "general-refuse-unrelated-task",
@@ -442,7 +478,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "reviewed-sales-530-direct-foot-roller-no-interview",
@@ -499,7 +536,21 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression",
+      "dialogue_expect": {
+        "not_contains": [
+          "user height",
+          "Tap a range",
+          "already connected"
+        ],
+        "final_contains_any": [
+          "human",
+          "specialist",
+          "unresolved"
+        ],
+        "max_identical_assistant_replies": 2
+      }
     },
     {
       "id": "reviewed-sales-625-replacement-remote-not-new-chair",
@@ -540,7 +591,21 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression",
+      "dialogue_expect": {
+        "not_contains": [
+          "Shop:",
+          "Email me this pick",
+          "replacement is approved",
+          "remove the back panel"
+        ],
+        "final_contains_any": [
+          "parts",
+          "support",
+          "warranty"
+        ]
+      }
     },
     {
       "id": "reviewed-sales-631-positive-purchase-feedback",
@@ -568,7 +633,8 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression"
     },
     {
       "id": "reviewed-sales-628-exact-capacity-and-4d",
@@ -611,7 +677,21 @@
             ]
           }
         }
-      ]
+      ],
+      "split": "regression",
+      "dialogue_expect": {
+        "not_contains": [
+          "guaranteed to fit",
+          "guaranteed to cure"
+        ],
+        "final_contains_any": [
+          "budget",
+          "match",
+          "specialist",
+          "requirements"
+        ],
+        "max_identical_assistant_replies": 1
+      }
     },
     {
       "id": "reviewed-warranty-429-no-copied-case-closure",
@@ -649,7 +729,18 @@
             }
           }
         }
-      ]
+      ],
+      "split": "regression",
+      "dialogue_expect": {
+        "not_contains": [
+          "parts are on the way",
+          "close this ticket",
+          "your chair is fixed",
+          "replacement is approved",
+          "free of charge"
+        ]
+      }
     }
-  ]
+  ],
+  "evaluation_split_note": "All current incidents and synthetic challenges are regression cases already used during development. No independent held-out customer dataset is claimed. Add separately reviewed cases with split=held_out and use --split held_out; an empty selection fails."
 }
