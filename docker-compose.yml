@@ -11,6 +11,8 @@ services:
     build: 
       context: .
       dockerfile: Dockerfile.backend
+      args:
+        APP_RELEASE_ID: ${APP_RELEASE_ID:-development}
     ports:
       - "127.0.0.1:8000:8000"
     restart: unless-stopped
@@ -29,6 +31,7 @@ services:
       - TZ=America/Chicago
       - PYTHONPATH=/app:/app/app
       - APP_ENV=production
+      - APP_RELEASE_ID=${APP_RELEASE_ID:-development}
     env_file:
       - .env
     volumes:

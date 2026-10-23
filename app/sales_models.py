@@ -289,6 +289,9 @@ def get_or_create_session(
             )
             db.add(session)
             db.flush()
+            from customer_journey import register_conversation
+            register_conversation(db, surface='sales', conversation_id=str(session.id),
+                                  session_id=session_id, domain=domain, is_new=True)
         else:
             # Update mutable fields if the caller provided them.
             if domain and domain != "unknown":

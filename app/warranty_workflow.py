@@ -344,6 +344,10 @@ class WarrantyEngine:
             from warranty_consent import attach_consent_to_ticket  # noqa: WPS433
 
             attach_consent_to_ticket(db, session_id, ticket)
+            from customer_journey import register_conversation  # noqa: WPS433
+
+            register_conversation(db, surface="warranty", conversation_id=ticket_id,
+                session_id=session_id, domain=domain, is_new=True)
         return ticket_id, _node_view(_ROOT)
 
     _QUICK_START_ISSUES = frozenset({"installation", "delivery", "defect"})

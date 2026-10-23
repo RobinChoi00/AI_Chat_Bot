@@ -700,6 +700,19 @@ def _complete_then_offer_human(
 
 
 def _handoff_reply(intent: SalesIntent) -> SalesReply:
+    if intent.label == INTENT_HUMAN:
+        return SalesReply(
+            reply=("A sales specialist is requested. You don't need to repeat the question or details already in this chat. "
+                   "A team member has not yet confirmed they have joined. You can also call **+1-888-848-2630 ext. 2**. "
+                   "Sharing contact details for follow-up is optional."),
+            intent=INTENT_HUMAN, handoff=True, handoff_reason=INTENT_HUMAN,
+            quick_replies=[QuickReply(label='Share contact for follow-up', payload='lead:email'),
+                           QuickReply(label='Continue chatting', payload='menu')],
+            tools_used=['human.requested'],
+            prefs_patch={'human_requested': True, 'awaiting_pre_human_question': False,
+                         'handoff_state': 'requested'},
+            flow_stage='handoff',
+        )
     reply = handoff_message(intent) or (
         "Let me connect you with a human. Share your **email** and someone "
         "from our team will reach out within one business day."
@@ -3538,17 +3551,17 @@ _PAYLOAD_ROUTES = {
     "stock": lambda msg: _stock_reply(msg),
     "specs": lambda msg: _specs_reply(msg),
     "intensity": lambda msg: _intensity_reply(msg),
-    "human": lambda _msg: _ask_question_before_human(),
+    "human": lambda _msg: _handoff_reply(SalesIntent(label=INTENT_HUMAN, confidence='high', handoff=True)),
 }
 
 
 def _ask_email_for_pick(prefs: Optional[dict]) -> SalesReply:
-    summary = ((prefs or {}).get("pending_pick_summary") or "").strip()
-    primary = ((prefs or {}).get("pending_primary") or "your recommended chair").strip()
+    summary = ((prefs or {}).get("pending_pick_summary") or (prefs or {}).get('last_shopper_question') or "").strip()
+    primary = ((prefs or {}).get("pending_primary") or "").strip()
+    subject = f"**{primary}** and your saved preferences" if primary else 'your saved question and details'
     blurb = (
-        f"Gladly — share your **email** and I'll pass **{primary}** "
-        "(plus your fit-guide notes) to our sales team for follow-up.\n\n"
-        "Type your email address in the chat."
+        f"Share your **email** if you'd like sales to follow up about {subject}.\n\n"
+        "This is optional. You can keep browsing and using the chat without sharing it."
     )
     if is_sales_after_hours():
         blurb += f"\n\n{after_hours_blurb()}"
@@ -3573,19 +3586,18 @@ def _ask_email_for_pick(prefs: Optional[dict]) -> SalesReply:
 def _capture_pick_lead(email: str, prefs: Optional[dict], *, domain: str) -> SalesReply:
     summary = ((prefs or {}).get("pending_pick_summary") or "").strip()
     if not summary:
-        summary = format_fit_guide_summary(
+        summary = str((prefs or {}).get('last_shopper_question') or '').strip() or format_fit_guide_summary(
             domain=domain,
             prefs=(prefs or {}).get("recommend_prefs") or {},
             primary=str((prefs or {}).get("pending_primary") or "Sales AI pick"),
             alternatives=[],
             product_url=(prefs or {}).get("pending_product_url"),
         )
-    primary = ((prefs or {}).get("pending_primary") or "your pick").strip()
+    primary = ((prefs or {}).get("pending_primary") or "").strip()
     url = ((prefs or {}).get("pending_product_url") or "").strip()
     lines = [
-        f"Thanks — I saved **{email}** with your pick (**{primary}**).",
-        "You'll get a confirmation email, and someone from sales will follow up "
-        "(usually next business day).",
+        f"Thanks — I saved **{email}** " + (f"with your pick (**{primary}**)." if primary else 'with your follow-up request.'),
+        "Your follow-up request is saved. A team member has not yet confirmed receipt or an appointment.",
     ]
     if url:
         lines.append(f"\nMeanwhile you can review it here: {url}")
@@ -3894,12 +3906,7 @@ def _payload_reply(
                 "what is your return policy", domain=domain
             )
     if root == "human":
-        confirm = len(parts) > 1 and parts[1].strip().lower() == "confirm"
-        if confirm:
-            return _handoff_reply(
-                SalesIntent(label="human", confidence="high", handoff=True)
-            )
-        return _complete_then_offer_human(prefs=prefs, domain=domain, reason="human")
+        return _handoff_reply(SalesIntent(label=INTENT_HUMAN, confidence="high", handoff=True))
     if root == "feedback" and len(parts) >= 2:
         return _feedback_reply(parts[1].strip().lower(), prefs)
     if root == "open" and len(parts) >= 2:
@@ -4503,11 +4510,10 @@ def _respond_turn(
             intent = revised
 
     if not before_handoff and intent.label == INTENT_HUMAN:
-        return _finalize_flow_stage(
-            _complete_then_offer_human(
-                prefs=prefs, domain=domain, reason="human", message=message
-            )
-        )
+        reply = _handoff_reply(intent)
+        if not _BARE_HUMAN_REQUEST_RE.match((message or '').strip()):
+            reply.prefs_patch['last_shopper_question'] = (message or '').strip()[:500]
+        return _finalize_flow_stage(reply)
 
     if _wants_cheaper_from_picks(message or "", prefs):
         cheaper = _pending_tier_follow_reply(

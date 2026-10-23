@@ -156,8 +156,14 @@ def test_resume_link_and_verify_roundtrip(client):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["sent"] is True
+    assert body["sent"] is False
+    assert body["queued"] is True
     assert body["customer_email"] == "b***r@example.com"
+    assert 'resume=' in body['resume_url']
+    with wm.warranty_db_session() as db:
+        saved = db.query(wm.WarrantyTicket).filter_by(ticket_id=ticket_id).one().get_collected()
+        assert saved['resume_email'] == 'buyer@example.com'
+        assert saved['resume_delivery_status'] == 'pending'
 
     # Directly generate a token — the SMTP side-effect is mocked, so we
     # cannot pluck the URL out of the email. We verify the round-trip via
@@ -181,3 +187,58 @@ def test_resume_endpoint_404_when_ticket_missing(client):
     token = wr.create_resume_token("does-not-exist", "s-x")
     resp = client.get(f"/api/v1/warranty/resume/{token}")
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize('sent,status', [(True, 'sent'), (False, 'failed')])
+def test_resume_worker_records_transport_result_for_current_attempt(client, monkeypatch, sent, status):
+    sid = 'resume-worker'
+    tid = _register_and_start(client, sid)
+    response = client.post(f'/api/v1/warranty/session/{sid}/resume-link', json={'customer_email': 'buyer@example.com'})
+    assert response.status_code == 200
+    with wm.warranty_db_session() as db:
+        data = db.query(wm.WarrantyTicket).filter_by(ticket_id=tid).one().get_collected()
+    monkeypatch.setattr(wr, '_send_resume_email', lambda **kwargs: sent)
+    wr._deliver_resume_email(attempt_id=data['resume_delivery_attempt_id'], customer_email='buyer@example.com',
+        resume_url=response.json()['resume_url'], ticket_id=tid, model_name='OS-4000T', domain='osakiusa.com')
+    with wm.warranty_db_session() as db:
+        result = db.query(wm.WarrantyTicket).filter_by(ticket_id=tid).one().get_collected()
+        assert result['resume_delivery_status'] == status
+    # A previous background attempt cannot overwrite the newer request's state.
+    wr._deliver_resume_email(attempt_id='old-attempt', customer_email='buyer@example.com',
+        resume_url=response.json()['resume_url'], ticket_id=tid, model_name='OS-4000T', domain='osakiusa.com')
+    with wm.warranty_db_session() as db:
+        assert db.query(wm.WarrantyTicket).filter_by(ticket_id=tid).one().get_collected()['resume_delivery_status'] == status
+
+
+def test_resume_scheduling_failure_still_preserves_copy_link_and_saved_progress(client, monkeypatch):
+    sid = 'resume-no-worker'
+    tid = _register_and_start(client, sid)
+    def unavailable(**kwargs):
+        raise RuntimeError('Do not expose private@example.test')
+    monkeypatch.setattr(wr, '_send_resume_email_async', unavailable)
+    response = client.post(f'/api/v1/warranty/session/{sid}/resume-link', json={'customer_email': 'buyer@example.com'})
+    assert response.status_code == 200
+    assert response.json()['queued'] is False
+    assert response.json()['sent'] is False
+    assert response.json()['resume_url']
+    assert 'private@example.test' not in response.text
+    with wm.warranty_db_session() as db:
+        assert db.query(wm.WarrantyTicket).filter_by(ticket_id=tid).one().get_collected()['resume_delivery_status'] == 'failed'
+
+
+def test_invalid_resume_token_is_safe_when_signing_is_unavailable(monkeypatch):
+    token = wr.create_resume_token('ticket', 'session')
+    monkeypatch.delenv('ADMIN_SESSION_SECRET')
+    assert wr.verify_resume_token(token) is None
+    assert wr.verify_resume_token('x' * 5000 + '.signature') is None
+
+
+def test_followup_capability_cannot_be_used_as_resume_token():
+    from warranty_quality import issue_outcome_token
+    assert wr.verify_resume_token(issue_outcome_token('ticket', 'session')) is None
+
+
+def test_resume_rejects_validly_signed_ticket_session_mismatch(client):
+    tid = _register_and_start(client, 'real-session')
+    token = wr.create_resume_token(tid, 'another-session')
+    assert client.get(f'/api/v1/warranty/resume/{token}').status_code == 400

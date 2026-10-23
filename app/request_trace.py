@@ -41,6 +41,8 @@ class TurnEvent:
     tool_args_summary: Optional[str] = None
     tool_success: bool = True
     tool_result_len: int = 0
+    # Controlled source identities only; never raw retrieval or customer IDs.
+    source_evidence: List[Dict[str, Any]] = field(default_factory=list)
     llm_prompt_tokens: int = 0
     llm_completion_tokens: int = 0
     llm_cached_tokens: int = 0
@@ -55,6 +57,7 @@ class TurnEvent:
             "tool_args_summary": self.tool_args_summary,
             "tool_success": self.tool_success,
             "tool_result_len": self.tool_result_len,
+            "source_evidence": self.source_evidence,
             "llm_prompt_tokens": self.llm_prompt_tokens,
             "llm_completion_tokens": self.llm_completion_tokens,
             "llm_cached_tokens": self.llm_cached_tokens,

@@ -150,3 +150,41 @@ def test_public_tracking_rejects_incomplete_or_search_injection_identifiers(main
     result=module.fetch_shopify_order_status(order,email,'osakiusa.com',allow_order_only=False)
     assert 'error' in result
     assert searches==[]
+
+
+def test_unavailable_catalog_is_not_cached_and_recovery_gets_fresh_evidence(main_module,monkeypatch):
+    module,logs,traces=main_module
+    cache={}
+    monkeypatch.setattr(module,'make_cache_key',lambda *args:'synthetic-faq')
+    monkeypatch.setattr(module,'cache_get',lambda key:cache.get(key))
+    monkeypatch.setattr(module,'cache_set',lambda key,text:cache.__setitem__(key,text))
+    tool=SimpleNamespace(id='lookup',function=SimpleNamespace(name='recommend_chairs',arguments=json.dumps({'user_need':'4D chair'})))
+    responses=iter([reply(calls=[tool]),reply('Fixture Omega supports up to 350 lbs.'),reply(calls=[tool]),reply('Osaki Solo Flex 4D is a catalog option.')])
+    model(module,monkeypatch,lambda **kwargs:next(responses))
+    facts={'model':'Osaki Solo Flex 4D','currency':'USD','price_usd':4999,'specs':{'massage_mechanism':'4D'}}
+    results=iter(['NO_RESULTS: No matching catalog data.','MODEL_FACTS_JSON: '+json.dumps(facts)])
+    monkeypatch.setattr(module,'_execute_tool',lambda *args,**kwargs:next(results))
+    body={'user_query':'Recommend a 4D chair','session_id':'quality-recovery'}
+    with TestClient(module.app) as client:
+        unavailable=client.post('/api/v1/chat',json=body)
+        assert 'Fixture Omega' not in unavailable.text
+        assert cache=={}
+        recovered=client.post('/api/v1/chat',json=body)
+    assert 'Osaki Solo Flex 4D' in recovered.text
+    assert len(cache)==1
+    assert traces[-1]['turns'][0]['source_evidence']==[{'source_type':'catalog','model':'Osaki Solo Flex 4D','currency':'USD','available':True}]
+
+
+def test_tracking_api_uses_exact_current_lookup_answer_not_model_invention(main_module,monkeypatch):
+    module,logs,traces=main_module
+    tool=SimpleNamespace(id='lookup',function=SimpleNamespace(name='lookup_order_status',arguments=json.dumps({'order_id':'1234','email':'synthetic@example.invalid'})))
+    responses=iter([reply(calls=[tool]),reply('Tracking number: INVENTED123. Carrier: InventedCarrier. Estimated delivery: tomorrow.')])
+    model(module,monkeypatch,lambda **kwargs:next(responses))
+    monkeypatch.setattr(module,'fetch_shopify_order_status',lambda *args,**kwargs:{'status':'PROCESSING'})
+    monkeypatch.setattr(module,'build_deterministic_tracking_response',lambda *args:'Your verified order is being prepared. No carrier tracking is available yet.')
+    with TestClient(module.app) as client:
+        response=client.post('/api/v1/chat',json={'user_query':'Track order 1234 with synthetic@example.invalid','session_id':'quality-tracking'})
+    assert 'INVENTED' not in response.text and 'tomorrow' not in response.text
+    assert 'Your verified order is being prepared' in response.text
+    assert 'ORDER_LOOKUP_RESULT_JSON' not in response.text
+    assert traces[-1]['turns'][0]['source_evidence']==[{'source_type':'verified_order_lookup','available':True}]

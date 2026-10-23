@@ -178,3 +178,36 @@ def test_unsupported_approval_and_delivery_guarantees_are_blocked():
     for text in ('Your replacement is approved.','We guarantee delivery tomorrow.','The chair will cure your back pain.'):
         out=sanitize_agent_response(text,tools_called=['get_warranty_or_policy'],user_query='help',tool_results=['Policy lookup'])
         assert 'cannot approve' in out
+
+
+def test_explicit_language_request_in_history_survives_neutral_followup():
+    from answer_guard import conversation_language
+    assert conversation_language('3000',[{'role':'user','content':'Please answer in Korean'}])=='ko'
+    assert conversation_language('Solo Flex',[{'role':'user','content':'Please reply in Spanish'}])=='es'
+
+
+def test_missing_catalog_results_cannot_authorize_fluent_recommendation_facts():
+    text='Fixture Omega is a 4D chair supporting 350 lbs and fitting a 30 inch doorway.'
+    output=sanitize_agent_response(text,tools_called=['recommend_chairs'],user_query='350 lb chair',
+                                   tool_results=['NO_RESULTS: No chairs match the given criteria.'])
+    assert '350 lbs' not in output and '30 inch' not in output and 'Fixture Omega' not in output
+    assert 'requirements' in output and 'specialist' in output
+    korean=sanitize_agent_response(text,tools_called=['recommend_chairs'],user_query='350',language='ko',tool_results=['NO_RESULTS: No chairs'])
+    assert '조건' in korean and 'Fixture Omega' not in korean
+
+
+def test_feature_by_model_table_cannot_borrow_other_column_price_and_capacity():
+    blob=model_facts('Fixture Alpha',3000,260,30)+'\n'+model_facts('Fixture Beta',6000,375,35)
+    wrong='| Feature | Fixture Alpha | Fixture Beta |\n|---|---|---|\n| Price | $6,000 | $6,000 |\n| Max user weight | 375 lbs | 375 lbs |'
+    output=sanitize_agent_response(wrong,tools_called=['search_chair_specs'],user_query='compare',tool_results=[blob])
+    assert 'accurate information' in output
+    correct='| Feature | Fixture Alpha | Fixture Beta |\n|---|---|---|\n| Price | $3,000 | $6,000 |\n| Max user weight | 260 lbs | 375 lbs |'
+    assert sanitize_agent_response(correct,tools_called=['search_chair_specs'],user_query='compare',tool_results=[blob])==correct
+
+
+def test_failed_tracking_cannot_leave_a_fabricated_carrier_or_eta():
+    text='Current status: In transit. Carrier: ExampleCarrier. Estimated delivery: June 15.'
+    output=sanitize_agent_response(text,tools_called=['lookup_order_status'],user_query='track order',
+                                   tool_results=['MISSING_INPUT: Need both a valid order number and the email used at checkout.'])
+    assert 'ExampleCarrier' not in output and 'June 15' not in output
+    assert 'order number' in output and 'email' in output

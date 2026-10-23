@@ -46,6 +46,9 @@ def in_memory_db(monkeypatch):
     import sales_router as sr  # noqa: WPS433
 
     monkeypatch.setattr(sr, "_ADMIN_API_KEY", "test-admin-key")
+    import sales_leads
+    monkeypatch.setattr(sales_leads, '_resolve_transport', lambda: lambda *a, **k: False)
+    monkeypatch.setattr(sales_leads, '_alert_lead_failure', lambda **kwargs: None)
     yield
 
 
@@ -181,17 +184,19 @@ def test_greeting_returns_menu(client):
     assert labels[0] != "Talk to a human"
 
 
-def test_talk_to_a_human_offers_help_before_handoff(client):
+def test_talk_to_a_human_requests_handoff_without_another_interview(client):
     first = client.post(
         "/api/v1/sales/chat",
         json={"session_id": "s-human", "message": "talk to a human", "domain": "osakiusa.com"},
     )
     assert first.status_code == 200
     body = first.json()
-    assert body["handoff"] is False
-    assert "one thing" in body["reply"].lower()
+    assert body["handoff"] is True
+    assert body['handoff_state'] == 'requested'
+    assert "one thing" not in body["reply"].lower()
+    assert "has not yet confirmed" in body['reply']
     payloads = [q["payload"] for q in body["quick_replies"]]
-    assert "human:confirm" in payloads
+    assert "lead:email" in payloads
 
     second = client.post(
         "/api/v1/sales/chat",
@@ -220,10 +225,10 @@ def test_talk_to_a_human_then_the_real_question_is_answered(client):
     assert answered.status_code == 200
     assert body["handoff"] is False
     assert "you pay" in body["reply"].lower() or "freight" in body["reply"].lower()
-    assert any(q["payload"] == "human:confirm" for q in body["quick_replies"])
+    assert any(q["payload"] == "human" for q in body["quick_replies"])
 
 
-def test_talk_to_a_human_replays_the_last_shopping_question(client):
+def test_talk_to_a_human_preserves_context_without_replaying_answer(client):
     sid = "s-human-replay"
     asked = client.post(
         "/api/v1/sales/chat",
@@ -238,9 +243,10 @@ def test_talk_to_a_human_replays_the_last_shopping_question(client):
     )
     assert human.status_code == 200
     body = human.json()
-    assert body["handoff"] is False
-    assert "up to 2 weeks" in body["reply"].lower()
-    assert "still connect me" in body["reply"].lower()
+    assert body["handoff"] is True
+    assert body['handoff_state'] == 'requested'
+    assert "up to 2 weeks" not in body["reply"].lower()
+    assert "don't need to repeat" in body["reply"].lower()
 
 
 def test_discount_gets_published_facts_before_a_specialist(client):
@@ -511,7 +517,8 @@ def test_email_me_this_pick_captures_lead_with_summary(client, monkeypatch):
     assert done.status_code == 200
     body = done.json()
     assert body["handoff"] is True
-    assert "confirmation email" in body["reply"].lower()
+    assert "follow-up request is saved" in body["reply"].lower()
+    assert "confirmation email" not in body["reply"].lower()
     assert "buyer@example.com" in body["reply"]
     assert "lead.capture" in body.get("tools_used", [])
 

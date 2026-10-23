@@ -73,11 +73,10 @@ def _chat_privacy_enforced() -> bool:
 
 
 def _require_web_chat_privacy(session_id: str) -> None:
-    """Block web chat mutators until consent + email gate are recorded server-side."""
+    """Recording consent is required; basic help does not require contact email."""
     if not _chat_privacy_enforced():
         return
     from warranty_consent import (  # noqa: WPS433
-        EMAIL_GATE_PROVIDED,
         get_chat_consent,
     )
 
@@ -87,12 +86,16 @@ def _require_web_chat_privacy(session_id: str) -> None:
             status_code=403,
             detail="Please agree to the privacy notice before continuing.",
         )
-    status = str(getattr(row, "email_gate_status", "") or "").strip().lower()
-    if status != EMAIL_GATE_PROVIDED:
-        raise HTTPException(
-            status_code=403,
-            detail="Please provide your email so we can follow up on your case securely.",
-        )
+
+
+def _public_privacy_state(session_id: str) -> dict:
+    from warranty_consent import get_chat_consent
+
+    row = get_chat_consent(session_id)
+    status = str(getattr(row, "email_gate_status", "") or "pending")
+    return {"consent_required": _chat_privacy_enforced(), "email_required_before_help": False,
+            "consent_recorded": row is not None, "email_gate_status": status,
+            "contact_email_available": bool(str(getattr(row, "contact_email", "") or "").strip())}
 
 
 def _require_web_chat_privacy_for_ticket(ticket) -> None:
@@ -328,6 +331,14 @@ async def upload_evidence(
         customer_email=normalized_email,
     )
 
+    from warranty_models import WarrantyTicket, warranty_db_session
+
+    with warranty_db_session() as db:
+        row = db.query(WarrantyTicket).filter_by(ticket_id=ticket_id).first()
+        if row is not None:
+            row.set_collected("customer_contact_email", normalized_email)
+            row.set_collected("contact_submitted_at", _now_cst_iso())
+
     turns = engine.get_turns(ticket_id)
     current_node = engine.get_current_node(ticket_id)
     terminal_node_id = str(current_node.get("node_id") or "") if current_node else ""
@@ -369,6 +380,10 @@ async def upload_evidence(
         "original_filename": original_filename,
         "customer_email":    _masked_public_email(normalized_email),
         "email_saved":       True,
+        "review_requested":  True,
+        "contact_submitted": True,
+        # Distribution runs asynchronously; this response cannot confirm delivery.
+        "email_notified":    None,
         "mime_type":         mime,
         "file_size_bytes":   file_size,
         "case_reference":    receipt.get("case_reference"),
@@ -401,6 +416,7 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
     ticket = engine.get_ticket(ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+    _require_web_chat_privacy_for_ticket(ticket)
 
     node = engine.get_current_node(ticket_id)
     if not node or node.get("type") != "terminal":
@@ -449,8 +465,9 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
             ticket_row.set_collected("evidence_na", "1")
             ticket_row.set_collected("case_summary", case_summary)
             ticket_row.set_collected("case_summary_source", summary_payload.get("source", ""))
+            ticket_row.set_collected("contact_submitted_at", _now_cst_iso())
 
-    send_warranty_transcript_email(
+    transcript_sent = bool(send_warranty_transcript_email(
         customer_email=normalized_email,
         session_id=str(ticket.session_id),
         ticket_id=ticket_id,
@@ -462,7 +479,11 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         case_summary=case_summary,
         case_summary_source=summary_payload.get("source", ""),
         terminal_node_id=terminal_node_id,
-    )
+    ))
+    with warranty_db_session() as db:
+        row = db.query(WarrantyTicket).filter_by(ticket_id=ticket_id).first()
+        if row is not None:
+            row.set_collected("contact_notification_sent", transcript_sent)
 
     notify_email_only_contact_async(
         evidence_id=cast(int, ev.id),
@@ -493,7 +514,9 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         "email_saved": True,
         "evidence_type": "not_available",
         "evidence_na": True,
-        "email_notified": True,
+        "email_notified": transcript_sent,
+        "review_requested": True,
+        "contact_submitted": True,
         "case_summary": case_summary,
         "case_summary_source": summary_payload.get("source", ""),
         "case_reference": receipt.get("case_reference"),
@@ -608,17 +631,22 @@ class WarrantyTroubleshootingOutcomeRequest(BaseModel):
 
 
 _TROUBLESHOOTING_OUTCOMES = frozenset(
-    {"steps_completed", "resolved", "unresolved", "unable_to_attempt"}
+    {"steps_completed", "resolved", "unresolved", "unable_to_attempt", "deferred", "delivery_answered"}
 )
 
 
 def _followup_context(ticket, outcome: Optional[str] = None, session_id: Optional[str] = None) -> dict:
-    from warranty_quality import issue_outcome_token, record_outcome_observation
+    from warranty_quality import issue_outcome_token, record_outcome_observation, ticket_purpose
 
-    if outcome:
-        record_outcome_observation(str(ticket.ticket_id), outcome)
+    purpose = ticket_purpose(ticket)
+    if outcome and purpose != "delivery":
+        updated_at = ticket.get_collected().get("troubleshooting_updated_at")
+        event_id = None
+        if updated_at:
+            event_id = "self-service:" + str(uuid.uuid5(uuid.NAMESPACE_URL, f"{ticket.ticket_id}:{updated_at}:{outcome}"))
+        record_outcome_observation(str(ticket.ticket_id), outcome, event_id=event_id)
     session_id = session_id or str(getattr(ticket, "session_id", "") or "")
-    return {"followup_token": issue_outcome_token(str(ticket.ticket_id), session_id) if session_id else None}
+    return {"followup_token": issue_outcome_token(str(ticket.ticket_id), session_id) if session_id and purpose != "delivery" else None}
 
 
 @router.post(
@@ -682,8 +710,22 @@ async def record_troubleshooting_outcome(
     ticket = engine.get_ticket(ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+    _require_web_chat_privacy_for_ticket(ticket)
+    from warranty_quality import ticket_purpose
+
+    is_delivery = ticket_purpose(ticket) == "delivery"
+    if is_delivery and outcome == "resolved":
+        outcome = "delivery_answered"
+    if outcome == "delivery_answered":
+        snapshot = ticket.get_collected().get("tracking_snapshot")
+        try:
+            snapshot = json.loads(snapshot) if isinstance(snapshot, str) else snapshot
+        except (TypeError, ValueError):
+            snapshot = None
+        if not is_delivery or not isinstance(snapshot, dict) or snapshot.get("available") is not True:
+            raise HTTPException(status_code=409, detail="A delivery answer can only be confirmed after a verified delivery lookup.")
     node = engine.get_current_node(ticket_id)
-    if not node or str(node.get("type") or "") != "terminal":
+    if (not node or str(node.get("type") or "") != "terminal") and outcome not in {"deferred", "delivery_answered"}:
         raise HTTPException(
             status_code=409,
             detail="Troubleshooting outcome is only available after diagnosis.",
@@ -695,6 +737,9 @@ async def record_troubleshooting_outcome(
     ticket_status = str(ticket.status or "")
     decision = str(ticket.admin_decision or "")
     if ticket_status == "resolved":
+        if decision == "delivery_answered" and outcome == "delivery_answered":
+            return {"ticket_id": ticket_id, "outcome": outcome, "status": ticket_status,
+                    "service_result": True, "self_service_resolved": False, "deferred": False, "followup_token": None}
         if decision == "self_resolved" and outcome == "resolved":
             return {
                 "ticket_id": ticket_id,
@@ -704,7 +749,7 @@ async def record_troubleshooting_outcome(
                 **_followup_context(ticket, outcome),
             }
         raise HTTPException(status_code=409, detail="This ticket is already resolved.")
-    if outcome in {"resolved", "unresolved"} and previous_outcome not in {
+    if not is_delivery and outcome in {"resolved", "unresolved"} and previous_outcome not in {
         "steps_completed",
         outcome,
     }:
@@ -723,11 +768,13 @@ async def record_troubleshooting_outcome(
             "outcome": outcome,
             "status": ticket_status,
             "self_service_resolved": outcome == "resolved",
+            "service_result": outcome == "delivery_answered",
+            "deferred": outcome == "deferred",
             **_followup_context(ticket, outcome),
         }
 
     now_iso = _now_cst_iso()
-    terminal_node_id = str(node.get("node_id") or "")
+    terminal_node_id = str((node or {}).get("node_id") or "")
     with warranty_db_session() as db:
         ticket_row = (
             db.query(WarrantyTicket)
@@ -752,6 +799,8 @@ async def record_troubleshooting_outcome(
         collected["troubleshooting_outcome"] = outcome
         collected["troubleshooting_updated_at"] = now_iso
         collected["troubleshooting_history"] = history[-20:]
+        if is_delivery:
+            collected["delivery_service_outcome"] = {"unresolved": "needs_review", "unable_to_attempt": "unable_to_attempt"}.get(outcome, outcome)
 
         import json as _json  # noqa: WPS433
 
@@ -767,6 +816,9 @@ async def record_troubleshooting_outcome(
             ticket_row.admin_note = (
                 f"{existing_note}\n{resolution_note}".strip()
             )
+        elif outcome == "delivery_answered":
+            ticket_row.status = "resolved"
+            ticket_row.admin_decision = "delivery_answered"
         status = str(ticket_row.status)
 
     logger.info(
@@ -780,7 +832,9 @@ async def record_troubleshooting_outcome(
         "outcome": outcome,
         "status": status,
         "self_service_resolved": outcome == "resolved",
-        **_followup_context(ticket, outcome),
+        "service_result": outcome == "delivery_answered",
+        "deferred": outcome == "deferred",
+        **_followup_context(engine.get_ticket(ticket_id) or ticket, outcome),
     }
 
 
@@ -801,6 +855,7 @@ async def go_back_from_warranty_contact(ticket_id: str):
     ticket = engine.get_ticket(ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+    _require_web_chat_privacy_for_ticket(ticket)
     node = engine.get_current_node(ticket_id)
     if not node or str(node.get("type") or "") != "terminal":
         raise HTTPException(
@@ -865,6 +920,10 @@ async def go_back_from_warranty_contact(ticket_id: str):
 
         ticket_row.collected_data = _json.dumps(collected)
 
+    from warranty_quality import record_outcome_observation, ticket_purpose
+
+    if ticket_purpose(ticket) == "repair":
+        record_outcome_observation(ticket_id, "unknown", event_id=f"back:{uuid.uuid4()}")
     logger.info(
         "warranty contact back ticket=%s previous=%s restored=%s",
         ticket_id,
@@ -935,7 +994,7 @@ class WarrantyConsentRequest(BaseModel):
 
 
 class WarrantySessionContactEmailRequest(BaseModel):
-    """Post-consent email gate — soft-required contact email before chat."""
+    """Optional post-consent contact email; basic help does not require it."""
     customer_email: str = ""
     skipped: bool = False
 
@@ -1896,7 +1955,7 @@ def _serialize_ticket_state(
 ) -> Dict[str, Any]:
     """Build the browser-safe session payload shared by GET/POST warranty endpoints."""
     if ticket is None:
-        return {"session_id": session_id, "ticket": None}
+        return {"session_id": session_id, "ticket": None, "privacy": _public_privacy_state(session_id)}
 
     ticket_id = str(ticket.ticket_id)
     collected = ticket.get_collected()
@@ -1974,6 +2033,7 @@ def _serialize_ticket_state(
 
     payload: Dict[str, Any] = {
         "session_id": session_id,
+        "privacy": _public_privacy_state(session_id),
         "ticket": {
             "ticket_id":    ticket_id,
             "domain":       normalize_warranty_domain(str(getattr(ticket, "domain", "") or "")),
@@ -1993,6 +2053,10 @@ def _serialize_ticket_state(
             ),
             "admin_decision": str(ticket.admin_decision or "").strip() or None,
             "troubleshooting_outcome": troubleshooting_outcome,
+            "review_requested": bool(collected.get("human_support_requested") or collected.get("contact_submitted_at") or str(collected.get("evidence_na") or "") == "1"),
+            "contact_submitted": bool(collected.get("contact_submitted_at") or str(collected.get("evidence_na") or "") == "1"),
+            "notification_sent": collected.get("contact_notification_sent") if isinstance(collected.get("contact_notification_sent"), bool) else None,
+            "receipt_email_sent": str(collected.get("receipt_email_sent") or "") == "1",
             **_followup_context(ticket, session_id=session_id),
             "current_node": {
                 "node_id":            node_id,
@@ -2116,7 +2180,7 @@ async def get_warranty_session_state(session_id: str):
     engine = _lazy_engine()
     ticket = _get_open_session_ticket(engine, session_id)
     if ticket is None:
-        return {"session_id": session_id, "ticket": None}
+        return _serialize_ticket_state(session_id, None, None, engine=engine)
 
     node = engine.get_current_node(str(ticket.ticket_id))
     return _serialize_ticket_state(session_id, ticket, node, engine=engine)
@@ -2142,6 +2206,7 @@ async def restart_warranty_session(session_id: str, body: WarrantyRestartRequest
         "restarted": True,
         "closed_ticket_count": closed,
         "domain": body.domain,
+        "privacy": _public_privacy_state(session_id),
     }
     return payload
 
@@ -2170,6 +2235,7 @@ async def record_warranty_chat_consent(session_id: str, body: WarrantyConsentReq
         "consent_recorded": True,
         "accepted_at": accepted_at.isoformat(),
         "policy_store": (body.policy_store or "").strip().lower() or None,
+        "privacy": _public_privacy_state(session_id),
     }
 
 
@@ -2193,12 +2259,6 @@ async def record_warranty_session_contact_email(
             status_code=403,
             detail="Please agree to the privacy notice before providing your email.",
         )
-    if bool(body.skipped) and _chat_privacy_enforced():
-        raise HTTPException(
-            status_code=422,
-            detail="Email is required for warranty chat follow-up.",
-        )
-
     try:
         result = record_session_contact_email(
             session_id,
@@ -2217,6 +2277,7 @@ async def record_warranty_session_contact_email(
         ),
         "email_gate_status": result.get("email_gate_status"),
         "skipped": result.get("email_gate_status") == "skipped",
+        "privacy": _public_privacy_state(session_id),
     }
 
 

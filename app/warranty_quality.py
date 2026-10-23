@@ -18,7 +18,8 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from collections import Counter
+from sqlalchemy import Column, DateTime, Integer, String, Text, or_
 from sqlalchemy.exc import IntegrityError
 
 from admin_auth import require_admin_key
@@ -106,8 +107,8 @@ def _verify_outcome_token(token: str) -> Optional[dict]:
 
 def record_outcome_observation(ticket_id: str, outcome: str, event_id: Optional[str] = None, source: str = "self_service") -> Optional[int]:
     """Append an observation, deduplicating retries; ignores progress-only events."""
-    normalized = {"resolved": "fixed", "unresolved": "still_broken", "unable_to_attempt": "still_broken"}.get(outcome, outcome)
-    if normalized not in {"fixed", "still_broken"}:
+    normalized = {"resolved": "fixed", "unresolved": "still_broken"}.get(outcome, outcome)
+    if normalized not in {"fixed", "still_broken", "unable_to_attempt", "deferred", "delivery_answered", "unknown"}:
         return None
     if source not in {"self_service", "customer_followup"}:
         raise ValueError("Unsupported outcome observation source")
@@ -155,48 +156,140 @@ async def record_customer_follow_up(request: Request, ticket_id: str, body: Foll
             raise HTTPException(status_code=401, detail="Invalid or expired follow-up access.")
         if str(ticket.status or "in_progress") == "in_progress":
             raise HTTPException(status_code=409, detail="Follow-up is available after diagnosis or case closure.")
+        if ticket_purpose(ticket) == "delivery":
+            raise HTTPException(status_code=409, detail="Delivery feedback is separate from a chair repair outcome.")
+        if not is_workflow_terminal(ticket) and not ticket.get_collected().get("troubleshooting_outcome") and str(ticket.admin_decision or "") != "self_resolved":
+            raise HTTPException(status_code=409, detail="A repair outcome is available after diagnosis, not after an early handoff.")
     observation_id = record_outcome_observation(ticket_id, body.outcome, body.event_id, source="customer_followup")
     return {"ok": True, "outcome": body.outcome, "observation_id": observation_id}
 
 
-def quality_metrics(*, days: Optional[int] = 30, domain: Optional[str] = None, all_time: bool = False) -> dict:
-    """Use latest customer report, keeping unknown results and reopenings distinct."""
+def ticket_purpose(ticket) -> str:
+    issue = str(getattr(ticket, "issue_type", "") or "").lower()
+    node = str(getattr(ticket, "current_node_id", "") or "")
+    collected = ticket.get_collected()
+    if issue == "delivery" or node.startswith("delivery_") or collected.get("human_support_department") == "sales":
+        return "delivery"
+    if issue in {"defect", "installation"} or node.startswith(("defect_", "install_")) or collected.get("human_support_reason") == "safety_hazard":
+        return "repair"
+    if issue in {"sales", "order_cancel"} or node == "sales_routing":
+        return "other"
+    return "unknown"
+
+
+def is_workflow_terminal(ticket) -> bool:
+    """A queued handoff at a question is not a completed diagnostic workflow."""
+    from warranty_workflow import _NODES
+
+    node = _NODES.get(str(getattr(ticket, "current_node_id", "") or "")) or {}
+    return node.get("type") == "terminal"
+
+
+def _rate(part: int, total: int):
+    return round(part / total * 100, 1) if total else None
+
+
+def summarize_ticket_outcomes(tickets, observations) -> dict:
+    """One current result per repair case; no result is inferred from closure."""
+    by_ticket: dict[str, list] = {}
+    for row in observations:
+        by_ticket.setdefault(str(row.ticket_id), []).append(row)
+    purposes = Counter({name: 0 for name in ("repair", "delivery", "other", "unknown")})
+    outcomes = Counter({name: 0 for name in ("fixed", "not_fixed", "unable_to_attempt", "deferred", "unknown")})
+    delivery = Counter({name: 0 for name in ("consultations", "latest_lookup_available", "latest_lookup_unavailable", "lookup_not_attempted", "answered", "needs_review", "unable_to_attempt", "deferred", "unknown")})
+    reasons, departments = Counter(), Counter()
+    followed_up = reopened = diagnosed = 0
+    by_id = {}
+    for ticket in tickets:
+        collected = ticket.get_collected()
+        purpose = ticket_purpose(ticket)
+        purposes[purpose] += 1
+        history = by_ticket.get(str(ticket.ticket_id), [])
+        initial = str(collected.get("troubleshooting_outcome") or "")
+        baseline = {"resolved": "fixed", "unresolved": "not_fixed", "unable_to_attempt": "unable_to_attempt", "deferred": "deferred"}.get(initial)
+        if baseline is None and str(ticket.admin_decision or "") == "self_resolved":
+            baseline = "fixed"
+        normalized_history = []
+        for row in history:
+            value = {"still_broken": "not_fixed"}.get(str(row.outcome), str(row.outcome))
+            # Older code stored inability as still_broken; its matching original
+            # self-service observation can be disambiguated from the saved input.
+            if initial == "unable_to_attempt" and row.source == "self_service" and str(row.event_id) == f"initial:{ticket.ticket_id}:still_broken":
+                value = "unable_to_attempt"
+            normalized_history.append(value)
+        latest = normalized_history[-1] if normalized_history else baseline or "unknown"
+        if latest not in outcomes:
+            latest = "unknown"
+        by_id[str(ticket.ticket_id)] = {"purpose": purpose, "outcome": latest, "diagnosis_completed": purpose == "repair" and is_workflow_terminal(ticket)}
+        if collected.get("human_support_requested"):
+            reasons[str(collected.get("human_support_reason") or "customer_request")] += 1
+            department = str(collected.get("human_support_department") or ("sales" if purpose == "delivery" else "warranty"))
+            departments[department] += 1
+        if purpose == "delivery":
+            delivery["consultations"] += 1
+            snapshot = collected.get("tracking_snapshot")
+            try:
+                snapshot = json.loads(snapshot) if isinstance(snapshot, str) else snapshot
+            except (TypeError, ValueError):
+                snapshot = None
+            if isinstance(snapshot, dict) and isinstance(snapshot.get("available"), bool):
+                delivery["latest_lookup_available" if snapshot["available"] else "latest_lookup_unavailable"] += 1
+            else:
+                delivery["lookup_not_attempted"] += 1
+            service = str(collected.get("delivery_service_outcome") or "")
+            service_key = "answered" if service == "delivery_answered" else service if service in {"needs_review", "unable_to_attempt", "deferred"} else "deferred" if initial == "deferred" else "unknown"
+            delivery[service_key] += 1
+            continue
+        if purpose != "repair":
+            continue
+        outcomes[latest] += 1
+        diagnosed += is_workflow_terminal(ticket)
+        followed_up += any(row.source == "customer_followup" for row in history)
+        ever_fixed = baseline == "fixed" and not any(row.source == "self_service" for row in history)
+        for value in normalized_history:
+            if ever_fixed and value == "not_fixed":
+                reopened += 1
+                break
+            ever_fixed = ever_fixed or value == "fixed"
+    reported = outcomes["fixed"] + outcomes["not_fixed"]
+    return {
+        "purpose_counts": dict(purposes),
+        "repair": {"consultations": purposes["repair"], "diagnosis_completed": diagnosed,
+            "diagnosis_completion_rate_pct": _rate(diagnosed, purposes["repair"]), "latest_outcomes": dict(outcomes),
+            "result_reported": reported, "confirmed_fix_rate_all_pct": _rate(outcomes["fixed"], purposes["repair"]),
+            "confirmed_fix_rate_reported_pct": _rate(outcomes["fixed"], reported),
+            "followed_up": followed_up, "reopened_after_fix": reopened},
+        "delivery": dict(delivery),
+        "handoffs": {"requested": sum(reasons.values()), "by_reason": [{"reason": k, "count": v} for k, v in sorted(reasons.items())],
+            "by_department": [{"department": k, "count": v} for k, v in sorted(departments.items())]},
+        "_by_ticket": by_id,
+    }
+
+
+def quality_metrics(*, days: Optional[int] = 30, domain: Optional[str] = None, all_time: bool = False, cohort: str = "all") -> dict:
+    """Latest repair results are separate from delivery service and unclassified cases."""
     with warranty_db_session() as db:
         _ensure_quality_tables(db)
         query = db.query(WarrantyTicket)
+        now = _now_cst()
+        query = query.filter(or_(WarrantyTicket.created_at <= now, WarrantyTicket.created_at.is_(None)))
         if days and not all_time:
             query = query.filter(WarrantyTicket.created_at >= (_now_cst() - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0))
         if domain:
             query = query.filter(WarrantyTicket.domain.contains(domain))
+        from customer_journey import apply_cohort, cohort_metadata
+        query = apply_cohort(db, query, surface="warranty", id_column=WarrantyTicket.ticket_id, cohort=cohort)
         tickets = query.all()
         observations = (db.query(WarrantyOutcomeObservation)
                         .join(WarrantyTicket, WarrantyTicket.ticket_id == WarrantyOutcomeObservation.ticket_id)
                         .filter(WarrantyTicket.id.in_(query.with_entities(WarrantyTicket.id)))
+                        .filter(WarrantyOutcomeObservation.observed_at <= now)
                         .order_by(WarrantyOutcomeObservation.observed_at, WarrantyOutcomeObservation.id).all())
-    by_ticket: dict[str, list] = {}
-    for row in observations:
-        by_ticket.setdefault(str(row.ticket_id), []).append(row)
-    fixed = still_broken = reopened = followed_up = 0
-    for ticket in tickets:
-        collected = ticket.get_collected()
-        initial = str(collected.get("troubleshooting_outcome") or "")
-        baseline = "fixed" if initial == "resolved" or str(ticket.admin_decision or "") == "self_resolved" else (
-            "still_broken" if initial in {"unresolved", "unable_to_attempt"} else None
-        )
-        history = by_ticket.get(str(ticket.ticket_id), [])
-        latest = str(history[-1].outcome) if history else baseline
-        if latest == "fixed":
-            fixed += 1
-        elif latest == "still_broken":
-            still_broken += 1
-        if any(row.source == "customer_followup" for row in history):
-            followed_up += 1
-        ever_fixed = baseline == "fixed" and not any(row.source == "self_service" for row in history)
-        for row in history:
-            if ever_fixed and row.outcome == "still_broken":
-                reopened += 1
-                break
-            ever_fixed = ever_fixed or row.outcome == "fixed"
+        cohort_info = cohort_metadata(db, surface="warranty", selected=cohort)
+    summary = summarize_ticket_outcomes(tickets, observations)
+    summary.pop("_by_ticket")
+    repair = summary["repair"]
+    fixed, still_broken = repair["latest_outcomes"]["fixed"], repair["latest_outcomes"]["not_fixed"]
     total = len(tickets)
     known = fixed + still_broken
     return {
@@ -204,19 +297,22 @@ def quality_metrics(*, days: Optional[int] = 30, domain: Optional[str] = None, a
         "latest_confirmed_fixed": fixed,
         "latest_still_broken": still_broken,
         "outcome_unknown": total - known,
-        "followed_up": followed_up,
-        "reopened_after_fix": reopened,
+        "followed_up": repair["followed_up"],
+        "reopened_after_fix": repair["reopened_after_fix"],
         "confirmed_fix_rate_all_pct": round(fixed / total * 100, 1) if total else 0.0,
         "confirmed_fix_rate_reported_pct": round(fixed / known * 100, 1) if known else 0.0,
+        **summary,
+        "cohort": cohort_info,
+        "cohort_metadata": cohort_info,
         "scope": {"days": None if all_time else days, "all_time": all_time, "domain": domain, "basis": "ticket_created_at"},
     }
 
 
 @router.get("/admin/warranty/quality")
-async def get_quality_metrics(days: int = Query(30, ge=1, le=180), all_time: bool = Query(False), domain: Optional[str] = None,
+async def get_quality_metrics(days: int = Query(30, ge=1, le=180), all_time: bool = Query(False), domain: Optional[str] = None, cohort: str = Query("all", max_length=100),
                               x_admin_key: Optional[str] = Header(default=None)):
     require_admin_key(x_admin_key)
-    return quality_metrics(days=days, domain=domain, all_time=all_time)
+    return quality_metrics(days=days, domain=domain, all_time=all_time, cohort=cohort)
 
 
 class KnowledgeDraftRequest(BaseModel):

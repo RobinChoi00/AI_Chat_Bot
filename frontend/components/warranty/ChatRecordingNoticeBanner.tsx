@@ -12,6 +12,9 @@ interface Props {
   consentAccepted: boolean;
   onAccept: () => void;
   storeDomain?: string;
+  disabled?: boolean;
+  error?: string | null;
+  pendingLabel?: string;
 }
 
 /** Top-of-chat privacy / recording disclosure with store policy links. */
@@ -20,6 +23,9 @@ export default function ChatRecordingNoticeBanner({
   consentAccepted,
   onAccept,
   storeDomain,
+  disabled = false,
+  error,
+  pendingLabel = "Saving consent…",
 }: Props) {
   const { privacy, terms } = resolveStorePolicyUrls(storeDomain);
 
@@ -48,13 +54,19 @@ export default function ChatRecordingNoticeBanner({
         >
           Terms of Service
         </a>
-        . This conversation may be recorded and stored for warranty support.
-        Messages, order or tracking details, email, and photos or videos you share
-        may be reviewed by our support team and processors we use only for this case
-        (for example helpdesk, shipping lookup, and email delivery). We keep case
-        records as needed for warranty support and remove uploaded evidence on a
-        regular retention schedule.
+        . This chat is recorded and stored for support. Our team and service
+        providers may review the messages, details, and attachments you share for this case.
       </p>
+      <details className="mt-1 text-left">
+        <summary className="cursor-pointer text-center underline underline-offset-2">How this chat uses your information</summary>
+        <p className="mt-2 text-xs leading-relaxed">
+          Messages, order or tracking details, email, and photos or videos you share
+          may be reviewed by our support team and processors used for this case
+          (including helpdesk, shipping lookup, and email delivery). We keep case
+          records as needed for warranty support and remove uploaded evidence on a
+          regular retention schedule.
+        </p>
+      </details>
       {!consentAccepted ? (
         <div className="mt-2 space-y-2">
           <p className="text-[10px] text-amber-700 sm:text-[11px]">
@@ -70,10 +82,12 @@ export default function ChatRecordingNoticeBanner({
           <button
             type="button"
             onClick={onAccept}
-            className="rounded-full bg-amber-700 px-4 py-1.5 text-xs font-semibold text-white hover:bg-amber-800"
+            disabled={disabled}
+            className="min-h-[44px] rounded-xl bg-amber-700 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-800 disabled:opacity-50"
           >
-            I Agree
+            {disabled ? pendingLabel : "I Agree"}
           </button>
+          {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
         </div>
       ) : (
         <p className="mt-1 text-[10px] text-amber-700 sm:text-[11px]">

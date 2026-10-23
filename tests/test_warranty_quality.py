@@ -41,7 +41,7 @@ def client(monkeypatch):
 
 def seed(ticket_id="case-1", session_id="session-1", status="resolved", outcome=None, age=0, domain="osakiusa.com", decision=None):
     with wm.warranty_db_session() as db:
-        row = wm.WarrantyTicket(ticket_id=ticket_id, session_id=session_id, status=status, domain=domain, current_node_id="terminal",
+        row = wm.WarrantyTicket(ticket_id=ticket_id, session_id=session_id, status=status, domain=domain, issue_type="defect", current_node_id="defect_power_remote_replace_terminal",
                                 created_at=wm._now_cst() - timedelta(days=age), admin_decision=decision)
         if outcome:
             row.set_collected("troubleshooting_outcome", outcome)

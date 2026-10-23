@@ -98,6 +98,7 @@ async def sales_metrics(
     days: int = Query(30, ge=1, le=_MAX_DAYS),
     period: Literal["all", "range"] = Query("range"),
     domain: Optional[str] = None,
+    cohort: str = Query('all', min_length=1, max_length=120),
     x_admin_key: Optional[str] = Header(default=None),
 ) -> dict[str, Any]:
     """Aggregate recommendation, handoff, lead, and delivery-health metrics."""
@@ -117,6 +118,7 @@ async def sales_metrics(
     )
 
     with warranty_db_session() as db:
+        from customer_journey import apply_cohort, cohort_metadata, journey_summary
         def dated_query(model):
             upper = model.created_at <= end
             if period == "all":
@@ -124,6 +126,7 @@ async def sales_metrics(
             return db.query(model).filter(upper)
 
         session_q = dated_query(SalesSession)
+        session_q = apply_cohort(db, session_q, surface='sales', id_column=SalesSession.id, cohort=cohort)
         lead_q = dated_query(SalesLead)
         feedback_q = dated_query(SalesFeedback)
         conversion_q = dated_query(SalesConversion)
@@ -140,7 +143,12 @@ async def sales_metrics(
         # A subquery keeps lifetime cohorts independent of SQLite's host-parameter
         # limit, unlike expanding every historical session ID into an IN list.
         session_id_query = session_q.with_entities(SalesSession.session_id)
+        if cohort != 'all':
+            lead_q = lead_q.filter(SalesLead.session_id.in_(session_id_query))
+            feedback_q = feedback_q.filter(SalesFeedback.session_id.in_(session_id_query))
+            conversion_q = conversion_q.filter(SalesConversion.session_id.in_(session_id_query))
         message_q = db.query(SalesMessage).filter(SalesMessage.session_id.in_(session_id_query))
+        message_q = message_q.filter(or_(SalesMessage.created_at <= end, SalesMessage.created_at.is_(None)))
         if period == "all":
             from sales_events import SalesEvent  # noqa: WPS433
 
@@ -166,10 +174,10 @@ async def sales_metrics(
             start = min((value for value in earliest if value is not None), default=None)
         sessions = session_q.options(load_only(
             SalesSession.session_id, SalesSession.domain, SalesSession.channel,
-            SalesSession.status, SalesSession.created_at,
+            SalesSession.status, SalesSession.created_at, SalesSession.updated_at,
         )).all()
-        leads = lead_q.options(load_only(SalesLead.session_id, SalesLead.forwarded, SalesLead.created_at)).all()
-        feedback = feedback_q.options(load_only(SalesFeedback.rating, SalesFeedback.intent)).all()
+        leads = lead_q.options(load_only(SalesLead.session_id, SalesLead.forwarded, SalesLead.forwarded_error, SalesLead.created_at)).all()
+        feedback = feedback_q.options(load_only(SalesFeedback.session_id, SalesFeedback.rating, SalesFeedback.intent)).all()
         conversions = conversion_q.options(load_only(
             SalesConversion.session_id, SalesConversion.financial_status, SalesConversion.cancelled_at,
             SalesConversion.net_paid_amount, SalesConversion.currency, SalesConversion.matched_by,
@@ -177,9 +185,14 @@ async def sales_metrics(
 
         session_ids = [str(row.session_id) for row in sessions]
         messages = message_q.options(load_only(
+            SalesMessage.id, SalesMessage.created_at,
             SalesMessage.session_id, SalesMessage.role, SalesMessage.intent,
             SalesMessage.handoff, SalesMessage.tools_used,
         )).all()
+        cohort_info = cohort_metadata(db, surface='sales', selected=cohort)
+        journey = journey_summary(db, surface='sales', session_ids=session_ids,
+                                  start=None if period == 'all' else start,
+                                  end=end, domain=domain, cohort=cohort)
 
     user_turns: Counter[str] = Counter()
     assistant_turns: Counter[str] = Counter()
@@ -254,28 +267,23 @@ async def sales_metrics(
     lead_count = len(leads)
     failed_leads = lead_status_counts["failed"]
 
-    # Per-question drop-off. "Advanced" means the session reached *any* later
-    # question, not specifically the next one — the doorway questions are only
-    # asked for narrow spaces, so a strict next-stage comparison would report
-    # everyone who skipped them as having quit.
-    funnel_rows: list[dict[str, Any]] = []
-    for index, (stage, label) in enumerate(_FUNNEL_STAGES):
-        here = stage_sessions.get(stage, set())
-        later: set[str] = set()
-        for next_stage, _ in _FUNNEL_STAGES[index + 1 :]:
-            later |= stage_sessions.get(next_stage, set())
-        advanced = len(here & later) if later else len(here)
-        dropped = max(len(here) - advanced, 0)
-        funnel_rows.append(
-            {
-                "stage": stage,
-                "label": label,
-                "reached": len(here),
-                "advanced": advanced,
-                "dropped": dropped,
-                "drop_off_pct": _percent(dropped, len(here)),
-            }
-        )
+    from sales_outcomes import aggregate_outcomes
+    outcomes, funnel_rows = aggregate_outcomes(sessions, messages, leads, feedback, end=end, to_datetime=_to_cst)
+    if journey.get('measured'):
+        staff = next((row.get('completed', 0) for row in journey.get('stages', []) if row.get('stage') == 'handoff'), 0)
+        outcomes['human']['staff_confirmed_sessions'] = staff
+        outcomes['human']['staff_confirmation_status'] = 'observed_authenticated_tidio_webhooks_only'
+    from sales_email_transport import transport_health
+    outcomes['follow_up']['transport'] = transport_health()
+    allowed_codes = {'smtp_not_configured', 'smtp_invalid_configuration', 'smtp_authentication_failed',
+                     'smtp_recipient_rejected', 'smtp_invalid_recipient', 'smtp_tls_unavailable',
+                     'smtp_connection_failed', 'smtp_submission_failed', 'sales_inbox_unconfigured',
+                     'transport_unavailable', 'transport_exception', 'smtp_returned_false'}
+    failure_codes = Counter(
+        row.forwarded_error if row.forwarded_error in allowed_codes else 'legacy_unspecified'
+        for row in leads if row.forwarded == 'failed' and str(row.session_id) in set(session_ids)
+    )
+    outcomes['follow_up']['failure_codes'] = [{'code': key, 'count': count} for key, count in failure_codes.most_common()]
 
     rating_counts: Counter[str] = Counter()
     feedback_by_intent: defaultdict[str, Counter[str]] = defaultdict(Counter)
@@ -319,6 +327,10 @@ async def sales_metrics(
             cursor += timedelta(days=1)
 
     return {
+        'cohort': cohort_info,
+        'cohort_metadata': cohort_info,
+        'journey': journey,
+        'outcomes': outcomes,
         "range": {
             "period": period,
             "days": None if period == "all" else days,
@@ -364,6 +376,8 @@ async def sales_metrics(
         "behavior_funnel": funnel_events,
         "attributed_revenue_by_currency": revenue["attributed_revenue_by_currency"],
         "measurement_notes": {
+            'outcomes': 'Purpose-specific observed outcomes. Handoff requests, SMTP acceptance, answer display and inactivity do not establish staff receipt, customer resolution or abandonment.',
+            'engagement': 'Legacy 2+ customer-turn count is conversational depth, not successful help; a correct one-turn answer can end normally.',
             "orders": "Authenticated paid orders only; cancelled, refunded, pending and legacy unknown orders are excluded from paid counts.",
             "attribution": "Same-store last touch within the configured window; association does not establish incremental sales caused by AI.",
             "session_rate": "Distinct paid session IDs within the selected conversation cohort / conversations started in that cohort.",

@@ -64,6 +64,9 @@ def in_memory_db(monkeypatch):
     monkeypatch.setenv("TIDIO_PRIVATE_KEY", "")
     monkeypatch.delenv("TIDIO_OPENAPI_CLIENT_ID", raising=False)
     monkeypatch.delenv("TIDIO_OPENAPI_CLIENT_SECRET", raising=False)
+    import sales_leads
+    monkeypatch.setattr(sales_leads, '_resolve_transport', lambda: lambda *a, **k: False)
+    monkeypatch.setattr(sales_leads, '_alert_lead_failure', lambda **kwargs: None)
     yield
 
 
@@ -342,6 +345,32 @@ def test_webhook_rejects_bad_signature(client):
         },
     )
     assert resp.status_code == 401
+
+
+def test_only_authenticated_operator_webhook_confirms_staff_response(client):
+    from customer_journey import CustomerJourneyEvent
+    request = client.post('/api/v1/sales/tidio/turn', json={'contact_id': 'staff-observation', 'message': 'talk to a human'})
+    assert request.status_code == 200
+    assert request.json()['handoff_state'] == 'requested'
+    body = {'project_public_key': PUBLIC_KEY, 'topic': 'conversation.operator_replied',
+            'webhook_id': 'operator-observation', 'content': {'contact_id': 'staff-observation'}}
+    raw = json.dumps(body, separators=(',', ':'))
+    invalid = client.post('/api/v1/sales/tidio/webhook', content=raw, headers={'Content-Type': 'application/json', 'x-tidio-signature': 'invalid'})
+    assert invalid.status_code == 401
+    with wm.warranty_db_session() as db:
+        assert db.query(CustomerJourneyEvent).filter_by(surface='sales', stage='handoff', event='completed').count() == 0
+    for _ in range(2):
+        valid = client.post('/api/v1/sales/tidio/webhook', content=raw, headers={'Content-Type': 'application/json', 'x-tidio-signature': _sign(raw)})
+        assert valid.status_code == 200
+    with wm.warranty_db_session() as db:
+        assert db.query(CustomerJourneyEvent).filter_by(surface='sales', stage='handoff', event='completed').count() == 1
+
+
+def test_tidio_turn_cannot_reassign_another_stores_existing_session(client):
+    from sales_models import get_or_create_session
+    get_or_create_session('store-owned', domain='titanchair.com')
+    response = client.post('/api/v1/sales/tidio/turn', json={'session_id': 'store-owned', 'domain': 'osakiusa.com', 'message': 'hello'})
+    assert response.status_code == 409
 
 
 def test_webhook_acks_unknown_topic(client):

@@ -7,8 +7,9 @@ Design
 ------
 - The customer taps *Save my progress*, enters an email address, and the
   server responds by emailing a signed resume URL.
-- The URL contains an opaque HMAC-signed token (no plaintext PII / ticket ID
-  exposed). Signing uses ``ADMIN_SESSION_SECRET`` — the same secret already
+- The URL contains HMAC-signed case/session identifiers and expiry, without a
+  contact email. It is a bearer link; its payload is signed, not encrypted.
+  Signing uses ``ADMIN_SESSION_SECRET`` — the same secret already
   used by the admin dashboard cookie.
 - When the customer opens the link, the frontend calls
   ``GET /api/v1/warranty/resume/{token}`` which validates the signature and
@@ -28,12 +29,14 @@ import json
 import logging
 import os
 import smtplib
+import ssl
 import threading
 import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -91,6 +94,7 @@ def create_resume_token(
     payload = {
         "tid": ticket_id,
         "sid": session_id,
+        "purpose": "warranty_resume",
         "exp": int(time.time()) + ttl_secs,
     }
     body = _b64u_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
@@ -102,22 +106,32 @@ def create_resume_token(
 
 def verify_resume_token(token: str) -> Optional[dict]:
     """Return the decoded payload or ``None`` if invalid / expired."""
-    if not token or "." not in token:
+    if not token or len(token) > 4096 or not token.isascii() or "." not in token:
         return None
     try:
         body, sig = token.split(".", 1)
     except ValueError:
         return None
-    expected = _b64u_encode(
-        hmac.new(_get_secret(), body.encode("utf-8"), hashlib.sha256).digest()
-    )
+    try:
+        expected = _b64u_encode(
+            hmac.new(_get_secret(), body.encode("utf-8"), hashlib.sha256).digest()
+        )
+    except RuntimeError:
+        return None
     if not hmac.compare_digest(sig, expected):
         return None
     try:
         payload = json.loads(_b64u_decode(body))
     except Exception:  # noqa: BLE001
         return None
-    if int(payload.get("exp", 0)) < int(time.time()):
+    if not isinstance(payload, dict):
+        return None
+    if payload.get('purpose') not in (None, 'warranty_resume'):
+        return None
+    try:
+        if int(payload.get("exp", 0)) <= int(time.time()):
+            return None
+    except (ValueError, TypeError, OverflowError):
         return None
     if not isinstance(payload.get("tid"), str) or not isinstance(payload.get("sid"), str):
         return None
@@ -165,12 +179,19 @@ def _send_resume_email(
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+        transport = smtplib.SMTP_SSL if int(SMTP_PORT) == 465 else smtplib.SMTP
+        options = {"timeout": 15}
+        if int(SMTP_PORT) == 465:
+            options["context"] = ssl.create_default_context()
+        with transport(SMTP_SERVER, SMTP_PORT, **options) as server:
             server.ehlo()
-            server.starttls()
-            server.ehlo()
+            if int(SMTP_PORT) != 465:
+                server.starttls(context=ssl.create_default_context())
+                server.ehlo()
             server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
+            rejected = server.send_message(msg)
+            if rejected:
+                return False
         logger.info(
             "warranty_resume sent ticket=%s domain=%s to=%s",
             ticket_id,
@@ -179,12 +200,33 @@ def _send_resume_email(
         )
         return True
     except Exception as exc:  # noqa: BLE001
-        logger.error("warranty_resume send failed ticket=%s err=%s", ticket_id, exc)
+        logger.error("warranty_resume send failed ticket=%s kind=%s", ticket_id, type(exc).__name__)
         return False
 
 
+def _deliver_resume_email(*, attempt_id: str, **kwargs) -> None:
+    """Persist transport acceptance only for the matching explicit save request."""
+    from warranty_models import WarrantyTicket, warranty_db_session, _now_cst
+    try:
+        sent = _send_resume_email(**kwargs)
+    except Exception as exc:
+        logger.warning("Resume email attempt failed (%s)", type(exc).__name__)
+        sent = False
+    try:
+        with warranty_db_session() as db:
+            ticket = db.query(WarrantyTicket).filter_by(ticket_id=kwargs['ticket_id']).first()
+            if ticket is not None:
+                data = ticket.get_collected()
+                if data.get('resume_delivery_attempt_id') == attempt_id:
+                    data['resume_delivery_status'] = 'sent' if sent else 'failed'
+                    data['resume_delivery_checked_at'] = _now_cst().isoformat()
+                    ticket.collected_data = json.dumps(data)
+    except Exception as exc:
+        logger.warning("Resume delivery result recording failed (%s)", type(exc).__name__)
+
+
 def _send_resume_email_async(**kwargs) -> None:
-    threading.Thread(target=_send_resume_email, kwargs=kwargs, daemon=True).start()
+    threading.Thread(target=_deliver_resume_email, kwargs=kwargs, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +297,9 @@ async def send_warranty_resume_link(session_id: str, body: ResumeLinkRequest):
             detail="No active warranty case for this session.",
         )
     ticket_id = str(ticket.ticket_id)
+    from warranty_router import _require_web_chat_privacy_for_ticket
+
+    _require_web_chat_privacy_for_ticket(ticket)
 
     resume_url = build_warranty_resume_url(ticket_id, session_id, str(ticket.domain or ""))
     if not resume_url:
@@ -263,17 +308,42 @@ async def send_warranty_resume_link(session_id: str, body: ResumeLinkRequest):
             detail="Save & continue is temporarily unavailable.",
         )
 
-    ticket.set_collected("resume_email", email)  # detached ORM copy update (best-effort)
-    _send_resume_email_async(
-        customer_email=email,
-        resume_url=resume_url,
-        ticket_id=ticket_id,
-        model_name=str(ticket.model_name or ""),
-        domain=str(ticket.domain or ""),
-    )
+    from warranty_models import WarrantyTicket, warranty_db_session, _now_cst
+
+    attempt_id = str(uuid4())
+    with warranty_db_session() as db:
+        saved = db.query(WarrantyTicket).filter_by(ticket_id=ticket_id).first()
+        if saved is None:
+            raise HTTPException(404, "Warranty case not found.")
+        data = saved.get_collected()
+        data.update(resume_email=email, resume_delivery_attempt_id=attempt_id,
+            resume_delivery_status='pending', resume_requested_at=_now_cst().isoformat())
+        saved.collected_data = json.dumps(data)
+    queued = True
+    try:
+        _send_resume_email_async(
+            attempt_id=attempt_id,
+            customer_email=email,
+            resume_url=resume_url,
+            ticket_id=ticket_id,
+            model_name=str(ticket.model_name or ""),
+            domain=str(ticket.domain or ""),
+        )
+    except Exception as exc:
+        queued = False
+        logger.warning("Resume delivery scheduling failed (%s)", type(exc).__name__)
+        with warranty_db_session() as db:
+            saved = db.query(WarrantyTicket).filter_by(ticket_id=ticket_id).first()
+            if saved is not None:
+                data = saved.get_collected()
+                if data.get('resume_delivery_attempt_id') == attempt_id:
+                    data['resume_delivery_status'] = 'failed'
+                    saved.collected_data = json.dumps(data)
 
     return {
-        "sent": True,
+        "sent": False,
+        "queued": queued,
+        "resume_url": resume_url,
         "customer_email": mask_email(email),
         "email_saved": True,
         "expires_in_days": _TOKEN_MAX_AGE_SECS // 86400,
@@ -291,6 +361,8 @@ async def resume_from_token(token: str):
     ticket = engine.get_ticket(payload["tid"])
     if ticket is None:
         raise HTTPException(status_code=404, detail="Warranty case not found.")
+    if str(ticket.session_id) != str(payload['sid']):
+        raise HTTPException(status_code=400, detail="Invalid resume link.")
 
     return {
         "ticket_id": payload["tid"],

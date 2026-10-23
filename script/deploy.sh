@@ -67,6 +67,7 @@ rollback() {
     stash_blocking_changes
     git checkout --detach "$PREVIOUS_SHA"
     protect_host_overlays
+    export APP_RELEASE_ID="$PREVIOUS_SHA"
     docker compose build
     docker compose up -d --remove-orphans
   fi
@@ -84,6 +85,7 @@ stash_blocking_changes
 git checkout --detach "$TARGET_SHA"
 protect_host_overlays
 SWITCHED=1
+export APP_RELEASE_ID="$TARGET_SHA"
 
 mkdir -p db_data faiss_index uploaded_evidence data raw_data rc_audio_cache backups logs
 python3 script/preflight.py

@@ -9,7 +9,7 @@ describe("EvidenceUploader", () => {
       <EvidenceUploader ticketId="ticket-1" onBack={vi.fn()} />
     );
 
-    expect(markup).toContain("Final step — how can we reach you?");
+    expect(markup).toContain("Send this case for review");
     expect(markup).toContain("← Back");
     expect(markup).toContain("Go back to the previous troubleshooting step");
   });
@@ -23,9 +23,9 @@ describe("EvidenceUploader", () => {
       />
     );
 
-    expect(markup).toContain("Final step — send to our warranty team?");
+    expect(markup).toContain("Send this case for review");
     expect(markup).toContain("buyer@example.com");
-    expect(markup).toContain("Yes — notify warranty team");
+    expect(markup).toContain("Send for review");
     expect(markup).toContain("Use a different email");
     expect(markup).not.toContain("Enter your email so our warranty team");
     expect(markup).not.toContain("24 hours");

@@ -39,7 +39,7 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-async function render(params: { period?: string; days?: string } = {}) {
+async function render(params: { period?: string; days?: string; cohort?: string } = {}) {
   return renderToStaticMarkup(await AdminSalesPage({ searchParams: Promise.resolve(params) }));
 }
 
@@ -152,5 +152,24 @@ describe("Sales all-time dashboard", () => {
     expect(failed).not.toContain("No stored Sales activity");
     fetchMock.mockRejectedValue(new Error("private transport details"));
     expect(await render()).not.toContain("private transport details");
+  });
+
+  it("keeps the selected cohort in all-time and recent-period links", async () => {
+    const body = metrics();
+    body.cohort_metadata = { selected: "mixed", current_release: "release-new", available_releases: ["release-new", "release-old"], measurement_started_at: "2026-10-23T12:00:00Z", legacy_note: "Historical releases are unknown." };
+    fetchMock.mockResolvedValue(Response.json(body));
+    const html = await render({ cohort: "mixed" });
+    expect(fetchMock.mock.calls[0][0]).toBe("http://backend.test/admin/sales/metrics?period=all&cohort=mixed");
+    expect(html).toContain('href="/admin/sales?period=range&amp;days=7&amp;cohort=mixed"');
+    expect(html).toContain('name="period" value="all"');
+    expect(html).toContain('value="mixed" selected=""');
+    expect(html).toContain("Mixed releases");
+    expect(html).not.toContain("sales-page-test-admin-secret");
+  });
+
+  it("rejects an older backend silently ignoring the release cohort", async () => {
+    const html = await render({ cohort: "current" });
+    expect(html).toContain("backend must be updated before release-cohort metrics");
+    expect(html).not.toContain("Sessions (all time)");
   });
 });

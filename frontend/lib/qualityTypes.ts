@@ -1,4 +1,7 @@
+import type { DeliveryOutcomeMetrics, MetricCohortMetadata, RepairOutcomeMetrics, SupportRequestMetrics } from "./adminTypes";
+
 export interface OutcomeQuality {
+  cohort_metadata?: MetricCohortMetadata;
   total_consultations: number;
   latest_confirmed_fixed: number;
   latest_still_broken: number;
@@ -7,6 +10,10 @@ export interface OutcomeQuality {
   reopened_after_fix: number;
   confirmed_fix_rate_all_pct: number;
   confirmed_fix_rate_reported_pct: number;
+  purpose_counts?: { repair: number; delivery: number; other: number; unknown: number };
+  repair?: RepairOutcomeMetrics;
+  delivery?: DeliveryOutcomeMetrics;
+  handoffs?: SupportRequestMetrics;
 }
 
 export interface KnowledgeReview {

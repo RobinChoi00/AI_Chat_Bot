@@ -15,7 +15,26 @@ import type {
   WarrantySessionResponse,
   WarrantyContactResponse,
   WarrantyStatusLookupResponse,
+  WarrantyPrivacyState,
+  WarrantyTroubleshootingResponse,
 } from "./types";
+import type { JourneyEvent, JourneyStage } from "./customerJourney";
+
+export async function sendCustomerJourneyEvent(body: {
+  event_id: string;
+  session_id: string;
+  domain: string;
+  stage: JourneyStage;
+  event: JourneyEvent;
+}): Promise<void> {
+  const response = await fetch(`${getApiBase()}/api/v1/journey/events`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error("Could not record journey event.");
+}
 
 // ---------------------------------------------------------------------------
 // Base URL
@@ -170,7 +189,7 @@ export async function recordWarrantyChatConsent(
   sessionId: string,
   domain: string,
   policyStore: string
-): Promise<{ consent_recorded: boolean; accepted_at: string }> {
+): Promise<{ consent_recorded: boolean; accepted_at: string; privacy?: WarrantyPrivacyState }> {
   const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/consent`;
   const res = await fetch(url, {
     method: "POST",
@@ -187,7 +206,7 @@ export async function recordWarrantyChatConsent(
     }
     throw new Error(detail);
   }
-  return res.json() as Promise<{ consent_recorded: boolean; accepted_at: string }>;
+  return res.json();
 }
 
 /**
@@ -203,6 +222,7 @@ export async function recordWarrantySessionContactEmail(
   customer_email?: string | null;
   email_gate_status: string;
   skipped: boolean;
+  privacy?: WarrantyPrivacyState;
 }> {
   const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(
     sessionId
@@ -564,7 +584,7 @@ export async function submitWarrantyContact(
 export async function sendWarrantyResumeLink(
   sessionId: string,
   customerEmail: string
-): Promise<{ sent: boolean; customer_email: string; expires_in_days: number }> {
+): Promise<{ sent: boolean; queued?: boolean; email_saved?: boolean; resume_url?: string | null; customer_email: string; expires_in_days: number }> {
   const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(
     sessionId
   )}/resume-link`;
@@ -585,6 +605,9 @@ export async function sendWarrantyResumeLink(
   }
   return res.json() as Promise<{
     sent: boolean;
+    queued?: boolean;
+    email_saved?: boolean;
+    resume_url?: string | null;
     customer_email: string;
     expires_in_days: number;
   }>;
@@ -714,13 +737,7 @@ export async function submitCustomerNote(
 export async function submitTroubleshootingOutcome(
   ticketId: string,
   outcome: TroubleshootingOutcome | string
-): Promise<{
-  ticket_id: string;
-  outcome: TroubleshootingOutcome;
-  status: string;
-  self_service_resolved: boolean;
-  followup_token?: string | null;
-} | WarrantySessionResponse> {
+): Promise<WarrantyTroubleshootingResponse | WarrantySessionResponse> {
   const url = `${getApiBase()}/api/v1/warranty/${encodeURIComponent(ticketId)}/troubleshooting-outcome`;
   const res = await fetch(url, {
     method: "POST",

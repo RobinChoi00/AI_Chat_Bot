@@ -9,7 +9,7 @@ interface Props {
 
 const EMAIL_RE = /^[\w.+-]+@[\w.-]+\.\w+$/;
 
-/** Required email step shown after I Agree, before chat is unlocked. */
+/** Compatibility gate shown only when the server requires email before help. */
 export default function ChatEmailGate({ disabled, onContinue }: Props) {
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
@@ -41,14 +41,11 @@ export default function ChatEmailGate({ disabled, onContinue }: Props) {
         Where should we email follow-up?
       </p>
       <p className="mt-1 text-sm text-sky-900">
-        Please enter your email so our warranty team can reply about your case —
-        parts, technician updates, and support.
+        Enter an email address for replies about this case.
       </p>
       <p className="mt-2 rounded-lg border border-sky-100 bg-white/70 px-3 py-2 text-xs leading-snug text-sky-800">
-        We do <strong>not</strong> sell or share your email for advertising or marketing
-        lists. It is used only to follow up on this warranty case (and related support
-        tools like our helpdesk and email). Please avoid shared or public computers when
-        possible, and use <strong>Start over</strong> when you are done on a shared device.
+        Your email is used for case support, including helpdesk and email delivery.
+        Use <strong>Start over</strong> when you finish on a shared device.
       </p>
       <form onSubmit={handleContinue} className="mt-3 space-y-2">
         <label className="block text-xs font-medium text-sky-900" htmlFor="chat-email-gate">

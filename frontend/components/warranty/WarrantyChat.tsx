@@ -30,6 +30,7 @@ import type {
   WarrantyTicketState,
   TrackingSummary,
   WarrantyHandoff,
+  WarrantyPrivacyState,
 } from "@/lib/types";
 import {
   assistantContentFromResponse,
@@ -61,6 +62,8 @@ import { readWarrantyFollowup, saveWarrantyFollowup, type WarrantyFollowupAccess
 
 import { resolveWarrantyStoreDomain } from "@/lib/warrantyStoreDomain";
 import { buildWarrantySubmissionMessage } from "@/lib/warrantyContact";
+import { applyWarrantyOutcome, canAccessWarrantyHelp, canSaveWarrantyProgress } from "@/lib/warrantyProgress";
+import { reportCustomerJourney, type JourneyEvent, type JourneyStage } from "@/lib/customerJourney";
 
 // Short pause before the assistant bubble. Kept small because ChatMessageBubble
 // already types the response out.
@@ -157,6 +160,7 @@ export default function WarrantyChat({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warrantyState, setWarrantyState] = useState<WarrantyTicketState | null>(null);
+  const journeyDomain = warrantyState?.domain?.trim() || storeDomain;
   const deliveryStoreDomain = warrantyState?.domain?.trim() || storeDomain;
   const [savedFollowup, setSavedFollowup] = useState<WarrantyFollowupAccess | null>(() => readWarrantyFollowup(sessionId));
   const rememberFollowup = useCallback((ticketId: string, token: string, issueType: string) => {
@@ -178,6 +182,7 @@ export default function WarrantyChat({
   });
   const [helpConsent, setHelpConsent] = useState<"yes" | "no" | null>(null);
   const [resolutionStage, setResolutionStage] = useState<"review" | "outcome">("review");
+  const [deferredPaused, setDeferredPaused] = useState(false);
   const [optionsPanelExpanded, setOptionsPanelExpanded] = useState(true);
   const [issueTypePanelExpanded, setIssueTypePanelExpanded] = useState(true);
   const [emailPanelCollapsed, setEmailPanelCollapsed] = useState(false);
@@ -194,6 +199,18 @@ export default function WarrantyChat({
     return status === "provided";
   });
   const [intakeContactEmail, setIntakeContactEmail] = useState("");
+  const [privacy, setPrivacy] = useState<WarrantyPrivacyState | null>(null);
+  const [consentSaving, setConsentSaving] = useState(false);
+  const [consentError, setConsentError] = useState<string | null>(null);
+  const helpAccessReady = sessionChecked && canAccessWarrantyHelp(chatConsentAccepted, emailGateDone, privacy);
+  const journeySeen = useRef(new Set<string>());
+  const reportJourney = useCallback((stage: JourneyStage, event: JourneyEvent, instance = "session") => {
+    if (!chatConsentAccepted || !sessionChecked) return;
+    const key = `${sessionId}:${stage}:${event}:${instance}`;
+    if (journeySeen.current.has(key)) return;
+    journeySeen.current.add(key);
+    reportCustomerJourney({ consentAccepted: true, sessionId, domain: journeyDomain, stage, event });
+  }, [chatConsentAccepted, sessionChecked, sessionId, journeyDomain]);
 
   // Privacy: never keep contact email in sessionStorage (shared devices / XSS surface).
   useEffect(() => {
@@ -202,26 +219,33 @@ export default function WarrantyChat({
   }, []);
 
   const acceptChatConsent = useCallback(async () => {
-    setChatConsentAccepted(true);
-    if (typeof window !== "undefined") {
-      sessionStorage.setItem(CHAT_CONSENT_STORAGE_KEY, "1");
-    }
+    if (consentSaving) return;
+    setConsentSaving(true);
+    setConsentError(null);
     const { storeDomain: policyStore } = resolveStorePolicyUrls(storeDomain);
     try {
-      await recordWarrantyChatConsent(sessionId, storeDomain, policyStore);
+      const response = await recordWarrantyChatConsent(sessionId, storeDomain, policyStore);
+      if (!response.consent_recorded) throw new Error("Your consent was not saved. Please try again.");
+      if (response.privacy) setPrivacy(response.privacy);
+      setChatConsentAccepted(true);
+      if (typeof window !== "undefined") sessionStorage.setItem(CHAT_CONSENT_STORAGE_KEY, "1");
+      reportCustomerJourney({ consentAccepted: true, sessionId, domain: journeyDomain, stage: "consent", event: "completed" });
     } catch (err) {
-      console.warn("warranty chat consent record failed", err);
+      setConsentError(err instanceof Error ? err.message : "Could not save consent. Please try again.");
+    } finally {
+      setConsentSaving(false);
     }
-  }, [sessionId, storeDomain]);
+  }, [consentSaving, sessionId, storeDomain, journeyDomain]);
 
   const completeEmailGate = useCallback(
     async (options: { email: string }) => {
       const email = (options.email || "").trim();
       try {
-        await recordWarrantySessionContactEmail(sessionId, {
+        const response = await recordWarrantySessionContactEmail(sessionId, {
           customerEmail: email,
           skipped: false,
         });
+        if (response.privacy) setPrivacy(response.privacy);
       } catch (err) {
         console.warn("warranty session contact email failed", err);
         throw err;
@@ -232,33 +256,11 @@ export default function WarrantyChat({
       }
       setIntakeContactEmail(email);
       setEmailGateDone(true);
+      reportJourney("email", "completed");
       inputRef.current?.focus();
     },
-    [sessionId]
+    [sessionId, reportJourney]
   );
-
-  // Reload / tab restore: sessionStorage may say "provided" without a server row.
-  useEffect(() => {
-    if (!chatConsentAccepted || !emailGateDone) return;
-    const email = (intakeContactEmail || "").trim();
-    if (!email) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        await recordWarrantySessionContactEmail(sessionId, {
-          customerEmail: email,
-          skipped: false,
-        });
-      } catch (err) {
-        if (!cancelled) {
-          console.warn("warranty session contact email re-sync failed", err);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [chatConsentAccepted, emailGateDone, intakeContactEmail, sessionId]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -268,6 +270,11 @@ export default function WarrantyChat({
   }, [messages, loading, helpConsent, resolutionStage]);
 
   const applySessionResponse = useCallback((resp: WarrantySessionResponse) => {
+    if (resp.privacy) {
+      setPrivacy(resp.privacy);
+      setChatConsentAccepted(resp.privacy.consent_recorded);
+      setEmailGateDone(resp.privacy.email_gate_status === "provided");
+    }
     const token = resp.followup_token ?? resp.ticket?.followup_token;
     if (resp.ticket?.status === "resolved" && token) {
       rememberFollowup(resp.ticket.ticket_id, token, resp.ticket.issue_type);
@@ -278,6 +285,9 @@ export default function WarrantyChat({
     } : null);
     setTerminalEnrichment(resp.terminal_enrichment ?? null);
     setHandoff(resp.handoff ?? null);
+    setContactSubmitted(Boolean(resp.ticket?.contact_submitted || resp.ticket?.review_requested));
+    setContactReceiptSent(Boolean(resp.ticket?.receipt_email_sent));
+    setDeferredPaused(resp.ticket?.troubleshooting_outcome === "deferred");
     if (resp.tracking_summary && resp.ticket) {
       setTrackingResult({ sessionId: resp.session_id, ticketId: resp.ticket.ticket_id, domain: resp.ticket.domain?.trim() || storeDomain, summary: resp.tracking_summary });
     } else if (resp.tracking_summary !== undefined || !resp.ticket) {
@@ -296,7 +306,7 @@ export default function WarrantyChat({
       } else if (outcome === "unresolved" || outcome === "unable_to_attempt") {
         setResolutionStage("outcome");
         setHelpConsent("yes");
-      } else if (outcome === "resolved") {
+      } else if (outcome === "resolved" || outcome === "delivery_answered") {
         setResolutionStage("outcome");
         setHelpConsent("no");
       } else {
@@ -345,6 +355,7 @@ export default function WarrantyChat({
       setSuggestedOption(null);
       setHelpConsent(null);
       setResolutionStage("review");
+      setDeferredPaused(false);
       setContactSubmitted(false);
       setContactReceiptSent(false);
       setOptionsUsed(false);
@@ -358,6 +369,8 @@ export default function WarrantyChat({
       setChatConsentAccepted(false);
       setEmailGateDone(false);
       setIntakeContactEmail("");
+      setPrivacy(null);
+      setConsentError(null);
     } finally {
       setLoading(false);
       inputRef.current?.focus();
@@ -452,6 +465,7 @@ export default function WarrantyChat({
         const data = await resumeWarrantyFromToken(token);
         if (cancelled) return;
         sessionStorage.setItem("warranty_session_id", data.session_id);
+        setIntakeContactEmail("");
         setSessionId(data.session_id);
         setResumeStatus("resumed");
       } catch (err) {
@@ -557,7 +571,7 @@ export default function WarrantyChat({
 
   const handleQuickStart = useCallback(
     async (issueType: "installation" | "delivery" | "defect", label: string) => {
-      if (loading || !chatConsentAccepted || !emailGateDone) return;
+      if (loading || !helpAccessReady) return;
       setSuggestedIssueType(null);
       if (issueType !== "defect") setPendingDefectStart(null);
       if (issueType === "defect" && !warrantyState?.model_name?.trim()) {
@@ -574,6 +588,7 @@ export default function WarrantyChat({
       try {
         const resp = await quickStartWarranty(sessionId, issueType, storeDomain);
         applySessionResponse(resp);
+        if (!resp.handoff?.requested && resp.ticket?.issue_type === issueType) reportJourney("issue", "completed", issueType);
         setMessages((prev) => [...prev, { role: "user", content: label }]);
         await appendAssistantFromResponse(resp.ticket, resp);
       } catch (err: unknown) {
@@ -585,29 +600,35 @@ export default function WarrantyChat({
         inputRef.current?.focus();
       }
     },
-    [loading, chatConsentAccepted, emailGateDone, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse, warrantyState?.model_name, promptModelForDefect]
+    [loading, helpAccessReady, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse, warrantyState?.model_name, promptModelForDefect, reportJourney]
   );
 
   const handleDeliveryLookup = useCallback(async (identity: DeliveryLookupIdentity) => {
-    if (loading || !chatConsentAccepted || !emailGateDone) return;
+    if (loading || !helpAccessReady) return;
     setLoading(true);
     setTrackingResult(null);
+    reportJourney("delivery", "requested", `lookup-${Date.now()}`);
     try {
       const resp = await lookupDeliveryTracking(sessionId, { ...identity, domain: deliveryStoreDomain });
       applySessionResponse(resp);
       if (!resp.tracking_summary) throw new Error("A current delivery update was not returned. Please try again.");
+      reportJourney("delivery", resp.tracking_summary.available ? "completed" : "failed", `lookup-${Date.now()}`);
+    } catch (error) {
+      reportJourney("delivery", "failed", `lookup-${Date.now()}`);
+      throw error;
     } finally {
       setLoading(false);
     }
-  }, [loading, chatConsentAccepted, emailGateDone, sessionId, deliveryStoreDomain, applySessionResponse]);
+  }, [loading, helpAccessReady, sessionId, deliveryStoreDomain, applySessionResponse, reportJourney]);
 
   const requestHumanSupport = useCallback(async () => {
-    if (loading || !chatConsentAccepted || !emailGateDone) return;
+    if (loading || !helpAccessReady) return;
     setLoading(true);
     setError(null);
     try {
       const resp = await requestWarrantyHandoff(sessionId, { domain: storeDomain, reason: "customer_request" });
       applySessionResponse(resp);
+      reportJourney("handoff", "requested");
       setMessages((previous) => [...previous, { role: "user", content: "I'd like to speak with a person." }]);
       await appendAssistantFromResponse(resp.ticket, resp, { skipDelay: true });
     } catch (err) {
@@ -615,7 +636,7 @@ export default function WarrantyChat({
     } finally {
       setLoading(false);
     }
-  }, [loading, chatConsentAccepted, emailGateDone, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse]);
+  }, [loading, helpAccessReady, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse, reportJourney]);
 
   const advanceWarranty = useCallback(
     async (answer: string, userLabel: string) => {
@@ -631,13 +652,14 @@ export default function WarrantyChat({
       try {
         const resp = await submitWarrantyAnswer(ticketId, answer);
         applySessionResponse(resp);
+        if (!resp.side_question && !resp.handoff?.requested && warrantyState?.current_node?.node_id === "issue_type" && resp.ticket?.issue_type) reportJourney("issue", "completed", resp.ticket.issue_type);
         if (resp.order_cancel_escalated) {
           await sleep(THINKING_DELAY_MS);
           setMessages((prev) => [
             ...prev,
             assistantMessage(
               resp.assistant_message ||
-                "We've sent your request to our warranty team. They will follow up with you by email."
+                "Your request is saved for team review. You can use the support contact details below for direct assistance."
             ),
           ]);
           setHelpConsent("yes");
@@ -673,7 +695,7 @@ export default function WarrantyChat({
         inputRef.current?.focus();
       }
     },
-    [warrantyState?.ticket_id, loading, applySessionResponse, appendAssistantFromResponse]
+    [warrantyState, loading, applySessionResponse, appendAssistantFromResponse, reportJourney]
   );
 
   const startViaSmartIntake = useCallback(
@@ -720,7 +742,7 @@ export default function WarrantyChat({
             ...prev,
             assistantMessage(
               resp.assistant_message ||
-                "We've sent your request to our warranty team. They will follow up with you by email."
+                "Your request is saved for team review. You can use the support contact details below for direct assistance."
             ),
           ]);
           setHelpConsent("yes");
@@ -793,6 +815,7 @@ export default function WarrantyChat({
           await appendAssistantFromResponse(resp.ticket, resp);
           return;
         }
+        if (resp.ticket?.model_confirmed) reportJourney("model", "completed");
         await sleep(THINKING_DELAY_MS);
         setMessages((prev) => [
           ...prev,
@@ -818,6 +841,7 @@ export default function WarrantyChat({
       warrantyState?.model_name,
       applySessionResponse,
       appendAssistantFromResponse,
+      reportJourney,
     ]
   );
 
@@ -873,14 +897,7 @@ export default function WarrantyChat({
         }
         setWarrantyState((previous) => {
           if (!previous) return previous;
-          return {
-            ...previous,
-            followup_token: resp.followup_token ?? previous.followup_token,
-            status: recorded === "resolved" ? "resolved" : previous.status,
-            admin_decision:
-              recorded === "resolved" ? "self_resolved" : previous.admin_decision,
-            troubleshooting_outcome: recorded,
-          };
+          return applyWarrantyOutcome(previous, resp);
         });
 
         if (label) {
@@ -891,7 +908,21 @@ export default function WarrantyChat({
           return true;
         }
 
-        if (recorded === "resolved") {
+        reportJourney("outcome", recorded === "deferred" ? "skipped" : "completed", recorded);
+        if (recorded === "deferred") {
+          setDeferredPaused(true);
+          setHelpConsent(null);
+          setMessages((previous) => [...previous, assistantMessage("Your progress is saved for later. You can continue here when ready, or keep a resume link below.")]);
+          return true;
+        }
+
+        if (recorded === "delivery_answered") {
+          setHelpConsent("no");
+          setMessages((previous) => [...previous, assistantMessage("Thanks — glad the delivery update helped. You can start another request if you need more support.")]);
+          return true;
+        }
+
+        if (resp.self_service_resolved) {
           setHelpConsent("no");
           setMessages((previous) => [
             ...previous,
@@ -901,33 +932,29 @@ export default function WarrantyChat({
         }
 
         setHelpConsent("yes");
-        const hasIntakeEmail = /^[\w.+-]+@[\w.-]+\.\w+$/.test(intakeContactEmail.trim());
         setMessages((previous) => [
           ...previous,
           assistantMessage(
             recorded === "unable_to_attempt"
-              ? hasIntakeEmail
-                ? "Understood — please don’t attempt anything that feels unsafe. We already have your email — confirm below if you’d like us to send this case to our warranty team. Photos or videos are optional."
-                : "Understood — please don’t attempt anything that feels unsafe. Share your email below and our warranty team will review the next step. Photos or videos are optional."
-              : hasIntakeEmail
-                ? "Thanks for trying those steps. Since the issue is still there, we already have your email — confirm below to send this case to our warranty team. Photos or videos are optional."
-                : "Thanks for trying those steps. Since the issue is still there, share your email below and our warranty team will review the next step. Photos or videos are optional."
+              ? "Please don’t attempt anything that feels unsafe. You can send a request for team review below without photos or videos."
+              : "You can send this case for team review below. Photos and documents are optional."
           ),
         ]);
         return true;
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "Could not save your progress.");
+        reportJourney("outcome", "failed", `outcome-${Date.now()}`);
         return false;
       } finally {
         setLoading(false);
       }
     },
-    [loading, warrantyState, intakeContactEmail, rememberFollowup, applySessionResponse, appendAssistantFromResponse]
+    [loading, warrantyState, rememberFollowup, applySessionResponse, appendAssistantFromResponse, reportJourney]
   );
 
   const sendMessage = useCallback(
     async (text: string) => {
-      if (!text.trim() || loading || !chatConsentAccepted || !emailGateDone) return;
+      if (!text.trim() || loading || !helpAccessReady) return;
 
       const trimmed = text.trim();
       const atIssueTypeNode =
@@ -991,6 +1018,7 @@ export default function WarrantyChat({
             await appendAssistantFromResponse(resp.ticket, resp);
             return;
           }
+          reportJourney("model", "completed");
           const defectLabel = pendingDefectStart;
           setPendingDefectStart(null);
           await sleep(THINKING_DELAY_MS);
@@ -1061,8 +1089,7 @@ export default function WarrantyChat({
     },
     [
       loading,
-      chatConsentAccepted,
-      emailGateDone,
+      helpAccessReady,
       warrantyState,
       helpConsent,
       contactSubmitted,
@@ -1078,6 +1105,7 @@ export default function WarrantyChat({
       applySessionResponse,
       workflowNodeId,
       handleResolutionOutcome,
+      reportJourney,
     ]
   );
 
@@ -1094,7 +1122,7 @@ export default function WarrantyChat({
   }
 
   function handleOptionSelect(answerKey: string, label: string) {
-    if (!chatConsentAccepted || !emailGateDone) return;
+    if (!helpAccessReady) return;
     const atIssueTypeNode =
       !warrantyState?.issue_type &&
       warrantyState?.current_node?.node_id === "issue_type";
@@ -1132,6 +1160,7 @@ export default function WarrantyChat({
   const needsFirstIntake =
     sessionChecked &&
     !isTerminal &&
+    warrantyState?.status !== "resolved" &&
     !handoff?.requested &&
     !warrantyState?.issue_type &&
     !atIssueTypeNode &&
@@ -1141,8 +1170,7 @@ export default function WarrantyChat({
   const needsModelConfirmation = Boolean(warrantyState?.needs_model_confirmation);
 
   const showIssueTypeOptions =
-    chatConsentAccepted &&
-    emailGateDone &&
+    helpAccessReady &&
     sessionChecked &&
     !loading &&
     !isTerminal &&
@@ -1153,8 +1181,8 @@ export default function WarrantyChat({
       (!!warrantyState?.model_name && atIssueTypeNode));
 
   const hasWorkflowOptions =
-    chatConsentAccepted &&
-    emailGateDone &&
+    helpAccessReady &&
+    warrantyState?.status !== "resolved" &&
     !optionsUsed &&
     !loading &&
     !showIssueTypeOptions &&
@@ -1169,19 +1197,19 @@ export default function WarrantyChat({
   }, [showIssueTypeOptions]);
 
   const showResolutionGate =
-    chatConsentAccepted &&
-    emailGateDone &&
+    helpAccessReady &&
     isTerminal &&
+    !deferredPaused &&
     !handoff?.requested &&
     terminalEnrichment?.phase === "awaiting_help_consent" &&
     helpConsent === null &&
     !contactSubmitted;
 
   const inEmailStep = Boolean(
-    isTerminal && !handoff?.requested && helpConsent === "yes" && !contactSubmitted && warrantyState?.ticket_id
+    isTerminal && !deferredPaused && !handoff?.requested && helpConsent === "yes" && !contactSubmitted && warrantyState?.ticket_id
   );
 
-  const showEmailSection = chatConsentAccepted && emailGateDone && inEmailStep;
+  const showEmailSection = helpAccessReady && inEmailStep;
 
   const nodeType = warrantyState?.current_node?.node_type;
   const isTextCaptureNode = nodeType === "question_text";
@@ -1195,13 +1223,47 @@ export default function WarrantyChat({
 
   // Keep the composer visible for the whole claim chat: buttons still work,
   // and free text can map to an option when the meaning is clear.
-  const chatFinished = contactSubmitted || helpConsent === "no" || handoff?.requested;
+  const caseClosed = warrantyState?.status === "resolved" && !needsCustomerReply;
+  const chatFinished = caseClosed || (contactSubmitted && !needsCustomerReply) || helpConsent === "no" || handoff?.requested;
   const showInputBar =
-    chatConsentAccepted &&
-    emailGateDone &&
-    !chatFinished;
+    helpAccessReady &&
+    !chatFinished && !deferredPaused && (!inEmailStep || emailPanelCollapsed);
 
-  const interactionsLocked = !chatConsentAccepted || !emailGateDone;
+  const interactionsLocked = !helpAccessReady;
+  const canSaveProgress = helpAccessReady && canSaveWarrantyProgress(warrantyState);
+  const saveProgressProps = {
+    sessionId,
+    disabled: loading || interactionsLocked,
+    initialCustomerEmail: intakeContactEmail,
+    onSaved: () => reportJourney("resume", "requested", `save-${Date.now()}`),
+    onError: () => reportJourney("resume", "failed", `save-${Date.now()}`),
+    onCustomerEmailConfirmed: (email: string) => { setIntakeContactEmail(email); reportJourney("email", "completed"); },
+  };
+
+  const journeyStage: JourneyStage = !helpAccessReady ? "email" : handoff?.requested ? "handoff" : deferredPaused || showResolutionGate ? "outcome" : inEmailStep ? "evidence" : needsModelConfirmation || pendingDefectStart ? "model" : warrantyState?.issue_type === "delivery" ? "delivery" : "issue";
+
+  useEffect(() => {
+    if (!helpAccessReady && !chatConsentAccepted) return;
+    reportJourney(journeyStage, "shown", `${workflowNodeId}:${resolutionStage}:${deferredPaused ? "paused" : "active"}`);
+  }, [helpAccessReady, chatConsentAccepted, reportJourney, journeyStage, workflowNodeId, resolutionStage, deferredPaused]);
+
+  useEffect(() => {
+    if (!helpAccessReady) return;
+    if (messages.length > 0 && messages[messages.length - 1].role === "assistant") reportJourney("response", "shown", `${workflowNodeId}:${messages.length}`);
+    if (trackingSummary?.available || (terminalEnrichment?.interaction_mode === "troubleshooting" && terminalEnrichment.message?.trim())) reportJourney("help", "shown");
+  }, [helpAccessReady, messages, workflowNodeId, reportJourney, trackingSummary?.available, terminalEnrichment]);
+
+  useEffect(() => {
+    if (resumeStatus === "resumed" || resumeStatus === "failed") reportJourney("resume", resumeStatus === "resumed" ? "resumed" : "failed");
+  }, [resumeStatus, reportJourney]);
+
+  useEffect(() => {
+    if (error) reportJourney(journeyStage, "failed", `error-${Date.now()}`);
+  }, [error, journeyStage, reportJourney]);
+
+  useEffect(() => {
+    if (showEmailSection && !/^[\w.+-]+@[\w.-]+\.\w+$/.test(intakeContactEmail.trim())) reportJourney("email", "shown", "review-contact");
+  }, [showEmailSection, intakeContactEmail, reportJourney]);
 
   const inputPlaceholder = needsCustomerReply
     ? "Type your reply to our team here…"
@@ -1231,7 +1293,12 @@ export default function WarrantyChat({
         consentAccepted={chatConsentAccepted}
         onAccept={acceptChatConsent}
         storeDomain={storeDomain}
+        disabled={consentSaving || !sessionChecked || resumeStatus === "resuming"}
+        pendingLabel={consentSaving ? "Saving consent…" : "Loading chat…"}
+        error={consentError}
       />
+
+      {resumeStatus === "failed" && <p role="alert" className="mx-4 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">That resume link could not be opened. It may have expired. You can check an existing case or start a new request.</p>}
 
       {warrantyState && !embed && (
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-white px-4 py-2">
@@ -1246,8 +1313,8 @@ export default function WarrantyChat({
                 {warrantyState.model_name}
               </span>
             )}
-            {warrantyState.ticket_id && !isTerminal && (
-              <SaveProgressButton sessionId={sessionId} disabled={loading} />
+            {canSaveProgress && (
+              <SaveProgressButton key={sessionId} {...saveProgressProps} />
             )}
             {canGoBack && (
               <button
@@ -1307,8 +1374,8 @@ export default function WarrantyChat({
             )}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
-          {!isTerminal && (
-            <SaveProgressButton sessionId={sessionId} disabled={loading} />
+          {canSaveProgress && (
+            <SaveProgressButton key={sessionId} {...saveProgressProps} />
           )}
           {canGoBack && (
             <button
@@ -1362,7 +1429,7 @@ export default function WarrantyChat({
         </div>
       )}
 
-      {isAwaitingAdmin && !handoff?.requested && (
+      {isAwaitingAdmin && (contactSubmitted || warrantyState?.review_requested) && !handoff?.requested && (
         <div className="mx-4 mt-3 shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
           <p className="text-sm font-medium text-amber-800">
             {warrantyState?.issue_type === "installation"
@@ -1423,7 +1490,7 @@ export default function WarrantyChat({
             continue.
           </div>
         )}
-        {chatConsentAccepted && !emailGateDone && (
+        {chatConsentAccepted && sessionChecked && !helpAccessReady && (
           <ChatEmailGate
             disabled={loading}
             onContinue={(email) => completeEmailGate({ email })}
@@ -1434,7 +1501,7 @@ export default function WarrantyChat({
             <ChatMessageBubble
               key={i}
               message={msg}
-              showFeedback={chatConsentAccepted && emailGateDone && msg.role === "assistant"}
+              showFeedback={helpAccessReady && msg.role === "assistant"}
               feedbackSessionId={sessionId}
               feedbackTicketId={warrantyState?.ticket_id}
               feedbackDomain={storeDomain}
@@ -1444,15 +1511,18 @@ export default function WarrantyChat({
 
         </div>
 
-        {chatConsentAccepted && emailGateDone && handoff?.requested && (
+        {helpAccessReady && handoff?.requested && (
           <div className="mt-4"><HumanHandoffNotice handoff={handoff} caseReference={caseReference} /></div>
         )}
 
-        {chatConsentAccepted && emailGateDone && warrantyState?.issue_type === "delivery" && !handoff?.requested && (
-          <DeliveryTrackingPanel key={`${sessionId}:${deliveryStoreDomain}`} storeDomain={deliveryStoreDomain} initialEmail={intakeContactEmail} summary={trackingSummary} disabled={loading} onLookup={handleDeliveryLookup} />
+        {helpAccessReady && warrantyState?.issue_type === "delivery" && warrantyState.status !== "resolved" && !deferredPaused && !handoff?.requested && (
+          <div>
+            <DeliveryTrackingPanel key={`${sessionId}:${deliveryStoreDomain}`} storeDomain={deliveryStoreDomain} initialEmail={intakeContactEmail} summary={trackingSummary} disabled={loading} onLookup={handleDeliveryLookup} />
+            {trackingSummary?.available && <button type="button" disabled={loading} onClick={() => handleResolutionOutcome("delivery_answered", "The delivery update answered my question")} className="mt-2 min-h-[44px] w-full rounded-xl border border-sky-300 bg-white px-4 py-2 text-sm font-medium text-sky-900 hover:bg-sky-50 disabled:opacity-50">This delivery update answered my question</button>}
+          </div>
         )}
 
-        {chatConsentAccepted && emailGateDone && !handoff?.requested && (
+        {helpAccessReady && !chatFinished && !deferredPaused && !handoff?.requested && (
           <div className="mt-4 flex flex-wrap justify-center gap-2">
             {sessionChecked && !warrantyState?.issue_type && !showIssueTypeOptions && (
               <button type="button" onClick={() => handleQuickStart("delivery", "Delivery & tracking")} disabled={loading} className="rounded-full border border-sky-300 bg-white px-4 py-2 text-sm font-medium text-sky-900 hover:bg-sky-50 disabled:opacity-50">Delivery & tracking</button>
@@ -1617,13 +1687,23 @@ export default function WarrantyChat({
                 ).unable
               )
             }
+            onDeferred={() => handleResolutionOutcome("deferred", "Save for later")}
           />
         </div>
       )}
 
+      {helpAccessReady && deferredPaused && !handoff?.requested && (
+        <div className="shrink-0 border-t border-gray-100 bg-white p-4">
+          <p className="mb-3 text-sm text-gray-700">Your case is saved for later. Keep a resume link, or continue now.</p>
+          {canSaveProgress && <SaveProgressButton key={sessionId} {...saveProgressProps} />}
+          <button type="button" disabled={loading} onClick={() => { setDeferredPaused(false); reportJourney("outcome", "resumed", `continue-${Date.now()}`); }} className="mt-3 min-h-[44px] w-full rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50">Continue this case now</button>
+        </div>
+      )}
+
       {showEmailSection && (
-        <div className="shrink-0 border-t border-gray-100 bg-white p-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:p-4">
+        <div className="max-h-[55dvh] shrink-0 overflow-y-auto border-t border-gray-100 bg-white p-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:p-4">
           <EvidenceUploader
+            key={warrantyState!.ticket_id}
             ticketId={warrantyState!.ticket_id}
             issueType={warrantyState?.issue_type}
             evidenceRequired={warrantyState!.current_node?.evidence_required}
@@ -1632,7 +1712,10 @@ export default function WarrantyChat({
             onToggleCollapsed={setEmailPanelCollapsed}
             onBack={goBackFromEmailStep}
             backDisabled={loading}
+            onCustomerEmailConfirmed={(email) => { setIntakeContactEmail(email); reportJourney("email", "completed"); }}
+            onError={() => reportJourney("evidence", "failed", `submit-${Date.now()}`)}
             onContactSuccess={(_email, response) => {
+              reportJourney("evidence", "completed");
               setContactSubmitted(true);
               setContactReceiptSent(Boolean(response.receipt_email_sent));
               if (response.case_reference) setWarrantyState((previous) => previous ? { ...previous, case_reference: response.case_reference } : previous);
@@ -1648,6 +1731,7 @@ export default function WarrantyChat({
               ]);
             }}
             onUploadSuccess={(filename, response) => {
+              reportJourney("evidence", "completed");
               setContactSubmitted(true);
               setContactReceiptSent(Boolean(response.receipt_email_sent));
               if (response.case_reference) setWarrantyState((previous) => previous ? { ...previous, case_reference: response.case_reference } : previous);
@@ -1707,7 +1791,7 @@ export default function WarrantyChat({
         </form>
       )}
 
-      {(contactSubmitted || helpConsent === "no") && (
+      {((contactSubmitted && !needsCustomerReply) || helpConsent === "no" || caseClosed) && (
         <div className="shrink-0 border-t border-gray-100 bg-white px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-center">
           {contactSubmitted && (
             <div className="space-y-1.5">

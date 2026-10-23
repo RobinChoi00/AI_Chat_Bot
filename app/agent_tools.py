@@ -204,6 +204,46 @@ def _source_record(doc: Document) -> str:
     return "SOURCE_RECORD: " + "; ".join(parts)
 
 
+def tool_source_evidence(name: str, result: str) -> List[Dict[str, Any]]:
+    """Return bounded source identities for traces, excluding raw tool text/PII.
+
+    Model names are re-resolved against the local public catalog. URLs, customer
+    identifiers, prices, retrieved paragraphs and arbitrary JSON keys are never
+    copied into this evidence summary.
+    """
+    evidence: List[Dict[str, Any]] = []
+    if name in {"search_chair_specs", "recommend_chairs"}:
+        from product_catalog import resolve_model_name
+        for line in result.splitlines():
+            if not line.startswith("MODEL_FACTS_JSON: "):
+                continue
+            try:
+                facts = json.loads(line.split(": ", 1)[1])
+                model = resolve_model_name(str(facts.get("model") or ""))
+                if model and facts.get("currency") == "USD":
+                    item = {"source_type": "catalog", "model": model, "currency": "USD", "available": True}
+                    if item not in evidence:
+                        evidence.append(item)
+            except (ValueError, TypeError, AttributeError):
+                continue
+    elif name == "get_repair_help" and result.startswith("VERIFIED_REPAIR_GUIDANCE:"):
+        allowed = {"qa_csv", "auto_check", "fault_judgment", "fonz_error_code", "freshdesk_kb", "freshdesk_qa", "reviewed_knowledge"}
+        for line in result.splitlines():
+            if line.startswith("SOURCE_TYPE: ") and (source := line.split(": ", 1)[1]) in allowed:
+                item = {"source_type": source, "available": True}
+                if item not in evidence:
+                    evidence.append(item)
+    elif name == "lookup_order_status":
+        for line in result.splitlines():
+            if line.startswith("ORDER_LOOKUP_RESULT_JSON: "):
+                try:
+                    facts = json.loads(line.split(": ", 1)[1])
+                    evidence.append({"source_type": "verified_order_lookup", "available": facts.get("verified") is True})
+                except (ValueError, TypeError, AttributeError):
+                    continue
+    return evidence
+
+
 def _model_key(value: str) -> str:
     """Compare a requested model with a retrieved product, not a nearby model."""
     from product_catalog import resolve_model_name
@@ -235,7 +275,7 @@ def _model_facts(doc: Document, title: str, price: Optional[float]) -> dict:
     if fit is not None:
         specs.update({"max_user_weight_lb": fit.max_user_lb, "doorway_assembled_in": fit.door_asm_in,
                       "doorway_disassembled_in": fit.door_dis_in, "wall_clearance_in": fit.wall_clearance_in})
-    return {"model": title, "currency": "USD", "price_usd": price,
+    return {"model": title, "currency": "USD", "price_usd": price, "source_type": "catalog",
             "specs": {key: value for key, value in specs.items() if value is not None and value != ""}}
 
 
@@ -614,9 +654,13 @@ def tool_lookup_order_status(
         return "MISSING_INPUT: Need both a valid order number and the email used at checkout."
     tracking_data = fetch_fn(order_id, email, target_domain)
     result = build_response_fn(tracking_data, target_domain)
-    if tracking_data.get("error"):
-        return result
-    return "VERIFIED_ORDER_STATUS: matched order number and checkout email in the current lookup.\n" + result
+    verified = bool(tracking_data.get("status") and not tracking_data.get("error"))
+    customer_result = "ORDER_LOOKUP_RESULT_JSON: " + json.dumps(
+        {"verified": verified, "customer_message": result}, ensure_ascii=False,
+    )
+    if not verified:
+        return result + "\n" + customer_result
+    return "VERIFIED_ORDER_STATUS: matched order number and checkout email in the current lookup.\n" + result + "\n" + customer_result
 
 
 def tool_capture_sales_lead(

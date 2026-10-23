@@ -108,6 +108,7 @@ class SalesChatResponse(BaseModel):
     intent: str
     handoff: bool
     handoff_reason: Optional[str] = None
+    handoff_state: Optional[str] = None
     analytics_token: Optional[str] = None
     quick_replies: list[QuickReplyDTO] = Field(default_factory=list)
     products: list[dict] = Field(default_factory=list)
@@ -160,6 +161,7 @@ def _reply_to_response(reply: SalesReply, session_id: str, domain: str) -> Sales
         intent=reply.intent,
         handoff=bool(reply.handoff),
         handoff_reason=reply.handoff_reason,
+        handoff_state='requested' if reply.handoff else None,
         quick_replies=[
             QuickReplyDTO(label=q.label, payload=q.payload) for q in reply.quick_replies
         ],
@@ -303,6 +305,8 @@ async def sales_chat(
         reply.handoff,
         reply.tools_used,
     )
+    from sales_journey import record_reply
+    record_reply(body.session_id, domain, reply)
     return _reply_to_response(reply, body.session_id, domain)
 
 
@@ -325,6 +329,11 @@ async def sales_lead(
 
     domain = _resolve_sales_domain(body.domain)
     reason = (body.reason or "").strip().lower() or None
+
+    with warranty_db_session() as db:
+        existing = db.query(SalesSession).filter(SalesSession.session_id == body.session_id).first()
+        if existing and normalize_storefront_domain(existing.domain) != domain:
+            raise HTTPException(status_code=409, detail="Session belongs to another storefront.")
 
     # Make sure a session row exists so admin dashboards can pivot on it.
     get_or_create_session(body.session_id, domain=domain, channel="tidio")

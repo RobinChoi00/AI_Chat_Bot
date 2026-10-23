@@ -2,6 +2,8 @@ import Link from "next/link";
 import SalesMetricsDashboard from "@/components/admin/SalesMetricsDashboard";
 import type { SalesMetricsResponse } from "@/lib/adminTypes";
 import { getBackendUrl } from "@/lib/backendUrl";
+import MetricCohortFilter from "@/components/admin/MetricCohortFilter";
+import { metricCohort, withMetricCohort } from "@/lib/adminMetricCohort";
 
 const BACKEND = getBackendUrl();
 const ALLOWED_DAYS = [7, 14, 30, 60, 90] as const;
@@ -17,14 +19,14 @@ function coercePeriod(rawPeriod: unknown, rawDays: unknown): SalesPeriod {
   return { period: "all", days: null };
 }
 
-async function fetchMetrics(selection: SalesPeriod) {
+async function fetchMetrics(selection: SalesPeriod, cohort: string) {
   const key = process.env.ADMIN_API_KEY;
   if (!key) {
     return { data: null, error: "ADMIN_API_KEY is not configured." };
   }
   try {
     const query = selection.period === "all" ? "period=all" : `period=range&days=${selection.days}`;
-    const response = await fetch(`${BACKEND}/admin/sales/metrics?${query}`, {
+    const response = await fetch(withMetricCohort(`${BACKEND}/admin/sales/metrics?${query}`, cohort), {
       headers: { "X-Admin-Key": key },
       cache: "no-store",
       signal: AbortSignal.timeout(15_000),
@@ -38,6 +40,9 @@ async function fetchMetrics(selection: SalesPeriod) {
     const data = (await response.json()) as SalesMetricsResponse;
     if (selection.period === "all" && data.range.period !== "all") {
       return { data: null, error: "The backend must be updated before all-time Sales metrics are available." };
+    }
+    if (cohort !== "all" && data.cohort_metadata?.selected !== cohort) {
+      return { data: null, error: "The backend must be updated before release-cohort metrics are available." };
     }
     return {
       data,
@@ -54,11 +59,12 @@ async function fetchMetrics(selection: SalesPeriod) {
 export default async function AdminSalesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ period?: string; days?: string }>;
+  searchParams: Promise<{ period?: string; days?: string; cohort?: string }>;
 }) {
-  const { period: rawPeriod, days: rawDays } = await searchParams;
+  const { period: rawPeriod, days: rawDays, cohort: rawCohort } = await searchParams;
   const selection = coercePeriod(rawPeriod, rawDays);
-  const { data, error } = await fetchMetrics(selection);
+  const cohort = metricCohort(rawCohort);
+  const { data, error } = await fetchMetrics(selection, cohort);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -66,7 +72,7 @@ export default async function AdminSalesPage({
         <div className="mx-auto max-w-7xl">
           <h1 className="text-lg font-semibold text-gray-900">Sales AI dashboard</h1>
           <p className="text-xs text-gray-500">
-            Recommendation funnel, handoffs, and lead-delivery reliability
+            Purpose-specific outcomes, observed shopper actions, and follow-up delivery
           </p>
           <Link href="/admin/history?source=sales" className="mt-2 inline-block text-sm text-indigo-700 underline">
             View all Sales conversations →
@@ -77,7 +83,7 @@ export default async function AdminSalesPage({
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <span className="text-sm text-gray-600">Time window:</span>
           <Link
-            href="/admin/sales?period=all"
+            href={withMetricCohort("/admin/sales?period=all", cohort)}
             aria-current={selection.period === "all" ? "page" : undefined}
             className={`rounded-full px-3 py-1 text-xs font-medium ${
               selection.period === "all"
@@ -90,7 +96,7 @@ export default async function AdminSalesPage({
           {ALLOWED_DAYS.map((n) => (
             <Link
               key={n}
-              href={`/admin/sales?period=range&days=${n}`}
+              href={withMetricCohort(`/admin/sales?period=range&days=${n}`, cohort)}
               aria-current={selection.period === "range" && n === selection.days ? "page" : undefined}
               className={`rounded-full px-3 py-1 text-xs font-medium ${
                 selection.period === "range" && n === selection.days
@@ -102,6 +108,7 @@ export default async function AdminSalesPage({
             </Link>
           ))}
         </div>
+        <MetricCohortFilter action="/admin/sales" selected={cohort} metadata={data?.cohort_metadata} hiddenFields={selection.period === "all" ? { period: "all" } : { period: "range", days: String(selection.days) }} />
         {error ? (
           <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
             {error}

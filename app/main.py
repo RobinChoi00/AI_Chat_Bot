@@ -50,6 +50,7 @@ try:
         tool_start_warranty_workflow,
         tool_answer_warranty_question,
         tool_attach_warranty_evidence,
+        tool_source_evidence,
     )
     from app.cost_guard import (
         UsageRecorder,
@@ -78,6 +79,7 @@ except ImportError:
         tool_start_warranty_workflow,
         tool_answer_warranty_question,
         tool_attach_warranty_evidence,
+        tool_source_evidence,
     )
     from cost_guard import (  # type: ignore
         UsageRecorder,
@@ -1184,6 +1186,9 @@ app.include_router(ai_quality_router)
 app.include_router(admin_history_router)
 app.include_router(sales_events_router)
 app.include_router(warranty_quality_router)
+from customer_journey import router as customer_journey_router
+
+app.include_router(customer_journey_router)
 
 # 🚦 Rate limiting: shared Limiter from cost_guard. We attach the SlowAPI
 # middleware/handler so that exceeding the per-IP budget returns HTTP 429
@@ -1905,7 +1910,7 @@ async def chat_endpoint(
     elif cache_key:
         context = [{"role": msg.role, "content": msg.content} for msg in (chat_request.chat_history or [])[-12:]]
         digest = hashlib.sha256(_json.dumps([cache_key, context, response_language], sort_keys=True).encode()).hexdigest()
-        cache_key = f"v2|{target_domain}|{response_language}|{digest}"
+        cache_key = f"v3|{target_domain}|{response_language}|{digest}"
     cached_reply = cache_get(cache_key)
     if cached_reply and cache_key:
         logger.info(f"⚡ Cache HIT: served from response cache (key={cache_key[:60]}…)")
@@ -2141,6 +2146,7 @@ async def chat_endpoint(
                                 tool_args_summary=str(args)[:200],
                                 tool_success=_tool_ok,
                                 tool_result_len=len(result),
+                                source_evidence=tool_source_evidence(tc.function.name, result) if _tool_ok else [],
                                 llm_prompt_tokens=_p,
                                 llm_completion_tokens=_o,
                                 llm_cached_tokens=_c,
@@ -2391,7 +2397,11 @@ async def chat_endpoint(
                 # 💰 Cache the final cleaned response for repeat FAQ queries.
                 # `make_cache_key` already returned None for PII / customer-
                 # specific queries upstream, so caching here is safe.
-                if cache_key:
+                cacheable_sources = all(not result.strip().startswith((
+                    "TOOL_ERROR:", "NO_RESULTS:", "MISSING_INPUT:", "UNKNOWN_TOOL:",
+                    "WARRANTY_ERROR:", "WARRANTY_UNAVAILABLE:",
+                )) for result in tool_results)
+                if cache_key and not _guard_changed and cacheable_sources:
                     cache_set(cache_key, full_response)
 
                 # 💰 DB writes are moved off the streaming hot path via

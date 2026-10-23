@@ -10,6 +10,10 @@
 
 import Link from "next/link";
 import { useMemo } from "react";
+import MetricCard from "./MetricCard";
+import RepairOutcomePanel from "./RepairOutcomePanel";
+import AdminJourneyPanel from "./AdminJourneyPanel";
+import { metricCount, metricRate } from "@/lib/adminMetricDisplay";
 import type {
   WarrantyMetricsResponse,
   MetricsDailyRow,
@@ -28,11 +32,11 @@ const STATUS_LABELS: Record<string, string> = {
   in_progress: "In progress",
   awaiting_admin_review: "Awaiting admin",
   awaiting_evidence: "Awaiting evidence",
-  send_info: "Self-service",
-  sales_handoff: "Sent to sales",
+  send_info: "Self-service guidance issued",
+  sales_handoff: "Sales request saved",
   admin_reviewing: "Admin reviewing",
   need_more_information: "Needs more info",
-  resolved: "Resolved",
+  resolved: "Marked closed",
   closed: "Closed",
 };
 
@@ -53,36 +57,6 @@ function issueLabel(key: string): string {
 
 function formatDay(day: string): string {
   return day.slice(0, 10);
-}
-
-function KpiCard({
-  label,
-  value,
-  hint,
-  tone = "default",
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  tone?: "default" | "good" | "warn" | "bad";
-}) {
-  const toneClass =
-    tone === "good"
-      ? "text-emerald-700"
-      : tone === "warn"
-      ? "text-amber-700"
-      : tone === "bad"
-      ? "text-red-700"
-      : "text-gray-900";
-  return (
-    <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-      <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-        {label}
-      </div>
-      <div className={`mt-1 text-2xl font-semibold ${toneClass}`}>{value}</div>
-      {hint && <div className="mt-1 text-xs text-gray-500">{hint}</div>}
-    </div>
-  );
 }
 
 function BarRow({
@@ -106,7 +80,7 @@ function BarRow({
       <div className="relative h-6 flex-1 overflow-hidden rounded-md bg-gray-100">
         <div
           className={`h-full ${color}`}
-          style={{ width: `${Math.max(2, Math.min(100, pct))}%` }}
+            style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
         />
       </div>
       <div className="w-24 shrink-0 text-right text-xs text-gray-600 tabular-nums">
@@ -139,11 +113,11 @@ function DailyTrend({ rows }: { rows: MetricsDailyRow[] }) {
             <div
               key={r.day}
               className="group relative flex flex-1 flex-col items-center justify-end"
-              title={`${r.day}\nStarted: ${r.started}\nCompleted: ${r.completed}`}
+              title={`${r.day}\nStarted: ${r.started}\nWorkflow endpoint: ${r.completed}`}
             >
               <div
                 className="w-full rounded-t-sm bg-gray-200"
-                style={{ height: `${Math.max(2, startedH)}%` }}
+                style={{ height: `${Math.max(0, startedH)}%` }}
               />
               <div
                 className="absolute bottom-0 w-full rounded-t-sm bg-brand-500"
@@ -162,7 +136,7 @@ function DailyTrend({ rows }: { rows: MetricsDailyRow[] }) {
           <span className="inline-block h-3 w-3 rounded-sm bg-gray-200" /> Started
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block h-3 w-3 rounded-sm bg-brand-500" /> Reached a terminal
+          <span className="inline-block h-3 w-3 rounded-sm bg-brand-500" /> Reached a workflow endpoint
         </span>
       </div>
     </div>
@@ -175,16 +149,8 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
 
   const started = totals.started;
   const allTime = data.range.all_time ?? days === null;
-  const overallResolutionRate = totals.self_service_overall_resolution_rate_pct ??
-    (started > 0 ? Math.round((totals.self_service_resolved / started) * 1000) / 10 : 0);
-  const completionTone: "default" | "good" | "warn" | "bad" =
-    started === 0
-      ? "default"
-      : totals.completion_rate_pct >= 70
-      ? "good"
-      : totals.completion_rate_pct >= 40
-      ? "warn"
-      : "bad";
+  const repair = data.repair;
+  const delivery = data.delivery;
 
   return (
     <div className="space-y-6">
@@ -193,86 +159,49 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
         {started > 0 && ` · ${formatDay(data.range.start)} to ${formatDay(data.range.end)}`}
         . Counts cover saved tickets; visits without a saved consultation and deleted records are not included.
       </p>
-      {/* KPI row */}
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <KpiCard
-          label={allTime ? "Consultations (all time)" : `Consultations (last ${days}d)`}
-          value={started.toString()}
-        />
-        <KpiCard
-          label="Identified customers"
-          value={totals.unique_identified_customers?.toString() ?? "—"}
-          hint="Distinct email addresses; repeat consultations with the same email count once"
-        />
-        <KpiCard
-          label="Anonymous sessions"
-          value={totals.anonymous_sessions?.toString() ?? "—"}
-          hint="Sessions without an email; these are not verified unique people"
-        />
-        <KpiCard
-          label="Confirmed self-resolution / all consultations"
-          value={`${overallResolutionRate}%`}
-          hint={`${totals.self_service_resolved} customer-confirmed fixes / ${started} consultations; unreported outcomes are unknown`}
-          tone={totals.self_service_resolved > 0 ? "good" : "default"}
-        />
-        <KpiCard
-          label="Completion rate"
-          value={`${totals.completion_rate_pct}%`}
-          hint={`${totals.reached_terminal} / ${started} reached a terminal`}
-          tone={completionTone}
-        />
-        <KpiCard
-          label="Contact captured"
-          value={`${totals.contact_rate_pct}%`}
-          hint={`${totals.contact_captured} consultations have an email`}
-        />
-        <KpiCard
-          label="Intake email provided"
-          value={`${totals.email_gate_provide_rate_pct ?? 0}%`}
-          hint={`${totals.email_gate_provided ?? 0} provided / ${totals.email_gate_skipped ?? 0} skipped at gate`}
-          tone={(totals.email_gate_provide_rate_pct ?? 0) >= 70 ? "good" : "default"}
-        />
-        <KpiCard
-          label="Tickets marked closed"
-          value={`${totals.resolved} / ${totals.reached_terminal}`}
-          hint={
-            totals.reached_terminal > 0
-              ? `${totals.resolved_rate_pct}% of terminal-reached tickets closed; includes admin decisions and ended sessions, not confirmed fixes`
-              : "No terminal-reached tickets yet"
-          }
-        />
-        <KpiCard
-          label="Self-resolution among reported outcomes"
-          value={`${totals.self_service_resolution_rate_pct}%`}
-          hint={`${totals.self_service_resolved} / ${totals.self_service_started} consultations with a reported troubleshooting outcome`}
-          tone={totals.self_service_resolved > 0 ? "good" : "default"}
-        />
-        <KpiCard
-          label="Escalated after steps"
-          value={`${totals.escalated_after_self_service}`}
-          hint="Issue remained or steps could not be completed safely"
-        />
-        <KpiCard
-          label="Abandoned"
-          value={`${totals.abandoned}`}
-          hint={`In-progress with no activity >${data.range.abandon_threshold_hours}h (${totals.abandoned_rate_pct}%)`}
-          tone={totals.abandoned > 0 ? "warn" : "default"}
-        />
-        <KpiCard
-          label="Median steps to terminal"
-          value={`${totals.median_turns_to_terminal}`}
-          hint="Fewer = faster diagnosis"
-        />
-        <KpiCard
-          label="Awaiting admin"
-          value={`${by_status.find((r: MetricsStatusRow) => r.status === "awaiting_admin_review")?.count ?? 0}`}
-          hint="Needs a decision"
-        />
-        <KpiCard
-          label="Sales handoffs"
-          value={`${by_status.find((r: MetricsStatusRow) => r.status === "sales_handoff")?.count ?? 0}`}
-          hint="Passed to sales team"
-        />
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Saved consultation coverage">
+        <MetricCard label={allTime ? "Consultations (all time)" : `Consultations (last ${days}d)`} value={String(started)} hint="Saved consultations, not site visits or verified unique people" />
+        <MetricCard label="Repair / delivery consultations" value={`${metricCount(repair?.consultations)} / ${metricCount(delivery?.consultations)}`} hint={`${metricCount(data.purpose_counts?.other)} other · ${metricCount(data.purpose_counts?.unknown)} purpose unknown; separate outcome denominators`} />
+        <MetricCard label="Identified customers (email addresses)" value={metricCount(totals.unique_identified_customers)} hint="Distinct email addresses; repeat consultations with the same email count once" />
+        <MetricCard label="Anonymous sessions" value={metricCount(totals.anonymous_sessions)} hint="Sessions without an email; these are not verified unique people" />
+      </section>
+
+      <RepairOutcomePanel repair={repair} />
+
+      <section className="space-y-3" aria-labelledby="delivery-outcomes-title">
+        <h2 id="delivery-outcomes-title" className="font-semibold text-gray-900">Delivery outcomes</h2>
+        <p className="text-xs text-gray-600">Delivery updates and postponed cases are not repair fixes. A provider update returned by the API does not prove the customer read it or that the shipment was delivered.</p>
+        {delivery ? <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+          <MetricCard label="Latest lookup available" value={String(delivery.latest_lookup_available)} hint={`${delivery.latest_lookup_available} / ${delivery.consultations} delivery consultations returned a provider update`} />
+          <MetricCard label="Latest lookup unavailable" value={String(delivery.latest_lookup_unavailable)} hint="The latest attempted lookup could not verify an update" />
+          <MetricCard label="No lookup attempted" value={String(delivery.lookup_not_attempted)} hint="No saved tracking lookup; not evidence of an unsuccessful shipment" />
+          <MetricCard label="Delivery question answered" value={String(delivery.answered)} hint="Customer confirmed the delivery question was answered; not a repair fix or proof of shipment delivery" />
+          <MetricCard label="Delivery deferred" value={String(delivery.deferred)} hint="Customer will return later; not a self-resolution" />
+          <MetricCard label="Delivery outcome unknown" value={String(delivery.unknown)} hint="No confirmed delivery outcome was recorded" />
+        </div> : <p className="rounded-lg bg-white p-4 text-sm text-gray-600">Purpose-specific delivery measurements are unavailable.</p>}
+        {delivery && <p className="text-xs text-gray-500">{delivery.needs_review} delivery cases need team review · {delivery.unable_to_attempt} could not proceed. Review requests do not confirm staff receipt.</p>}
+      </section>
+
+      <AdminJourneyPanel journey={data.journey} />
+
+      <section className="rounded-xl border border-gray-200 bg-white p-4">
+        <h2 className="font-semibold text-gray-900">Support requests saved</h2>
+        <p className="mt-2 text-2xl font-semibold">{metricCount(data.handoffs?.requested)}</p>
+        <p className="mt-1 text-xs text-gray-600">Saved requests do not confirm a notification, staff receipt, or callback. Department records show the intended contact route.</p>
+        {data.handoffs && <div className="mt-3 grid gap-3 sm:grid-cols-2"><div><h3 className="text-xs font-medium text-gray-500">Intended department</h3><ul className="mt-1 text-sm">{data.handoffs.by_department.map((row) => <li key={row.department}>{row.department || "Not recorded"}: {row.count}</li>)}</ul></div><div><h3 className="text-xs font-medium text-gray-500">Reason</h3><ul className="mt-1 text-sm">{data.handoffs.by_reason.map((row) => <li key={row.reason}>{row.reason.replace(/_/g, " ")}: {row.count}</li>)}</ul></div></div>}
+      </section>
+
+      <section className="space-y-3" aria-labelledby="workflow-reference-title">
+        <h2 id="workflow-reference-title" className="font-semibold text-gray-900">Workflow &amp; queue reference</h2>
+        <p className="text-xs text-gray-600">Workflow endpoints, saved emails, and closed statuses do not establish customer resolution. Idle activity is an observation, not confirmed abandonment.</p>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+          <MetricCard label="Idle in-progress consultations" value={String(totals.idle_in_progress ?? totals.abandoned)} hint={`No activity >${data.range.abandon_threshold_hours}h · ${metricRate(totals.idle_in_progress ?? totals.abandoned, started)} of saved consultations; departure and outcome unknown`} />
+          <MetricCard label="Repair diagnosis completed" value={metricRate(repair?.diagnosis_completed, repair?.consultations)} hint={`${metricCount(repair?.diagnosis_completed)} / ${metricCount(repair?.consultations)} repair consultations reached a diagnosis endpoint`} />
+          <MetricCard label="Workflow endpoint reached" value={metricRate(totals.reached_terminal, started)} hint={`${totals.reached_terminal} / ${started} saved consultations; not confirmed fixes`} />
+          <MetricCard label="Tickets marked closed" value={String(totals.resolved)} hint="Administrative and customer closures; not confirmed fixes" />
+          <MetricCard label="Saved email coverage" value={metricRate(totals.contact_captured, started)} hint={`${totals.contact_captured} / ${started} saved consultations; visits before contact collection are not measured`} />
+          <MetricCard label="Median recorded turns to endpoint" value={totals.reached_terminal > 0 ? String(totals.median_turns_to_terminal) : "—"} hint="Recorded workflow turns; fewer turns do not establish a better outcome" />
+        </div>
       </section>
 
       {/* Trend chart */}
@@ -289,7 +218,7 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
       <section className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <h3 className="mb-2 text-sm font-semibold text-gray-900">
-            Where tickets end up
+            Current queue statuses
           </h3>
           {by_status.length === 0 ? (
             <p className="text-sm text-gray-500">No tickets in this window.</p>
@@ -303,7 +232,7 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
                   pct={started > 0 ? (row.count / started) * 100 : 0}
                   color={
                     row.status === "resolved"
-                      ? "bg-emerald-500"
+                      ? "bg-slate-400"
                       : row.status === "in_progress"
                       ? "bg-gray-400"
                       : row.status === "sales_handoff"
@@ -318,7 +247,7 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
 
         <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <h3 className="mb-2 text-sm font-semibold text-gray-900">
-            Completion by issue type
+            Workflow endpoint by issue type
           </h3>
           {by_issue_type.length === 0 ? (
             <p className="text-sm text-gray-500">No tickets in this window.</p>
@@ -329,7 +258,7 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
                   key={row.issue_type}
                   label={issueLabel(row.issue_type)}
                   count={row.count}
-                  extra={`${row.completion_rate_pct}%`}
+                  extra={metricRate(row.completed, row.count)}
                   pct={row.completion_rate_pct}
                   color="bg-brand-500"
                 />
@@ -340,7 +269,7 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
 
         <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <h3 className="mb-2 text-sm font-semibold text-gray-900">
-            Completion by domain
+            Workflow endpoint by domain
           </h3>
           {by_domain.length === 0 ? (
             <p className="text-sm text-gray-500">No tickets in this window.</p>
@@ -351,7 +280,7 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
                   key={row.domain}
                   label={row.domain}
                   count={row.count}
-                  extra={`${row.completion_rate_pct}%`}
+                  extra={metricRate(row.completed, row.count)}
                   pct={row.completion_rate_pct}
                   color="bg-teal-500"
                 />

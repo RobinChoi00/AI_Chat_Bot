@@ -92,6 +92,9 @@ def conversation_language(text: str, history: Sequence | None = None) -> str:
         content = message.get("content", "") if isinstance(message, dict) else getattr(message, "content", "")
         if role != "user":
             continue
+        explicit = re.search(r"(?:in|speak|reply|answer)\s+(English|Korean|Spanish)\b", str(content), re.I)
+        if explicit:
+            return {"english": "en", "korean": "ko", "spanish": "es"}[explicit.group(1).lower()]
         if re.search(r"[가-힣]", str(content)):
             return "ko"
         if _SPANISH_HINTS.search(str(content)) or str(content).strip().lower() in {"sí", "si"}:
@@ -126,6 +129,11 @@ _MESSAGES = {
         "en": "I'm sorry, but the authoritative lookup is temporarily unavailable. I don't want to guess. Please try again shortly or contact support at +1-888-848-2630.",
         "es": "Lo siento, la fuente oficial no está disponible temporalmente y no quiero adivinar. Inténtelo de nuevo en unos minutos o llame al +1-888-848-2630.",
         "ko": "죄송하지만 현재 공식 정보 조회가 일시적으로 불가능해 추측해서 안내드릴 수 없습니다. 잠시 후 다시 시도하거나 +1-888-848-2630으로 연락해 주세요.",
+    },
+    "recommendation_unverified": {
+        "en": "I could not verify a chair matching all your requirements in the current catalog. I will keep those requirements rather than guess a fit. Would you like help from a specialist?",
+        "es": "No pude verificar una silla que cumpla todos sus requisitos en el catálogo actual. Mantendré esos requisitos sin adivinar si encaja. ¿Desea ayuda de un especialista?",
+        "ko": "현재 카탈로그에서 모든 조건을 충족하는 의자를 확인하지 못했습니다. 조건을 유지하며 적합성을 추측하지 않겠습니다. 전문 상담원의 도움을 받으시겠어요?",
     },
     "unsupported_promise": {
         "en": "Our team needs to confirm that request. I cannot approve warranty coverage, guarantee a delivery date, or promise a medical result here. I can help connect you with the appropriate team.",
@@ -327,8 +335,30 @@ def _has_model_fact_conflict(response: str, blob: str) -> bool:
     facts = _model_facts(blob)
     if not facts:
         return False
+    # A feature-by-model table carries its model identity in the header, not
+    # in each value row. Check the column binding before ordinary prose.
+    columns: dict[int, dict] = {}
+    bound_table_rows: set[str] = set()
+    for row in response.splitlines():
+        if row.count("|") < 2:
+            columns = {}
+            continue
+        cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+        header = {index: mentions[0][2] for index, cell in enumerate(cells)
+                  if (mentions := _fact_mentions(cell, facts)) and len(mentions) == 1}
+        if len(header) >= 2:
+            columns = header
+            bound_table_rows.add(row.strip())
+            continue
+        if columns and cells:
+            bound_table_rows.add(row.strip())
+            for index, fact in columns.items():
+                if index < len(cells) and _bound_claim_conflicts(f"{cells[0]}: {cells[index]}", fact):
+                    return True
     current = facts[0] if len(facts) == 1 else None
     for line in re.split(r"\n|(?<=[.;])\s+|\bwhile\b", response):
+        if line.strip() in bound_table_rows:
+            continue
         mentions = _fact_mentions(line, facts)
         if not mentions:
             if current is not None and _bound_claim_conflicts(line, current):
@@ -357,14 +387,34 @@ def sanitize_agent_response(
     Returns the (possibly modified) customer-facing string.
     """
     text = (response or "").strip()
-    called = set(tools_called or [])
+    tool_names = list(tools_called or [])
+    called = set(tool_names)
     blob = _tool_blob(tool_results or [])
     blob_lower = blob.lower()
+    paired_results = list(zip(tool_names, tool_results or [])) if len(tool_names) == len(tool_results or []) else []
 
     if called.intersection(_WARRANTY_TOOLS):
-        locked = _warranty_locked_message(blob)
+        locked = _warranty_locked_message(_tool_blob([result for name, result in paired_results if name in _WARRANTY_TOOLS]))
         if locked:
             return locked
+
+    # The tracking formatter already produces the complete customer answer.
+    # Never let model prose add a carrier, number, date or a status from a
+    # different lookup. The marker also covers deterministic not-found errors.
+    if "lookup_order_status" in called:
+        tracking_blob = _tool_blob([result for name, result in paired_results if name == "lookup_order_status"])
+        for line in reversed(tracking_blob.splitlines()):
+            if line.startswith("ORDER_LOOKUP_RESULT_JSON: "):
+                try:
+                    result = json.loads(line.split(": ", 1)[1])
+                    customer_message = result.get("customer_message")
+                    if isinstance(customer_message, str) and customer_message.strip():
+                        return customer_message.strip()
+                except (ValueError, TypeError, AttributeError):
+                    pass
+        if "missing_input:" in tracking_blob.lower():
+            return _message("tracking_input", user_query, language)
+        return _message("source_unavailable", user_query, language)
 
     if not text:
         return text
@@ -373,6 +423,11 @@ def sanitize_agent_response(
 
     if "tool_error:" in blob_lower:
         return _message("source_unavailable", user_query, language)
+
+    if "recommend_chairs" in called and "no_results:" in blob_lower and not _model_facts(blob):
+        return _message("recommendation_unverified", user_query, language)
+    if "search_chair_specs" in called and "no_results:" in blob_lower and not _model_facts(blob):
+        return _message("spec_fallback", user_query, language)
 
     unsupported_promise = re.search(
         r"\b(?:your|the)\s+(?:claim|replacement|warranty)\s+(?:is|has been)\s+approved\b|"

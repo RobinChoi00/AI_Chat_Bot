@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { AIHealth, KnowledgeReview, OutcomeQuality } from "@/lib/qualityTypes";
+import RepairOutcomePanel from "./RepairOutcomePanel";
 
 export default function AIQualityDashboard({ outcomes, reviews, health }: {
   outcomes: OutcomeQuality | null; reviews: KnowledgeReview[] | null; health: AIHealth | null;
@@ -42,28 +43,16 @@ export default function AIQualityDashboard({ outcomes, reviews, health }: {
 
   const input = "w-full rounded border border-gray-300 bg-white p-2 text-sm";
   return <div className="space-y-6">
-    {outcomes && <section className="rounded-xl border bg-white p-4">
-      <h2 className="font-semibold">All stored warranty outcomes</h2>
-      <dl className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
-        {[
-          ["Consultations", outcomes.total_consultations], ["Latest report: fixed", outcomes.latest_confirmed_fixed],
-          ["Latest report: still broken", outcomes.latest_still_broken], ["Outcome unknown", outcomes.outcome_unknown],
-          ["Customers followed up", outcomes.followed_up], ["Reported broken after a fix", outcomes.reopened_after_fix],
-          ["Fixed / all consultations", `${outcomes.confirmed_fix_rate_all_pct}%`],
-          ["Fixed / reported outcomes", `${outcomes.confirmed_fix_rate_reported_pct}%`],
-        ].map(([label, value]) => <div key={String(label)}><dt className="text-xs text-gray-500">{label}</dt><dd className="text-xl font-semibold">{value}</dd></div>)}
-      </dl>
-      <p className="mt-3 text-xs text-gray-500">Latest customer reports can change earlier results. A follow-up does not reopen a claim or approve service. Unreported results remain unknown.</p>
-    </section>}
+    {outcomes && <RepairOutcomePanel repair={outcomes.repair} />}
     {health && <section className="rounded-xl border bg-white p-4">
-      <h2 className="font-semibold">Response times · last 7 days</h2>
+      <h2 className="font-semibold">Current runtime · response times in the last 7 days</h2>
       <p className="mt-2 text-xs text-gray-600">Agent: {health.models.agent} · Router: {health.models.router} · Embedding: {health.models.embedding}</p>
       {Object.entries(health.latency).map(([surface, timing]) => <p key={surface} className="mt-2 text-sm">
-        {surface}: {timing.samples} successful requests · median {timing.p50_ms === null ? "—" : `${timing.p50_ms} ms`} · P95 {timing.p95_ms === null ? "—" : `${timing.p95_ms} ms`}
+        {surface}: {timing.samples} successful requests · median {timing.samples <= 0 || timing.p50_ms === null ? "—" : `${timing.p50_ms} ms`} · P95 {timing.samples <= 0 || timing.p95_ms === null ? "—" : `${timing.p95_ms} ms`}
       </p>)}
       <p className="mt-3 text-sm">Stock cache: {String(health.stock_cache.fresh_entries ?? 0)} fresh entries · TTL {String(health.stock_cache.ttl_seconds ?? "—")} seconds · Last provider fetch {String(health.stock_cache.latest_fetched_at ?? "unmeasured")}</p>
       <p className="mt-2 text-sm">Warranty semantic index: {health.warranty_embeddings.ready ? "Ready" : "Not loaded"} · {String(health.warranty_embeddings.entries ?? 0)} entries · Source {String(health.warranty_embeddings.source ?? "none")}</p>
-      <p className="mt-3 text-xs text-gray-500">No samples means unmeasured. Streamed chat completion is measured separately in chat traces and live evaluations. Cache status does not verify external service access.</p>
+      <p className="mt-3 text-xs text-gray-500">This runtime view is not filtered by the selected release cohort. Model names describe the current configuration, not versions used in past conversations. No samples means unmeasured. Streamed chat completion is measured separately in chat traces and live evaluations. Cache status does not verify external service access.</p>
     </section>}
     <section className="rounded-xl border bg-white p-4">
       <h2 className="font-semibold">Submit a knowledge draft</h2>

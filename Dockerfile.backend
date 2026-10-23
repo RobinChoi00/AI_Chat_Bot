@@ -10,9 +10,11 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements-prod.txt
 
 FROM python:3.11-slim-bookworm AS runtime
 
+ARG APP_RELEASE_ID=development
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app:/app/app
+    PYTHONPATH=/app:/app/app \
+    APP_RELEASE_ID=$APP_RELEASE_ID
 WORKDIR /app
 
 RUN apt-get update \

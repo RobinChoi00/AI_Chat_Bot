@@ -191,7 +191,7 @@ def _seed_funnel() -> None:
                 )
 
 
-def test_question_funnel_shows_where_shoppers_quit(client):
+def test_question_funnel_does_not_label_active_sessions_as_abandoned(client):
     _seed_funnel()
     response = client.get(
         "/admin/sales/metrics?days=7", headers={"X-Admin-Key": _ADMIN_KEY}
@@ -200,13 +200,17 @@ def test_question_funnel_shows_where_shoppers_quit(client):
     funnel = {row["stage"]: row for row in response.json()["question_funnel"]}
 
     assert funnel["ask_height"]["reached"] == 3
-    assert funnel["ask_height"]["dropped"] == 1
+    assert funnel["ask_height"]["dropped"] is None
+    assert funnel["ask_height"]['active_waiting'] == 1
+    assert funnel["ask_height"]['continued'] == 2
 
     assert funnel["ask_goal"]["reached"] == 2
-    assert funnel["ask_goal"]["dropped"] == 1
+    assert funnel["ask_goal"]["dropped"] is None
+    assert funnel["ask_goal"]['active_waiting'] == 1
 
     assert funnel["recommend"]["reached"] == 1
-    assert funnel["recommend"]["dropped"] == 0
+    assert funnel["recommend"]["dropped"] is None
+    assert funnel["recommend"]['answer_provided'] == 1
     assert "ask_weight" not in funnel
     assert "ask_space" not in funnel
 
