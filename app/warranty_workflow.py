@@ -88,6 +88,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from sqlalchemy.orm import Query, Session
+
 from warranty_error_code_gate import (
     COL_ERROR_CODE,
     COL_GATE_COMPLETED,
@@ -287,6 +289,35 @@ class WarrantyEngine:
     """Stateless class — all state lives in the DB and the flowchart JSON."""
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _ticket_query(
+        db: Session,
+        status: Optional[str] = None,
+        domain: Optional[str] = None,
+        channel: Optional[str] = None,
+    ) -> Query[WarrantyTicket]:
+        """Use identical filters for the queue's page and matching total."""
+        q = db.query(WarrantyTicket)
+        if status:
+            q = q.filter(WarrantyTicket.status == status)
+        if domain:
+            q = q.filter(WarrantyTicket.domain.contains(domain))
+        if channel == "phone":
+            q = q.filter(WarrantyTicket.collected_data.like('%"channel": "phone"%'))
+        elif channel == "web":
+            q = q.filter(~WarrantyTicket.collected_data.like('%"channel": "phone"%'))
+        return q
+
+    @staticmethod
+    def count_tickets(
+        status: Optional[str] = None,
+        domain: Optional[str] = None,
+        channel: Optional[str] = None,
+    ) -> int:
+        """Count every matching stored ticket, independently of pagination."""
+        with warranty_db_session() as db:
+            return WarrantyEngine._ticket_query(db, status, domain, channel).count()
+
     # Session management
     # ------------------------------------------------------------------
 
@@ -504,17 +535,9 @@ class WarrantyEngine:
     ) -> list[WarrantyTicket]:
         """List tickets filtered by status, domain, and/or intake channel."""
         with warranty_db_session() as db:
-            q = db.query(WarrantyTicket)
-            if status:
-                q = q.filter(WarrantyTicket.status == status)
-            if domain:
-                q = q.filter(WarrantyTicket.domain.contains(domain))
-            if channel == "phone":
-                q = q.filter(WarrantyTicket.collected_data.like('%"channel": "phone"%'))
-            elif channel == "web":
-                q = q.filter(~WarrantyTicket.collected_data.like('%"channel": "phone"%'))
+            q = WarrantyEngine._ticket_query(db, status, domain, channel)
             return (
-                q.order_by(WarrantyTicket.created_at.desc())
+                q.order_by(WarrantyTicket.created_at.desc(), WarrantyTicket.ticket_id.desc())
                 .limit(limit)
                 .offset(offset)
                 .all()

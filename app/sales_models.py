@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 from typing import Optional, cast
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text
+from sqlalchemy import Column, DateTime, Float, Integer, String, Text, inspect
 
 from warranty_models import Base, _engine, _now_cst, warranty_db_session
 
@@ -182,10 +182,10 @@ class SalesFeedback(Base):
 
 
 class SalesConversion(Base):
-    """A Shopify order matched back to the chat session that influenced it.
+    """A Shopify order associated with a prior same-store conversation.
 
-    Until this existed the funnel stopped at "lead captured" and there was no
-    way to show the chat produced revenue.
+    Payment/refund evidence is separate from attribution; an associated order
+    does not establish that the conversation caused a purchase.
     """
 
     __tablename__ = "sales_conversions"
@@ -197,7 +197,14 @@ class SalesConversion(Base):
     email             = Column(String, index=True, nullable=True)
     domain            = Column(String, index=True, default="unknown")
     total_usd         = Column(Float, nullable=True)
+    total_amount      = Column(Float, nullable=True)  # original order currency
     currency          = Column(String, nullable=True)
+    financial_status  = Column(String, nullable=False, default="unknown", server_default="unknown")
+    refunded_amount   = Column(Float, nullable=True, default=0.0)
+    net_paid_amount   = Column(Float, nullable=True)
+    cancelled_at      = Column(DateTime, nullable=True)
+    lifecycle_updated_at = Column(DateTime, nullable=True)  # naive UTC
+    refund_events     = Column(Text, nullable=False, default="{}", server_default="{}")
     matched_by        = Column(String, index=True, nullable=True)  # session_email | lead_email
     ordered_at        = Column(DateTime, index=True, nullable=True)
     created_at        = Column(DateTime, default=_now_cst, index=True)
@@ -210,7 +217,12 @@ class SalesConversion(Base):
             "session_id":       self.session_id,
             "domain":           self.domain,
             "total_usd":        self.total_usd,
+            "total_amount":     self.total_amount,
             "currency":         self.currency,
+            "financial_status": self.financial_status,
+            "refunded_amount":  self.refunded_amount,
+            "net_paid_amount":  self.net_paid_amount,
+            "cancelled_at":     self.cancelled_at.isoformat() if self.cancelled_at else None,
             "matched_by":       self.matched_by,
             "ordered_at":       self.ordered_at.isoformat() if self.ordered_at else None,
             "created_at":       self.created_at.isoformat() if self.created_at else None,
@@ -218,6 +230,35 @@ class SalesConversion(Base):
 
 
 Base.metadata.create_all(bind=_engine)
+
+
+def ensure_sales_conversion_schema(engine) -> None:
+    """Add lifecycle fields without treating historical orders as paid.
+
+    Existing conversion rows remain financial_status=unknown. Their legacy
+    total_usd values are retained for audit, and revenue reporting excludes
+    them until an authenticated Shopify lifecycle update supplies evidence.
+    """
+    if engine.dialect.name != "sqlite":
+        return
+    additions = {
+        "total_amount": "FLOAT",
+        "financial_status": "VARCHAR NOT NULL DEFAULT 'unknown'",
+        "refunded_amount": "FLOAT",
+        "net_paid_amount": "FLOAT",
+        "cancelled_at": "DATETIME",
+        "lifecycle_updated_at": "DATETIME",
+        "refund_events": "TEXT NOT NULL DEFAULT '{}'",
+    }
+    with engine.begin() as connection:
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+        columns = {column["name"] for column in inspect(connection).get_columns("sales_conversions")}
+        for name, sql_type in additions.items():
+            if name not in columns:
+                connection.exec_driver_sql(f"ALTER TABLE sales_conversions ADD COLUMN {name} {sql_type}")
+
+
+ensure_sales_conversion_schema(_engine)
 
 
 # ---------------------------------------------------------------------------

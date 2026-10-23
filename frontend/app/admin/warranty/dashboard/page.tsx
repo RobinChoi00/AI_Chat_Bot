@@ -17,14 +17,15 @@ const BACKEND = getBackendUrl();
 const ALLOWED_DAYS = [7, 14, 30, 60, 90] as const;
 type AllowedDays = (typeof ALLOWED_DAYS)[number];
 
-function coerceDays(raw: string | undefined): AllowedDays {
-  const parsed = Number.parseInt(raw ?? "", 10);
+function coerceDays(raw: string | undefined): AllowedDays | null {
+  if (!raw || raw === "all") return null;
+  const parsed = Number(raw);
   const found = ALLOWED_DAYS.find((n) => n === parsed);
-  return (found ?? 30) as AllowedDays;
+  return found ?? null;
 }
 
 async function fetchMetrics(
-  days: number
+  days: number | null
 ): Promise<{ data: WarrantyMetricsResponse | null; error: string | null }> {
   const adminKey = process.env.ADMIN_API_KEY;
   if (!adminKey) {
@@ -36,7 +37,7 @@ async function fetchMetrics(
 
   try {
     const res = await fetch(
-      `${BACKEND}/admin/warranty/metrics?days=${days}`,
+      `${BACKEND}/admin/warranty/metrics?${days === null ? "all_time=true" : `days=${days}`}`,
       {
         headers: { "X-Admin-Key": adminKey },
         cache: "no-store",
@@ -53,6 +54,12 @@ async function fetchMetrics(
       };
     }
     const body = (await res.json()) as WarrantyMetricsResponse;
+    if (days === null && body.range.all_time !== true) {
+      return {
+        data: null,
+        error: "The backend must be updated before all-time metrics are available.",
+      };
+    }
     return { data: body, error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Fetch failed";
@@ -82,7 +89,7 @@ export default async function AdminMetricsPage({
           <span className="text-gray-300">|</span>
           <div>
             <h1 className="text-base font-semibold text-gray-900">
-              Warranty completion dashboard
+              Warranty usage &amp; resolution
             </h1>
             <p className="text-xs font-medium text-red-600">
               INTERNAL USE ONLY — Do not share this page
@@ -94,6 +101,16 @@ export default async function AdminMetricsPage({
       <main className="mx-auto max-w-7xl px-6 py-6">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <span className="text-sm text-gray-600">Time window:</span>
+          <Link
+            href="/admin/warranty/dashboard?days=all"
+            className={`rounded-full px-3 py-1 text-xs font-medium ${
+              days === null
+                ? "bg-brand-600 text-white"
+                : "border border-gray-300 bg-white text-gray-700 hover:bg-gray-100"
+            }`}
+          >
+            All time
+          </Link>
           {ALLOWED_DAYS.map((n) => (
             <Link
               key={n}

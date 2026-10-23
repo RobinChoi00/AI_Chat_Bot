@@ -18,6 +18,7 @@ import json
 import re
 from dataclasses import dataclass
 from functools import lru_cache
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -243,6 +244,10 @@ class KnowledgeEntry:
     title: str
     diagnostic: str
     customer_steps: tuple[str, ...]
+    applicable_models: tuple[str, ...] = ()
+    source_url: str = ""
+    reviewed_at: Optional[str] = None
+    review_until: Optional[str] = None
 
 
 def _model_signature(text: str) -> str:
@@ -277,6 +282,18 @@ def _entry_explicit_model_signatures(entry: KnowledgeEntry) -> set[str]:
 
 def _entry_matches_requested_model(entry: KnowledgeEntry, model_name: str) -> bool:
     """Reject knowledge that explicitly names a different chair model."""
+    if entry.review_until:
+        import pytz
+
+        today = datetime.now(pytz.timezone("America/Chicago")).date().isoformat()
+        if entry.review_until < today:
+            return False
+    if entry.applicable_models:
+        # Human-reviewed instructions have an explicit applicability boundary;
+        # without a model, ask the customer instead of guessing another model.
+        requested = _model_signature(model_name)
+        if not requested or requested not in {_model_signature(value) for value in entry.applicable_models}:
+            return False
     if not str(model_name or "").strip():
         return True
     explicit = _entry_explicit_model_signatures(entry)
@@ -830,7 +847,8 @@ def _load_fonz_error_entries() -> list[KnowledgeEntry]:
 
 
 @lru_cache(maxsize=1)
-def load_knowledge_entries() -> tuple[KnowledgeEntry, ...]:
+def _baseline_knowledge_entries() -> tuple[KnowledgeEntry, ...]:
+    """Cache source-file parsing independently of mutable review decisions."""
     combined: list[KnowledgeEntry] = []
     combined.extend(_load_fonz_error_entries())
     combined.extend(_load_qa_entries())
@@ -839,6 +857,36 @@ def load_knowledge_entries() -> tuple[KnowledgeEntry, ...]:
     combined.extend(_load_autocheck_entries())
     combined.extend(_load_fault_judgment_entries())
     return tuple(combined)
+
+
+@lru_cache(maxsize=1)
+def _knowledge_with_reviews(reviewed: tuple[KnowledgeEntry, ...]) -> tuple[KnowledgeEntry, ...]:
+    # Preserve object identity for embedding indexes while this exact approved
+    # content is current. A decision made by another process changes this key.
+    return _baseline_knowledge_entries() + reviewed
+
+
+def load_knowledge_entries() -> tuple[KnowledgeEntry, ...]:
+    """Read current approval/expiry on every retrieval, including other workers."""
+    reviewed: tuple[KnowledgeEntry, ...] = ()
+    # Only raw source parsing is process-cached. Never let a cached approval
+    # survive a revocation or expiry recorded by another application process.
+    try:
+        from warranty_quality import approved_knowledge_entries
+
+        reviewed = approved_knowledge_entries()
+    except ImportError:
+        pass
+    return _knowledge_with_reviews(reviewed)
+
+
+def _clear_loaded_knowledge() -> None:
+    _baseline_knowledge_entries.cache_clear()
+    _knowledge_with_reviews.cache_clear()
+
+
+# Existing maintenance code and tests use this public cache-clear surface.
+load_knowledge_entries.cache_clear = _clear_loaded_knowledge
 
 
 def clear_knowledge_cache() -> None:

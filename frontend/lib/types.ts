@@ -79,6 +79,7 @@ export interface WarrantyTicketState {
   customer_message?: string | null;
   admin_decision?: string | null;
   troubleshooting_outcome?: TroubleshootingOutcome | null;
+  followup_token?: string | null;
   current_node: WarrantyNode | null;
 }
 
@@ -131,6 +132,7 @@ export interface ModelConfirmationMetadata {
 export interface WarrantySessionResponse {
   session_id: string;
   ticket: WarrantyTicketState | null;
+  followup_token?: string | null;
   tracking_summary?: TrackingSummary | null;
   email_notified?: boolean;
   nlp_interpreted?: boolean;

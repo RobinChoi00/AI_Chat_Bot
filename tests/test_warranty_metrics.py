@@ -78,6 +78,7 @@ def _seed_ticket(
     updated_hours_ago: int = 0,
     admin_decision: str | None = None,
     customer_email: str | None = None,
+    customer_contact_email: str | None = None,
     troubleshooting_outcome: str | None = None,
     turns_count: int = 0,
 ) -> None:
@@ -87,6 +88,8 @@ def _seed_ticket(
     collected = {}
     if customer_email:
         collected["customer_email"] = customer_email
+    if customer_contact_email:
+        collected["customer_contact_email"] = customer_contact_email
     if troubleshooting_outcome:
         collected["troubleshooting_outcome"] = troubleshooting_outcome
 
@@ -276,6 +279,29 @@ def test_metrics_domain_filter(client):
     assert body["by_domain"][0]["domain"] == "osakichair.com"
 
 
+def test_metrics_counts_legacy_self_resolved_decision_as_reported_outcome_once(client):
+    _seed_ticket("legacy-fix", status="resolved", admin_decision="self_resolved")
+    _seed_ticket(
+        "current-fix",
+        status="resolved",
+        admin_decision="self_resolved",
+        troubleshooting_outcome="resolved",
+    )
+    _seed_ticket("not-fixed", troubleshooting_outcome="unresolved")
+    _seed_ticket("unknown-outcome")
+
+    response = client.get(
+        "/admin/warranty/metrics?all_time=true",
+        headers={"X-Admin-Key": _ADMIN_KEY},
+    )
+    assert response.status_code == 200
+    totals = response.json()["totals"]
+    assert totals["self_service_resolved"] == 2
+    assert totals["self_service_started"] == 3
+    assert totals["self_service_resolution_rate_pct"] == 66.7
+    assert totals["self_service_overall_resolution_rate_pct"] == 50.0
+
+
 def test_metrics_days_window_excludes_older(client):
     _seed_ticket("old", status="resolved", created_days_ago=45)
     _seed_ticket("new", status="resolved", created_days_ago=1)
@@ -295,3 +321,122 @@ def test_metrics_rejects_out_of_range_days(client):
         headers={"X-Admin-Key": _ADMIN_KEY},
     )
     assert resp.status_code == 422
+
+
+def test_lifetime_metrics_includes_old_tickets_but_bounds_daily_chart(client):
+    _seed_ticket(
+        "historical",
+        created_days_ago=800,
+        status="resolved",
+        admin_decision="self_resolved",
+        troubleshooting_outcome="resolved",
+        turns_count=7,
+    )
+    _seed_ticket("recent", created_days_ago=1, turns_count=2)
+
+    lifetime = client.get(
+        "/admin/warranty/metrics?all_time=true",
+        headers={"X-Admin-Key": _ADMIN_KEY},
+    )
+    assert lifetime.status_code == 200
+    body = lifetime.json()
+    assert body["range"]["all_time"] is True
+    assert body["range"]["days"] is None
+    assert body["totals"]["started"] == 2
+    assert body["totals"]["self_service_resolved"] == 1
+    assert body["totals"]["self_service_overall_resolution_rate_pct"] == 50.0
+    assert body["totals"]["median_turns_to_terminal"] == 7
+    expected_start = (datetime.now(_CST) - timedelta(days=800)).date().isoformat()
+    assert body["range"]["start"].startswith(expected_start)
+    assert body["range"]["trend_days"] == 180
+    assert len(body["daily_started"]) == 180
+    assert body["daily_started"][0]["day"] == body["range"]["trend_start"][:10]
+    # Chart clipping must not clip the totals or count old starts on today's bar.
+    assert sum(row["started"] for row in body["daily_started"]) == 1
+
+    recent = client.get(
+        "/admin/warranty/metrics?days=180",
+        headers={"X-Admin-Key": _ADMIN_KEY},
+    ).json()
+    assert recent["range"]["all_time"] is False
+    assert recent["range"]["days"] == 180
+    assert recent["totals"]["started"] == 1
+
+
+def test_lifetime_metrics_preserves_domain_filter_and_first_record_date(client):
+    _seed_ticket("other-store", domain="titan.com", created_days_ago=900)
+    _seed_ticket("osaki-old", created_days_ago=400)
+    _seed_ticket("osaki-new", created_days_ago=1)
+
+    response = client.get(
+        "/admin/warranty/metrics?all_time=true&domain=osaki",
+        headers={"X-Admin-Key": _ADMIN_KEY},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["totals"]["started"] == 2
+    assert [row["domain"] for row in body["by_domain"]] == ["osakichair.com"]
+    expected_start = (datetime.now(_CST) - timedelta(days=400)).date().isoformat()
+    assert body["range"]["start"].startswith(expected_start)
+
+
+def test_metrics_deduplicates_identified_customers_and_separates_anonymous_sessions(client):
+    _seed_ticket("anonymous-first", session_id="later-identified")
+    _seed_ticket(
+        "identified-later",
+        session_id="later-identified",
+        customer_email="  Customer@Example.com  ",
+    )
+    _seed_ticket(
+        "repeat-customer",
+        session_id="new-session",
+        customer_contact_email="customer@example.com",
+    )
+    _seed_ticket(
+        "second-customer",
+        session_id="other-session",
+        customer_email=" ",
+        customer_contact_email=" Second@Example.com ",
+    )
+    _seed_ticket("anonymous-1", session_id="anonymous")
+    _seed_ticket("anonymous-2", session_id="anonymous")
+    _seed_ticket("missing-session", session_id="  ")
+
+    response = client.get(
+        "/admin/warranty/metrics?all_time=true",
+        headers={"X-Admin-Key": _ADMIN_KEY},
+    )
+    assert response.status_code == 200
+    totals = response.json()["totals"]
+    assert totals["started"] == 7
+    assert totals["unique_identified_customers"] == 2
+    assert totals["unique_sessions"] == 4
+    # The anonymous ticket that later supplied an email is not a separate visitor.
+    assert totals["anonymous_sessions"] == 1
+
+
+def test_lifetime_metrics_empty_db_has_safe_range_and_zero_denominators(client):
+    response = client.get(
+        "/admin/warranty/metrics?all_time=true",
+        headers={"X-Admin-Key": _ADMIN_KEY},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["range"]["all_time"] is True
+    assert body["range"]["days"] is None
+    assert body["range"]["start"][:10] == body["range"]["end"][:10]
+    assert body["range"]["trend_days"] == 1
+    assert len(body["daily_started"]) == 1
+    for key in (
+        "started",
+        "unique_identified_customers",
+        "unique_sessions",
+        "anonymous_sessions",
+        "self_service_overall_resolution_rate_pct",
+    ):
+        assert body["totals"][key] == 0
+
+
+def test_lifetime_metrics_requires_admin_key(client):
+    response = client.get("/admin/warranty/metrics?all_time=true")
+    assert response.status_code == 401

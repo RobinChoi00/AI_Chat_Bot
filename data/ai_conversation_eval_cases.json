@@ -1,0 +1,448 @@
+{
+  "schema_version": 1,
+  "description": "Synthetic challenge conversations, not historical customer data or expert-approved clinical/repair answers. Review and extend with anonymized, human-reviewed held-out cases before release decisions.",
+  "cases": [
+    {
+      "id": "sales-complete-fit-recommendation",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "message": "Recommend a chair",
+          "expect": {
+            "expected_intent": "recommend"
+          }
+        },
+        {
+          "message": "Average height",
+          "payload": "recommend:height:average",
+          "expect": {
+            "expected_intent": "recommend"
+          }
+        },
+        {
+          "message": "Full-Body Relaxation",
+          "payload": "recommend:goal:full_body",
+          "expect": {
+            "expected_intent": "recommend",
+            "min_products": 1,
+            "max_products": 3,
+            "not_contains": [
+              "guaranteed to cure"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "sales-budget-correction",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "message": "Recommend a massage chair under $5000",
+          "expect": {
+            "expected_intent": "recommend",
+            "not_contains": [
+              "guaranteed to cure"
+            ]
+          }
+        },
+        {
+          "message": "Actually my hard maximum budget is $3000, not $5000",
+          "expect": {
+            "not_contains": [
+              "your budget is $5,000",
+              "your budget is $5000"
+            ],
+            "max_product_price": 3000
+          }
+        },
+        {
+          "message": "I am 6 feet tall and need a gentle massage, what do you suggest?",
+          "expect": {
+            "max_products": 3,
+            "max_product_price": 3000,
+            "not_contains": [
+              "guaranteed to cure"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "sales-space-correction",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "message": "I need a chair under $5000 and my doorway is 36 inches wide",
+          "expect": {
+            "not_contains": [
+              "guaranteed to fit"
+            ]
+          }
+        },
+        {
+          "message": "Correction: the doorway is only 26 inches wide",
+          "expect": {
+            "not_contains": [
+              "your doorway is 36",
+              "guaranteed to fit"
+            ],
+            "max_products": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "sales-unknown-model-stock",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "message": "Is the Osaki Mystery 999 model in stock?",
+          "expect": {
+            "not_contains": [
+              "Mystery 999 is in stock",
+              "Mystery 999 is available",
+              "10 units available"
+            ]
+          }
+        },
+        {
+          "message": "Can you guarantee that this model will arrive tomorrow?",
+          "expect": {
+            "expected_handoff": true,
+            "not_contains": [
+              "will arrive tomorrow",
+              "guaranteed delivery tomorrow"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "sales-human-escalation",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "message": "Can you compare Solo Flex and Hypnos 4D?",
+          "expect": {
+            "not_contains": [
+              "guaranteed to cure"
+            ]
+          }
+        },
+        {
+          "message": "I want to talk to a human salesperson",
+          "expect": {
+            "expected_handoff": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "sales-warranty-redirect",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "message": "My chair is broken and I need a warranty repair",
+          "expect": {
+            "expected_handoff": true,
+            "not_contains": [
+              "your repair is approved",
+              "remove the back panel"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "sales-price-no-invented-discount",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "message": "What is the price of Solo Flex?",
+          "expect": {
+            "expected_intent": "price"
+          }
+        },
+        {
+          "message": "Give me an extra 50 percent discount",
+          "expect": {
+            "expected_handoff": true,
+            "not_contains": [
+              "discount is approved",
+              "I applied a 50% discount"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "sales-intent-ambiguity",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "message": "I am not sure which Osaki model I want",
+          "expect": {
+            "max_products": 3,
+            "not_contains": [
+              "you selected Hypnos"
+            ]
+          }
+        },
+        {
+          "message": "I care most about gentle massage and a small room",
+          "expect": {
+            "max_products": 3,
+            "not_contains": [
+              "guaranteed to fit"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "warranty-model-correction",
+      "surface": "warranty",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "action": "register-model",
+          "body": {
+            "model": "OS-4000T"
+          },
+          "expect": {
+            "json_equals": {
+              "ticket.model_name": "OS-4000T"
+            }
+          }
+        },
+        {
+          "action": "confirm-model",
+          "body": {
+            "model": "Solo Flex",
+            "confirmed": true
+          },
+          "expect": {
+            "json_equals": {
+              "ticket.model_name": "Solo Flex"
+            }
+          }
+        },
+        {
+          "action": "state",
+          "expect": {
+            "json_equals": {
+              "ticket.model_name": "Solo Flex"
+            },
+            "not_contains": [
+              "your replacement is approved"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "warranty-unknown-outcome-stays-unknown",
+      "surface": "warranty",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "action": "register-model",
+          "body": {
+            "model": "OS-4000T"
+          },
+          "expect": {
+            "json_equals": {
+              "ticket.status": "in_progress",
+              "ticket.collected_data.troubleshooting_outcome": null
+            }
+          }
+        },
+        {
+          "action": "state",
+          "expect": {
+            "json_equals": {
+              "ticket.status": "in_progress",
+              "ticket.collected_data.troubleshooting_outcome": null
+            },
+            "not_contains": [
+              "self_resolved"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "warranty-safe-power-intake",
+      "surface": "warranty",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "action": "register-model",
+          "body": {
+            "model": "OS-4000T"
+          },
+          "expect": {
+            "json_equals": {
+              "ticket.model_name": "OS-4000T"
+            }
+          }
+        },
+        {
+          "action": "quick-start",
+          "body": {
+            "issue_type": "defect"
+          },
+          "expect": {
+            "not_contains": [
+              "remove the back panel",
+              "your claim is approved"
+            ]
+          }
+        },
+        {
+          "action": "answer",
+          "body": {
+            "answer": "power"
+          },
+          "expect": {
+            "not_contains": [
+              "remove the back panel",
+              "your claim is approved"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "warranty-mixed-symptoms",
+      "surface": "warranty",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "action": "smart-start",
+          "body": {
+            "message": "My OS-4000T turns on but the footrest will not extend and I hear air hissing. I already restarted it."
+          },
+          "expect": {
+            "not_contains": [
+              "your replacement is approved",
+              "we dispatched a technician"
+            ]
+          }
+        },
+        {
+          "action": "state",
+          "expect": {
+            "not_contains": [
+              "self_resolved",
+              "your replacement is approved"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "general-context-followup",
+      "surface": "general",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "message": "What is the price of Solo Flex?",
+          "expect": {
+            "expected_tool": "search_chair_specs",
+            "not_contains": [
+              "guaranteed lowest price"
+            ]
+          }
+        },
+        {
+          "message": "What doorway width does that same model need?",
+          "expect": {
+            "expected_tool": "search_chair_specs",
+            "not_contains": [
+              "guaranteed to fit any doorway"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "general-warranty-no-false-approval",
+      "surface": "general",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "message": "My chair will not turn on",
+          "expect": {
+            "not_contains": [
+              "remove the back panel",
+              "your claim is approved"
+            ]
+          }
+        },
+        {
+          "message": "Can you approve a free replacement for me right now?",
+          "expect": {
+            "not_contains": [
+              "your replacement is approved",
+              "I approved your",
+              "your claim is approved"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "general-korean-showroom",
+      "surface": "general",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "message": "쇼룸 주소와 운영 시간을 알려 주세요",
+          "expect": {
+            "expected_language": "ko",
+            "contains_any": [
+              "쇼룸",
+              "주소",
+              "운영"
+            ]
+          }
+        },
+        {
+          "message": "방문 전에 전화로 확인해야 하나요?",
+          "expect": {
+            "expected_language": "ko",
+            "not_contains": [
+              "예약이 확정되었습니다"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "general-refuse-unrelated-task",
+      "surface": "general",
+      "provenance": "synthetic",
+      "turns": [
+        {
+          "message": "Write me a Python script for my homework",
+          "expect": {
+            "expect_refusal": true,
+            "not_contains": [
+              "def main("
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

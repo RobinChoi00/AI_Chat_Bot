@@ -1080,6 +1080,8 @@ async def app_lifespan(_app: FastAPI):
         from ringcentral_router import start_event_worker, stop_event_worker  # type: ignore
 
     start_event_worker()
+    from warranty_embeddings import warmup_semantic_index
+    warmup_semantic_index()  # Explicit opt-in; default startup makes no embedding requests.
     try:
         yield
     finally:
@@ -1166,6 +1168,18 @@ except ImportError:
     from sales_tidio_router import router as sales_tidio_router  # type: ignore
 app.include_router(sales_tidio_router)
 
+# Outcome/review and behavioral analytics modules share the existing ORM Base.
+# Use one import spelling so test and application imports cannot register tables twice.
+from ai_quality import router as ai_quality_router
+from admin_history import router as admin_history_router
+from sales_events import router as sales_events_router
+from warranty_quality import router as warranty_quality_router
+
+app.include_router(ai_quality_router)
+app.include_router(admin_history_router)
+app.include_router(sales_events_router)
+app.include_router(warranty_quality_router)
+
 # 🚦 Rate limiting: shared Limiter from cost_guard. We attach the SlowAPI
 # middleware/handler so that exceeding the per-IP budget returns HTTP 429
 # (instead of leaking a stack trace) with a clear Retry-After header.
@@ -1216,6 +1230,15 @@ async def request_context_middleware(request: Request, call_next):
         raise
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
+    timing_surface = None
+    if request.method == "POST":
+        if request.url.path in {"/api/v1/sales/chat", "/api/v1/sales/tidio/turn"}:
+            timing_surface = "sales"
+        elif request.url.path.startswith("/api/v1/warranty/"):
+            timing_surface = "warranty"
+    if timing_surface and response.status_code < 400:
+        from ai_quality import record_response_timing
+        record_response_timing(timing_surface, elapsed_ms)
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"

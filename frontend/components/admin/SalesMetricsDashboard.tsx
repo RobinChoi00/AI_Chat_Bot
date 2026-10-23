@@ -119,6 +119,23 @@ export default function SalesMetricsDashboard({
         />
       </section>
 
+      <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+        <h2 className="font-semibold">Observed shopper actions &amp; paid orders</h2>
+        <p className="mt-1 text-xs text-gray-500">Actions are recorded only after storefront analytics is enabled. Offered links are not clicks. Missing observations do not establish that no action occurred.</p>
+        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Kpi label="Analytics coverage" value={data.behavior_funnel?.measurement_coverage_pct == null ? "—" : `${data.behavior_funnel.measurement_coverage_pct}%`} hint={`${data.behavior_funnel?.measured_sessions ?? 0} conversations with an accepted tracking signal; other conversations are unmeasured`} />
+          <Kpi label="Product clicks" value={String(data.behavior_funnel?.observed_sessions.product_click ?? "—")} hint="Sessions with an observed product link click" />
+          <Kpi label="Added to cart" value={String(data.behavior_funnel?.ordered_sessions.add_to_cart ?? "—")} hint="Observed cart success after a product click" />
+          <Kpi label="Checkout started" value={String(data.behavior_funnel?.ordered_sessions.checkout_started ?? "—")} hint="Observed checkout start after cart success" />
+          <Kpi label="Paid orders" value={String(t.paid_orders_seen ?? "—")} hint="Authenticated payment evidence; cancelled and fully refunded orders excluded" />
+          <Kpi label="Paid conversations" value={String(t.paid_sessions ?? "—")} hint={`${t.session_to_order_rate_pct ?? "—"}% of the selected conversation cohort has a paid order`} />
+          <Kpi label="Payment unknown" value={String(t.payment_unknown_orders ?? "—")} hint="Legacy or missing payment evidence; excluded from paid revenue" />
+          <Kpi label="Helpful answers" value={t.csat_score_pct === undefined || !t.csat_rated ? "—" : `${t.csat_score_pct}%`} hint={`${t.csat_rated ?? 0} rated answers; unrated answers remain unknown`} />
+          <Kpi label="Net attributed USD" value={t.attributed_revenue_usd === undefined ? "—" : `$${t.attributed_revenue_usd.toFixed(2)}`} hint="Verified USD net payment only; attribution does not prove AI caused the sale" />
+        </div>
+        {data.attributed_revenue_by_currency && Object.keys(data.attributed_revenue_by_currency).length > 0 && <p className="mt-3 text-xs text-gray-600">Net attributed amounts by original currency: {Object.entries(data.attributed_revenue_by_currency).map(([currency, amount]) => `${currency} ${amount.toFixed(2)}`).join(" · ")}</p>}
+      </section>
+
       <section className="grid gap-4 lg:grid-cols-2">
         <Breakdown title="Intent mix" rows={data.by_intent} keyName="intent" />
         <Breakdown title="Storefronts" rows={data.by_domain} keyName="domain" />

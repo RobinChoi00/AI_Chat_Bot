@@ -110,11 +110,11 @@ async def sales_metrics(
     )
 
     with warranty_db_session() as db:
-        session_q = db.query(SalesSession).filter(SalesSession.created_at >= start)
-        lead_q = db.query(SalesLead).filter(SalesLead.created_at >= start)
-        feedback_q = db.query(SalesFeedback).filter(SalesFeedback.created_at >= start)
+        session_q = db.query(SalesSession).filter(SalesSession.created_at >= start, SalesSession.created_at <= end)
+        lead_q = db.query(SalesLead).filter(SalesLead.created_at >= start, SalesLead.created_at <= end)
+        feedback_q = db.query(SalesFeedback).filter(SalesFeedback.created_at >= start, SalesFeedback.created_at <= end)
         conversion_q = db.query(SalesConversion).filter(
-            SalesConversion.created_at >= start
+            SalesConversion.created_at >= start, SalesConversion.created_at <= end
         )
         if domain:
             session_q = session_q.filter(SalesSession.domain.contains(domain))
@@ -238,8 +238,16 @@ async def sales_metrics(
 
     # Revenue. Orders we could not tie to a session are still counted in
     # `orders_seen` so the attributed share stays honest.
-    attributed = [c for c in conversions if c.session_id]
-    attributed_revenue = sum(float(c.total_usd or 0.0) for c in attributed)
+    from sales_conversion import is_paid_conversion, conversion_revenue_summary
+    from sales_events import aggregate_sales_events
+
+    paid = [c for c in conversions if is_paid_conversion(c)]
+    attributed = [c for c in paid if c.session_id]
+    revenue = conversion_revenue_summary(conversions)
+    paid_sessions = {str(c.session_id) for c in attributed}
+    cohort_paid_sessions = paid_sessions & set(session_ids)
+    lead_sessions = {str(lead.session_id) for lead in leads}
+    funnel_events = aggregate_sales_events(session_ids, start, end, domain=domain)
     match_counts: Counter[str] = Counter(
         str(c.matched_by or "unattributed").lower() for c in conversions
     )
@@ -285,10 +293,22 @@ async def sales_metrics(
             "csat_score_pct": _percent(helpful, rated),
             "orders_seen": len(conversions),
             "orders_attributed": len(attributed),
-            "attribution_rate_pct": _percent(len(attributed), len(conversions)),
-            "attributed_revenue_usd": round(attributed_revenue, 2),
-            "session_to_order_rate_pct": _percent(len(attributed), started),
-            "lead_to_order_rate_pct": _percent(len(attributed), lead_count),
+            "paid_orders_seen": len(paid),
+            "payment_unknown_orders": revenue["payment_unknown_orders"],
+            "attribution_rate_pct": _percent(len(attributed), len(paid)),
+            "attributed_revenue_usd": revenue["attributed_revenue_usd"],
+            "paid_sessions": len(cohort_paid_sessions),
+            "session_to_order_rate_pct": _percent(len(cohort_paid_sessions), started),
+            "lead_to_order_rate_pct": _percent(len(paid_sessions & lead_sessions), len(lead_sessions)),
+        },
+        "behavior_funnel": funnel_events,
+        "attributed_revenue_by_currency": revenue["attributed_revenue_by_currency"],
+        "measurement_notes": {
+            "orders": "Authenticated paid orders only; cancelled, refunded, pending and legacy unknown orders are excluded from paid counts.",
+            "attribution": "Same-store last touch within the configured window; association does not establish incremental sales caused by AI.",
+            "session_rate": "Distinct paid session IDs within the selected conversation cohort / conversations started in that cohort.",
+            "lead_rate": "Distinct paid lead session IDs / distinct sessions with leads in this window.",
+            "behavior": "Accepted browser-reported events, distinct from offered links and authenticated purchase evidence.",
         },
         "conversion_match": [
             {"matched_by": key, "count": count}
