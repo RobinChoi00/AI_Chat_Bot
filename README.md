@@ -53,6 +53,12 @@ CI runs these gates, builds both container images, and blocks remediable high/cr
 
 ## AI quality workflow
 
+Use `/admin/history` (**All conversations** in the admin navigation) to browse
+the complete stored Warranty, Sales, and general-chat history. The default has
+no date cutoff, with source/store filters and pagination for both conversations
+and their messages. Counts represent stored records, not deduplicated people;
+records never saved or already deleted cannot be recovered by this browser.
+
 The admin portal's `/admin/quality` page separates customer-confirmed outcomes
 from claim closure and supports approval of model-scoped troubleshooting
 guidance. Sales metrics distinguish observed shopper actions from authenticated

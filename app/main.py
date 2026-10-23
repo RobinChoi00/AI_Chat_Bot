@@ -1171,10 +1171,12 @@ app.include_router(sales_tidio_router)
 # Outcome/review and behavioral analytics modules share the existing ORM Base.
 # Use one import spelling so test and application imports cannot register tables twice.
 from ai_quality import router as ai_quality_router
+from admin_history import router as admin_history_router
 from sales_events import router as sales_events_router
 from warranty_quality import router as warranty_quality_router
 
 app.include_router(ai_quality_router)
+app.include_router(admin_history_router)
 app.include_router(sales_events_router)
 app.include_router(warranty_quality_router)
 
