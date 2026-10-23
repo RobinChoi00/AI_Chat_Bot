@@ -200,9 +200,13 @@ export interface WarrantyMetricsResponse {
 
 export interface SalesMetricsResponse {
   range: {
-    days: number;
-    start: string;
+    period: "all" | "range";
+    days: number | null;
+    start: string | null;
     end: string;
+    start_date: string | null;
+    end_date: string;
+    daily_mode?: "observed" | "calendar";
   };
   totals: {
     started: number;

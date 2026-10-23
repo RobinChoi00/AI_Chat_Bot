@@ -41,7 +41,7 @@ function Breakdown({
       <h2 className="mb-3 text-sm font-semibold text-gray-900">{title}</h2>
       <div className="space-y-2">
         {rows.length === 0 ? (
-          <p className="text-sm text-gray-500">No data in this window.</p>
+          <p className="text-sm text-gray-500">No data in this reporting period.</p>
         ) : (
           rows.map((row) => (
             <div key={String(row[keyName])} className="flex items-center gap-3">
@@ -71,10 +71,22 @@ export default function SalesMetricsDashboard({
   data: SalesMetricsResponse;
 }) {
   const t = data.totals;
+  const allTime = data.range.period === "all";
+  const startDate = data.range.start_date ?? data.range.start?.slice(0, 10) ?? null;
+  const endDate = data.range.end_date ?? data.range.end.slice(0, 10);
   return (
     <div className="space-y-6">
+      <section aria-label="Reporting period" className="rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-600">
+        <p className="font-semibold text-gray-900">{allTime ? "All time" : `Last ${data.range.days} days`}</p>
+        <p className="mt-1">
+          {startDate ? `Saved Sales activity from ${startDate} through ${endDate}.` : `Recording start date is unavailable. Reporting through ${endDate}.`}
+        </p>
+        <p className="mt-1 text-xs">
+          {allTime ? "The metrics below include the full stored history." : "The metrics below cover the selected time window."} Sessions are conversations, not unique customers. Visits without a saved conversation and deleted records are not included.
+        </p>
+      </section>
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi label="Sessions" value={String(t.started)} hint="Sales conversations started" />
+        <Kpi label={allTime ? "Sessions (all time)" : `Sessions (last ${data.range.days}d)`} value={String(t.started)} hint="Sales conversations started in the reporting period" />
         <Kpi
           label="Engagement"
           value={`${t.engagement_rate_pct}%`}
@@ -114,7 +126,7 @@ export default function SalesMetricsDashboard({
         <Kpi
           label="Sales data"
           value={data.artifacts.ok ? "Healthy" : "Needs attention"}
-          hint={`${data.artifacts.models} models · ${data.artifacts.doorway_models} doorway specs`}
+          hint={`Current catalog · ${data.artifacts.models} models · ${data.artifacts.doorway_models} doorway specs`}
           alert={!data.artifacts.ok}
         />
       </section>
