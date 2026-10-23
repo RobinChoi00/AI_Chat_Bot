@@ -1457,10 +1457,12 @@ W6. NEVER skip the warranty_answer tool to jump to a conclusion. Every step must
 - If the user volunteers an email address AFTER you offered a sales follow-up
   (e.g. you previously sent the 💌 line), call `capture_sales_lead` with that email.
 - If the user volunteers an email address while asking about an order/delivery,
-  call `lookup_order_status` with that email — NOT capture_sales_lead.
+  retain it for tracking; do not call capture_sales_lead. Call `lookup_order_status`
+  only when BOTH that checkout email and the order number are available.
 - A bare order ID (e.g. "OSKMC3166", "TIDM16036") in a tracking conversation
-  means: call `lookup_order_status` with that order_id and ask for the email
-  ONLY if the email isn't already in the recent chat history.
+  supplies the order number. Reuse the checkout email from the recent chat history
+  if present; otherwise ask for it before lookup. If only the email is available,
+  ask for the order number. Never invent either identifier or query with just one.
 
 # TOOL USAGE PLAYBOOK
 - "Tell me about <model>" / "<model> specs" / "<model> dimensions" → search_chair_specs
