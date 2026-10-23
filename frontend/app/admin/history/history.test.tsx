@@ -55,9 +55,9 @@ async function renderList(params: { source?: string; domain?: string; page?: str
   return renderToStaticMarkup(await HistoryPage({ searchParams: Promise.resolve(params) }));
 }
 
-async function renderDetail(source = "sales", recordId = "42", page?: string) {
+async function renderDetail(source = "sales", recordId = "42", page?: string, view?: string) {
   return renderToStaticMarkup(await HistoryDetailPage({
-    params: Promise.resolve({ source, recordId }), searchParams: Promise.resolve({ page }),
+    params: Promise.resolve({ source, recordId }), searchParams: Promise.resolve({ page, view }),
   }));
 }
 
@@ -125,6 +125,54 @@ describe("all stored conversation history", () => {
     body.conversation.ticket_id = "../unsafe";
     fetchMock.mockResolvedValue(Response.json(body));
     expect(await renderDetail("warranty")).not.toContain("Open warranty ticket and actions");
+  });
+
+  it("distinguishes recorded replies from workflow prompts and preserves the reference view in pagination", async () => {
+    const body = detail();
+    body.conversation.source = "warranty";
+    body.transcript_mode = "api_recorded";
+    body.recorded_since = "2026-10-23T13:00:00";
+    body.alternate_view_available = true;
+    body.messages = [
+      { id: "recorded-1", role: "assistant", content: "Actual API response", created_at: "2026-10-23T13:00:00", origin: "api_response" },
+      { id: "action-1", role: "user", content: "Delivery & tracking selected", created_at: null, origin: "user_action" },
+    ];
+    fetchMock.mockResolvedValue(Response.json(body));
+    const recorded = await renderDetail("warranty", "42", "2");
+    expect(recorded).toContain("Customer-facing replies");
+    expect(recorded).toContain("Recorded customer-facing response");
+    expect(recorded).toContain("Recorded customer action");
+    expect(recorded).toContain("2026-10-23 13:00:00");
+    expect(recorded).toContain("do not confirm that the customer read them");
+    expect(recorded).toContain('href="/admin/history/warranty/42?view=workflow"');
+
+    body.transcript_mode = "workflow_reference";
+    body.messages = [{ id: "workflow-1", role: "assistant", content: "Internal node prompt", created_at: null, origin: "workflow_prompt" }];
+    fetchMock.mockResolvedValue(Response.json(body));
+    const workflow = await renderDetail("warranty", "42", "2", "workflow");
+    expect(fetchMock.mock.lastCall?.[0]).toBe("http://backend.test/admin/history/warranty/42?limit=100&offset=100&view=workflow");
+    expect(workflow).toContain("Internal workflow prompt");
+    expect(workflow).toContain("not a verbatim customer transcript");
+    expect(workflow).toContain('href="/admin/history/warranty/42?view=workflow&amp;page=3"');
+    fetchMock.mockResolvedValue(Response.json(body));
+    await expect(renderDetail("warranty", "42", "8", "workflow")).rejects.toThrow("REDIRECT:/admin/history/warranty/42?view=workflow&page=3");
+  });
+
+  it("clearly labels old warranty history as reconstructed without implying raw prompts were delivered", async () => {
+    const body = detail();
+    body.conversation.source = "warranty";
+    body.transcript_mode = "legacy_reconstruction";
+    body.recorded_since = null;
+    body.messages = [
+      { id: "prompt", role: "assistant", content: "Raw workflow prompt", created_at: null, origin: "workflow_prompt" },
+      { id: "enrichment", role: "assistant", content: "Saved enrichment", created_at: null, origin: "legacy_enrichment" },
+    ];
+    fetchMock.mockResolvedValue(Response.json(body));
+    const html = await renderDetail("warranty");
+    expect(html).toContain("Reconstructed history");
+    expect(html).toContain("Internal prompts may differ from the reply shown to the customer");
+    expect(html).toContain("Legacy reply / enrichment");
+    expect(html).not.toContain("Recorded customer-facing response</strong>");
   });
 
   it("clamps stale transcript pages and rejects malformed source/record paths before fetching", async () => {

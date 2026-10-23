@@ -183,7 +183,8 @@ def test_format_success_message_status_path_does_not_promise_more_questions():
     msg = format_warranty_tracking_message(snap, continue_with_questions=False)
     assert "IN_TRANSIT" in msg
     assert "We'll continue with your delivery warranty questions below." not in msg
-    assert "Our team will follow up shortly" in msg
+    assert "Use Refresh" in msg
+    assert "will follow up" not in msg
 
 
 def test_format_processing_message_status_path_closing():
@@ -196,7 +197,8 @@ def test_format_processing_message_status_path_closing():
     msg = format_warranty_tracking_message(snap, continue_with_questions=False)
     assert "PROCESSING" in msg
     assert "We'll continue with your delivery warranty questions below." not in msg
-    assert "Our team will follow up shortly" in msg
+    assert "Use Refresh" in msg
+    assert "will follow up" not in msg
 
 
 def test_format_success_message_includes_order_details():
@@ -314,7 +316,8 @@ def test_lookup_by_tracking_number_falls_back_to_aftership(monkeypatch):
 def test_lookup_by_order_or_email_shopify(monkeypatch):
     class FakeMain:
         @staticmethod
-        def fetch_shopify_order_status(order, email, domain):
+        def fetch_shopify_order_status(order, email, domain, *, allow_order_only=False):
+            assert allow_order_only is False
             assert email == "buyer@example.com"
             return {
                 "status": "FULFILLED",
@@ -333,7 +336,7 @@ def test_lookup_by_order_or_email_shopify(monkeypatch):
             }
 
     monkeypatch.setattr("delivery_lookup._lazy_logistics", lambda: FakeMain())
-    snap = lookup_by_order_or_email("buyer@example.com", "osaki.com")
+    snap = lookup_by_order_or_email("#1001 buyer@example.com", "osaki.com")
     assert snap.available is True
     assert snap.source == "shopify"
     assert snap.tracking_number == "1234567890"

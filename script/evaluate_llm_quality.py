@@ -37,7 +37,7 @@ CASES_PATH = ROOT / "data" / "llm_eval_cases.json"
 CONVERSATIONS_PATH = ROOT / "data" / "ai_conversation_eval_cases.json"
 LEGACY_SECTIONS = ("tool_selection", "faithfulness", "refusal", "language_consistency")
 WARRANTY_ACTIONS = frozenset({"register-model", "confirm-model", "quick-start", "natural-start", "smart-start", "answer", "state"})
-CHECK_KEYS = frozenset({"contains", "contains_any", "not_contains", "json_equals", "expected_intent", "expected_handoff", "expected_tool", "expected_language", "expect_refusal", "min_products", "max_products", "max_product_price"})
+CHECK_KEYS = frozenset({"contains", "contains_any", "not_contains", "json_equals", "expected_intent", "expected_handoff", "expected_tool", "expected_language", "expect_refusal", "min_products", "max_products", "max_product_price", "min_product_capacity_lb", "required_product_mechanism"})
 
 
 def _get_model() -> str:
@@ -110,9 +110,11 @@ def validate_conversations(payload: dict[str, Any]) -> list[str]:
                 for key in ("expected_handoff", "expect_refusal"):
                     if key in checks and not isinstance(checks[key], bool):
                         errors.append(f"{cid}/{index}: {key} must be boolean")
-                for key in ("min_products", "max_products", "max_product_price"):
-                    if key in checks and (isinstance(checks[key], bool) or not isinstance(checks[key], (int, float)) or checks[key] < 0):
+                for key in ("min_products", "max_products", "max_product_price", "min_product_capacity_lb"):
+                    if key in checks and (isinstance(checks[key], bool) or not isinstance(checks[key], (int, float)) or not math.isfinite(checks[key]) or checks[key] < 0):
                         errors.append(f"{cid}/{index}: {key} must be nonnegative")
+                if "required_product_mechanism" in checks and checks["required_product_mechanism"] not in {"2D", "3D", "4D", "5D"}:
+                    errors.append(f"{cid}/{index}: required_product_mechanism must name a supported mechanism")
             if case.get("surface") == "warranty":
                 if turn.get("action") not in WARRANTY_ACTIONS:
                     errors.append(f"{cid}/{index}: unsupported warranty action")
@@ -171,7 +173,12 @@ def check_answer(text: str, payload: dict[str, Any], checks: dict[str, Any], tra
     if not text.strip():
         errors.append("empty final response")
     lower = text.lower()
-    if "an unexpected error occurred. please try again" in lower:
+    if any(marker in lower for marker in (
+        "an unexpected error occurred. please try again", "we could not complete this lookup",
+        "no pudimos completar esta consulta", "현재 조회를 완료하지 못했습니다",
+        "authoritative lookup is temporarily unavailable", "fuente oficial no está disponible temporalmente",
+        "공식 정보 조회가 일시적으로 불가능",
+    )):
         errors.append("application error fallback was returned")
     for needle in checks.get("contains", []):
         if needle.lower() not in lower:
@@ -200,6 +207,9 @@ def check_answer(text: str, payload: dict[str, Any], checks: dict[str, Any], tra
         authoritative_shortcut = checks["expected_tool"] == "get_showroom_info" and trace and trace.get("short_circuit") == "showroom"
         if not authoritative_shortcut and checks["expected_tool"] not in tools:
             errors.append("required tool execution not observed")
+        matching = [turn for turn in (trace or {}).get("turns", []) if turn.get("tool_name") == checks["expected_tool"]]
+        if matching and not any(turn.get("tool_success") is True for turn in matching):
+            errors.append("required tool did not execute successfully")
     products = payload.get("products", [])
     if "min_products" in checks and len(products) < checks["min_products"]:
         errors.append("not enough recommended products")
@@ -209,10 +219,22 @@ def check_answer(text: str, payload: dict[str, Any], checks: dict[str, Any], tra
         for product in products:
             value = product.get("price_usd", product.get("price"))
             try:
-                if value is None or float(value) > float(checks["max_product_price"]):
+                if value is None or not math.isfinite(float(value)) or float(value) > float(checks["max_product_price"]):
                     errors.append("product price missing or above the hard budget")
             except (TypeError, ValueError):
                 errors.append("product price cannot be checked")
+    if "min_product_capacity_lb" in checks:
+        for product in products:
+            value = _lookup(product, "fit.maximum_user_weight_lb")
+            try:
+                if value is None or not math.isfinite(float(value)) or float(value) < checks["min_product_capacity_lb"]:
+                    errors.append("recommended capacity missing or below the customer's exact weight")
+            except (TypeError, ValueError):
+                errors.append("recommended capacity cannot be checked")
+    if "required_product_mechanism" in checks:
+        for product in products:
+            if str(_lookup(product, "specs.massage_mechanism") or "").upper() != checks["required_product_mechanism"]:
+                errors.append("recommended massage mechanism missing or violates the requirement")
     return errors
 
 
@@ -220,6 +242,12 @@ def _read_stream(response) -> str:
     response.raise_for_status()
     text = "".join(response.iter_text())
     if "text/event-stream" not in response.headers.get("content-type", ""):
+        return text
+    # The current general-chat API streams raw UTF-8 chunks under this media
+    # type. Preserve that wire format as well as genuine SSE data frames.
+    if not any(line.startswith("data:") for line in text.splitlines()):
+        if any(line.startswith(("event:", "id:", "retry:", ":")) for line in text.splitlines()):
+            return ""
         return text
     parts: list[str] = []
     for line in text.splitlines():
@@ -364,7 +392,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         selected = ([] if args.suite == "conversations" else legacy_conversations(legacy)) + ([] if args.suite == "legacy" else conversations["cases"])
         if args.dry_run:
-            print(json.dumps({"status": "structure_valid", "mode": "dry_run", "quality_evaluated": False, "total_cases": len(selected), "synthetic_cases": sum(case["provenance"] == "synthetic" for case in selected), "local_config_model": _get_model(), "note": "No model, server, retrieval, stock or customer outcomes were evaluated."}, indent=2))
+            print(json.dumps({"status": "structure_valid", "mode": "dry_run", "quality_evaluated": False, "total_cases": len(selected), "synthetic_cases": sum(case["provenance"] == "synthetic" for case in selected), "reviewed_anonymized_cases": sum(case["provenance"] == "reviewed_anonymized" for case in selected), "local_config_model": _get_model(), "note": "No model, server, retrieval, stock or customer outcomes were evaluated."}, indent=2))
             return 0
         if not args.live:
             parser.error("choose --dry-run or --live; live requests never run implicitly")

@@ -6,13 +6,16 @@ import type {
 
 type AssistantResponse = Pick<
   WarrantySessionResponse,
-  "assistant_message" | "terminal_enrichment"
+  "assistant_message" | "terminal_enrichment" | "handoff"
 >;
 
 export function assistantContentFromResponse(
   ticket: WarrantyTicketState | null,
   resp: AssistantResponse
 ): string | null {
+  if (resp.handoff?.requested) {
+    return resp.handoff.message?.trim() || resp.assistant_message?.trim() || null;
+  }
   const node = ticket?.current_node;
   if (!node?.prompt && !resp.assistant_message) return null;
 
@@ -41,6 +44,7 @@ export function hydrationAssistantContent(
   ticket: WarrantyTicketState | null,
   resp: WarrantySessionResponse
 ): string | null {
+  if (resp.handoff?.requested) return assistantContentFromResponse(ticket, resp);
   const node = ticket?.current_node;
   if (!node) return null;
 

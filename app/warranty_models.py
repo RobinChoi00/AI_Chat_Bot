@@ -208,6 +208,25 @@ class WarrantyTurn(Base):
         }
 
 
+class WarrantyConversationMessage(Base):
+    """Full customer input and final API reply, separate from workflow references.
+
+    An API response is not a browser render receipt. Keeping its provenance
+    explicit prevents internal flowchart prompts from masquerading as replies.
+    """
+
+    __tablename__ = "warranty_conversation_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticket_id = Column(String, index=True, nullable=False)
+    session_id = Column(String, index=True, nullable=False)
+    exchange_id = Column(String, index=True, nullable=False)
+    role = Column(String, nullable=False)
+    origin = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=_now_cst, nullable=False)
+
+
 class WarrantyEvidence(Base):
     """An uploaded evidence file (photo, video, receipt) attached to a ticket."""
 

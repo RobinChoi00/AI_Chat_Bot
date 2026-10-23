@@ -1,10 +1,14 @@
-import { HISTORY_SOURCES, type HistorySource } from "./historyTypes";
+import { HISTORY_SOURCES, type HistorySource, type HistoryView, type HistoryDetailResponse } from "./historyTypes";
 
 export const HISTORY_PAGE_SIZE = 100;
 const MAX_PAGE = Math.floor(Number.MAX_SAFE_INTEGER / HISTORY_PAGE_SIZE);
 
 export function historySource(raw?: string): HistorySource | undefined {
   return HISTORY_SOURCES.find((source) => source === raw);
+}
+
+export function historyView(raw?: unknown): HistoryView {
+  return raw === "workflow" ? "workflow" : "conversation";
 }
 
 export function historyDomain(raw?: unknown): string | undefined {
@@ -31,10 +35,25 @@ export function historyListHref(page: number, source?: HistorySource, domain?: s
   return `/admin/history${query.size ? `?${query}` : ""}`;
 }
 
-export function historyDetailHref(source: HistorySource, recordId: string, page = 1): string {
+export function historyDetailHref(source: HistorySource, recordId: string, page = 1, view: HistoryView = "conversation"): string {
   const id = historyRecordId(recordId);
   if (!id) return "/admin/history";
-  return `/admin/history/${encodeURIComponent(source)}/${id}${page > 1 ? `?page=${page}` : ""}`;
+  const query = new URLSearchParams();
+  if (source === "warranty" && view === "workflow") query.set("view", view);
+  if (page > 1) query.set("page", String(page));
+  return `/admin/history/${encodeURIComponent(source)}/${id}${query.size ? `?${query}` : ""}`;
+}
+
+export function historyMessageLabel(message: HistoryDetailResponse["messages"][number], source: HistorySource): string {
+  switch (message.origin) {
+    case "customer_input": return "Customer · recorded input";
+    case "user_action": return "Recorded customer action";
+    case "api_response": return "Recorded customer-facing response";
+    case "workflow_prompt": return "Internal workflow prompt";
+    case "workflow_answer": return "Saved workflow answer";
+    case "legacy_enrichment": return "Legacy reply / enrichment";
+    default: return message.role === "user" ? "Customer" : source === "warranty" ? "Reconstructed assistant text" : "Stored assistant message";
+  }
 }
 
 export function historyPagination(page: number, total: number) {

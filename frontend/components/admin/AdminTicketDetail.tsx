@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
+import { historyDetailHref, historyRecordId } from "@/lib/adminHistory";
 import type {
   AdminWarrantyEvidence,
   AdminWarrantyTicket,
@@ -121,6 +123,7 @@ function formatTurnTime(iso: string | null): string {
 }
 
 export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
+  const historyId = ticket.history_record_id ? historyRecordId(ticket.history_record_id) : null;
   const collectedEntries = Object.entries(ticket.collected_data ?? {}).filter(
     ([key]) =>
       ![
@@ -517,12 +520,16 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
         </section>
       )}
 
-      {/* ── Conversation turns ───────────────────────────────────── */}
+      {/* ── Internal workflow reference ──────────────────────────── */}
       <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-gray-500">
-          Conversation ({turns.length} step{turns.length !== 1 ? "s" : ""}
+          Workflow reference ({turns.length} step{turns.length !== 1 ? "s" : ""}
           {ticket.current_node_id ? " + current" : ""})
         </h2>
+        <p className="mb-4 text-xs text-gray-600">
+          Node prompts below are internal workflow reference text and may differ from the reply returned to the customer.{" "}
+          <Link href={historyId ? historyDetailHref("warranty", historyId) : "/admin/history?source=warranty"} className="font-medium text-indigo-700 underline">Open recorded conversation history →</Link>
+        </p>
         {turns.length === 0 && !ticket.current_node_prompt ? (
           <p className="text-sm text-gray-400 italic">No turns recorded yet.</p>
         ) : (
@@ -548,12 +555,12 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
                   </div>
                   {turn.node_prompt && (
                     <p className="mb-2 text-gray-600">
-                      <span className="font-medium text-gray-500">Bot asked:</span>{" "}
+                      <span className="font-medium text-gray-500">Internal workflow prompt:</span>{" "}
                       {turn.node_prompt}
                     </p>
                   )}
                   <p className="text-sm text-gray-900">
-                    <span className="font-medium text-indigo-700">Customer:</span>{" "}
+                    <span className="font-medium text-indigo-700">Saved workflow answer:</span>{" "}
                     {humanAnswer(turn)}
                   </p>
                   {turn.answer_key &&
@@ -583,12 +590,12 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
                   </div>
                   {ticket.current_node_prompt ? (
                     <p className="whitespace-pre-wrap text-sm text-amber-950">
-                      <span className="font-medium text-amber-800">Bot is showing:</span>{" "}
+                      <span className="font-medium text-amber-800">Current workflow prompt (internal):</span>{" "}
                       {ticket.current_node_prompt}
                     </p>
                   ) : (
                     <p className="text-amber-800/80 italic">
-                      Waiting on this node (prompt not available).
+                      Current workflow node (internal prompt not available).
                     </p>
                   )}
                 </div>
@@ -612,7 +619,7 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
           (ticket.collected_data.chat_timeline as unknown[]).length > 0 && (
             <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50/50 p-3">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-600">
-                Extra chat (tips & side questions)
+                Saved legacy chat / enrichment
               </p>
               <ul className="space-y-2">
                 {(ticket.collected_data.chat_timeline as Array<Record<string, unknown>>).map(
@@ -630,7 +637,7 @@ export default function AdminTicketDetail({ ticket, turns, evidence }: Props) {
                       >
                         <div className="mb-1 flex flex-wrap gap-2 text-[10px] text-indigo-500">
                           <span className="font-semibold uppercase">
-                            {role === "user" ? "Customer" : "Bot"} · {kind}
+                            {role === "user" ? "Saved customer input" : "Legacy reply / enrichment"} · {kind}
                           </span>
                           {when ? <span className="ml-auto">{when}</span> : null}
                         </div>

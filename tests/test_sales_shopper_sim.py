@@ -467,7 +467,11 @@ def test_oneshot_height_and_goal_shows_three_chairs():
     low = reply.reply.lower()
     assert reply.intent == "recommend"
     assert _UNCLEAR_MENU not in low
-    assert "value" in low and "premium" in low
+    assert len(reply.products) == 3
+    assert "premium" in low
+    # Tier labels follow actual catalog prices; the case-book Value candidate
+    # can now retail above $3,000 and must not be presented as under $3,000.
+    assert all(p['price_usd'] >= 3000 for p in reply.products)
     assert "extra tall" not in low
     assert "assumed" in low
 
@@ -482,22 +486,20 @@ def test_mid_flow_typed_height_then_goal():
     third = _turn("lower back", prefs)
     low = third.reply.lower()
     assert third.intent == "recommend"
-    assert "value" in low
+    assert len(third.products) == 3
+    assert "options within the verified constraints" in low
     assert _UNCLEAR_MENU not in low
 
 
-def test_mid_flow_not_sure_height_assumes_average():
+def test_mid_flow_not_sure_height_does_not_invent_average():
     first = _turn("recommend a chair")
     prefs = _merge({}, first)
     second = _turn("not sure", prefs)
     prefs = _merge(prefs, second)
     assert second.intent != "unclear"
-    assert "tap a range" not in second.reply.lower()
-    assert "focus" in second.reply.lower() or "neck" in second.reply.lower()
-    third = _turn("neck", prefs)
-    low = third.reply.lower()
-    assert "value" in low
-    assert "average" in low or "5'4" in low or "assumed" in low
+    assert second.flow_stage == 'ask_height'
+    assert 'height' not in prefs.get('recommend_prefs', {})
+    assert not second.products
 
 
 def test_opener_tall_guy_still_asks_height():

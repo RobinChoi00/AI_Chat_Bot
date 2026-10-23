@@ -218,7 +218,7 @@ def height_from_shopper_answer(text: str) -> Optional[str]:
     if not raw:
         return None
     if re.search(r"not\s+sure|idk\b|i\s+don'?t\s+know|\bdunno\b|\bno\s+idea\b", raw):
-        return HEIGHTS[1]
+        return None
     if re.search(r"petite|under\s*5\s*['’]?\s*4|shorter\s+than\s*5", raw):
         return HEIGHTS[0]
     if re.search(r"extra\s+tall|6\s*['’]?\s*3\s*\+|over\s*6\s*['’]?\s*3", raw):
@@ -311,6 +311,8 @@ def goal_bucket(focus_areas: Optional[list[str]], text: str = "") -> Optional[st
 
 def intensity_bucket(text: str = "") -> Optional[str]:
     raw = (text or "").lower()
+    if re.search(r"\b(?:not\s+(?:too\s+)?(?:strong|firm)|no\s+deep[ -]?tissue)\b", raw):
+        return "Gentle"
     if re.search(r"\b(gentle|soft|light|elderly|senior)\b", raw):
         return "Gentle"
     if re.search(r"\b(strong|deep|firm|intense|hard)\b", raw):
@@ -325,6 +327,8 @@ def intensity_bucket(text: str = "") -> Optional[str]:
 def foot_bucket(text: str = "", focus_areas: Optional[list[str]] = None) -> Optional[str]:
     raw = (text or "").lower()
     areas = {a.lower() for a in (focus_areas or [])}
+    if re.search(r"\b(no\s+foot|foot\s+not|don'?t\s+care.*foot)\b", raw):
+        return "Not Important"
     if re.search(r"\b(top\s+priority|must\s+have.*foot|need.*foot)\b", raw):
         return "Top Priority"
     if "feet" in areas or re.search(r"\b(foot|feet|calf|calves)\b", raw):
@@ -365,10 +369,14 @@ def apply_payload_codes(prefs: dict[str, str], payload: str) -> dict[str, str]:
         i += 2
         if key == "budget" and code in _BUDGET_CODE:
             out["budget"] = _BUDGET_CODE[code]
+            cap = {'under_3000': 2999, '3000_4999': 4999, '5000_6999': 6999, '7000_9999': 9999}.get(code)
+            out['budget_max_usd'] = str(cap or int(code)) if cap or code.isdigit() else ''
         elif key == "height" and code in _HEIGHT_CODE:
             out["height"] = _HEIGHT_CODE[code]
+            out['height_in'] = ''
         elif key == "weight" and code in _WEIGHT_CODE:
             out["weight"] = _WEIGHT_CODE[code]
+            out['weight_lb'] = ''
         elif key in {"goal", "focus"} and code in _GOAL_CODE:
             out["goal"] = _GOAL_CODE[code]
         elif key == "intensity" and code in _INTENSITY_CODE:
@@ -411,22 +419,10 @@ def merge_prefs_from_hints(
     free_text: str = "",
 ) -> dict[str, str]:
     out = dict(prefs or {})
-    if "height" not in out:
-        hb = height_bucket(height_in)
-        if hb:
-            out["height"] = hb
-    if "weight" not in out:
-        wb = weight_bucket(weight_lb)
-        if wb:
-            out["weight"] = wb
-    if "budget" not in out:
-        bb = budget_bucket(budget_usd)
-        if bb:
-            out["budget"] = bb
-    if "goal" not in out:
-        gb = goal_bucket(focus_areas, free_text)
-        if gb:
-            out["goal"] = gb
+    # Explicit new answers replace prior answers, including earlier defaults.
+    for key, value in (("height", height_bucket(height_in)), ("weight", weight_bucket(weight_lb)), ("budget", budget_bucket(budget_usd)), ("goal", goal_bucket(focus_areas, free_text))):
+        if value:
+            out[key] = value
     # Secondary axes: free-text / refine answers may override earlier defaults.
     ib = intensity_bucket(free_text)
     if ib:
@@ -438,23 +434,22 @@ def merge_prefs_from_hints(
     if sb:
         out["space"] = sb
     # Doorway inches from free text ("30 inch door", '32"').
-    if "doorway_in" not in out:
-        dm = re.search(
-            r"(\d{2}(?:\.\d)?)\s*(?:\"|''|in(?:ch(?:es)?)?)\s*(?:door|doorway)?",
-            free_text or "",
-            re.I,
-        )
-        if dm:
-            try:
-                inches = float(dm.group(1))
-            except ValueError:
-                inches = None
-            if inches is not None and 20 <= inches <= 48:
-                out["doorway_in"] = (
-                    str(int(inches)) if inches == int(inches) else str(inches)
-                )
-                if "space" not in out:
-                    out["space"] = "Narrow Doorway"
+    dm = re.search(
+        r"(\d{2}(?:\.\d)?)\s*(?:\"|''|in(?:ch(?:es)?)?)\s*(?:door|doorway)?",
+        free_text or "",
+        re.I,
+    )
+    if dm:
+        try:
+            inches = float(dm.group(1))
+        except ValueError:
+            inches = None
+        if inches is not None and 20 <= inches <= 48:
+            out["doorway_in"] = (
+                str(int(inches)) if inches == int(inches) else str(inches)
+            )
+            if "space" not in out:
+                out["space"] = "Narrow Doorway"
     return out
 
 

@@ -15,6 +15,8 @@ Design principles:
 from __future__ import annotations
 
 import logging
+import json
+import math
 import re
 import threading
 from contextlib import nullcontext
@@ -202,6 +204,64 @@ def _source_record(doc: Document) -> str:
     return "SOURCE_RECORD: " + "; ".join(parts)
 
 
+def _model_key(value: str) -> str:
+    """Compare a requested model with a retrieved product, not a nearby model."""
+    from product_catalog import resolve_model_name
+    canonical = resolve_model_name(value) or value
+    return re.sub(r"[^a-z0-9]", "", _normalize_model_query(canonical).lower())
+
+
+def _same_model(doc: Document, model_name: str) -> bool:
+    return _model_key(_extract_title(doc)) == _model_key(model_name)
+
+
+def _usd_document(doc: Document) -> bool:
+    currency = str(doc.metadata.get("currency") or doc.metadata.get("currencyCode") or "").upper()
+    if not currency:
+        match = re.search(r"(?:CURRENCY\s*:\s*|BASE PRICE\s*\()([A-Z]{3})", doc.page_content, re.I)
+        currency = match.group(1).upper() if match else ""
+    return not currency or currency == "USD"
+
+
+def _model_facts(doc: Document, title: str, price: Optional[float]) -> dict:
+    """Bind each fact to one model; pooled values cannot justify another model."""
+    from sales_catalog import resolve_product
+    from sales_spec_index import lookup_fit_spec
+    product = resolve_product(title)
+    fit = lookup_fit_spec(title)
+    specs = {}
+    if product is not None and _model_key(product.display_name) == _model_key(title):
+        specs.update(product.as_public_dict().get("specs") or {})
+    if fit is not None:
+        specs.update({"max_user_weight_lb": fit.max_user_lb, "doorway_assembled_in": fit.door_asm_in,
+                      "doorway_disassembled_in": fit.door_dis_in, "wall_clearance_in": fit.wall_clearance_in})
+    return {"model": title, "currency": "USD", "price_usd": price,
+            "specs": {key: value for key, value in specs.items() if value is not None and value != ""}}
+
+
+def _hard_recommendation_limits(user_need: str, budget_max: Optional[float]) -> dict:
+    """Recover explicit customer limits even when a model omits them in args."""
+    from sales_constraints import extract_constraints
+    limits = extract_constraints(user_need, {"budget_max_usd": str(budget_max)} if budget_max is not None else None)
+    if limits.get("budget_max_usd") is not None:
+        try:
+            maximum = float(limits["budget_max_usd"])
+            if not math.isfinite(maximum) or maximum <= 0:
+                raise ValueError("invalid budget")
+            limits["budget_max_usd"] = str(maximum)
+        except (TypeError, ValueError):
+            raise ValueError("A positive finite maximum budget is required") from None
+    return limits
+
+
+def _meets_hard_limits(doc: Document, price: float, limits: dict) -> bool:
+    from sales_catalog import resolve_product
+    from sales_constraints import product_constraint_issues
+    title = _extract_title(doc)
+    product = resolve_product(title)
+    return bool(product is not None and product.status.lower() == "active" and not product_constraint_issues(product, limits, price_usd=price))
+
+
 # Keywords that map a user's query topic to matching spec column patterns
 _SPEC_TOPIC_KEYWORDS: List[Tuple[List[str], List[str]]] = [
     # (user query keywords, spec column keywords)
@@ -310,12 +370,14 @@ def tool_search_chair_specs(
     base_query = f"{model_name} {query}".strip() if model_name else query
 
     docs = products_retriever.search(base_query, k=5, model_hint=model_name)
+    docs = [doc for doc in docs if _usd_document(doc) and (not model_name or _same_model(doc, model_name))]
 
     # Try typo-normalized form if the original returned nothing useful
     if not docs and norm_model and norm_model.lower() != (model_name or "").lower():
         retry_query = f"{norm_model} {query}".strip()
         logger.info(f"[search_chair_specs] retrying with normalized: {retry_query!r}")
         docs = products_retriever.search(retry_query, k=5, model_hint=norm_model)
+        docs = [doc for doc in docs if _usd_document(doc) and _same_model(doc, norm_model)]
 
     # Try just the model name (drop the spec topic) — sometimes the topic noise
     # hurts retrieval (e.g. "parts" doesn't help find a spec sheet)
@@ -323,6 +385,7 @@ def tool_search_chair_specs(
         bare = norm_model or model_name
         logger.info(f"[search_chair_specs] retrying with bare model: {bare!r}")
         docs = products_retriever.search(bare or "", k=5, model_hint=bare or "")
+        docs = [doc for doc in docs if _usd_document(doc) and _same_model(doc, bare or "")]
 
     # Final fallback: pull out alphanumeric core (e.g. "4000cs", "soho", "otamic")
     if not docs and (model_name or norm_model):
@@ -331,6 +394,7 @@ def tool_search_chair_specs(
             core_query = " ".join(core_tokens)
             logger.info(f"[search_chair_specs] retrying with core tokens: {core_query!r}")
             docs = products_retriever.search(core_query, k=5, model_hint=core_query)
+            docs = [doc for doc in docs if _usd_document(doc) and _same_model(doc, model_name or norm_model or "")]
 
     if not docs:
         return (
@@ -356,6 +420,7 @@ def tool_search_chair_specs(
         base_price = _extract_price(doc.page_content, title=title)
         if base_price is not None:
             lines.append(f"BASE PRICE (USD): ${base_price:,.2f}")
+        lines.append("MODEL_FACTS_JSON: " + json.dumps(_model_facts(doc, title, base_price), sort_keys=True))
         if auth_lines:
             lines.append("AUTHORITATIVE SPEC VALUES (use EXACTLY these numbers, do not paraphrase):")
             for al in auth_lines:
@@ -389,8 +454,8 @@ def tool_recommend_chairs(
     - Anything < $500 is treated as a non-chair / accessory (a 4D chair below
       $500 is structurally impossible — those came from misparsed lines like
       monthly-payment promos or shipping fees).
-    - Budget bands are widened slightly so e.g. "around $3000" returns chairs
-      from $2000-$5000 instead of nothing.
+    - A stated maximum budget is a ceiling. Do not widen it or silently relax
+      an exact capacity, doorway or massage-mechanism requirement.
     """
     NON_CHAIR_KEYWORDS = {
         "mat", "pad", "cover", "cleaner", "gun", "cushion", "shawl",
@@ -401,13 +466,9 @@ def tool_recommend_chairs(
     }
     MIN_REASONABLE_PRICE = 500.0  # anything below this is not a real chair
 
-    # Slightly widen the band so "around $3000" still returns chairs in the
-    # $2000-$5000 range rather than failing entirely.
+    limits = _hard_recommendation_limits(user_need, budget_max)
     eff_min = budget_min
-    eff_max = budget_max
-    if budget_max is not None and budget_min is None:
-        eff_min = max(MIN_REASONABLE_PRICE, budget_max * 0.6)
-        eff_max = budget_max * 1.3
+    eff_max = float(limits["budget_max_usd"]) if limits.get("budget_max_usd") is not None else None
 
     docs = products_retriever.search(user_need or "premium 4D massage chair", k=20)
     candidates = []
@@ -415,6 +476,8 @@ def tool_recommend_chairs(
     excludes_norm = {(m or "").lower().strip() for m in (exclude_models or [])}
 
     for doc in docs:
+        if not _usd_document(doc):
+            continue
         title = _extract_title(doc)
         title_lower = title.lower()
         if title_lower in seen_titles:
@@ -431,12 +494,16 @@ def tool_recommend_chairs(
             continue
         if eff_max is not None and price > eff_max:
             continue
-        candidates.append((title, price, doc.page_content[:500], _source_record(doc)))
+        if not _meets_hard_limits(doc, price, limits):
+            continue
+        facts = "MODEL_FACTS_JSON: " + json.dumps(_model_facts(doc, title, price), sort_keys=True)
+        candidates.append((title, price, doc.page_content[:500], _source_record(doc) + "\n" + facts))
 
     if not candidates:
         return (
             "NO_RESULTS: No chairs match the given criteria. "
-            "Suggest broadening budget (premium massage chairs typically range $1,500-$10,000)."
+            "Do not relax the customer's requirements or claim an unverified fit. "
+            "Explain which requirements could not be verified and ask whether the customer wants a specialist."
         )
 
     # If user gave a target budget, sort by closeness to budget midpoint.
@@ -446,11 +513,11 @@ def tool_recommend_chairs(
         candidates.sort(key=lambda x: abs(x[1] - target))
     else:
         candidates.sort(key=lambda x: -x[1])
-    picks = candidates[:num_recommendations]
+    picks = candidates[:max(1, min(int(num_recommendations), 3))]
 
     header = f"Top {len(picks)} matching chairs"
-    if budget_max is not None:
-        header += f" (target budget ~${budget_max:,.0f})"
+    if eff_max is not None:
+        header += f" (maximum budget ${eff_max:,.0f})"
     header += ":"
     lines = [header]
     for i, (title, price, body, source) in enumerate(picks, 1):
@@ -458,6 +525,8 @@ def tool_recommend_chairs(
     lines.append(
         "\nIMPORTANT: Quote ONLY the prices shown above. Do NOT recall prices from training data."
     )
+    from sales_constraints import constraint_verification_notes
+    lines.extend("FIT VERIFICATION NOTE: " + note for note in constraint_verification_notes(limits))
     return "\n".join(lines)
 
 
@@ -466,42 +535,39 @@ def tool_get_repair_help(
     qa_retriever: HybridRetriever,
     issue_description: str,
     error_code: Optional[str] = None,
+    model_name: Optional[str] = None,
 ) -> str:
-    """Look up repair / error code information."""
+    """Retrieve curated, model-applicable customer steps, never ticket replies.
+
+    ``qa_retriever`` remains in the call signature for compatibility; its raw
+    correspondence index is deliberately excluded from customer instructions.
+    """
     suppress = "\nFOOTER_HINT: SUPPRESS_LEAD_FOOTER (this is a service issue, do not pitch sales)."
-
-    try:
-        from error_code_lookup import (  # noqa: WPS433
-            extract_error_codes_from_text,
-            format_repair_help,
-            lookup_error_code,
-        )
-
-        codes: list[str] = []
-        if error_code and str(error_code).strip():
-            codes.append(str(error_code).strip())
-        codes.extend(extract_error_codes_from_text(issue_description))
-        seen: set[str] = set()
-        for code in codes:
-            norm = code.upper().replace(" ", "")
-            if not norm or norm in seen:
-                continue
-            seen.add(norm)
-            hit = lookup_error_code(None, norm)
-            if hit:
-                return format_repair_help(hit) + suppress
-    except ImportError:
-        pass
-
+    if not str(model_name or "").strip():
+        return "NO_RESULTS: Ask for the exact chair model before giving model-specific repair guidance. Do not infer a model from the error code." + suppress
+    from warranty_knowledge import (  # noqa: WPS433
+        customer_knowledge_entries, is_customer_instruction_safe, search_knowledge,
+        _is_customer_safe_step,
+    )
     query = f"error code {error_code} {issue_description}" if error_code else issue_description
-    docs = qa_retriever.search(query, k=5)
-    if not docs:
+    entries = customer_knowledge_entries(
+        search_knowledge(path_text=query, model_name=model_name, limit=5),
+        model_name=model_name,
+    )
+    lines = []
+    for entry in entries:
+        steps = [step for step in entry.customer_steps if _is_customer_safe_step(step) and is_customer_instruction_safe(step)]
+        if not steps:
+            continue
+        # Titles and diagnostics can also contain correspondence. Only curated
+        # customer steps cross the boundary; raw case text is never returned.
+        lines.append(f"SOURCE_TYPE: {entry.source}")
+        if entry.source_url.startswith("https://"):
+            lines.append(f"SOURCE_URL: {entry.source_url}")
+        lines.extend(f"{index}. {step}" for index, step in enumerate(steps, 1))
+    if not lines:
         return "NO_RESULTS: No specific repair guide found." + suppress
-    lines = ["Relevant repair / error info:"]
-    for i, doc in enumerate(docs, 1):
-        lines.append(f"\n[{i}] {_source_record(doc)}\n{doc.page_content[:800]}")
-    lines.append(suppress)
-    return "\n".join(lines)
+    return f"VERIFIED_REPAIR_GUIDANCE: {model_name}\n" + "\n".join(lines) + suppress
 
 
 # Topics that are clearly post-purchase / service-oriented — never pitch sales after.
@@ -543,10 +609,14 @@ def tool_lookup_order_status(
     email: str = "",
 ) -> str:
     """Look up live shipping status. fetch_fn = fetch_shopify_order_status."""
-    if not order_id and not email:
-        return "MISSING_INPUT: Need order number or email."
+    from delivery_intake import is_plausible_email, is_plausible_order_id
+    if not is_plausible_order_id(order_id) or not is_plausible_email(email):
+        return "MISSING_INPUT: Need both a valid order number and the email used at checkout."
     tracking_data = fetch_fn(order_id, email, target_domain)
-    return build_response_fn(tracking_data, target_domain)
+    result = build_response_fn(tracking_data, target_domain)
+    if tracking_data.get("error"):
+        return result
+    return "VERIFIED_ORDER_STATUS: matched order number and checkout email in the current lookup.\n" + result
 
 
 def tool_capture_sales_lead(
@@ -565,7 +635,10 @@ def tool_capture_sales_lead(
         daemon=True,
     ).start()
     logger.info("📧 [Tool] Sales lead captured for domain=%s", target_domain)
-    return f"SUCCESS: Forwarded {customer_email} to sales team. They will respond within 24 hours."
+    return (
+        "LEAD_SEND_QUEUED: A background delivery attempt was started for the volunteered email. "
+        "Delivery and a response time are not confirmed. Do not say the team has already received it."
+    )
 
 
 def tool_get_showroom_info(*, target_domain: str) -> str:
@@ -1152,6 +1225,7 @@ TOOL_SCHEMAS: List[Any] = [
                 "type": "object",
                 "properties": {
                     "issue_description": {"type": "string"},
+                    "model_name": {"type": "string", "description": "Exact model confirmed by the customer. Empty if unknown; ask for it before giving model-specific steps."},
                     "error_code": {"type": "string", "description": "If user mentions a code like '63', '63.0', 'E5', use it. Empty otherwise."},
                 },
                 "required": ["issue_description", "error_code"],
@@ -1183,7 +1257,7 @@ TOOL_SCHEMAS: List[Any] = [
         "function": {
             "name": "capture_sales_lead",
             "description": (
-                "Capture a customer's email so the sales team can follow up within 24 hours. "
+                "Queue a sales follow-up request using the customer's volunteered email. Delivery and response time are not confirmed. "
                 "Call ONLY after the user has volunteered their email address in response to a sales offer. "
                 "Do NOT use for shipping-tracking emails."
             ),

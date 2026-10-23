@@ -1,9 +1,9 @@
 """
-Warranty-chat scope gate — setup and defect support only.
+Warranty-chat scope gate — setup, defect support, and verified delivery lookup.
 
 The warranty embed is not a general product/sales assistant. Off-topic,
-sales/pricing, and delivery/tracking questions get a fixed refusal (sales
-phone ext. 2) without KB lookup or LLM answers.
+sales/pricing questions get a fixed refusal (sales phone ext. 2) without KB
+lookup or LLM answers. Post-purchase tracking uses the verified lookup route.
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ _POST_PURCHASE_DELIVERY_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Post-purchase delivery / tracking — sales owns this, not the warranty flowchart.
+# Post-purchase delivery / tracking enters the verified delivery flow.
 _DELIVERY_INQUIRY_RE = re.compile(
     r"("
     r"\btracking\b|"
@@ -169,8 +169,10 @@ def is_order_cancel_request(text: str) -> bool:
 def build_order_cancel_handoff_message() -> str:
     """Minimal confirmation — no cancel policy advice from the bot."""
     return (
-        "We've sent your request to our **warranty team**. "
-        "They will follow up with you by email."
+        "Your request is saved with this case for **warranty team** review. "
+        "An email response or callback time has not been confirmed. "
+        "For direct follow-up, use the warranty contact below.\n\n"
+        f"{department_phone_directory()}"
     )
 
 
@@ -190,10 +192,8 @@ def build_warranty_scope_refusal(reason: str = "") -> str:
         )
     if (reason or "").strip().lower() == "delivery":
         return (
-            "This chat is for **setup and product defects**.\n\n"
-            "For **delivery and tracking**, please call **sales** at "
-            f"{SALES_PHONE}. I can't look up a live shipment or promise a "
-            "calendar date from this chat.\n\n"
+            "I can check a delivery after you provide both your **order number** "
+            "and the **email used at checkout**. Carrier estimates are not guaranteed arrival dates.\n\n"
             f"{phones}"
         )
     return (
@@ -208,7 +208,7 @@ def build_warranty_scope_refusal(reason: str = "") -> str:
 
 
 def is_delivery_inquiry(text: str) -> bool:
-    """True for post-purchase delivery / tracking that sales should take."""
+    """True for post-purchase delivery / tracking supported by this chat."""
     raw = (text or "").strip()
     if not raw:
         return False
@@ -315,10 +315,9 @@ def evaluate_warranty_scope(
     if is_pre_purchase_shipping_policy(raw):
         return WarrantyScopeDecision(in_scope=False, reason="shipping_policy")
 
-    # Delivery / tracking is a sales phone path (ext. 2). Leave in-progress
-    # delivery tickets alone so an open case can finish.
-    if is_delivery_inquiry(raw) and (issue_type or "") != "delivery":
-        return WarrantyScopeDecision(in_scope=False, reason="delivery")
+    # Post-purchase tracking is supported through the verified delivery lookup.
+    if is_delivery_inquiry(raw):
+        return WarrantyScopeDecision(in_scope=True, reason="delivery")
 
     try:
         from delivery_intake import detect_delivery_spec_question  # noqa: WPS433
@@ -367,14 +366,46 @@ def _looks_like_general_product_question(text: str) -> bool:
 
 
 def filter_warranty_menu_options(node: dict) -> list[dict]:
-    """Hide sales and delivery routing from customer-facing warranty menus."""
+    """Keep post-purchase delivery available; hide general sales routing."""
     options = list(node.get("options") or [])
     node_id = str(node.get("node_id") or "")
     if node_id not in ("root", "issue_type"):
         return options
-    hidden = {"sales", "delivery"}
+    hidden = {"sales"}
     return [
         opt
         for opt in options
         if _normalize(str(opt.get("answer_key") or "")) not in hidden
     ]
+
+
+def human_support_reason(text: str) -> Optional[str]:
+    """Detect explicit support/callback requests before any workflow mapping."""
+    raw = (text or "").strip()
+    if re.search(r"\b(?:call\s+me|call\s+(?:me\s+)?back|callback|phone\s+me)\b|전화\s*(?:해|주세요|부탁)|ll[aá]m(?:e|ame)", raw, re.I):
+        return "callback_request"
+    if re.search(
+        r"\b(?:human|real\s+person|live\s+(?:agent|person)|representative|customer\s+service)\b|"
+        r"\b(?:speak|talk|connect)\s+(?:me\s+)?(?:to|with)\s+(?:a\s+)?(?:person|someone|agent|support)\b|"
+        r"상담원|직원\s*(?:연결|상담)|hablar\s+con\s+(?:una?\s+)?(?:persona|agente)", raw, re.I
+    ):
+        return "customer_request"
+    return None
+
+
+def support_contact(department: str = "warranty", domain: str = "") -> dict[str, str]:
+    """Customer contact details from the same verified application constants."""
+    from config import SALES_EMAIL_BY_DOMAIN, SUPPORT_BUSINESS_HOURS, WARRANTY_BUSINESS_HOURS, WARRANTY_PHONE, WARRANTY_TEAM_EMAIL
+
+    is_sales = department == "sales"
+    phone = SALES_PHONE if is_sales else WARRANTY_PHONE
+    base, _, extension = phone.partition(" ext.")
+    phone_href = "tel:" + re.sub(r"[^+\d]", "", base)
+    if extension.strip().isdigit():
+        phone_href += ";ext=" + extension.strip()
+    email = next((address for key, address in SALES_EMAIL_BY_DOMAIN.items() if key in (domain or "").lower()), "") if is_sales else WARRANTY_TEAM_EMAIL
+    result = {"department": "sales" if is_sales else "warranty", "phone": phone, "phone_href": phone_href,
+              "hours": SUPPORT_BUSINESS_HOURS if is_sales else WARRANTY_BUSINESS_HOURS}
+    if re.fullmatch(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", email or ""):
+        result["email"] = email
+    return result

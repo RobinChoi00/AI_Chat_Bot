@@ -290,7 +290,9 @@ def test_limits_kinds_stay_honest(monkeypatch):
     assert "affirm" in paypal.lower()
     assert "paypal" not in paypal.lower()
     hsa = policy_answer(TOPIC_LIMITS, "osakiusa.com", message="can I use HSA")
-    assert "medical" in hsa.lower()
+    assert "eligibility" in hsa.lower()
+    assert "plan administrator" in hsa.lower()
+    assert "won't give medical advice" not in hsa.lower()
     affiliate = policy_answer(
         TOPIC_LIMITS, "osakiusa.com", message="do you have an affiliate program"
     )

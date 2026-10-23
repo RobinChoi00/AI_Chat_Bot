@@ -67,6 +67,7 @@ export interface WarrantyNode {
 
 export interface WarrantyTicketState {
   ticket_id: string;
+  domain?: string;
   case_reference?: string | null;
   status: TicketStatus;
   issue_type: string;
@@ -86,7 +87,29 @@ export interface WarrantyTicketState {
 export interface TrackingSummary {
   available: boolean;
   message: string;
-  snapshot?: Record<string, unknown>;
+  status?: string;
+  carrier?: string;
+  eta?: string;
+  tracking_url?: string;
+  fetched_at?: string;
+  source?: string;
+  self_service_links?: { label: string; url: string }[];
+  support_contact?: SupportContact;
+}
+
+export interface SupportContact {
+  department?: "sales" | "warranty";
+  phone: string;
+  phone_href?: string;
+  email?: string;
+  hours?: string;
+}
+
+export interface WarrantyHandoff extends SupportContact {
+  requested: boolean;
+  reason: "customer_request" | "callback_request" | "clarification_loop" | "safety_hazard";
+  notification_sent: boolean;
+  message: string;
 }
 
 export interface TerminalEnrichment {
@@ -134,6 +157,8 @@ export interface WarrantySessionResponse {
   ticket: WarrantyTicketState | null;
   followup_token?: string | null;
   tracking_summary?: TrackingSummary | null;
+  delivery_lookup_required?: boolean;
+  handoff?: WarrantyHandoff | null;
   email_notified?: boolean;
   nlp_interpreted?: boolean;
   interpreted_option?: AnswerOption;

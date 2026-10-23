@@ -75,12 +75,6 @@ def lookup_install_video(model_name: str) -> dict[str, Any]:
             models[key], resolved=resolved, match="model", fallback_url=fallback_url
         )
 
-    for model_key, entry in models.items():
-        if model_key in key or key in model_key:
-            return _entry_to_result(
-                entry, resolved=resolved, match="model", fallback_url=fallback_url
-            )
-
     series: dict = catalog.get("series") or {}
     for series_key, entry in series.items():
         sk = _normalize_key(series_key)

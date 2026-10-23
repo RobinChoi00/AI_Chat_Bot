@@ -87,6 +87,16 @@ class ProductSpecs:
         }
         if self.colors:
             public["colors"] = list(self.colors)
+        from sales_spec_index import lookup_fit_spec
+        fit = lookup_fit_spec(self.display_name)
+        public['fit'] = {
+            'maximum_user_weight_lb': fit.max_user_lb if fit else None,
+            'doorway_assembled_in': fit.door_asm_in if fit else None,
+            'doorway_disassembled_in': fit.door_dis_in if fit else None,
+            'wall_clearance_in': fit.wall_clearance_in if fit else None,
+            'minimum_user_height_in': None,
+            'maximum_user_height_in': None,
+        }
         return public
 
 
@@ -531,7 +541,8 @@ def parse_recommendation_hints(text: str) -> RecommendationRequest:
     if ft_in:
         feet = int(ft_in.group(1))
         inches = int(ft_in.group(2) or 0)
-        req.height_in = feet * 12 + inches
+        if inches < 12 and 3 <= feet <= 7:
+            req.height_in = feet * 12 + inches
 
     cm_match = re.search(r"(\d{3})\s*cm\b", raw, re.I)
     if cm_match and not req.height_in:
@@ -592,9 +603,8 @@ def _score(product: ProductSpecs, req: RecommendationRequest) -> float:
         score += 1
 
     if req.budget_usd and product.price_usd:
-        # Treat a stated dollar amount as a *target*, not a hard ceiling that
-        # dumps every cheaper chair into the same bucket. "$6,000 chair" should
-        # surface ~$5–6k picks, not the $1,999 entry models.
+        # Eligible products have already passed the hard ceiling. Within
+        # that set, prefer prices nearer the requested budget.
         ratio = product.price_usd / req.budget_usd
         proximity = 1.0 - abs(product.price_usd - req.budget_usd) / req.budget_usd
         if 0.70 <= ratio <= 1.05:
@@ -648,7 +658,7 @@ def price_tier_label(price_usd: Optional[float]) -> Optional[str]:
 
 
 def _fit_request(req: RecommendationRequest) -> RecommendationRequest:
-    """Body-fit scoring only — budget must not collapse all tiers to one band."""
+    """Rank body preferences within shelves already filtered by hard limits."""
     return RecommendationRequest(
         height_in=req.height_in,
         weight_lb=req.weight_lb,
@@ -661,10 +671,17 @@ def _fit_request(req: RecommendationRequest) -> RecommendationRequest:
 def _recommend_across_tiers(req: RecommendationRequest) -> list[ProductSpecs]:
     """Pick the best active chair in each Value / Mid / Premium price shelf."""
     fit_req = _fit_request(req)
+    from sales_constraints import extract_constraints, product_constraint_issues
+    constraints = extract_constraints(req.free_text)
+    if req.budget_usd is not None:
+        constraints['budget_max_usd'] = str(req.budget_usd)
+    if req.weight_lb is not None:
+        constraints['weight_lb'] = str(req.weight_lb)
     products = [
         p
         for p in load_product_index()
         if p.status.lower() == "active" and p.price_usd is not None
+        and not product_constraint_issues(p, constraints)
     ]
     picked: list[ProductSpecs] = []
     used: set[str] = set()
@@ -698,9 +715,16 @@ def recommend(req: RecommendationRequest, limit: int = 3) -> list[ProductSpecs]:
         if tiered:
             return tiered[:limit]
 
+    from sales_constraints import extract_constraints, product_constraint_issues
+    constraints = extract_constraints(req.free_text)
+    if req.budget_usd is not None:
+        constraints['budget_max_usd'] = str(req.budget_usd)
+    if req.weight_lb is not None:
+        constraints['weight_lb'] = str(req.weight_lb)
     ranked = [
         (product, _score(product, req))
         for product in load_product_index()
+        if not product_constraint_issues(product, constraints)
     ]
     ranked = [pair for pair in ranked if pair[1] > 0]
     ranked.sort(key=lambda pair: _recommend_sort_key(pair, req))

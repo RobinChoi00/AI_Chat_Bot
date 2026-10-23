@@ -162,7 +162,47 @@ _LOGISTICS_OR_FOLLOWUP_MARKERS = (
     "warranty inquiry form",
     "received a message from",
     "via warranty inquiry",
+    "parts are on the way",
+    "parts are already on the way",
+    "parts have been shipped",
+    "close this ticket",
+    "close your ticket",
+    "close the ticket",
+    "close this case",
+    "glad your chair is back",
+    "apologize for the late reply",
+    "sorry for the late reply",
+    "ask customer",
+    "ask the customer",
+    "no cost to you",
+    "free of charge",
 )
+
+_CASE_STATUS_RE = re.compile(
+    r"\b(?:clos(?:e|ing|ed)|reopen(?:ed|ing)?)\b.{0,30}\b(?:ticket|case)\b|"
+    r"\b(?:parts?|replacement|technician)\b.{0,45}\b(?:on (?:the|their) way|shipped|dispatched|scheduled|approved)\b|"
+    r"\b(?:i|we|our team)(?:'ll| will)\s+(?:go ahead|arrange|ship|send|replace|refund)|"
+    r"\b(?:can usually arrange|likely needs replacement|replacement at no cost)\b|"
+    r"\b(?:hello|dear customer|ask (?:the )?customer|glad (?:your|the) chair|no cost to you|free of charge)\b",
+    re.I,
+)
+
+
+def is_customer_instruction_safe(text: str) -> bool:
+    """Reject copied correspondence/status promises, even after prior ingest."""
+    value = str(text or "").strip()
+    lower = value.lower()
+    return bool(value) and not (
+        _CASE_STATUS_RE.search(value)
+        or any(marker in lower for marker in _LOGISTICS_OR_FOLLOWUP_MARKERS)
+        or re.search(r"(?:/Users/|/home/|[A-Za-z]:\\)", value)
+    )
+
+
+def sanitize_customer_answer(text: str) -> str:
+    """Remove inherited ticket-status correspondence from generated answer lines."""
+    lines = [line for line in str(text or "").splitlines() if not line.strip() or is_customer_instruction_safe(line)]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 _UNHELPFUL_MATCH_TITLE_MARKERS = (
     "warranty inquiry form",
@@ -188,6 +228,13 @@ _BUTTON_HINT_RE = re.compile(r"\b(button|stuck|side panel|keys?)\b", re.I)
 _SENSOR_HINT_RE = re.compile(r"\b(sensor|counting|encoder|limit|hall)\b", re.I)
 
 _CUSTOMER_ACTION_WORDS = (
+    "note",
+    "record",
+    "photograph",
+    "keep",
+    "take ",
+    "avoid",
+    "stop using",
     "check",
     "verify",
     "ensure",
@@ -248,6 +295,31 @@ class KnowledgeEntry:
     source_url: str = ""
     reviewed_at: Optional[str] = None
     review_until: Optional[str] = None
+
+
+_CUSTOMER_KNOWLEDGE_SOURCES = frozenset({
+    "qa_csv", "auto_check", "fault_judgment", "fonz_error_code",
+    "freshdesk_kb", "freshdesk_qa", "reviewed_knowledge",
+})
+
+
+def customer_knowledge_entries(
+    entries,
+    *,
+    model_name: Optional[str] = None,
+) -> list[KnowledgeEntry]:
+    """Keep customer answers within curated or explicitly reviewed sources.
+
+    Raw Freshdesk correspondence remains available to internal diagnostics and
+    the review queue. Even a plausible extracted step needs human promotion to
+    reviewed_knowledge before it can become a customer instruction or quote.
+    This gate also handles pre-parsed/cached entries at presentation boundaries.
+    """
+    return [
+        entry for entry in entries
+        if entry.source in _CUSTOMER_KNOWLEDGE_SOURCES
+        and (model_name is None or _entry_matches_requested_model(entry, model_name))
+    ]
 
 
 def _model_signature(text: str) -> str:
@@ -381,6 +453,8 @@ def _is_customer_safe_step(text: str) -> bool:
     chunk = (text or "").strip()
     if len(chunk) < _MIN_CUSTOMER_STEP_LEN or len(chunk) > _MAX_CUSTOMER_STEP_LEN:
         return False
+    if not is_customer_instruction_safe(chunk):
+        return False
     if _is_internal(chunk):
         return False
     lower = chunk.lower()
@@ -400,7 +474,7 @@ def _is_customer_safe_step(text: str) -> bool:
 def is_presentable_match_title(title: str) -> bool:
     """Hide generic web-form / intake ticket subjects from customer UI."""
     lower = (title or "").lower().strip()
-    if not lower:
+    if not lower or not is_customer_instruction_safe(title):
         return False
     return not any(marker in lower for marker in _UNHELPFUL_MATCH_TITLE_MARKERS)
 
@@ -502,7 +576,7 @@ def _extract_customer_steps(*texts: str) -> tuple[str, ...]:
 def _fallback_manual_steps(*texts: str) -> tuple[str, ...]:
     """Customer-safe DIY when a tech manual only lists part replacements."""
     blob = " ".join(_normalize_manual_text(t) for t in texts if t)
-    if not blob:
+    if not blob or not is_customer_instruction_safe(blob):
         return ()
     fallbacks: list[str] = []
     if _CONNECTION_HINT_RE.search(blob):
@@ -566,7 +640,7 @@ def _load_qa_entries() -> list[KnowledgeEntry]:
                     category=category,
                     title=col0,
                     diagnostic=diagnostic,
-                    customer_steps=steps or (diagnostic,) if diagnostic else (),
+                    customer_steps=steps,
                 )
             )
     return entries
@@ -827,10 +901,8 @@ def _load_fonz_error_entries() -> list[KnowledgeEntry]:
         if not model or not code:
             continue
         steps = _extract_customer_steps(troubleshooting, meaning)
-        if not steps and troubleshooting:
-            trimmed = troubleshooting.strip()
-            if len(trimmed) >= _MIN_CUSTOMER_STEP_LEN and not _is_internal(trimmed):
-                steps = (trimmed[:_MAX_CUSTOMER_STEP_LEN],)
+        # Never rescue an arbitrary raw paragraph by trimming it: doing so
+        # bypassed the customer-step guards and could promote case-status copy.
         if not steps:
             steps = _fallback_manual_steps(troubleshooting, meaning)
         blob = f"{meaning} {troubleshooting} error {code}"
@@ -1006,7 +1078,7 @@ def search_knowledge(
     candidate_ids = set(keyword_scores.keys()) | set(semantic_scores.keys())
     for idx in candidate_ids:
         entry = entries[idx]
-        if not _entry_matches_requested_model(entry, model_name):
+        if not customer_knowledge_entries((entry,), model_name=model_name):
             continue
         if category and not entry_allowed_for_category(entry, category):
             continue

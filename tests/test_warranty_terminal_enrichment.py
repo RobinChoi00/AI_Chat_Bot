@@ -57,7 +57,8 @@ def test_install_terminal_includes_video_and_help_offer():
     }
     result = build_terminal_enrichment(_EngineInstall(), _TicketInstall(), node)
     assert result is not None
-    assert "Watch —" in result["message"]
+    assert "Open guide —" in result["message"]
+    assert "related series resource" in result["message"]
     assert "footrest and base" in result["message"].lower()
     assert result["defer_email"] is True
     assert result["phase"] == "awaiting_help_consent"
@@ -90,7 +91,8 @@ def test_install_air_hose_terminal_includes_diy_steps_and_video():
     assert result is not None
     assert "footrest-to-base air hose" in result["message"].lower()
     assert "What you can try" in result["message"]
-    assert "Watch —" in result["message"]
+    assert "Open guide —" in result["message"]
+    assert "check the model label" in result["message"]
     assert result["diagnosis"]["steps"]
     assert result["phase"] == "awaiting_help_consent"
 

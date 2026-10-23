@@ -4,6 +4,7 @@ import { useMemo, useRef, useState, type ChangeEvent } from "react";
 import { submitWarrantyContact, uploadEvidence } from "@/lib/api";
 import { WARRANTY_CONTACT_BLURB } from "@/lib/warrantyContact";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
+import type { EvidenceUploadResponse, WarrantyContactResponse } from "@/lib/types";
 
 interface Props {
   ticketId: string;
@@ -11,8 +12,8 @@ interface Props {
   evidenceRequired?: string[];
   /** Email already collected at intake — skip re-asking when valid. */
   initialCustomerEmail?: string;
-  onContactSuccess?: (customerEmail: string) => void;
-  onUploadSuccess?: (filename: string) => void;
+  onContactSuccess?: (customerEmail: string, response: WarrantyContactResponse) => void;
+  onUploadSuccess?: (filename: string, response: EvidenceUploadResponse) => void;
   collapsed?: boolean;
   onToggleCollapsed?: (next: boolean) => void;
   onBack?: () => void;
@@ -155,13 +156,13 @@ export default function EvidenceUploader({
       if (willUpload && selectedFile) {
         const resp = await uploadEvidence(ticketId, evidenceType, selectedFile, email);
         setResult("success");
-        onUploadSuccess?.(resp.original_filename);
+        onUploadSuccess?.(resp.original_filename, resp);
         setSelectedFile(null);
         if (fileRef.current) fileRef.current.value = "";
       } else {
-        await submitWarrantyContact(ticketId, email);
+        const resp = await submitWarrantyContact(ticketId, email);
         setResult("success");
-        onContactSuccess?.(email);
+        onContactSuccess?.(email, resp);
       }
     } catch (err: unknown) {
       setResult("error");
@@ -216,10 +217,10 @@ export default function EvidenceUploader({
 
   const reachBlurb =
     issueType === "installation"
-      ? "Ready to send this setup case to our team? They’ll follow up with installation support within 24 hours."
+      ? "Ready to save this setup case for our team to review?"
       : issueType === "delivery"
-        ? "Ready to send this delivery case? They’ll review damage, missing parts, or tracking and follow up within 24 hours."
-        : "Ready to send it to our warranty team? They’ll follow up within 24 hours with repair or next steps.";
+        ? "Ready to save this delivery case for review of damage, missing parts, or tracking?"
+        : "Ready to save this case for our warranty team to review?";
 
   const submitLabel = submitting
     ? "Submitting…"
@@ -289,10 +290,10 @@ export default function EvidenceUploader({
         <>
           <p className="mb-3 text-xs text-gray-500">
             {issueType === "installation"
-              ? "Enter your email so our team can follow up with installation support within 24 hours. "
+              ? "Enter your email so our team can follow up with installation support. "
               : issueType === "delivery"
-                ? "Enter your email so our team can follow up on this delivery case within 24 hours. "
-                : "Enter your email so our warranty team can follow up within 24 hours. "}
+                ? "Enter your email so our team can follow up on this delivery case. "
+                : "Enter your email so our warranty team can follow up. "}
             {requiredEvidence
               ? "Please attach the requested photos or video if you have them."
               : "Photos and videos are optional."}

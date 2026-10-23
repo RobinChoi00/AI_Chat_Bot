@@ -1,7 +1,7 @@
 /** Server-component data access only. Never import this file in a client component. */
 import { getBackendUrl } from "./backendUrl";
 import { HISTORY_PAGE_SIZE } from "./adminHistory";
-import type { HistoryDetailResponse, HistoryListResponse, HistorySource } from "./historyTypes";
+import type { HistoryDetailResponse, HistoryListResponse, HistorySource, HistoryView } from "./historyTypes";
 
 type HistoryResult<T> = { data: T; error: null } | { data: null; error: string };
 
@@ -38,7 +38,8 @@ export function fetchHistoryList(page: number, source?: HistorySource, domain?: 
   return fetchHistory<HistoryListResponse>(`/admin/history?${query}`);
 }
 
-export function fetchHistoryDetail(source: HistorySource, recordId: string, page: number) {
+export function fetchHistoryDetail(source: HistorySource, recordId: string, page: number, view: HistoryView = "conversation") {
   const query = new URLSearchParams({ limit: String(HISTORY_PAGE_SIZE), offset: String((page - 1) * HISTORY_PAGE_SIZE) });
+  if (source === "warranty" && view === "workflow") query.set("view", view);
   return fetchHistory<HistoryDetailResponse>(`/admin/history/${encodeURIComponent(source)}/${encodeURIComponent(recordId)}?${query}`, true);
 }

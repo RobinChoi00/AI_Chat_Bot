@@ -31,7 +31,7 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Literal, Optional, cast
 
 import pytz
 import requests
@@ -46,9 +46,10 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from warranty_defaults import DEFAULT_WARRANTY_DOMAIN, normalize_warranty_domain
+from warranty_transcript import WarrantyConversationRoute
 
 try:
     from app.admin_auth import require_admin_key
@@ -112,7 +113,7 @@ def _masked_public_email(value: str | None) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Router — all endpoints registered here are included by main.py
 # ---------------------------------------------------------------------------
-router = APIRouter()
+router = APIRouter(route_class=WarrantyConversationRoute)
 
 try:
     from cost_guard import limiter  # noqa: WPS433
@@ -541,6 +542,12 @@ async def append_customer_note(ticket_id: str, body: WarrantyCustomerNoteRequest
     ticket = engine.get_ticket(ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
+    _require_web_chat_privacy_for_ticket(ticket)
+    from warranty_scope import human_support_reason  # noqa: WPS433
+
+    human_reason = _support_interrupt_reason(note)
+    if human_reason:
+        return _request_human_handoff(engine, str(ticket.session_id), note, str(ticket.domain), reason=human_reason)
 
     now_iso = _now_cst_iso()
 
@@ -631,6 +638,16 @@ async def record_troubleshooting_outcome(
     from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
 
     outcome = (body.outcome or "").strip()
+    from warranty_scope import human_support_reason  # noqa: WPS433
+
+    human_reason = _support_interrupt_reason(outcome)
+    if human_reason:
+        engine = _lazy_engine()
+        ticket = engine.get_ticket(ticket_id)
+        if ticket is None:
+            raise HTTPException(status_code=404, detail="Warranty session not found.")
+        _require_web_chat_privacy_for_ticket(ticket)
+        return _request_human_handoff(engine, str(ticket.session_id), outcome, str(ticket.domain), reason=human_reason)
     outcome_key = outcome.lower()
     if outcome_key not in _TROUBLESHOOTING_OUTCOMES:
         from warranty_nlp import interpret_troubleshooting_outcome  # noqa: WPS433
@@ -923,11 +940,25 @@ class WarrantySessionContactEmailRequest(BaseModel):
     skipped: bool = False
 
 
+class WarrantyDeliveryTrackingRequest(BaseModel):
+    order_number: str = Field(min_length=1, max_length=40)
+    email: str = Field(min_length=3, max_length=254)
+    domain: str = DEFAULT_WARRANTY_DOMAIN
+
+
+class WarrantyHandoffRequest(BaseModel):
+    domain: str = DEFAULT_WARRANTY_DOMAIN
+    message: str = Field(default="I'd like to speak to a person.", max_length=2000)
+    reason: Literal["customer_request", "callback_request"] = "customer_request"
+
+
 _QUICK_START_ISSUE_KEYS = frozenset({"installation", "delivery", "defect"})
 
 
 def _require_registered_model(ticket) -> None:
-    if not str(getattr(ticket, "model_name", "") or "").strip():
+    from warranty_intake_context import is_valid_model_input  # noqa: WPS433
+
+    if not is_valid_model_input(str(getattr(ticket, "model_name", "") or "")):
         raise HTTPException(
             status_code=422,
             detail=(
@@ -967,6 +998,9 @@ def _quick_start_ticket(
     ticket = engine.get_active_session_ticket(session_id)
     ticket_id: str
 
+    if ticket is None and issue_type == "delivery":
+        ticket_id, _root = engine.start_session(session_id, domain)
+        ticket = engine.get_ticket(ticket_id)
     if ticket is None:
         raise HTTPException(
             status_code=422,
@@ -976,7 +1010,8 @@ def _quick_start_ticket(
             ),
         )
 
-    _require_registered_model(ticket)
+    if issue_type != "delivery":
+        _require_registered_model(ticket)
     ticket_id = str(ticket.ticket_id)
     node = engine.get_current_node(ticket_id)
     node_id = node.get("node_id") if node else None
@@ -991,7 +1026,14 @@ def _quick_start_ticket(
 
     ticket = engine.get_ticket(ticket_id)
     node = engine.get_current_node(ticket_id)
-    return _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    if issue_type == "delivery":
+        payload["delivery_lookup_required"] = True
+        payload["assistant_message"] = (
+            "I can check your delivery using both your **order number** and the **email used at checkout**. "
+            "Enter them in the delivery form below. You can also continue with a delivery damage or missing-item case."
+        )
+    return payload
 
 
 def _register_model_ticket(
@@ -1001,11 +1043,14 @@ def _register_model_ticket(
     domain: str,
 ) -> Dict[str, Any]:
     from product_catalog import resolve_model_name  # noqa: WPS433
-    from warranty_scope import is_order_cancel_request  # noqa: WPS433
+    from warranty_scope import human_support_reason, is_order_cancel_request  # noqa: WPS433
 
     raw = model.strip()
     if not raw:
         raise HTTPException(status_code=422, detail="model must not be empty")
+    human_reason = _support_interrupt_reason(raw)
+    if human_reason:
+        return _request_human_handoff(engine, session_id, raw, domain, reason=human_reason)
 
     if is_order_cancel_request(raw):
         return _escalate_order_cancel_to_warranty_team(
@@ -1015,31 +1060,10 @@ def _register_model_ticket(
             domain,
         )
 
-    lower = raw.lower()
-    issue_markers = (
-        "not working",
-        "not inflating",
-        "won't",
-        "wont",
-        "doesn't",
-        "doesnt",
-        "broken",
-        "damaged",
-        "no air",
-        "not turn",
-        "not power",
-        "false trigger",
-        "too hot",
-        "too loud",
-        "making noise",
-        "delivery",
-        "tracking",
-        "installation",
-        "cancel",
-        "refund",
-        "return my",
-    )
-    if any(marker in lower for marker in issue_markers) or len(raw.split()) >= 4:
+    from warranty_intake_context import is_valid_model_input, normalize_model_input  # noqa: WPS433
+
+    raw = normalize_model_input(raw)
+    if not is_valid_model_input(raw):
         raise HTTPException(
             status_code=422,
             detail=(
@@ -1164,6 +1188,96 @@ _DEFECT_MODEL_REQUIRED_MSG = (
     "Please tell us your chair model first (for example OS-4000T or 3D LTX), "
     "then continue with warranty / defect."
 )
+
+
+def _handoff_message(reason: str, department: str = "warranty") -> str:
+    from warranty_scope import support_contact  # noqa: WPS433
+
+    phone = support_contact("warranty" if reason == "safety_hazard" else department)["phone"]
+
+    if reason == "safety_hazard":
+        return (
+            "Stop using the chair. Switch it off and unplug it only if you can do so safely. "
+            "Do not run another test, resume use, or open panels. "
+            "I've saved the reported safety concern and conversation context with this case for team review. "
+            "I haven't sent a notification or booked a callback. "
+            f"Please call **{phone}** for direct support."
+        )
+    request = "callback request" if reason == "callback_request" else "request for a person"
+    return (
+        f"I've saved your {request} with this case and its conversation context for team review. "
+        "I haven't sent a notification or booked a callback. "
+        f"For direct help, please call **{phone}**. "
+        "You do not need to repeat the troubleshooting steps here."
+    )
+
+
+def _support_interrupt_reason(text: str) -> Optional[str]:
+    from warranty_intake_context import reported_safety_hazard  # noqa: WPS433
+    from warranty_scope import human_support_reason  # noqa: WPS433
+
+    if reported_safety_hazard(text=text):
+        return "safety_hazard"
+    return human_support_reason(text)
+
+
+def _request_human_handoff(engine, session_id: str, message: str, domain: str, *, reason: str = "customer_request") -> Dict[str, Any]:
+    """Persist a visible support request without claiming a live transfer/email."""
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    ticket = _get_open_session_ticket(engine, session_id)
+    if ticket is None:
+        ticket_id, _root = engine.start_session(session_id, domain)
+    else:
+        ticket_id = str(ticket.ticket_id)
+    with warranty_db_session() as db:
+        row = db.query(WarrantyTicket).filter(WarrantyTicket.ticket_id == ticket_id).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Warranty session not found.")
+        if row.get_collected().get("human_support_reason") == "safety_hazard":
+            reason = "safety_hazard"
+        from warranty_scope import is_delivery_inquiry  # noqa: WPS433
+
+        department = str(row.get_collected().get("human_support_department") or "warranty")
+        if str(row.issue_type or "") == "delivery" or is_delivery_inquiry(message):
+            department = "sales"
+        if reason == "safety_hazard":
+            department = "warranty"
+        row.set_collected("human_support_requested", True)
+        row.set_collected("human_support_reason", reason)
+        row.set_collected("human_support_department", department)
+        row.set_collected("human_support_requested_at", _now_cst_iso())
+        row.set_collected("human_support_request", message[:2000])
+        row.set_collected("human_support_previous_node", str(row.current_node_id or ""))
+        row.status = "awaiting_admin_review"
+    ticket = engine.get_ticket(ticket_id)
+    payload = _serialize_ticket_state(session_id, ticket, engine.get_current_node(ticket_id), engine=engine)
+    payload["side_question"] = True
+    return payload
+
+
+def _clarification_response(engine, ticket_id: str, answer: str, clarify: str) -> Dict[str, Any]:
+    """Offer support after a repeat; stop an unresolved loop on its third turn."""
+    from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+    with warranty_db_session() as db:
+        row = db.query(WarrantyTicket).filter(WarrantyTicket.ticket_id == ticket_id).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Warranty session not found.")
+        collected = row.get_collected()
+        node_id = str(row.current_node_id or "")
+        count = int(collected.get("clarification_count") or 0) + 1 if collected.get("clarification_node") == node_id else 1
+        row.set_collected("clarification_node", node_id)
+        row.set_collected("clarification_count", count)
+        session_id, domain = str(row.session_id), str(row.domain or DEFAULT_WARRANTY_DOMAIN)
+    if count >= 3:
+        return _request_human_handoff(engine, session_id, answer, domain, reason="clarification_loop")
+    if count >= 2:
+        clarify += "\n\nIf these choices don't describe your problem, choose **Ask for a person** or type **human**. Your case context will be kept."
+    payload = _build_side_question_response(engine, ticket_id, clarify, customer_text=answer)
+    if count >= 2:
+        payload["handoff"] = {"requested": False, "offered": True, "notification_sent": False}
+    return payload
 
 
 def _answer_selects_defect(node: Optional[dict], answer: str) -> bool:
@@ -1618,11 +1732,8 @@ def _finalize_answer_response(
         "delivery_status_get_order_email",
     ):
         from delivery_lookup import (  # noqa: WPS433
-            append_eligibility_to_tracking_message,
-            build_self_service_lookup_links,
-            format_warranty_tracking_message,
             persist_snapshot,
-            public_tracking_summary_payload,
+            public_delivery_tracking_summary,
             safe_lookup_by_order_or_email,
             safe_lookup_by_tracking_number,
         )
@@ -1649,32 +1760,7 @@ def _finalize_answer_response(
             raw_input=lookup_text,
             lookup_kind=lookup_kind,
         )
-        self_service_links = build_self_service_lookup_links(
-            domain=domain,
-            lookup_kind=lookup_kind,
-            raw_input=lookup_text,
-        )
-        tracking_message = format_warranty_tracking_message(
-            snapshot,
-            domain=domain,
-            lookup_kind=lookup_kind,
-            raw_input=lookup_text,
-            continue_with_questions=previous_node
-            in (
-                "delivery_get_tracking_number",
-                "delivery_get_name",
-            ),
-        )
-        tracking_message = append_eligibility_to_tracking_message(
-            tracking_message, ticket_id
-        )
-        tracking_summary = public_tracking_summary_payload(
-            available=snapshot.available,
-            message=tracking_message,
-            self_service_links=[
-                {"label": label, "url": url} for label, url in self_service_links
-            ],
-        )
+        tracking_summary = public_delivery_tracking_summary(snapshot, domain)
 
     ticket = engine.get_ticket(ticket_id)
     if ticket is None:
@@ -1691,13 +1777,16 @@ def _finalize_answer_response(
             .first()
         )
         if ticket_row:
+            ticket_row.set_collected("clarification_count", 0)
             turns = engine.get_turns(ticket_id)
-            _detected, sent_now = maybe_send_warranty_transcript(
-                ticket=ticket_row,
-                answer_text=answer,
-                turns=turns,
-            )
-            email_notified = sent_now
+            # A tracking lookup is not an instruction to send an email.
+            if tracking_summary is None:
+                _detected, sent_now = maybe_send_warranty_transcript(
+                    ticket=ticket_row,
+                    answer_text=answer,
+                    turns=turns,
+                )
+                email_notified = sent_now
 
     node = engine.get_current_node(ticket_id)
     payload = _serialize_ticket_state(str(ticket.session_id), ticket, node, engine=engine)
@@ -1713,10 +1802,10 @@ def _finalize_answer_response(
         existing = str(payload.get("assistant_message") or "").strip()
         payload["assistant_message"] = f"{ack}\n\n{existing}" if existing else ack
 
-    if result.get("is_terminal") or str(ticket.status) in (
+    if (result.get("is_terminal") or str(ticket.status) in (
         "awaiting_admin_review",
         "awaiting_evidence",
-    ):
+    )) and str(ticket.current_node_id or "") != "delivery_status_terminal":
         from warranty_freshdesk_case import schedule_freshdesk_case_creation  # noqa: WPS433
 
         freshdesk_result = schedule_freshdesk_case_creation(ticket_id)
@@ -1810,6 +1899,12 @@ def _serialize_ticket_state(
         return {"session_id": session_id, "ticket": None}
 
     ticket_id = str(ticket.ticket_id)
+    collected = ticket.get_collected()
+    human_requested = bool(collected.get("human_support_requested"))
+    if human_requested:
+        node = {"node_id": str(ticket.current_node_id or ""), "type": "terminal",
+                "prompt": _handoff_message(str(collected.get("human_support_reason") or "customer_request"), str(collected.get("human_support_department") or "warranty")),
+                "options": [], "evidence_required": []}
     options: List[Dict[str, Any]] = []
     node_prompt: Optional[str] = None
     node_id: Optional[str] = None
@@ -1847,7 +1942,7 @@ def _serialize_ticket_state(
         needs_model_confirmation,
     )
 
-    enrichment = build_assistant_message_bundle(
+    enrichment = {} if human_requested else build_assistant_message_bundle(
         engine=engine,
         ticket=ticket,
         node=node,
@@ -1881,6 +1976,7 @@ def _serialize_ticket_state(
         "session_id": session_id,
         "ticket": {
             "ticket_id":    ticket_id,
+            "domain":       normalize_warranty_domain(str(getattr(ticket, "domain", "") or "")),
             "case_reference": _case_reference_for(ticket),
             "status":       str(ticket.status),
             "issue_type":   str(ticket.issue_type or ""),
@@ -1926,6 +2022,21 @@ def _serialize_ticket_state(
     suggestion = _pending_suggestion_from_ticket(ticket)
     if suggestion:
         payload["suggested_option"] = suggestion
+    if str(ticket.issue_type or "") == "delivery":
+        payload["delivery_lookup_required"] = True
+    if human_requested:
+        from warranty_scope import support_contact  # noqa: WPS433
+
+        reason = str(collected.get("human_support_reason") or "customer_request")
+        department = str(collected.get("human_support_department") or "warranty")
+        message = _handoff_message(reason, department)
+        payload["assistant_message"] = message
+        payload["handoff"] = {"requested": True, "reason": reason, "notification_sent": False,
+                              **support_contact(department, str(getattr(ticket, "domain", "") or "")), "message": message}
+        payload["ticket"]["ready_for_issue_type"] = False
+        payload["ticket"]["needs_model_confirmation"] = False
+        payload["ticket"]["can_go_back"] = False
+        payload.pop("suggested_option", None)
     return payload
 
 
@@ -2124,7 +2235,9 @@ async def register_warranty_model(
     ticket = payload.get("ticket") or {}
     ticket_id = str(ticket.get("ticket_id") or "")
     resolved_model = str(payload.get("resolved_model") or body.model)
-    if ticket_id:
+    from warranty_intake_context import is_valid_model_input  # noqa: WPS433
+
+    if ticket_id and not payload.get("handoff") and not payload.get("order_cancel_escalated") and is_valid_model_input(resolved_model):
         from warranty_order_verification import verify_ticket_purchase  # noqa: WPS433
 
         background_tasks.add_task(
@@ -2152,16 +2265,25 @@ async def confirm_warranty_model(
     from warranty_intake_context import mark_model_confirmed  # noqa: WPS433
 
     engine = _lazy_engine()
+    from warranty_scope import human_support_reason  # noqa: WPS433
+
+    human_reason = _support_interrupt_reason(str(body.model or ""))
+    if human_reason:
+        return _request_human_handoff(engine, session_id, str(body.model), body.domain, reason=human_reason)
     ticket = engine.get_active_session_ticket(session_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail="No active warranty session found.")
 
     ticket_id = str(ticket.ticket_id)
-    corrected = str(body.model or "").strip()
+    from warranty_intake_context import is_valid_model_input, normalize_model_input  # noqa: WPS433
+
+    corrected = normalize_model_input(str(body.model or ""))
     if corrected:
+        if not is_valid_model_input(corrected):
+            raise HTTPException(status_code=422, detail="Please enter only your chair model, such as OS-4000T.")
         resolved = resolve_model_name(corrected) or corrected
         engine.set_model_name(ticket_id, resolved)
-    elif not body.confirmed:
+    elif not body.confirmed or not is_valid_model_input(str(ticket.model_name or "")):
         raise HTTPException(
             status_code=422,
             detail="Set confirmed=true or provide a corrected model name.",
@@ -2200,6 +2322,45 @@ async def quick_start_warranty(session_id: str, body: WarrantyQuickStartRequest)
     return _quick_start_ticket(engine, session_id, body.issue_type, body.domain)
 
 
+@router.post("/api/v1/warranty/session/{session_id}/handoff", tags=["warranty"])
+async def request_warranty_handoff(session_id: str, body: WarrantyHandoffRequest):
+    _require_web_chat_privacy(session_id)
+    reason = "safety_hazard" if _support_interrupt_reason(body.message) == "safety_hazard" else body.reason
+    return _request_human_handoff(_lazy_engine(), session_id, body.message, body.domain, reason=reason)
+
+
+@router.post("/api/v1/warranty/session/{session_id}/delivery-tracking", tags=["warranty"])
+@limiter.limit("12/minute")
+async def lookup_delivery_tracking(request: Request, session_id: str, body: WarrantyDeliveryTrackingRequest):
+    """Each request asks the provider again; identity is never inferred from email alone."""
+    _require_web_chat_privacy(session_id)
+    from delivery_intake import is_plausible_email, is_plausible_order_id  # noqa: WPS433
+    from delivery_lookup import persist_snapshot, public_delivery_tracking_summary, safe_lookup_by_order_or_email  # noqa: WPS433
+    from store_config import is_supported_storefront_domain  # noqa: WPS433
+
+    order, email = body.order_number.strip(), body.email.strip()
+    if not is_plausible_order_id(order) or not is_plausible_email(email):
+        raise HTTPException(status_code=422, detail="Enter your order number and the email used at checkout.")
+    engine = _lazy_engine()
+    ticket = _get_open_session_ticket(engine, session_id)
+    domain = normalize_warranty_domain(str(ticket.domain if ticket is not None else body.domain))
+    if not is_supported_storefront_domain(domain):
+        raise HTTPException(status_code=422, detail="Select a supported store before looking up delivery.")
+    if ticket is None:
+        _quick_start_ticket(engine, session_id, "delivery", domain)
+        ticket = _get_open_session_ticket(engine, session_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Warranty session not found.")
+    snapshot = safe_lookup_by_order_or_email(f"{order} {email}", domain)
+    persist_snapshot(str(ticket.ticket_id), snapshot, raw_input=f"{order} {email}", lookup_kind="order")
+    ticket = engine.get_ticket(str(ticket.ticket_id))
+    payload = _serialize_ticket_state(session_id, ticket, engine.get_current_node(str(ticket.ticket_id)), engine=engine)
+    summary = public_delivery_tracking_summary(snapshot, domain)
+    payload["tracking_summary"] = summary
+    payload["assistant_message"] = summary["message"]
+    return payload
+
+
 @router.post("/api/v1/warranty/session/{session_id}/natural-start", tags=["warranty"])
 @limiter.limit(_WARRANTY_LLM_RATE)
 async def natural_start_warranty(
@@ -2215,6 +2376,14 @@ async def natural_start_warranty(
     message = body.message.strip()
     if not message:
         raise HTTPException(status_code=422, detail="message must not be empty")
+
+    from warranty_scope import human_support_reason, is_delivery_inquiry, is_pre_purchase_shipping_policy  # noqa: WPS433
+
+    human_reason = _support_interrupt_reason(message)
+    if human_reason:
+        return _request_human_handoff(_lazy_engine(), session_id, message, body.domain, reason=human_reason)
+    if is_delivery_inquiry(message) and not is_pre_purchase_shipping_policy(message):
+        return _quick_start_ticket(_lazy_engine(), session_id, "delivery", body.domain)
 
     from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
 
@@ -2255,9 +2424,11 @@ async def natural_start_warranty(
         if not model_candidate and not issue_type:
             model_candidate = resolve_model_name(message)
 
-        if model_candidate or (not issue_type and len(message.split()) <= 6):
+        from warranty_intake_context import is_valid_model_input, normalize_model_input  # noqa: WPS433
+
+        if (model_candidate or (not issue_type and len(message.split()) <= 6)) and is_valid_model_input(model_candidate or message):
             ticket_id = str(ticket.ticket_id)
-            resolved = model_candidate or resolve_model_name(message) or message
+            resolved = model_candidate or resolve_model_name(message) or normalize_model_input(message)
             engine.set_model_name(ticket_id, resolved)
             ticket = engine.get_ticket(ticket_id)
             if ticket is not None:
@@ -2271,9 +2442,7 @@ async def natural_start_warranty(
 
     issue_type = interpret_issue_type(message)
     if issue_type == "delivery":
-        return _refuse_warranty_scope_payload(
-            engine, session_id, body.domain, "delivery"
-        )
+        return _quick_start_ticket(engine, session_id, "delivery", body.domain)
     if ticket is None:
         raise HTTPException(
             status_code=422,
@@ -2353,6 +2522,14 @@ async def smart_start_warranty(
     if not message:
         raise HTTPException(status_code=422, detail="message must not be empty")
 
+    from warranty_scope import human_support_reason, is_delivery_inquiry, is_pre_purchase_shipping_policy  # noqa: WPS433
+
+    human_reason = _support_interrupt_reason(message)
+    if human_reason:
+        return _request_human_handoff(_lazy_engine(), session_id, message, body.domain, reason=human_reason)
+    if is_delivery_inquiry(message) and not is_pre_purchase_shipping_policy(message):
+        return _quick_start_ticket(_lazy_engine(), session_id, "delivery", body.domain)
+
     from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
 
     scope = evaluate_warranty_scope(message)
@@ -2399,9 +2576,7 @@ async def smart_start_warranty(
         or suggested_issue_type == "delivery"
         or "delivery" in answer_keys
     ):
-        return _refuse_warranty_scope_payload(
-            engine, session_id, body.domain, "delivery"
-        )
+        return _quick_start_ticket(engine, session_id, "delivery", body.domain)
 
     safe_keys: list[str] = []
     if answer_keys:
@@ -2426,8 +2601,10 @@ async def smart_start_warranty(
         if skipped_deep:
             apply_result["stopped_reason"] = "awaiting_intent_confirmation"
 
-    model_hint = str(extraction.get("model_name") or "").strip()
-    if model_hint:
+    from warranty_intake_context import is_valid_model_input, normalize_model_input  # noqa: WPS433
+
+    model_hint = normalize_model_input(str(extraction.get("model_name") or ""))
+    if model_hint and is_valid_model_input(model_hint):
         from product_catalog import resolve_model_name  # noqa: WPS433
 
         resolved_model = resolve_model_name(model_hint) or model_hint
@@ -2519,7 +2696,12 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
     if not answer:
         raise HTTPException(status_code=422, detail="answer must not be empty")
 
-    from warranty_scope import is_order_cancel_request  # noqa: WPS433
+    from warranty_scope import human_support_reason, is_order_cancel_request  # noqa: WPS433
+
+    human_reason = _support_interrupt_reason(answer)
+    if human_reason or ticket.get_collected().get("human_support_requested"):
+        return _request_human_handoff(engine, str(ticket.session_id), answer, str(ticket.domain),
+            reason=human_reason or str(ticket.get_collected().get("human_support_reason") or "customer_request"))
 
     if is_order_cancel_request(answer):
         domain = str(getattr(ticket, "domain", "") or "osaki.com")
@@ -2553,9 +2735,7 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if clarify:
-        return _build_side_question_response(
-            engine, ticket_id, clarify, customer_text=answer
-        )
+        return _clarification_response(engine, ticket_id, answer, clarify)
 
     if result is None:
         raise HTTPException(status_code=422, detail="Could not process answer.")
@@ -2698,6 +2878,8 @@ def _serialize_admin_ticket(ticket, turns=None, evidences=None) -> dict:
     from warranty_error_code_gate import build_admin_fonz_payload  # noqa: WPS433
 
     payload = ticket.to_dict()
+    if getattr(ticket, "id", None) is not None:
+        payload["history_record_id"] = str(ticket.id)
     payload["case_reference"] = _case_reference_for(ticket)
     collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
     payload["freshdesk_ticket_id"] = collected.get("freshdesk_ticket_id")

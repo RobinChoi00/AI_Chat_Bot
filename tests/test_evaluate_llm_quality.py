@@ -37,7 +37,10 @@ def test_repository_fixtures_have_real_assertions_and_multiple_turn_surfaces():
     assert ev.validate_conversations(source) == []
     assert {row["surface"] for row in source["cases"]} == {"general", "sales", "warranty"}
     assert sum(len(row["turns"]) > 1 for row in source["cases"]) >= 10
-    assert all(row["provenance"] == "synthetic" for row in source["cases"])
+    assert {row["provenance"] for row in source["cases"]} == {"synthetic", "reviewed_anonymized"}
+    reviewed=[row for row in source['cases'] if row['provenance']=='reviewed_anonymized']
+    assert len(reviewed)>=5
+    assert all(row.get('source_ref') and row.get('adaptation') for row in reviewed)
 
 
 def test_fixture_validation_rejects_empty_no_assertion_and_duplicate_cases():
@@ -182,6 +185,46 @@ def test_unrun_turns_are_distinguished_from_failed_turns():
 def test_sse_final_text_is_concatenated():
     response = httpx.Response(200, headers={"content-type": "text/event-stream"}, content=b'data: {"text":"Grounded "}\n\ndata: {"content":"answer"}\n\ndata: [DONE]\n', request=httpx.Request("POST", "http://localhost/api/v1/chat"))
     assert ev._read_stream(response) == "Grounded answer"
+
+
+def test_actual_general_chat_raw_stream_is_not_discarded_as_empty_sse():
+    text = "고객에게 보이는 정상 답변\n\nThe grounded final answer."
+    response = httpx.Response(200, headers={"content-type": "text/event-stream; charset=utf-8"},
+                              content=text.encode(), request=httpx.Request("POST", "http://localhost/api/v1/chat"))
+    assert ev._read_stream(response) == text
+
+
+@pytest.mark.parametrize('reply',["We could not complete this lookup. Please try again.","No pudimos completar esta consulta.","현재 조회를 완료하지 못했습니다."])
+def test_localized_application_error_cannot_count_as_quality_success(reply):
+    errors=ev.check_answer(reply,{}, {'not_contains':['guaranteed to cure']})
+    assert 'application error fallback was returned' in errors
+
+
+def test_recommendation_metadata_rejects_wrong_or_missing_fit_and_mechanism():
+    checks={'min_products':1,'min_product_capacity_lb':350,'required_product_mechanism':'4D','max_product_price':5000}
+    valid={'price_usd':4500,'fit':{'maximum_user_weight_lb':375},'specs':{'massage_mechanism':'4D'}}
+    assert ev.check_answer('Matching chair',{'products':[valid]},checks)==[]
+    for product in ({'price_usd':4500}, {**valid,'fit':{'maximum_user_weight_lb':330}}, {**valid,'specs':{'massage_mechanism':'3D'}}):
+        assert ev.check_answer('Matching chair',{'products':[product]},checks)
+    assert ev.check_answer('No products',{'products':[]},checks)
+
+
+def test_recorded_tool_failure_cannot_satisfy_tool_execution_check():
+    errors=ev.check_answer('A fluent reply',{}, {'expected_tool':'search_chair_specs'},
+                           {'tools_called':['search_chair_specs'],'turns':[{'tool_name':'search_chair_specs','tool_success':False}]})
+    assert 'required tool did not execute successfully' in errors
+
+
+def test_audit_capacity_failure_cannot_pass_on_fluent_wrong_recommendations():
+    source=json.loads(ev.CONVERSATIONS_PATH.read_text())
+    spec=next(row for row in source['cases'] if row['id']=='reviewed-sales-628-exact-capacity-and-4d')
+    def handler(request):
+        return httpx.Response(200,json={'reply':'Here is a matching budget chair','intent':'recommend','products':[
+            {'price_usd':4500,'fit':{'maximum_user_weight_lb':330},'specs':{'massage_mechanism':'3D'}}]})
+    with client_for(handler) as client:
+        result=ev.run_case(spec,client,base_url='http://localhost',domain='osakiusa.com')
+    assert not result['passed']
+    assert all(not turn['passed'] for turn in result['turns'])
 
 
 def test_summary_has_percentiles_no_test_failure_and_comparable_baseline():
