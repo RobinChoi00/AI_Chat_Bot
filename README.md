@@ -59,6 +59,12 @@ no date cutoff, with source/store filters and pagination for both conversations
 and their messages. Counts represent stored records, not deduplicated people;
 records never saved or already deleted cannot be recovered by this browser.
 
+The Sales dashboard at `/admin/sales` defaults to **All time**, covering all
+stored Sales metrics through the current time. The 7/14/30/60/90-day options
+remain available, and **View all Sales conversations** opens the saved transcripts.
+The metrics API accepts `period=all`; callers that only pass `days` retain their
+existing date range.
+
 The admin portal's `/admin/quality` page separates customer-confirmed outcomes
 from claim closure and supports approval of model-scoped troubleshooting
 guidance. Sales metrics distinguish observed shopper actions from authenticated

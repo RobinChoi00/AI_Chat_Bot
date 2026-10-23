@@ -7,10 +7,12 @@ import os
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import pytz
 from fastapi import APIRouter, Header, Query
+from sqlalchemy import func, or_
+from sqlalchemy.orm import load_only
 
 from admin_auth import require_admin_key
 
@@ -32,9 +34,13 @@ def _now_cst() -> datetime:
 def _to_cst(value: Any) -> Optional[datetime]:
     if not isinstance(value, datetime):
         return None
-    if value.tzinfo is None:
-        return _CST.localize(value)
-    return value.astimezone(_CST)
+    try:
+        if value.tzinfo is None:
+            return _CST.localize(value)
+        return value.astimezone(_CST)
+    except (OverflowError, ValueError):
+        # Legacy sentinel dates cannot always be represented in this timezone.
+        return None
 
 
 def _percent(part: int, whole: int) -> float:
@@ -90,6 +96,7 @@ def _tools(raw: Optional[str]) -> set[str]:
 @router.get("/admin/sales/metrics")
 async def sales_metrics(
     days: int = Query(30, ge=1, le=_MAX_DAYS),
+    period: Literal["all", "range"] = Query("range"),
     domain: Optional[str] = None,
     x_admin_key: Optional[str] = Header(default=None),
 ) -> dict[str, Any]:
@@ -105,35 +112,74 @@ async def sales_metrics(
     ) = _lazy_orm()
 
     end = _now_cst()
-    start = (end - timedelta(days=days - 1)).replace(
+    start = None if period == "all" else (end - timedelta(days=days - 1)).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
 
     with warranty_db_session() as db:
-        session_q = db.query(SalesSession).filter(SalesSession.created_at >= start, SalesSession.created_at <= end)
-        lead_q = db.query(SalesLead).filter(SalesLead.created_at >= start, SalesLead.created_at <= end)
-        feedback_q = db.query(SalesFeedback).filter(SalesFeedback.created_at >= start, SalesFeedback.created_at <= end)
-        conversion_q = db.query(SalesConversion).filter(
-            SalesConversion.created_at >= start, SalesConversion.created_at <= end
-        )
+        def dated_query(model):
+            upper = model.created_at <= end
+            if period == "all":
+                upper = or_(upper, model.created_at.is_(None))
+            return db.query(model).filter(upper)
+
+        session_q = dated_query(SalesSession)
+        lead_q = dated_query(SalesLead)
+        feedback_q = dated_query(SalesFeedback)
+        conversion_q = dated_query(SalesConversion)
+        if start is not None:
+            session_q = session_q.filter(SalesSession.created_at >= start)
+            lead_q = lead_q.filter(SalesLead.created_at >= start)
+            feedback_q = feedback_q.filter(SalesFeedback.created_at >= start)
+            conversion_q = conversion_q.filter(SalesConversion.created_at >= start)
         if domain:
             session_q = session_q.filter(SalesSession.domain.contains(domain))
             lead_q = lead_q.filter(SalesLead.domain.contains(domain))
             feedback_q = feedback_q.filter(SalesFeedback.domain.contains(domain))
             conversion_q = conversion_q.filter(SalesConversion.domain.contains(domain))
-        sessions = session_q.all()
-        leads = lead_q.all()
-        feedback = feedback_q.all()
-        conversions = conversion_q.all()
+        # A subquery keeps lifetime cohorts independent of SQLite's host-parameter
+        # limit, unlike expanding every historical session ID into an IN list.
+        session_id_query = session_q.with_entities(SalesSession.session_id)
+        message_q = db.query(SalesMessage).filter(SalesMessage.session_id.in_(session_id_query))
+        if period == "all":
+            from sales_events import SalesEvent  # noqa: WPS433
+
+            message_q = message_q.filter(or_(SalesMessage.created_at <= end, SalesMessage.created_at.is_(None)))
+            event_q = db.query(SalesEvent).filter(
+                SalesEvent.session_id.in_(session_id_query), SalesEvent.created_at <= end
+            )
+            if domain:
+                from sales_events import _store  # noqa: WPS433
+
+                store = _store(domain)
+                event_q = event_q.filter(
+                    SalesEvent.domain == store if store else SalesEvent.domain.contains(domain.strip().lower())
+                )
+            earliest = [
+                _to_cst(query.with_entities(func.min(model.created_at)).scalar())
+                for query, model in (
+                    (session_q, SalesSession), (lead_q, SalesLead),
+                    (feedback_q, SalesFeedback), (conversion_q, SalesConversion),
+                    (message_q, SalesMessage), (event_q, SalesEvent),
+                )
+            ]
+            start = min((value for value in earliest if value is not None), default=None)
+        sessions = session_q.options(load_only(
+            SalesSession.session_id, SalesSession.domain, SalesSession.channel,
+            SalesSession.status, SalesSession.created_at,
+        )).all()
+        leads = lead_q.options(load_only(SalesLead.session_id, SalesLead.forwarded, SalesLead.created_at)).all()
+        feedback = feedback_q.options(load_only(SalesFeedback.rating, SalesFeedback.intent)).all()
+        conversions = conversion_q.options(load_only(
+            SalesConversion.session_id, SalesConversion.financial_status, SalesConversion.cancelled_at,
+            SalesConversion.net_paid_amount, SalesConversion.currency, SalesConversion.matched_by,
+        )).all()
 
         session_ids = [str(row.session_id) for row in sessions]
-        messages = (
-            db.query(SalesMessage)
-            .filter(SalesMessage.session_id.in_(session_ids))
-            .all()
-            if session_ids
-            else []
-        )
+        messages = message_q.options(load_only(
+            SalesMessage.session_id, SalesMessage.role, SalesMessage.intent,
+            SalesMessage.handoff, SalesMessage.tools_used,
+        )).all()
 
     user_turns: Counter[str] = Counter()
     assistant_turns: Counter[str] = Counter()
@@ -182,17 +228,23 @@ async def sales_metrics(
         channel_counts[str(session.channel or "unknown").lower()] += 1
         if status == "handoff":
             handoff_sessions.add(sid)
-        created = _to_cst(session.created_at) or end
-        day = created.strftime("%Y-%m-%d")
-        daily[day]["started"] += 1
-        if sid in recommended_sessions:
-            daily[day]["recommended"] += 1
+        created = _to_cst(session.created_at)
+        if created is None and period == "range":
+            created = end
+        if created is not None:
+            day = created.strftime("%Y-%m-%d")
+            daily[day]["started"] += 1
+            if sid in recommended_sessions:
+                daily[day]["recommended"] += 1
 
     lead_status_counts: Counter[str] = Counter()
     for lead in leads:
         lead_status_counts[str(lead.forwarded or "pending").lower()] += 1
-        created = _to_cst(lead.created_at) or end
-        daily[created.strftime("%Y-%m-%d")]["leads"] += 1
+        created = _to_cst(lead.created_at)
+        if created is None and period == "range":
+            created = end
+        if created is not None:
+            daily[created.strftime("%Y-%m-%d")]["leads"] += 1
 
     started = len(sessions)
     engaged = sum(1 for s in sessions if user_turns[str(s.session_id)] >= 2)
@@ -247,26 +299,34 @@ async def sales_metrics(
     paid_sessions = {str(c.session_id) for c in attributed}
     cohort_paid_sessions = paid_sessions & set(session_ids)
     lead_sessions = {str(lead.session_id) for lead in leads}
-    funnel_events = aggregate_sales_events(session_ids, start, end, domain=domain)
+    funnel_events = aggregate_sales_events(session_ids, None if period == "all" else start, end, domain=domain)
     match_counts: Counter[str] = Counter(
         str(c.matched_by or "unattributed").lower() for c in conversions
     )
 
     from sales_spec_index import sales_artifact_health  # noqa: WPS433
 
+    # Lifetime history is sparse: a legacy sentinel date must not allocate
+    # millions of zero-activity days. Existing numbered-day ranges stay filled.
     daily_rows = []
-    cursor = start
-    while cursor.date() <= end.date():
-        day = cursor.strftime("%Y-%m-%d")
-        values = daily[day]
-        daily_rows.append({"day": day, **values})
-        cursor += timedelta(days=1)
+    if period == "all":
+        daily_rows = [{"day": day, **daily[day]} for day in sorted(daily)]
+    else:
+        cursor = start
+        while cursor is not None and cursor.date() <= end.date():
+            day = cursor.strftime("%Y-%m-%d")
+            daily_rows.append({"day": day, **daily[day]})
+            cursor += timedelta(days=1)
 
     return {
         "range": {
-            "days": days,
-            "start": start.isoformat(),
+            "period": period,
+            "days": None if period == "all" else days,
+            "start": start.isoformat() if start is not None else None,
             "end": end.isoformat(),
+            "start_date": start.date().isoformat() if start is not None else None,
+            "end_date": end.date().isoformat(),
+            "daily_mode": "observed" if period == "all" else "calendar",
         },
         "totals": {
             "started": started,

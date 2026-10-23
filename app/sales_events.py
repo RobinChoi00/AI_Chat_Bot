@@ -228,13 +228,14 @@ async def record_sales_event(request: Request, body: SalesEventRequest):
 
 def aggregate_sales_events(
     session_ids: Iterable[str],
-    start: datetime,
+    start: Optional[datetime],
     end: datetime,
     domain: Optional[str] = None,
 ) -> dict:
     """Observed and ordered funnel stages for the selected consultation cohort.
 
-    Ordered cart/checkout counts require each preceding observed action. We do
+    A null start includes all stored history up to end. Ordered cart/checkout
+    counts require each preceding observed action. We do
     not infer unobserved clicks or cart operations from a later event.
     """
     eligible = set(session_ids)
@@ -243,10 +244,9 @@ def aggregate_sales_events(
     ordered: dict[str, set[str]] = {kind: set() for kind in ACTION_TYPES}
     if eligible:
         with warranty_db_session() as db:
-            query = db.query(SalesEvent).filter(
-                SalesEvent.created_at >= start,
-                SalesEvent.created_at <= end,
-            )
+            query = db.query(SalesEvent).filter(SalesEvent.created_at <= end)
+            if start is not None:
+                query = query.filter(SalesEvent.created_at >= start)
             if domain:
                 store = _store(domain)
                 query = query.filter(
