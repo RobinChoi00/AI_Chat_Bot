@@ -158,8 +158,16 @@ REPAIR_MANUAL_URL = "https://www.otasupport.com"
 MAX_RETRIES = 3
 
 # LLM model settings — override via env without code changes.
-AGENT_MODEL = os.environ.get("OPENAI_AGENT_MODEL", "gpt-5.6")
-ROUTER_MODEL = os.environ.get("OPENAI_ROUTER_MODEL", "gpt-4.1-mini")
+_DEFAULT_AGENT_MODEL = "gpt-6.1-sol"
+_DEFAULT_ROUTER_MODEL = "gpt-6-luna"
+AGENT_MODEL = os.environ.get("OPENAI_AGENT_MODEL", "").strip() or _DEFAULT_AGENT_MODEL
+ROUTER_MODEL = os.environ.get("OPENAI_ROUTER_MODEL", "").strip() or _DEFAULT_ROUTER_MODEL
+MODEL_CONFIGURATION = {
+    "agent": {"effective_model": AGENT_MODEL, "default_model": _DEFAULT_AGENT_MODEL,
+              "source": "env" if os.environ.get("OPENAI_AGENT_MODEL", "").strip() else "default"},
+    "router": {"effective_model": ROUTER_MODEL, "default_model": _DEFAULT_ROUTER_MODEL,
+               "source": "env" if os.environ.get("OPENAI_ROUTER_MODEL", "").strip() else "default"},
+}
 
 # 💰 [Cost Optimization] Embedding model:
 # - text-embedding-3-small : 5x cheaper than ada-002 AND higher quality.

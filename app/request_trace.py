@@ -21,11 +21,19 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+
+
+def _model_id(value: Any) -> Optional[str]:
+    """Accept bounded identifiers, never arbitrary provider/customer text."""
+    return value if isinstance(value, str) and _MODEL_ID.fullmatch(value) else None
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +84,13 @@ class RequestTrace:
     domain: str
     user_query: str
     model: str = ""
+    # Configuration is not proof that a provider executed a model. These fields
+    # remain empty for cache hits, deterministic replies, and historical traces.
+    requested_models: List[str] = field(default_factory=list)
+    provider_models: List[str] = field(default_factory=list)
+    model_calls_successful: int = 0
+    model_calls_failed: int = 0
+    model_calls_unverified: int = 0
 
     # Pre-agent outcomes
     scope_blocked: bool = False
@@ -108,6 +123,24 @@ class RequestTrace:
     def add_turn(self, event: TurnEvent) -> None:
         self.turns.append(event)
 
+    def record_model_call(
+        self, requested_model: str, provider_model: Optional[str] = None,
+        succeeded: bool = True,
+    ) -> None:
+        """Record actual call evidence independently from the configured model."""
+        requested = _model_id(requested_model)
+        if requested and requested not in self.requested_models and len(self.requested_models) < 16:
+            self.requested_models.append(requested)
+        if not succeeded:
+            self.model_calls_failed += 1
+            return
+        self.model_calls_successful += 1
+        provider = _model_id(provider_model)
+        if not requested or not provider:
+            self.model_calls_unverified += 1
+        if provider and provider not in self.provider_models and len(self.provider_models) < 16:
+            self.provider_models.append(provider)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "request_id": self.request_id,
@@ -115,6 +148,11 @@ class RequestTrace:
             "domain": self.domain,
             "user_query": self.user_query[:500],
             "model": self.model,
+            "requested_models": list(self.requested_models),
+            "provider_models": list(self.provider_models),
+            "model_calls_successful": self.model_calls_successful,
+            "model_calls_failed": self.model_calls_failed,
+            "model_calls_unverified": self.model_calls_unverified,
             "scope_blocked": self.scope_blocked,
             "cache_hit": self.cache_hit,
             "short_circuit": self.short_circuit,
@@ -141,6 +179,11 @@ CREATE TABLE IF NOT EXISTS request_traces (
     session_id  TEXT    NOT NULL,
     domain      TEXT    DEFAULT 'unknown',
     model       TEXT    DEFAULT '',
+    requested_models TEXT DEFAULT '[]',
+    provider_models TEXT DEFAULT '[]',
+    model_calls_successful INTEGER DEFAULT 0,
+    model_calls_failed INTEGER DEFAULT 0,
+    model_calls_unverified INTEGER DEFAULT 0,
     user_query  TEXT    DEFAULT '',
     scope_blocked    INTEGER DEFAULT 0,
     cache_hit        INTEGER DEFAULT 0,
@@ -163,8 +206,10 @@ INSERT INTO request_traces (
     request_id, session_id, domain, model, user_query,
     scope_blocked, cache_hit, short_circuit, forced_first_tool,
     warranty_mode, guard_sanitized, turn_count, tools_called,
-    total_latency_ms, final_response_len, final_response, turns_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    total_latency_ms, final_response_len, final_response, turns_json,
+    requested_models, provider_models, model_calls_successful,
+    model_calls_failed, model_calls_unverified
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _table_ensured = False
@@ -179,6 +224,15 @@ def _ensure_trace_schema(cur: Any) -> None:
     existing = {row[1] for row in cur.execute("PRAGMA table_info(request_traces)")}
     if "final_response" not in existing:
         cur.execute("ALTER TABLE request_traces ADD COLUMN final_response TEXT DEFAULT ''")
+    for name, definition in (
+        ("requested_models", "TEXT DEFAULT '[]'"),
+        ("provider_models", "TEXT DEFAULT '[]'"),
+        ("model_calls_successful", "INTEGER DEFAULT 0"),
+        ("model_calls_failed", "INTEGER DEFAULT 0"),
+        ("model_calls_unverified", "INTEGER DEFAULT 0"),
+    ):
+        if name not in existing:
+            cur.execute(f"ALTER TABLE request_traces ADD COLUMN {name} {definition}")
     _table_ensured = True
 
 
@@ -211,6 +265,11 @@ def persist_trace(trace: RequestTrace, engine: Any) -> None:
                 d["final_response_len"],
                 d["final_response"],
                 json.dumps(d["turns"]),
+                json.dumps(d["requested_models"]),
+                json.dumps(d["provider_models"]),
+                d["model_calls_successful"],
+                d["model_calls_failed"],
+                d["model_calls_unverified"],
             ))
             raw.commit()
         finally:
@@ -281,7 +340,8 @@ def get_trace(engine: Any, request_id: str) -> Optional[Dict[str, Any]]:
                scope_blocked, cache_hit, short_circuit, forced_first_tool,
                warranty_mode, guard_sanitized, turn_count, tools_called,
                total_latency_ms, final_response_len, final_response,
-               turns_json, created_at
+               turns_json, created_at, requested_models, provider_models,
+               model_calls_successful, model_calls_failed, model_calls_unverified
         FROM request_traces
         WHERE request_id = ?
         ORDER BY id DESC
@@ -322,4 +382,19 @@ def get_trace(engine: Any, request_id: str) -> Optional[Dict[str, Any]]:
         "final_response": row[15] or "",
         "turns": turns,
         "created_at": row[17],
+        "requested_models": _stored_model_ids(row[18]),
+        "provider_models": _stored_model_ids(row[19]),
+        "model_calls_successful": int(row[20] or 0),
+        "model_calls_failed": int(row[21] or 0),
+        "model_calls_unverified": int(row[22] or 0),
     }
+
+
+def _stored_model_ids(value: Any) -> List[str]:
+    try:
+        parsed = json.loads(value or "[]")
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return list(dict.fromkeys(item for item in parsed if _model_id(item)))[:16]

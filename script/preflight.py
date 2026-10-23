@@ -9,6 +9,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from script.verify_model_upgrade import ProbeFailure, load_profile
 
 
 def _load_env_file(path: Path) -> None:
@@ -138,11 +141,13 @@ def main() -> int:
     if not os.getenv("BACKUP_S3_URI", "").strip():
         warnings.append("BACKUP_S3_URI is empty; backups will remain on the same host")
 
-    agent_model = os.getenv("OPENAI_AGENT_MODEL", "gpt-5.6").strip()
-    if not agent_model.startswith("gpt-5.6"):
-        warnings.append(
-            "OPENAI_AGENT_MODEL is not GPT-5.6; compare it against the current quality profile before release"
-        )
+    # Compose reads this non-secret profile after host .env. Validate the same
+    # two effective IDs rather than treating a legacy .env name as the release.
+    try:
+        profile = load_profile(ROOT / "deploy/customer-models.env")
+        print(f"Release model profile: agent={profile['OPENAI_AGENT_MODEL']} router={profile['OPENAI_ROUTER_MODEL']}")
+    except ProbeFailure as exc:
+        errors.append(str(exc))
 
     for warning in warnings:
         print(f"WARNING: {warning}")

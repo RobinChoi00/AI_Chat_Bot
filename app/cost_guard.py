@@ -80,16 +80,18 @@ def estimate_cost_usd(
     prompt_tokens: int,
     cached_tokens: int,
     completion_tokens: int,
-) -> float:
+) -> Optional[float]:
     """Estimate USD cost from token counts using the pricing table.
 
     `cached_tokens` is the subset of `prompt_tokens` that hit OpenAI's
-    automatic prompt cache (billed at half price). We bill the non-cached
-    portion at the full input rate.
+    automatic prompt cache. We apply the configured cached-input rate and
+    bill the non-cached portion at the full input rate. An unlisted model
+    has an unknown cost, including a dated or similarly named model whose
+    price has not been explicitly added to the table.
     """
     pricing = MODEL_PRICING_USD_PER_1M.get(model)
     if not pricing:
-        return 0.0
+        return None
     fresh_input = max(prompt_tokens - cached_tokens, 0)
     return (
         fresh_input * pricing["input"]
@@ -124,13 +126,14 @@ class UsageRecorder:
     """Accumulates usage across the tool-call loop for one request.
 
     Each `record(response)` call adds the response's usage to the running
-    totals. At the end we hand the totals to `flush()` to persist a single
-    aggregated row.
+    totals. The caller persists one aggregated row after the request ends.
+    Missing pricing or missing provider usage stays unknown rather than
+    being reported as a free completion.
     """
 
     __slots__ = (
         "model", "prompt_tokens", "cached_tokens", "completion_tokens",
-        "call_count", "_started_at",
+        "call_count", "_started_at", "_usage_available",
     )
 
     def __init__(self, model: str):
@@ -140,6 +143,7 @@ class UsageRecorder:
         self.completion_tokens = 0
         self.call_count = 0
         self._started_at = time.time()
+        self._usage_available = True
 
     def record(self, response: Any) -> None:
         p, c, o = extract_usage(response)
@@ -147,9 +151,14 @@ class UsageRecorder:
         self.cached_tokens += c
         self.completion_tokens += o
         self.call_count += 1
+        self._usage_available = self._usage_available and getattr(response, "usage", None) is not None
 
     @property
-    def estimated_cost_usd(self) -> float:
+    def estimated_cost_usd(self) -> Optional[float]:
+        if self.call_count == 0:
+            return 0.0
+        if not self._usage_available:
+            return None
         return estimate_cost_usd(
             self.model, self.prompt_tokens, self.cached_tokens, self.completion_tokens
         )
@@ -159,6 +168,7 @@ class UsageRecorder:
         return int((time.time() - self._started_at) * 1000)
 
     def summary_dict(self) -> Dict[str, Any]:
+        estimated_cost = self.estimated_cost_usd
         return {
             "model": self.model,
             "calls": self.call_count,
@@ -166,7 +176,8 @@ class UsageRecorder:
             "cached_tokens": self.cached_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.prompt_tokens + self.completion_tokens,
-            "estimated_cost_usd": round(self.estimated_cost_usd, 6),
+            "estimated_cost_usd": round(estimated_cost, 6) if estimated_cost is not None else None,
+            "estimated_cost_available": estimated_cost is not None,
             "elapsed_ms": self.elapsed_ms,
         }
 

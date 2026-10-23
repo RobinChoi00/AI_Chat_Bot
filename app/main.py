@@ -1036,7 +1036,7 @@ def _persist_usage_log(
     prompt_tokens: int,
     cached_tokens: int,
     completion_tokens: int,
-    estimated_cost_usd: float,
+    estimated_cost_usd: Optional[float],
     elapsed_ms: int,
     cache_hit: bool,
 ) -> None:
@@ -1052,7 +1052,7 @@ def _persist_usage_log(
                 prompt_tokens=prompt_tokens,
                 cached_tokens=cached_tokens,
                 completion_tokens=completion_tokens,
-                estimated_cost_usd=f"{estimated_cost_usd:.6f}",
+                estimated_cost_usd=(f"{estimated_cost_usd:.6f}" if estimated_cost_usd is not None else None),
                 elapsed_ms=elapsed_ms,
                 cache_hit=1 if cache_hit else 0,
             ))
@@ -1525,22 +1525,38 @@ def _agent_completion_options(session_id: str) -> Dict[str, Any]:
         max_output = int(os.getenv("OPENAI_AGENT_MAX_OUTPUT_TOKENS", "3000"))
     except ValueError:
         max_output = 3000
+    from app.model_runtime import completion_options
     options: Dict[str, Any] = {
+        **completion_options(
+            AGENT_MODEL, role="agent", max_output_tokens=max(512, min(max_output, 8000)),
+            reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "medium"),
+            temperature=LLM_TEMPERATURE,
+        ),
         "safety_identifier": hashlib.sha256(
             f"titan-chat:{session_id}".encode("utf-8")
         ).hexdigest(),
-        "store": False,
-        "max_completion_tokens": max(512, min(max_output, 8000)),
     }
-    if AGENT_MODEL.startswith("gpt-5"):
-        effort = os.getenv("OPENAI_REASONING_EFFORT", "medium").strip().lower()
-        if effort not in {"none", "low", "medium", "high", "xhigh", "max"}:
-            effort = "medium"
-        options["reasoning_effort"] = effort
-        options["verbosity"] = "low"
-    else:
-        options["temperature"] = LLM_TEMPERATURE
     return options
+
+
+def _agent_completion_session(client):
+    """Keep tool/reasoning state inside one customer request."""
+    if AGENT_MODEL.lower().startswith("gpt-6"):
+        from app.responses_completion import ResponsesCompletionSession
+        return ResponsesCompletionSession(client).create
+
+    from app.model_runtime import observe_model_call
+
+    def create(**kwargs):
+        try:
+            response = client.chat.completions.create(**kwargs)
+        except Exception as error:
+            observe_model_call(role="agent", requested_model=kwargs["model"], error=error)
+            raise
+        observe_model_call(role="agent", requested_model=kwargs["model"], response=response)
+        return response
+
+    return create
 
 
 try:
@@ -2001,6 +2017,20 @@ async def chat_endpoint(
             tools_called: List[str] = []  # track which tools the agent invoked this turn
             tool_results: List[str] = []
             _guard_changed = False
+            create_completion = _agent_completion_session(openai_client)
+
+            def complete(**kwargs):
+                try:
+                    response = create_completion(**kwargs)
+                except Exception:
+                    trace.record_model_call(kwargs["model"], succeeded=False)
+                    raise
+                choices = getattr(response, "choices", None) or []
+                message = getattr(choices[0], "message", None) if choices else None
+                usable = bool(getattr(message, "content", None) or getattr(message, "tool_calls", None))
+                trace.record_model_call(kwargs["model"], getattr(response, "model", None), succeeded=usable)
+                return response
+
             try:
                 # ── Agentic loop: tool calls → final answer in ONE pass ──────
                 # When the LLM responds without tool_calls, msg.content IS the
@@ -2044,7 +2074,7 @@ async def chat_endpoint(
                         create_kwargs["parallel_tool_calls"] = False
 
                     _llm_t0 = time.perf_counter()
-                    response = openai_client.chat.completions.create(**create_kwargs)
+                    response = complete(**create_kwargs)
                     _llm_ms = int((time.perf_counter() - _llm_t0) * 1000)
                     usage.record(response)
                     msg = response.choices[0].message
@@ -2081,7 +2111,7 @@ async def chat_endpoint(
                                 **_agent_completion_options(chat_request.session_id),
                             }
                             _llm_t0 = time.perf_counter()
-                            response = openai_client.chat.completions.create(**retry_kwargs)
+                            response = complete(**retry_kwargs)
                             _llm_ms += int((time.perf_counter() - _llm_t0) * 1000)
                             usage.record(response)
                             msg = response.choices[0].message
@@ -2165,7 +2195,7 @@ async def chat_endpoint(
                     # Loop completed without `break` → still in tool-loop limbo.
                     # Do ONE final cheap synthesis call WITHOUT tools to wrap up.
                     logger.warning("⚠️ Agent hit MAX_TOOL_TURNS — forcing synthesis without tools")
-                    response = openai_client.chat.completions.create(
+                    response = complete(
                         model=AGENT_MODEL,
                         messages=messages,
                         **_agent_completion_options(chat_request.session_id),
@@ -2416,7 +2446,7 @@ async def chat_endpoint(
                     f"📊 Usage: model={usage.model} calls={usage.call_count} "
                     f"in={usage.prompt_tokens} (cached={usage.cached_tokens}) "
                     f"out={usage.completion_tokens} "
-                    f"cost≈${usage.estimated_cost_usd:.5f} "
+                    f"cost={('$' + format(usage.estimated_cost_usd, '.5f')) if usage.estimated_cost_usd is not None else 'unmeasured'} "
                     f"elapsed={usage.elapsed_ms}ms"
                 )
                 background_tasks.add_task(
@@ -2488,25 +2518,41 @@ async def cost_summary(
 
         # Cast SQLAlchemy column attribute reads into plain Python types so
         # basedpyright stops treating each `r.field` as a Column descriptor.
-        total_cost = sum(float(cast(str, r.estimated_cost_usd) or 0) for r in rows)
+        def recorded_cost(row):
+            value = row.estimated_cost_usd
+            if value is None or value == "":
+                return None
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return None
+            import math
+            return parsed if math.isfinite(parsed) and parsed >= 0 else None
+
+        costs = [recorded_cost(row) for row in rows]
+        total_cost = sum(value for value in costs if value is not None)
+        unknown_cost_requests = sum(value is None for value in costs)
         total_calls = sum(cast(int, r.call_count) or 0 for r in rows)
         total_prompt = sum(cast(int, r.prompt_tokens) or 0 for r in rows)
         total_cached = sum(cast(int, r.cached_tokens) or 0 for r in rows)
         total_completion = sum(cast(int, r.completion_tokens) or 0 for r in rows)
         cache_hits = sum(1 for r in rows if cast(int, r.cache_hit) > 0)
 
-        by_model: Dict[str, Dict[str, float]] = {}
-        for r in rows:
+        by_model: Dict[str, Dict[str, Any]] = {}
+        for r, recorded in zip(rows, costs):
             bucket = by_model.setdefault(cast(str, r.model) or "(unknown)", {
                 "requests": 0, "calls": 0, "prompt": 0, "cached": 0,
-                "completion": 0, "cost_usd": 0.0,
+                "completion": 0, "known_cost_usd": 0.0, "unknown_cost_requests": 0,
             })
             bucket["requests"] += 1
             bucket["calls"] += cast(int, r.call_count) or 0
             bucket["prompt"] += cast(int, r.prompt_tokens) or 0
             bucket["cached"] += cast(int, r.cached_tokens) or 0
             bucket["completion"] += cast(int, r.completion_tokens) or 0
-            bucket["cost_usd"] += float(cast(str, r.estimated_cost_usd) or 0)
+            if recorded is None:
+                bucket["unknown_cost_requests"] += 1
+            else:
+                bucket["known_cost_usd"] += recorded
 
         return {
             "days": days,
@@ -2517,10 +2563,16 @@ async def cost_summary(
             "completion_tokens": total_completion,
             "cache_hits": cache_hits,
             "cache_hit_ratio": round(cache_hits / max(len(rows), 1), 3),
-            "total_cost_usd": round(total_cost, 4),
-            "avg_cost_per_request_usd": round(total_cost / max(len(rows), 1), 6),
+            "known_cost_usd": round(total_cost, 4),
+            "unknown_cost_requests": unknown_cost_requests,
+            "pricing_available": unknown_cost_requests == 0,
+            "total_cost_usd": round(total_cost, 4) if not unknown_cost_requests else None,
+            "avg_cost_per_request_usd": round(total_cost / max(len(rows), 1), 6) if not unknown_cost_requests else None,
+            "cost_scope": "Recorded general-chat model calls only; router, embeddings, OCR and speech are not included.",
             "by_model": {
-                k: {**v, "cost_usd": round(v["cost_usd"], 4)} for k, v in by_model.items()
+                k: {**v, "known_cost_usd": round(v["known_cost_usd"], 4),
+                    "cost_usd": round(v["known_cost_usd"], 4) if not v["unknown_cost_requests"] else None}
+                for k, v in by_model.items()
             },
             "cache": cache_stats(),
         }

@@ -237,7 +237,15 @@ def test_llm_is_only_asked_for_a_route(monkeypatch):
     llm_fallback("what's it like")
     system = client.chat.completions.seen["messages"][0]["content"].lower()
     assert "never answer the customer" in system
-    assert client.chat.completions.seen["temperature"] == 0
+    import config
+    seen=client.chat.completions.seen
+    if config.ROUTER_MODEL.startswith(("gpt-5", "gpt-6")):
+        assert "temperature" not in seen and "max_tokens" not in seen
+        assert seen["reasoning_effort"] == "low"
+    else:
+        assert seen["temperature"] == 0
+    assert seen["max_completion_tokens"] >= 1024
+    assert seen["store"] is False
 
 
 def test_revise_recommend_sends_costco_gap_to_discount():

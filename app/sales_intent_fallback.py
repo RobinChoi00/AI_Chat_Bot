@@ -367,11 +367,13 @@ def llm_fallback(text: str) -> Optional[SalesIntent]:
     try:
         from config import ROUTER_MODEL
 
-        response = client.chat.completions.create(
+        from app.model_runtime import create_completion
+        response = create_completion(
+            client,
             model=ROUTER_MODEL,
+            role="router",
             temperature=0,
-            max_tokens=32,
-            response_format={"type": "json_object"},
+            json_mode=True,
             messages=[
                 {
                     "role": "system",

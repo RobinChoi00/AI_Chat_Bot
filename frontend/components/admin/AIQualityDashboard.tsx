@@ -42,11 +42,38 @@ export default function AIQualityDashboard({ outcomes, reviews, health }: {
   }
 
   const input = "w-full rounded border border-gray-300 bg-white p-2 text-sm";
+  const modelCalls = health?.model_calls;
   return <div className="space-y-6">
     {outcomes && <RepairOutcomePanel repair={outcomes.repair} />}
     {health && <section className="rounded-xl border bg-white p-4">
       <h2 className="font-semibold">Current runtime · response times in the last 7 days</h2>
       <p className="mt-2 text-xs text-gray-600">Agent: {health.models.agent} · Router: {health.models.router} · Embedding: {health.models.embedding}</p>
+      <p className="mt-1 break-all text-xs text-gray-500">Code release: {health.app_release_id ?? "Unmeasured"}</p>
+      {health.model_configuration && <div className="mt-3 rounded-lg bg-gray-50 p-3 text-xs text-gray-700">
+        <h3 className="font-semibold">Configured model selection</h3>
+        {(["agent", "router"] as const).map((role) => {
+          const selection = health.model_configuration?.[role];
+          return <p key={role} className="mt-1 break-all">{role}: {selection?.effective_model ?? "Unknown"} · {selection?.source === "env" ? "environment override" : selection?.source === "default" ? "code default" : "selection source unknown"} · code default {selection?.default_model ?? "Unknown"}</p>;
+        })}
+        <p className="mt-2">Configuration alone does not confirm model access or a completed request.</p>
+      </div>}
+      <div className="mt-4 rounded-lg border border-gray-200 p-3 text-xs text-gray-700">
+        <h3 className="font-semibold">Observed model calls{modelCalls ? ` · last ${modelCalls.days} days` : ""}</h3>
+        {modelCalls ? <>
+          {(["agent", "router"] as const).map((role) => {
+            const observed = modelCalls.roles[role];
+            const latest = observed.latest_call;
+            const successful = observed.latest_successful_call;
+            return <div key={role} className="mt-3 space-y-1 break-words">
+              <p className="font-medium">{role}: {observed.calls} recorded calls · {observed.successful_calls} successful · {observed.failed_calls} failed</p>
+              {latest ? <p>Latest request: {latest.requested_model} · {latest.succeeded ? "successful" : `failed (${latest.error_code ?? "unknown category"})`} · {latest.observed_at ?? "time unknown"} · release {latest.release_id}</p> : <p>No recorded request. Provider model is unknown.</p>}
+              {successful ? <p>Latest successful request: {successful.requested_model} · {successful.provider_model ? `provider returned ${successful.provider_model}` : "provider model ID unknown"} · {successful.observed_at ?? "time unknown"} · release {successful.release_id}</p> : <p>No successful call recorded. Model access is unverified.</p>}
+            </div>;
+          })}
+          <p className="mt-3 text-gray-500">{modelCalls.scope}</p>
+          <p className="mt-1 text-gray-500">Counts cover retained observations: at most {modelCalls.max_retained_calls.toLocaleString("en-US")} calls for {modelCalls.retention_days} days.</p>
+        </> : <p className="mt-2">Model-call evidence is unavailable. Configured names do not establish successful access.</p>}
+      </div>
       {Object.entries(health.latency).map(([surface, timing]) => <p key={surface} className="mt-2 text-sm">
         {surface}: {timing.samples} successful requests · median {timing.samples <= 0 || timing.p50_ms === null ? "—" : `${timing.p50_ms} ms`} · P95 {timing.samples <= 0 || timing.p95_ms === null ? "—" : `${timing.p95_ms} ms`}
       </p>)}

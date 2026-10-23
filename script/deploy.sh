@@ -6,7 +6,7 @@ if [[ $# -ne 1 || ! "$1" =~ ^[0-9a-f]{40}$ ]]; then
   exit 2
 fi
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "${DEPLOY_REPOSITORY_ROOT:-$(dirname "$0")/..}" && pwd)"
 TARGET_SHA="$1"
 cd "$ROOT"
 
@@ -96,6 +96,9 @@ else
 fi
 
 docker compose build --pull
+# Fail before replacing healthy services if the account cannot actually use
+# either reviewed model/API path. Four bounded synthetic requests, no customer records.
+docker compose run --rm --no-deps backend python script/verify_model_upgrade.py --live --record-observations
 docker compose up -d --remove-orphans
 
 for attempt in $(seq 1 30); do

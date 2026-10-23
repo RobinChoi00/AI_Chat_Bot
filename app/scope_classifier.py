@@ -268,10 +268,13 @@ def _llm_classify(user_query: str, chat_history: Sequence[Any] | None) -> Option
     )
 
     try:
-        response = client.chat.completions.create(
+        from app.model_runtime import create_completion
+        response = create_completion(
+            client,
             model=ROUTER_MODEL,
+            role="router",
             temperature=0,
-            response_format={"type": "json_object"},
+            json_mode=True,
             messages=[
                 {
                     "role": "system",
