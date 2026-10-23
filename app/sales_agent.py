@@ -20,8 +20,11 @@ from __future__ import annotations
 
 import logging
 import re
+import hashlib
 from dataclasses import dataclass, field
 from typing import Optional
+
+from sales_constraints import extract_constraints, product_constraint_issues, constraint_verification_notes
 
 from sales_catalog import (
     ProductSpecs,
@@ -401,7 +404,7 @@ def _department_phones() -> str:
 
 _MENU_INTRO = (
     "Hi! I'm the Osaki shopping assistant. Tell me **height** and what the "
-    "chair should help with — I'll pick three models.\n\n"
+    "chair should help with — I'll look for matching models.\n\n"
     "I can also check **price**, **specs**, **stock**, **shipping**, and "
     "**returns** here.\n\n"
     f"{_department_phones()}"
@@ -415,13 +418,20 @@ _MENU_INTRO = (
 
 def _guess_model_from_text(text: str) -> Optional[ProductSpecs]:
     product = resolve_product(text or "")
-    if product is not None:
+    requested_mechanisms = re.findall(r"\b([2345]D)\b", text or "", re.I)
+    def consistent(candidate):
+        return candidate is not None and (not requested_mechanisms or any(
+            mechanism.lower() in ' '.join([candidate.massage_mechanism or '', candidate.display_name or '', candidate.title or '']).lower()
+            for mechanism in requested_mechanisms
+        ))
+    if consistent(product):
         return product
     # `resolve_product` matches names, not sentences, so "tell me about the
     # Maestro" slips past it. The fallback index knows which catalog token was
     # in the message, so retry with just that name.
     named = named_model_in_text(text or "")
-    return resolve_product(named) if named else None
+    candidate = resolve_product(named) if named else None
+    return candidate if consistent(candidate) else None
 
 
 _CHEAPER_FROM_LIST_RE = re.compile(
@@ -467,6 +477,10 @@ def _resolve_focus_product(
         named = _guess_model_from_text(message or "")
         if named is not None:
             return named
+        # A misspelled explicit mechanism/model must not silently become a
+        # different chair through the saved-focus fallback.
+        if re.search(r"\b[2345]D\b", message or "", re.I) and named_model_in_text(message or ""):
+            return None
     idx = _pending_tier_index(message or "", prefs)
     if idx is not None:
         picks = (prefs or {}).get("pending_tier_picks") or []
@@ -937,6 +951,11 @@ def _resume_recommend_after_side(
     *,
     domain: str,
 ) -> SalesReply:
+    # Answer a named product question as its own turn. Keeping the unfinished
+    # recommendation state lets the shopper resume without appending the same
+    # height/focus interview to every direct feature question.
+    if side.intent in {INTENT_SPECS, INTENT_PRICE, INTENT_STOCK} and side.products:
+        return side
     rec = dict((prefs or {}).get("recommend_prefs") or {})
     side_patch = dict(side.prefs_patch or {})
     extra_rec = side_patch.get("recommend_prefs")
@@ -1184,6 +1203,11 @@ def _specs_reply(
     fit = lookup_fit_spec(product.display_name)
     lines = [f"**{product.display_name}** — {_fmt_price(product.price_usd)}"]
 
+    if re.search(r"\b(?:how\s+heavy|chair\s+weigh|chair\s+weight|weight\s+of\s+(?:the\s+)?chair)\b", message or "", re.I):
+        lines.append("The chair's own weight is not verified in this catalog. Maximum user weight is a different specification; a specialist can confirm shipping and chair weight for this exact model.")
+    if re.search(r"\b(?:min(?:imum)?|max(?:imum)?|supported|user)\b.{0,25}\bheight\b|\bheight\s+(?:range|limit)\b", message or "", re.I):
+        lines.append("The supported user-height range is not verified in this catalog. A specialist should confirm the minimum and maximum user height for this exact model before purchase.")
+
     asked = [
         (label, key)
         for pattern, key, label in _SPEC_QUESTION_PATTERNS
@@ -1323,7 +1347,7 @@ def _why_pick(product: ProductSpecs, request: RecommendationRequest) -> str:
         "L-Track",
         "SL-Track",
     }:
-        bits.append(f"{product.track_type} suits taller users")
+        bits.append(f"{product.track_type}; exact height fit needs verification")
     if "back" in request.focus_areas and product.track_type in {"L-Track", "SL-Track"}:
         bits.append("strong back / full-body track coverage")
     if "neck" in request.focus_areas and product.massage_mechanism in {"3D", "4D"}:
@@ -1433,8 +1457,8 @@ def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
         return SalesReply(
             reply=(
                 "What's the **user height**? Tap a range, or type it "
-                "(like *5'10*). Then I'll ask the main focus and show "
-                "**Value / Mid / Premium**."
+                "(like *5'10*). Then I'll ask the main focus and look for "
+                "models within your requirements."
             ),
             intent=INTENT_RECOMMEND,
             quick_replies=[*_HEIGHT_REPLIES, QuickReply(label="Talk to a human", payload="human")],
@@ -1523,11 +1547,11 @@ def _why_case_pick_lines(
     if prefs.get("goal"):
         fit_bits.append(f"targets **{prefs['goal']}**")
     if prefs.get("height"):
-        fit_bits.append(f"sized for **{prefs['height']}**")
+        fit_bits.append(f"height preference **{prefs['height']}** (fit verification needed)")
     if prefs.get("weight"):
         fit_bits.append(f"rated for **{prefs['weight']}**")
     if prefs.get("intensity"):
-        fit_bits.append(f"**{prefs['intensity']}** intensity")
+        fit_bits.append(f"requested **{prefs['intensity']}** intensity (pressure verification needed)")
     if fit_bits:
         lines.append("• Built around your fit: " + "; ".join(fit_bits) + ".")
     cleaned_reason = (reason or "").strip()
@@ -1612,6 +1636,9 @@ def _passes_fit_gates(
     limit: Optional[float],
     mode: str,
 ) -> bool:
+    product = resolve_product(model_name)
+    if product_constraint_issues(product, prefs):
+        return False
     if not weight_ok(model_name, prefs.get("weight") or ""):
         return False
     if not wall_ok(model_name, prefs.get("space") or ""):
@@ -1671,6 +1698,7 @@ def _choose_tier_pick(
     *,
     domain: str,
     prefer_compact: bool,
+    prefs: Optional[dict] = None,
 ) -> Optional[tuple[str, Optional[ProductSpecs], Optional[LiveStockSnapshot], str, Optional[float]]]:
     """Pick best candidate by stock, then doorway when space is tight, then list order."""
     if not candidates:
@@ -1687,6 +1715,9 @@ def _choose_tier_pick(
     for idx, (name, reason, door_key) in enumerate(candidates):
         product = products[name]
         snap = snapshots.get(product.handle) if product is not None else None
+        live_price = getattr(snap, 'price_usd', None) if snap else None
+        if product_constraint_issues(product, prefs or {}, price_usd=live_price):
+            continue
         door_sort = door_key if prefer_compact else 0.0
         scored.append(
             (
@@ -1700,6 +1731,8 @@ def _choose_tier_pick(
                 door_key if door_key < 999 else None,
             )
         )
+    if not scored:
+        return None
     scored.sort(key=lambda row: (row[0], row[1], row[2]))
     best = scored[0]
     return best[3], best[4], best[5], best[6], best[7]
@@ -1712,6 +1745,12 @@ def _no_fit_recommend_reply(
 ) -> SalesReply:
     """Honest empty result when hard fit gates leave no tier picks."""
     bits: list[str] = []
+    if prefs.get('budget_max_usd'):
+        bits.append(f"a **${float(prefs['budget_max_usd']):,.0f} maximum budget**")
+    if prefs.get('mechanism'):
+        bits.append(f"a **{prefs['mechanism']} mechanism**")
+    if prefs.get('weight_lb'):
+        bits.append(f"a verified capacity of at least **{prefs['weight_lb']} lb**")
     door = (prefs.get("doorway_in") or "").strip()
     if door and door != "skip":
         mode = _doorway_fit_mode(prefs)
@@ -1723,7 +1762,7 @@ def _no_fit_recommend_reply(
             else ""
         )
         bits.append(f'a **{door}"** doorway{mode_bit}')
-    if prefs.get("weight"):
+    if prefs.get("weight") and not prefs.get('weight_lb'):
         bits.append(f"**{prefs['weight']}** capacity")
     if prefs.get("space") == "Small Room":
         bits.append("**small-room** wall clearance")
@@ -1758,7 +1797,9 @@ def _no_fit_recommend_reply(
         intent=INTENT_RECOMMEND,
         quick_replies=replies,
         tools_used=["cases.nofit"],
-        prefs_patch={"recommend_prefs": prefs, "awaiting_recommend": False},
+        prefs_patch={"recommend_prefs": prefs, "awaiting_recommend": False,
+                     "pending_tier_picks": [], "pending_primary": "",
+                     "pending_product_url": "", "pending_pick_summary": ""},
         flow_stage="recommend_nofit",
     )
 
@@ -1801,6 +1842,7 @@ def _tiered_case_recommend_reply(
             candidates,
             domain=domain,
             prefer_compact=prefer_compact,
+            prefs=prefs,
         )
         if chosen is None:
             continue
@@ -1821,6 +1863,8 @@ def _tiered_case_recommend_reply(
                     title=alt_product.title or alt_product.display_name or alt_name,
                 )
                 if alt_snap is not None and alt_snap.in_stock:
+                    if product_constraint_issues(alt_product, prefs, price_usd=getattr(alt_snap, 'price_usd', None)):
+                        continue
                     pick_name, product, snap = alt_name, alt_product, alt_snap
                     reason = alt_reason
                     doorway_in = alt_door if alt_door < 999 else None
@@ -1838,7 +1882,7 @@ def _tiered_case_recommend_reply(
         show_price = live_price if live_price is not None else catalog_price
         picked.append(
             {
-                "tier": tier_label,
+                "tier": price_tier_label(show_price) or "Price not verified",
                 "pick_name": pick_name,
                 "product": product,
                 "snap": snap,
@@ -1854,6 +1898,9 @@ def _tiered_case_recommend_reply(
 
     if not picked:
         return _no_fit_recommend_reply(prefs, defaults_applied=defaults_applied)
+
+    count_label = '1 option' if len(picked) == 1 else f'{len(picked)} options'
+    header = f"Based on **{fit_label}**, here are {count_label} within the verified constraints:"
 
     blurbs = _contrast_tier_blurbs(
         [row["product"] for row in picked],
@@ -1901,13 +1948,16 @@ def _tiered_case_recommend_reply(
         lines.append(defaults_note)
         lines.append("")
 
+    for note in constraint_verification_notes(prefs):
+        lines.extend([note, ""])
+
     if is_sales_after_hours():
         lines.append(after_hours_blurb())
         lines.append("")
 
     lines.append(
-        "Reply **1 / 2 / 3** for that chair, or email these picks. "
-        "If a doorway is tight or you weigh over 220 lb, tell me and I'll re-check fit."
+        "Reply with the option number for that chair, or email these picks. "
+        "A specialist can confirm delivery and fit details before purchase."
     )
 
     primary = tier_leads[0]
@@ -1930,7 +1980,7 @@ def _tiered_case_recommend_reply(
     if len(tier_leads) >= 2:
         quick.append(
             QuickReply(
-                label="Compare Value vs Mid",
+                label="Compare first two options",
                 payload="compare:tiers:1:2",
             )
         )
@@ -2198,13 +2248,18 @@ def _catalog_tier_recommend_reply(
     request: RecommendationRequest,
     *,
     domain: str = "osakiusa.com",
+    prefs: Optional[dict] = None,
 ) -> SalesReply:
     """Fallback when practical-case file is missing or incomplete."""
     has_hints = any(
         [request.height_in, request.weight_lb, request.budget_usd, request.focus_areas]
     )
-    picks = recommend(request, limit=3)
+    picks = [product for product in recommend(request, limit=3) if _passes_fit_gates(
+        product.display_name, prefs or {}, limit=_doorway_limit_in(prefs or {}), mode=_doorway_fit_mode(prefs or {})
+    )]
     if not picks:
+        if (prefs or {}).get('height'):
+            return _no_fit_recommend_reply(prefs or {})
         return SalesReply(
             reply=(
                 "What's the **user height**? Tap a range, or type it "
@@ -2324,6 +2379,14 @@ def _recommend_reply(
         focus_areas=request.focus_areas,
         free_text=request.free_text or message,
     )
+    merged = extract_constraints(message, merged)
+    # Rebuild the request from retained exact answers; short follow-ups must
+    # not drop a budget/capacity supplied earlier in the same conversation.
+    request.height_in = int(float(merged['height_in'])) if merged.get('height_in') else request.height_in
+    request.weight_lb = float(merged['weight_lb']) if merged.get('weight_lb') else request.weight_lb
+    request.budget_usd = int(float(merged['budget_max_usd'])) if merged.get('budget_max_usd') else request.budget_usd
+    request.free_text = ' '.join([message or '', merged.get('mechanism') or ''])
+    merged = merge_prefs_from_hints(merged, height_in=request.height_in, weight_lb=request.weight_lb, budget_usd=request.budget_usd)
     before_defaults = dict(merged)
     awaiting = bool((prefs or {}).get("awaiting_recommend"))
     height_just_set = False
@@ -2346,16 +2409,14 @@ def _recommend_reply(
             merged["goal"] = "Full-Body Relaxation"
     # Bare "30 inch" / '32"' answers after ask_doorway.
     door_msg = _parse_doorway_inches_message(message or "")
-    if door_msg is not None and not (merged.get("doorway_in") or "").strip():
+    if door_msg is not None:
         merged["doorway_in"] = (
             str(int(door_msg)) if door_msg == int(door_msg) else str(door_msg)
         )
         if "space" not in merged:
             merged["space"] = "Narrow Doorway"
 
-    # Budget is never asked and never gates the reply — Value/Mid/Premium
-    # tiers inject case-book budget bands internally only.
-    merged.pop("budget", None)
+    # Case-book bands select shelves; exact budgets remain hard ceilings.
     merged = enrich_implied_prefs(merged)
     defaults_applied = secondary_defaults_applied(before_defaults, merged)
 
@@ -2388,7 +2449,12 @@ def _recommend_reply(
     if tiered is not None:
         return tiered
 
-    return _catalog_tier_recommend_reply(message, request, domain=domain)
+    result = _catalog_tier_recommend_reply(message, request, domain=domain, prefs=merged)
+    result.prefs_patch = {**(result.prefs_patch or {}), 'recommend_prefs': merged}
+    notes = constraint_verification_notes(merged)
+    if result.products and notes:
+        result.reply += '\n\n' + '\n'.join(notes)
+    return result
 
 
 
@@ -2731,6 +2797,9 @@ def _compare_reply(
     prefs: Optional[dict] = None,
     domain: str = "osakiusa.com",
 ) -> SalesReply:
+    terms = [term.strip() for term in re.split(r"\s+(?:vs\.?|versus|and)\s+|,", message or '', flags=re.I) if term.strip()]
+    if len(terms) > 2:
+        return SalesReply(reply="You named more than two models. Which two should I compare first? I can compare the remaining model afterward.", intent=INTENT_COMPARE, quick_replies=[QuickReply(label="See all models", payload="list"), QuickReply(label="Talk to a human", payload="human")], tools_used=['catalog.compare'], prefs_patch=_clear_compare_state())
     pair = split_compare_terms(message)
     if pair is None:
         return SalesReply(
@@ -3009,10 +3078,30 @@ def _compare_recommend_reply(
         focus_areas=request.focus_areas,
         free_text=request.free_text or message,
     )
+    rec = extract_constraints(message, rec)
     rec = enrich_implied_prefs(rec)
     missing = missing_ask(rec)
     if missing:
         return _clarify_compare_recommend(missing[0], rec, left, right)
+
+    eligible = [product for product in (left, right) if _passes_fit_gates(
+        product.display_name, rec, limit=_doorway_limit_in(rec), mode=_doorway_fit_mode(rec)
+    )]
+    if len(eligible) < 2:
+        if not eligible:
+            reply = _no_fit_recommend_reply(rec)
+            reply.prefs_patch = {**(reply.prefs_patch or {}), 'awaiting_compare_recommend': False}
+            return reply
+        product = eligible[0]
+        url = product_page_url(domain, product.handle)
+        return SalesReply(
+            reply=f"Of these two, only **{product.display_name}** passes the verified budget, mechanism and fit limits you supplied. The other model does not meet every verified requirement.\n\n" + '\n'.join(constraint_verification_notes(rec)) + (f'\n\n{url}' if url else ''),
+            intent=INTENT_COMPARE, products=[product.as_public_dict()],
+            quick_replies=[QuickReply(label='Talk to a human', payload='human')],
+            tools_used=['catalog.compare', 'cases.fit_gates'],
+            prefs_patch={'recommend_prefs': rec, 'pending_primary': product.display_name,
+                         'pending_product_url': url, 'awaiting_compare_recommend': False},
+        )
 
     left_score, right_score = pair_fit_scores(left, right, {"recommend_prefs": rec})
     if abs(left_score - right_score) < 0.75:
@@ -3063,7 +3152,7 @@ def _compare_recommend_reply(
     other_url = product_page_url(domain, other.handle)
     lines = [
         f"Between these two, **{winner.display_name}** is the better "
-        f"**published fit** for **{rec.get('height') or 'your height'}**"
+        f"match for your stated preferences"
         + (f" and **{rec.get('goal')}**" if rec.get("goal") else "")
         + ".",
         "",
@@ -3078,6 +3167,7 @@ def _compare_recommend_reply(
     lines.append(
         "\nThat is catalog fit, not which chair feels stronger in person."
     )
+    lines.extend(constraint_verification_notes(rec))
     if url:
         lines.append(f"\nShop: {url}")
     quick = []
@@ -3113,11 +3203,10 @@ def _intensity_reply(message: str) -> SalesReply:
         mech = product.massage_mechanism or "adjustable"
         return SalesReply(
             reply=(
-                f"**{product.display_name}** uses a **{mech} mechanism** with "
-                "multiple intensity levels — most people find level 3 of 5 firm "
-                "but comfortable. If you want it stronger, 4D models push deeper "
-                "into muscles than 2D/3D. A rep can walk you through settings if "
-                "you'd like."
+                f"**{product.display_name}** is listed with a **{mech} mechanism**. "
+                "The exact intensity levels and pressure range are not verified in this catalog. "
+                "A mechanism label alone does not establish how strong it will feel. "
+                "A specialist can confirm this model's settings, or you can try it in the showroom."
             ),
             intent=INTENT_INTENSITY,
             quick_replies=[
@@ -3130,9 +3219,9 @@ def _intensity_reply(message: str) -> SalesReply:
         )
     return SalesReply(
         reply=(
-            "Osaki chairs offer **multiple intensity levels** (typically 5 steps) "
-            "and, on 3D/4D models, an adjustable *depth* separately from speed. "
-            "Which model did you have in mind? I can pull the exact spec."
+            "Intensity settings and pressure vary by model; I don't have a verified "
+            "setting count for every chair. Which model are you considering? "
+            "I can check the published mechanism and help you ask a specialist about pressure."
         ),
         intent=INTENT_INTENSITY,
         quick_replies=_menu_quick_replies(),
@@ -3953,12 +4042,14 @@ def _tier_followup_reply(
     stock = (pick.get("stock") or "").strip()
     product = resolve_product(handle or display)
     rec_prefs = ((prefs or {}).get("recommend_prefs") or {})
+    if not _passes_fit_gates(display, rec_prefs, limit=_doorway_limit_in(rec_prefs), mode=_doorway_fit_mode(rec_prefs)):
+        return _no_fit_recommend_reply(rec_prefs)
 
     why_bits: list[str] = []
     if rec_prefs.get("goal"):
         why_bits.append(f"targets **{rec_prefs['goal']}**")
     if rec_prefs.get("height"):
-        why_bits.append(f"sized for **{rec_prefs['height']}**")
+        why_bits.append(f"height preference **{rec_prefs['height']}** (fit verification needed)")
     if product is not None:
         for bit in (product.massage_mechanism, product.track_type):
             if bit:
@@ -4131,6 +4222,8 @@ def _pending_tier_index(message: str, prefs: Optional[dict]) -> Optional[int]:
     raw = (message or "").strip().lower()
     if not raw:
         return None
+    if extract_constraints(raw):
+        return None
     if re.search(
         r"\b(recommend|another|different|start over|new search)\b", raw
     ):
@@ -4257,7 +4350,7 @@ def _remember_question(result: SalesReply, message: str, payload: Optional[str])
     return result
 
 
-def respond(
+def _respond_turn(
     message: str,
     *,
     payload: Optional[str] = None,
@@ -4443,6 +4536,13 @@ def respond(
 
     waiting = _in_recommend_wait(prefs)
 
+    constraints = extract_constraints(message or '')
+    if constraints and ((prefs or {}).get('recommend_prefs') or waiting) and (
+        intent.label in {INTENT_RECOMMEND, INTENT_INTENSITY, INTENT_UNCLEAR}
+        or re.search(r"\b(?:actually|correction|instead|my budget|budget is|budget now)\b", message or '', re.I)
+    ):
+        return _remember_question(_finalize_flow_stage(_recommend_reply(message, domain=domain, prefs=prefs)), message, payload)
+
     if intent.label == INTENT_PREPURCHASE_POLICY:
         result = _prepurchase_policy_reply(message, domain=domain)
         if waiting:
@@ -4452,6 +4552,8 @@ def respond(
         )
 
     if intent.label == INTENT_GREETING:
+        if 'positive_feedback' in intent.matched_terms:
+            return _finalize_flow_stage(SalesReply(reply="Thank you for sharing! I'm glad you're enjoying your chair. If you have a question about it, I'm here to help.", intent=INTENT_GREETING, quick_replies=[QuickReply(label="Back to menu", payload="menu")]))
         return _finalize_flow_stage(_greeting_reply(prefs))
 
     if _EMAIL_PICK_RE.search(message or ""):
@@ -4549,7 +4651,7 @@ def respond(
             payload,
         )
 
-    if waiting and intent.label == INTENT_UNCLEAR:
+    if waiting and intent.label in {INTENT_UNCLEAR, INTENT_INTENSITY}:
         return _remember_question(
             _finalize_flow_stage(
                 _recommend_reply(message or "recommend", domain=domain, prefs=prefs)
@@ -4641,3 +4743,62 @@ def respond(
     return _remember_question(
         _finalize_flow_stage(_unclear_reply()), message, payload
     )
+
+
+_TRANSIENT_FLOW_KEYS = (
+    'awaiting_showroom_window', 'awaiting_showroom_email',
+    'awaiting_email_for_pick', 'awaiting_pre_human_question',
+)
+
+
+def respond(message: str, *, payload: Optional[str] = None,
+            domain: str = 'osakiusa.com', prefs: Optional[dict] = None,
+            before_handoff: bool = False) -> SalesReply:
+    """Resolve task interruptions before collecting pending form answers."""
+    data = dict(prefs or {})
+    raw = (message or '').strip()
+    reset = {}
+    intent = classify(raw) if raw and not payload else None
+    menu = (payload or '').lower() in {'menu', 'root', 'start', 'start_over'} or (not payload and bool(re.fullmatch(r'(?:back to )?menu|start over|cancel(?: that)?|never mind|nevermind', raw, re.I)))
+    waiting_form = any(data.get(key) for key in _TRANSIENT_FLOW_KEYS if key != 'awaiting_pre_human_question')
+    # A showroom request must look like a day/time. A technical question,
+    # cancellation or request for a person is never an appointment window.
+    time_answer = bool(re.search(r'\b(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|today|tomorrow|weekday|weekend|morning|afternoon|evening|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b|\b\d{1,2}[/-]\d{1,2}\b', raw, re.I))
+    interrupts = intent is not None and intent.label != INTENT_UNCLEAR and (intent.label in HANDOFF_INTENTS or not extract_email(raw))
+    if menu or (waiting_form and (interrupts or (data.get('awaiting_showroom_window') and raw and not time_answer))):
+        reset = {key: False for key in _TRANSIENT_FLOW_KEYS}
+        reset['pending_showroom_window'] = ''
+        data.update(reset)
+    if menu:
+        reset.update({'awaiting_recommend': False, **_clear_compare_state()})
+        data.update(reset)
+        if re.fullmatch(r'start over', raw, re.I) or (payload or '').lower() in {'start', 'start_over'}:
+            result = _finalize_flow_stage(_resume_reset_reply())
+        else:
+            reset['visitor_resume_declined'] = True
+            data.update(reset)
+            result = _finalize_flow_stage(_greeting_reply(data))
+    elif not before_handoff and re.search(r'\b(?:just answer|already (?:asked|told)|stop (?:asking|repeating)|not what i asked|you (?:are not|aren.t) listening)\b', raw, re.I):
+        result = SalesReply(reply="I haven't resolved your question clearly. A sales specialist can help with the exact model or requirement; please use **Talk to a human** below.", intent=INTENT_HUMAN, handoff=True, handoff_reason='answer_unresolved', quick_replies=[QuickReply(label='Talk to a human', payload='human:confirm')], flow_stage='handoff')
+        result = _finalize_flow_stage(result)
+    else:
+        result = _respond_turn(message, payload=payload, domain=domain, prefs=data, before_handoff=before_handoff)
+    patch = {**reset, **(result.prefs_patch or {})}
+    if result.intent == INTENT_RECOMMEND and result.products:
+        retained = dict(data.get('recommend_prefs') or {})
+        retained.update(patch.get('recommend_prefs') or {})
+        # Defense in depth for legacy/saved recommendation branches. Displayed
+        # facts requested for a specific chair remain available through specs.
+        if any(product_constraint_issues(resolve_product(card.get('model') or ''), retained, price_usd=card.get('price_usd')) for card in result.products):
+            result = _finalize_flow_stage(_no_fit_recommend_reply(retained))
+            patch.update(result.prefs_patch or {})
+    if raw and not payload and not before_handoff:
+        digest = hashlib.sha256(re.sub(r'\W+', '', raw.lower()).encode()).hexdigest()
+        count = min(3, int(data.get('quality_repeat_count') or 0) + 1) if data.get('quality_last_question_hash') == digest else 1
+        unresolved = result.intent == INTENT_UNCLEAR or result.flow_stage.startswith('ask_')
+        if count >= 2 and unresolved:
+            result = _finalize_flow_stage(SalesReply(reply="I keep asking without resolving your question. A sales specialist should help with this requirement. Please use **Talk to a human** below.", intent=INTENT_HUMAN, handoff=True, handoff_reason='repeated_unresolved', quick_replies=[QuickReply(label='Talk to a human', payload='human:confirm')], flow_stage='handoff'))
+            patch.update({'awaiting_recommend': False})
+        patch.update({'quality_last_question_hash': digest, 'quality_repeat_count': count})
+    result.prefs_patch = patch or None
+    return result

@@ -119,8 +119,8 @@ _INTERNATIONAL_RE = re.compile(
 _POST_PURCHASE_RE = re.compile(
     r"("
     r"\bmy\s+(?:chair|order|unit|purchase|delivery|shipment|package|tracking)\b|"
-    r"\bi\s+(?:bought|ordered|purchased|received|got)\b|"
-    r"\bi'?ve\s+(?:bought|ordered|purchased|received)\b|"
+    r"\bi\s+(?:(?:just|already|recently)\s+)?(?:bought|ordered|purchased|received|got)\b|"
+    r"\bi(?:'ve|\s+have)\s+(?:(?:just|already|recently)\s+)?(?:bought|ordered|purchased|received)\b|"
     r"\balready\s+(?:bought|ordered|purchased|own|received|paid)\b|"
     r"\bwe\s+(?:bought|ordered|purchased|received)\b|"
     r"\bwhen\s+(?:will|does)\s+(?:it|mine|my)\b|"
@@ -304,6 +304,10 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"(?:do\s+you\s+have\s+a|is\s+there\s+a|nearest)\s+(?:store|shop|location)|"
             r"store\s+(?:near|location|address|hours)|"
             r"(?:try|test|sit\s+in|see)\s+(?:it|one|them|a\s+chair)\s+(?:in\s+person|out|first)?|"
+            r"where\s+(?:(?:can|could)\s+i\s+|to\s+)?(?:try|test|sit\s+in)\b|"
+            r"where\s+(?:can|could)\s+i\s+see\s+(?:the|this|a)\s+chair|"
+            r"(?:local|nearby|nearest)\s+(?:dealer|retailer)|"
+            r"(?:dealer|retailer)s?\s+(?:in|near)\b|"
             r"in\s+person|"
             r"visit\s+(?:you|your|the)|come\s+see|"
             r"where\s+are\s+you\s+located|your\s+address|"
@@ -366,9 +370,17 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 def detect_topic(text: str) -> Optional[str]:
     """Return the pre-purchase policy topic in this message, if any."""
-    raw = (text or "").strip()
+    raw = (text or "").strip().replace("’", "'")
     if not raw or is_post_purchase(raw):
         return None
+    # A location in a showroom question is not a shipping destination.
+    if re.search(
+        r"\b(?:showroom|local\s+dealer|nearby\s+dealer|nearest\s+dealer|"
+        r"dealers?\s+(?:in|near)|where\s+(?:(?:can|could)\s+i\s+|to\s+)?(?:try|test))\b",
+        raw,
+        re.I,
+    ):
+        return TOPIC_SHOWROOM
     # Guam is an explicit no. Hawaii/Alaska ship, but freight is quoted and
     # paid by the customer — that must not fall into the generic "curbside
     # included" copy.
@@ -390,8 +402,24 @@ def detect_topic(text: str) -> Optional[str]:
             re.I,
         )
     )
+    # A mechanism keyword in a model name must not replace a concrete feature
+    # question with the generic 2D/3D/4D explainer.
+    specific_spec = bool(
+        re.search(
+            r"\bhow\s+(?:heavy|wide|tall|long)|how\s+much.{0,48}\bweigh|"
+            r"\b(?:chair|shipping|product)\s+weight|"
+            r"\bweight\s+(?:capacity|limit)|\b(?:maximum|minimum|max|min)\s+(?:user\s+)?height|"
+            r"\b(?:dimensions?|doorway|foot\s+rollers?|calf\s+rollers?|airbags?|"
+            r"bluetooth|wi-fi|upholstery)\b|"
+            r"\b(?:does|has|have)\b.{0,100}\b(?:heat|roller|recline|body\s+scan)",
+            raw,
+            re.I,
+        )
+    )
     for topic, pattern in _TOPIC_PATTERNS:
         if skip_shipping and topic == TOPIC_SHIPPING:
+            continue
+        if specific_spec and topic == TOPIC_MECHANISM:
             continue
         if pattern.search(raw):
             return topic
@@ -539,6 +567,12 @@ def _showroom_answer(domain: str, message: str = "") -> str:
             "I won't confirm a chair is ready for same-day pickup from this "
             "chat. A specialist can check showroom stock."
         )
+    if re.search(r"\b(?:dealer|retailer)s?\b", raw, re.I):
+        extra.append(
+            "This is the verified showroom address I can provide. "
+            "I don't have a verified local dealer list or model availability "
+            "for other locations; sales can check before you travel."
+        )
     extra_block = ("\n\n" + " ".join(extra)) if extra else ""
     return (
         "**Visit our showroom**\n\n"
@@ -636,12 +670,13 @@ def _limits_kind(message: str) -> str:
     if re.search(
         r"medical\s+device|fda\s+approv|pregnan(?:t|cy)|"
         r"for\s+(?:kids?|children|toddlers?)|safe\s+(?:for\s+)?(?:kids?|children|pregnancy)|"
-        r"pacemaker|after\s+(?:a\s+)?(?:hip\s+)?surgery|"
-        r"\bhsa\b|\bfsa\b|flex(?:ible)?\s+spend|insurance\s+cover",
+        r"pacemaker|after\s+(?:a\s+)?(?:hip\s+)?surgery",
         raw,
         re.I,
     ):
         return "medical"
+    if re.search(r"\bhsa\b|\bfsa\b|flex(?:ible)?\s+spend|insurance\s+cover", raw, re.I):
+        return "benefit_payment"
     if re.search(r"how\s+loud|decibel|\bnois(?:y|e)\b", raw, re.I):
         return "noise"
     if re.search(r"voltage|special\s+outlet|what\s+outlet|110\s*v|220\s*v", raw, re.I):
@@ -742,6 +777,15 @@ def _limits_answer(_domain: str, message: str = "") -> str:
         return (
             "These chairs are sold for **indoor home use**. I won't recommend one "
             "for a patio or outdoor space."
+        )
+    if kind == "benefit_payment":
+        return (
+            "I don't have verified **FSA / HSA eligibility or payment acceptance** "
+            "for these chairs. Please check with your **plan administrator** "
+            "before purchasing; eligibility and any documentation requirements "
+            "depend on your plan.\n\n"
+            "Sales can confirm the storefront's payment process and available "
+            "product documentation. I can't promise reimbursement or coverage."
         )
     if kind == "medical":
         return (

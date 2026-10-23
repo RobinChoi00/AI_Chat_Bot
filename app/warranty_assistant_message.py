@@ -58,6 +58,25 @@ def build_assistant_message_bundle(
                 str(step_enrichment.get("message") or "").strip() or None
             )
 
+    if assistant_message:
+        from warranty_knowledge import sanitize_customer_answer
+
+        assistant_message = sanitize_customer_answer(assistant_message)
+        if step_enrichment:
+            step_enrichment = dict(step_enrichment)
+            step_enrichment["message"] = assistant_message
+            step_enrichment["summary"] = sanitize_customer_answer(str(step_enrichment.get("summary") or ""))
+            step_enrichment["tips"] = [tip for tip in step_enrichment.get("tips", []) if sanitize_customer_answer(str(tip)) == tip]
+        if terminal_enrichment:
+            terminal_enrichment = dict(terminal_enrichment)
+            terminal_enrichment["message"] = assistant_message
+            diagnosis = terminal_enrichment.get("diagnosis")
+            if isinstance(diagnosis, dict):
+                diagnosis = dict(diagnosis)
+                diagnosis["summary"] = sanitize_customer_answer(str(diagnosis.get("summary") or ""))
+                diagnosis["steps"] = [step for step in diagnosis.get("steps", []) if sanitize_customer_answer(str(step)) == step]
+                terminal_enrichment["diagnosis"] = diagnosis
+
     return {
         "assistant_message": assistant_message,
         "terminal_enrichment": terminal_enrichment,

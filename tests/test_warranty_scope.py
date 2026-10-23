@@ -53,15 +53,15 @@ def test_blocks_alaska_and_guam_shipping_questions():
         assert decision.reason == "shipping_policy", text
 
 
-def test_blocks_how_long_shipping_on_warranty_chat():
+def test_allows_how_long_shipping_for_verified_tracking():
     decision = evaluate_warranty_scope("how long does shipping take")
-    assert decision.is_blocked
+    assert decision.in_scope
     assert decision.reason == "delivery"
 
 
-def test_blocks_post_purchase_delivery_to_sales_phone():
+def test_allows_post_purchase_delivery_for_verified_lookup():
     decision = evaluate_warranty_scope("Where is my FedEx tracking number?")
-    assert decision.is_blocked
+    assert decision.in_scope
     assert decision.reason == "delivery"
     msg = build_warranty_scope_refusal(decision.reason)
     assert "ext. 2" in msg
@@ -69,17 +69,17 @@ def test_blocks_post_purchase_delivery_to_sales_phone():
     assert "sales" in msg.lower()
 
 
-def test_blocks_damaged_delivery_to_sales_phone():
+def test_allows_damaged_delivery_flow():
     decision = evaluate_warranty_scope(
         "My Hawaii shipment arrived damaged and the box was crushed"
     )
-    assert decision.is_blocked
+    assert decision.in_scope
     assert decision.reason == "delivery"
 
 
-def test_blocks_vague_shipping_help_to_sales_phone():
+def test_allows_shipping_help_for_verified_lookup():
     decision = evaluate_warranty_scope("need help with shipping the chair")
-    assert decision.is_blocked
+    assert decision.in_scope
     assert decision.reason == "delivery"
 
 
@@ -89,7 +89,7 @@ def test_blocks_sales_answer_key():
     assert decision.is_blocked
 
 
-def test_filters_sales_and_delivery_from_root_menu():
+def test_filters_sales_but_keeps_delivery_in_root_menu():
     node = {
         "node_id": "root",
         "options": [
@@ -100,7 +100,7 @@ def test_filters_sales_and_delivery_from_root_menu():
     }
     filtered = filter_warranty_menu_options(node)
     keys = [opt["answer_key"] for opt in filtered]
-    assert keys == ["warranty"]
+    assert keys == ["warranty", "delivery"]
 
 
 def test_shipping_policy_refusal_lists_both_extensions():
@@ -133,7 +133,8 @@ def test_blocks_order_cancel_as_order_cancel_reason():
     msg = build_warranty_scope_refusal("order_cancel")
     assert "warranty team" in msg.lower()
     assert "discount" not in msg.lower()
-    assert "follow up" in msg.lower()
+    assert "saved" in msg.lower()
+    assert "has not been confirmed" in msg.lower()
 
 
 def test_order_cancel_not_confused_with_defect():

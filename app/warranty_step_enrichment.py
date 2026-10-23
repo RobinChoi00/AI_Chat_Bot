@@ -24,6 +24,7 @@ from typing import Any, Optional
 from warranty_intake_context import intake_aware_step_summary
 from warranty_knowledge import (
     KnowledgeEntry,
+    customer_knowledge_entries,
     is_presentable_match_title,
 )
 from warranty_self_help import (
@@ -103,11 +104,11 @@ def _fonz_match_from_turns(model_name: str, turns: list) -> Optional[KnowledgeEn
     return None
 
 
-# Prefer curated sources over raw Freshdesk ticket threads in mid-flow tips,
-# unless a Freshdesk hit is strongly similar to what the customer described.
-# Solutions (KB) sit above generic Q&A so published DIY guides surface first.
+# Raw ticket threads are blocked centrally regardless of similarity. Published
+# KB and human-reviewed procedures lead generic curated troubleshooting hints.
 _STEP_SOURCE_PRIORITY: dict[str, int] = {
     "fonz_error_code": 0,
+    "reviewed_knowledge": 1,
     "freshdesk_kb": 1,
     "freshdesk_qa": 1,
     "qa_csv": 2,
@@ -147,7 +148,7 @@ def _freshdesk_similarity_leader(
     best_kb_score = 0.0
     best_ticket: Optional[KnowledgeEntry] = None
     best_ticket_score = 0.0
-    for entry in matches:
+    for entry in customer_knowledge_entries(matches):
         if entry.source not in _FRESHDESK_SIMILAR_SOURCES:
             continue
         if not entry.customer_steps:
@@ -180,6 +181,7 @@ def _pick_step_tips(
     max_tips: int = 2,
     prefer_freshdesk: bool = False,
 ) -> list[str]:
+    matches = customer_knowledge_entries(matches)
     tips: list[str] = []
     seen: set[str] = set()
 
@@ -211,6 +213,7 @@ def _pick_step_tips(
             "fault_judgment",
             "freshdesk_kb",
             "freshdesk_qa",
+            "reviewed_knowledge",
         }
     )
 
@@ -239,11 +242,7 @@ def _pick_step_tips(
                     break
 
     for hint in fallback:
-        key = hint.lower().strip()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        tips.append(hint.strip())
+        _add(hint)
         if len(tips) >= max_tips:
             break
 
@@ -301,7 +300,7 @@ def _step_enrichment_summary(
     """
     customer_text = _aggregate_customer_text(turns)
     grounded: list[KnowledgeEntry] = []
-    for entry in matches:
+    for entry in customer_knowledge_entries(matches, model_name=model_name):
         if not is_presentable_match_title(entry.title):
             continue
         if entry.source == "fonz_error_code":
@@ -402,6 +401,9 @@ def build_step_enrichment(
     if not fallback and defect_category:
         fallback = category_fallback_hints(defect_category)
     tips = _pick_step_tips(matches, fallback, prefer_freshdesk=False)
+    from warranty_intake_context import filter_completed_check_steps
+
+    tips = filter_completed_check_steps(tips, ticket=ticket, turns=turns)
 
     if not tips:
         return None

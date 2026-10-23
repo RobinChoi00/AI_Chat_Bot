@@ -5,7 +5,7 @@ Warranty Delivery flow — live tracking lookup (no LLM).
 
 Supports either:
   - Tracking number  → Track123 (+ AfterShip fallback)
-  - Checkout email (or order number + email) → Shopify (+ Track123 enrich)
+  - Order number + checkout email → Shopify (+ Track123 enrich)
 """
 
 from __future__ import annotations
@@ -228,34 +228,60 @@ def admin_lookup_failure_reason(error: Optional[str]) -> str:
 
 
 def lookup_by_order_or_email(raw: str, domain: str) -> TrackingSnapshot:
-    """Shopify order lookup — email required when looking up by order number."""
+    """Shopify lookup verified by both order number and checkout email."""
     order, email = parse_order_or_email(raw)
-    if not order and not email:
+    if not order or not email:
         return TrackingSnapshot(
             source="unavailable",
             available=False,
-            error="Please provide your checkout email, or your order number together with that email.",
+            error="For your privacy, please provide both your order number and the email used at checkout.",
             looked_up_at=_now_iso(),
         )
-    if order and not email:
-        return TrackingSnapshot(
-            source="unavailable",
-            available=False,
-            error=(
-                "For your privacy, we need the checkout email along with your order number. "
-                "Please reply with both (for example: #12345 you@example.com)."
-            ),
-            looked_up_at=_now_iso(),
-        )
-
     logistics = _lazy_logistics()
     fetch = logistics.fetch_shopify_order_status
-    try:
-        data = fetch(order, email, domain, allow_order_only=False)
-    except TypeError:
-        # Older / test stubs without the privacy kwarg.
-        data = fetch(order, email, domain)
+    data = fetch(order, email, domain, allow_order_only=False)
+    if not data.get("error"):
+        # Never expose a latest-email fallback or another order's details.
+        expected = re.sub(r"[^a-z0-9]", "", order.lower())
+        actual = re.sub(r"[^a-z0-9]", "", str(data.get("order_number") or "").lower())
+        numeric_suffix = re.search(r"\d+$", actual)
+        if actual != expected and not (expected.isdigit() and numeric_suffix and numeric_suffix.group() == expected):
+            return TrackingSnapshot(source="unavailable", available=False,
+                error="We could not verify that order number and checkout email together.", looked_up_at=_now_iso())
     return _snapshot_from_tracking_data(data, source="shopify")
+
+
+def public_delivery_tracking_summary(snapshot: TrackingSnapshot, domain: str) -> Dict[str, Any]:
+    """Minimal delivery status; deliberately omit customer/order purchase details."""
+    from urllib.parse import urlparse
+    from warranty_scope import support_contact
+
+    url = snapshot.tracking_url if snapshot.available else ""
+    try:
+        parsed = urlparse(url)
+        safe = parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password and not re.search(r"[\s\x00-\x1f]", url)
+    except ValueError:
+        safe = False
+    if not safe:
+        url = build_carrier_tracking_url(snapshot.tracking_number, snapshot.carrier) if snapshot.available else ""
+    if snapshot.available:
+        message = f"Latest delivery status: **{snapshot.status or 'Status pending'}**."
+        if snapshot.carrier:
+            message += f" Carrier: {snapshot.carrier}."
+        if snapshot.eta and snapshot.eta != "Pending carrier update":
+            message += f" Carrier estimate: {snapshot.eta}. This is an estimate, not a delivery guarantee."
+        message += " Use Refresh to request another update; carrier scans can take time to appear."
+    else:
+        message = "We couldn't verify a current delivery update. Check the order number and checkout email, or try again later. No delivery date has been confirmed."
+    return {
+        "available": snapshot.available, "message": message,
+        "status": snapshot.status if snapshot.available else "unavailable",
+        "carrier": snapshot.carrier if snapshot.available else "",
+        "eta": snapshot.eta if snapshot.available else "", "tracking_url": url,
+        "fetched_at": snapshot.looked_up_at or _now_iso(), "source": snapshot.source,
+        "support_contact": support_contact("sales", domain),
+        "self_service_links": [{"label": label, "url": link} for label, link in build_self_service_lookup_links(domain=domain, lookup_kind="order")],
+    }
 
 
 def public_tracking_summary_payload(
@@ -385,7 +411,9 @@ def build_carrier_tracking_url(tracking_number: str, carrier: str = "") -> str:
     slug = _infer_carrier_slug(tn, carrier)
     template = _CARRIER_TRACKING_URLS.get(slug)
     if template:
-        return template.format(tn=tn)
+        from urllib.parse import quote
+
+        return template.format(tn=quote(tn, safe=""))
     return ""
 
 
@@ -428,8 +456,8 @@ def format_warranty_tracking_message(
         "We'll continue with your delivery warranty questions below."
         if continue_with_questions
         else (
-            "That's the latest status we have. "
-            "Our team will follow up shortly if you need more help."
+            "This is the latest update returned by the provider. "
+            "Use Refresh to check again, or contact support if you need more help."
         )
     )
 
@@ -437,7 +465,7 @@ def format_warranty_tracking_message(
         lines = [
             "We couldn't verify your delivery details automatically right now.",
             "We saved what you entered, and your case continues.",
-            "Our support team will look this up and follow up with you.",
+            "No current delivery date or callback has been confirmed. Please contact support for direct help.",
         ]
         saved = snapshot.tracking_number or snapshot.order_number
         if saved:
@@ -469,8 +497,8 @@ def format_warranty_tracking_message(
             [
                 "",
                 f"- Order Status: **{snapshot.status or 'PROCESSING'}** (in preparation)",
-                "- A tracking number will be emailed once the carrier picks up the shipment.",
-                "- Typical processing time before pickup: **1–3 business days**.",
+                "- A carrier tracking number is not available yet.",
+                "- A carrier pickup date has not been confirmed.",
                 "",
                 closing,
             ]

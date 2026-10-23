@@ -126,8 +126,19 @@ def capture_error_code_from_intake(ticket, text: str) -> bool:
 
 def _entry_procedure_hint(model_name: str) -> str:
     from error_code_lookup import get_model_diagnostic  # noqa: WPS433
+    from warranty_intake_context import _model_identity, normalize_model_input
 
     diag = get_model_diagnostic(model_name) or {}
+    requested = _model_identity(normalize_model_input(model_name))
+    # Related models may share code meanings without sharing physical buttons.
+    # Only an exact procedure label or explicit applicability list can authorize
+    # a diagnostic-button sequence; substring/family fallback is insufficient.
+    applicable = diag.get("applicable_models") or []
+    labels = [str(diag.get("model") or "")]
+    if isinstance(applicable, list):
+        labels.extend(str(value) for value in applicable)
+    if not requested or requested not in {_model_identity(value) for value in labels if value}:
+        return ""
     return str(diag.get("entry_procedure") or "").strip()
 
 
@@ -415,6 +426,10 @@ def append_fonz_to_terminal_enrichment(
         return enrichment
     out = dict(enrichment)
     diagnosis = out.get("diagnosis")
+    if isinstance(diagnosis, dict) and diagnosis.get("safety_stop"):
+        # A confirmed code must not add a restart/test procedure after a stop-use
+        # report. Its internal ticket fields remain available to the reviewer.
+        return out
     if isinstance(diagnosis, dict):
         out["diagnosis"] = merge_fonz_into_diagnosis(diagnosis, ticket)
     message = str(out.get("message") or "").strip()

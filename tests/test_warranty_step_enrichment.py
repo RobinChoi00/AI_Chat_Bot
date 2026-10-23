@@ -209,7 +209,7 @@ def test_build_step_enrichment_drops_off_topic_air_tips_on_remote(monkeypatch):
     assert "remote cable" in message
 
 
-def test_pick_step_tips_prefers_freshdesk_when_flagged():
+def test_pick_step_tips_rejects_raw_freshdesk_even_when_flagged():
     qa = KnowledgeEntry(
         source="qa_csv",
         category="power",
@@ -230,7 +230,8 @@ def test_pick_step_tips_prefers_freshdesk_when_flagged():
         prefer_freshdesk=True,
     )
     assert tips
-    assert "Toggle the back power switch" in tips[0]
+    assert "Confirm the power cord" in tips[0]
+    assert all("Toggle the back power switch" not in tip for tip in tips)
 
 
 def test_pick_step_tips_prefers_freshdesk_kb_over_qa_by_default():

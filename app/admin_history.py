@@ -45,18 +45,19 @@ def _tables(db):
     existing = set(inspect(bind).get_table_names())
     metadata = MetaData()
     return {name: Table(name, metadata, autoload_with=bind) for name in
-            ("warranty_tickets", "warranty_turns", "sales_sessions", "sales_messages", "chat_logs") if name in existing}
+            ("warranty_tickets", "warranty_turns", "warranty_conversation_messages", "sales_sessions", "sales_messages", "chat_logs") if name in existing}
 
 
-def _message(group_id, message_id, role, content, created_at, tie, part=0):
+def _message(group_id, message_id, role, content, created_at, tie, part=0, origin="general_log"):
     return select(
         group_id.label("group_id"), message_id.label("id"), literal(role).label("role"),
         cast(content, String).label("content"), cast(created_at, String).label("created_at"),
         _time_order(created_at).label("_time"), tie.label("_tie"), literal(part).label("_part"),
+        literal(origin).label("origin"),
     )
 
 
-def _warranty_messages(tables):
+def _warranty_legacy_messages(tables):
     tickets = tables.get("warranty_tickets")
     if tickets is None:
         return None
@@ -66,7 +67,8 @@ def _warranty_messages(tables):
         joined = tickets.join(turns, tickets.c.ticket_id == turns.c.ticket_id)
         for role, content, part in (("assistant", turns.c.node_prompt, 0), ("user", turns.c.customer_answer, 1)):
             pieces.append(_message(tickets.c.id, literal("turn:") + cast(turns.c.id, String) + literal(f":{role}"),
-                                   role, content, turns.c.created_at, turns.c.id, part).select_from(joined).where(_present(content)))
+                                   role, content, turns.c.created_at, turns.c.id, part,
+                                   "workflow_prompt" if role == "assistant" else "workflow_answer").select_from(joined).where(_present(content)))
     if "collected_data" in tickets.c:
         valid = case((func.json_valid(tickets.c.collected_data), tickets.c.collected_data), else_=literal("{}"))
         timeline = case((func.json_type(valid, "$.chat_timeline") == "array", func.json_extract(valid, "$.chat_timeline")), else_=literal("[]"))
@@ -83,12 +85,44 @@ def _warranty_messages(tables):
             func.json_extract(event, "$.role").label("role"), cast(content, String).label("content"),
             cast(timestamp, String).label("created_at"), _time_order(timestamp).label("_time"),
             cast(events.c.key, Integer).label("_tie"), literal(2).label("_part"),
+            literal("legacy_enrichment").label("origin"),
         ).select_from(tickets.join(events, true())).where(
             func.json_extract(event, "$.role").in_(("user", "assistant")),
             func.json_type(event, "$.text") == "text", _present(content),
         )
         pieces.append(base)
     return union_all(*pieces).subquery("warranty_history_messages") if pieces else None
+
+
+def _warranty_recorded_messages(tables):
+    tickets, messages = tables.get("warranty_tickets"), tables.get("warranty_conversation_messages")
+    if tickets is None or messages is None:
+        return None
+    return select(
+        tickets.c.id.label("group_id"), (literal("recorded:") + cast(messages.c.id, String)).label("id"),
+        messages.c.role, cast(messages.c.content, String).label("content"),
+        cast(messages.c.created_at, String).label("created_at"), _time_order(messages.c.created_at).label("_time"),
+        messages.c.id.label("_tie"), literal(0).label("_part"), messages.c.origin,
+    ).select_from(tickets.join(messages, tickets.c.ticket_id == messages.c.ticket_id)).where(
+        messages.c.role.in_(("user", "assistant")), _present(messages.c.content),
+    ).subquery("recorded_warranty_messages")
+
+
+def _warranty_messages(tables, view="conversation"):
+    legacy = _warranty_legacy_messages(tables)
+    if view == "workflow":
+        return legacy
+    recorded = _warranty_recorded_messages(tables)
+    if recorded is None:
+        return legacy
+    if legacy is None:
+        return recorded
+    # New exchanges are a separate source of truth. Keep old reconstructions
+    # accessible in workflow view without duplicating them as recorded replies.
+    recorded_groups = select(recorded.c.group_id).distinct()
+    return union_all(
+        select(recorded), select(legacy).where(~legacy.c.group_id.in_(recorded_groups)),
+    ).subquery("preferred_warranty_messages")
 
 
 def _sales_messages(tables):
@@ -99,6 +133,7 @@ def _sales_messages(tables):
         sessions.c.id.label("group_id"), cast(messages.c.id, String).label("id"), messages.c.role,
         cast(messages.c.content, String).label("content"), cast(messages.c.created_at, String).label("created_at"),
         _time_order(messages.c.created_at).label("_time"), messages.c.id.label("_tie"), literal(0).label("_part"),
+        literal("sales_message").label("origin"),
     ).select_from(sessions.join(messages, sessions.c.session_id == messages.c.session_id)).where(
         messages.c.role.in_(("user", "assistant")), _present(messages.c.content),
     ).subquery("sales_history_messages")
@@ -157,8 +192,8 @@ def _general_summary(logs, messages):
     ).select_from(grouped.join(logs, grouped.c.group_id == logs.c.id))
 
 
-def _queries(tables):
-    messages = {"warranty": _warranty_messages(tables), "sales": _sales_messages(tables), "general": _general_messages(tables)}
+def _queries(tables, view="conversation"):
+    messages = {"warranty": _warranty_messages(tables, view), "sales": _sales_messages(tables), "general": _general_messages(tables)}
     summaries = []
     for source, name in (("warranty", "warranty_tickets"), ("sales", "sales_sessions")):
         if name in tables:
@@ -216,10 +251,12 @@ async def list_admin_history(source: Optional[Source] = None, domain: Optional[s
 @router.get("/admin/history/{source}/{record_id}")
 async def get_admin_history(source: Source, record_id: int = Path(..., ge=1),
                             limit: int = Query(100, ge=1, le=200), offset: int = Query(0, ge=0),
+                            view: Literal["conversation", "workflow"] = Query("conversation"),
                             x_admin_key: Optional[str] = Header(default=None)):
     require_admin_key(x_admin_key)
     with warranty_db_session() as db:
-        history, sources = _queries(_tables(db))
+        tables = _tables(db)
+        history, sources = _queries(tables, view)
         row = db.execute(select(history).where(history.c.source == source, history.c.record_id == str(record_id))).mappings().first()
         if row is None:
             raise HTTPException(status_code=404, detail="Stored conversation not found.")
@@ -227,7 +264,14 @@ async def get_admin_history(source: Source, record_id: int = Path(..., ge=1),
         total = int(row["message_count"])
         rows = [] if messages is None else db.execute(select(messages).where(messages.c.group_id == record_id)
             .order_by(messages.c._time, messages.c._tie, messages.c._part, messages.c.id).limit(limit).offset(offset)).mappings().all()
+        recorded = _warranty_recorded_messages(tables) if source == "warranty" else None
+        recorded_since = (db.execute(select(func.min(recorded.c.created_at)).where(recorded.c.group_id == record_id)).scalar()
+                          if recorded is not None else None)
+        legacy = _warranty_legacy_messages(tables) if source == "warranty" else None
+        has_legacy = bool(db.execute(select(legacy.c.id).where(legacy.c.group_id == record_id).limit(1)).first()) if legacy is not None else False
+        mode = ("workflow_reference" if view == "workflow" else "api_recorded" if recorded_since else "legacy_reconstruction") if source == "warranty" else "stored_messages"
     return {"conversation": _summary_dict(row), "messages": [
-        {"id": message["id"], "role": message["role"], "content": message["content"], "created_at": _iso(message["created_at"])}
+        {"id": message["id"], "role": message["role"], "content": message["content"], "created_at": _iso(message["created_at"]), "origin": message["origin"]}
         for message in rows
-    ], "total": total, "offset": offset, "limit": limit}
+    ], "total": total, "offset": offset, "limit": limit, "transcript_mode": mode,
+        "recorded_since": _iso(recorded_since), "alternate_view_available": has_legacy}

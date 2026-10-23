@@ -7,10 +7,12 @@ import {
   getWarrantySession,
   goBackFromWarrantyContact,
   goBackWarranty,
+  lookupDeliveryTracking,
   quickStartWarranty,
   naturalStartWarranty,
   recordWarrantyChatConsent,
   recordWarrantySessionContactEmail,
+  requestWarrantyHandoff,
   registerWarrantyModel,
   restartWarrantySession,
   resumeWarrantyFromToken,
@@ -26,6 +28,8 @@ import type {
   TroubleshootingOutcome,
   WarrantySessionResponse,
   WarrantyTicketState,
+  TrackingSummary,
+  WarrantyHandoff,
 } from "@/lib/types";
 import {
   assistantContentFromResponse,
@@ -39,7 +43,6 @@ import SaveProgressButton from "./SaveProgressButton";
 import SerialPhotoButton from "./SerialPhotoButton";
 import TicketStatusBadge from "./TicketStatusBadge";
 import TroubleshootingGate, { resolutionGateLabels } from "./TroubleshootingGate";
-import { WARRANTY_CONTACT_EMAIL } from "@/lib/evidenceMessage";
 import {
   CHAT_CONSENT_STORAGE_KEY,
   CHAT_CONTACT_EMAIL_STORAGE_KEY,
@@ -52,9 +55,12 @@ import ChatEmailGate from "./ChatEmailGate";
 import WarrantyCaseLookup from "./WarrantyCaseLookup";
 import WarrantyTeamContactFooter from "./WarrantyTeamContactFooter";
 import OutcomeFollowup from "./OutcomeFollowup";
+import DeliveryTrackingPanel, { type DeliveryLookupIdentity } from "./DeliveryTrackingPanel";
+import HumanHandoffNotice from "./HumanHandoffNotice";
 import { readWarrantyFollowup, saveWarrantyFollowup, type WarrantyFollowupAccess } from "@/lib/warrantyFollowup";
 
 import { resolveWarrantyStoreDomain } from "@/lib/warrantyStoreDomain";
+import { buildWarrantySubmissionMessage } from "@/lib/warrantyContact";
 
 // Short pause before the assistant bubble. Kept small because ChatMessageBubble
 // already types the response out.
@@ -63,9 +69,6 @@ const THINKING_DELAY_MS = 700;
 function assistantMessage(content: string): ChatMessage {
   return { role: "assistant", content, animate: true };
 }
-
-const EMAIL_THANK_YOU =
-  `Thank you! Our warranty team at ${WARRANTY_CONTACT_EMAIL} will respond within 24 hours.`;
 
 const SELF_HELP_CLOSING =
   "Great — this request is now closed as self-resolved. If you still need us, you can start a new case anytime. " +
@@ -87,27 +90,12 @@ function selfHelpClosing(issueType?: string | null): string {
   return SELF_HELP_CLOSING;
 }
 
-function teamFollowUpThankYou(
-  issueType?: string | null,
-  caseReference?: string | null
-): string {
-  const ref = caseReference?.trim()
-    ? ` Your case reference is **${caseReference.trim()}**. We emailed a confirmation.`
-    : "";
-  if (issueType === "installation") {
-    return `Thank you — our team will follow up with installation support within 24 hours.${ref}`;
-  }
-  if (issueType === "delivery") {
-    return `Thank you — our team will review this delivery case (damage, missing parts, or tracking) and follow up within 24 hours.${ref}`;
-  }
-  return `Thank you — our team will review this product issue and follow up within 24 hours.${ref}`;
-}
-
 const DEFECT_MODEL_PROMPT =
   "To troubleshoot warranty defects accurately, please **enter your chair model** in the box below (for example OS-4000T or 3D LTX). I'll continue with the defect questions right after.";
 
 const INITIAL_ISSUE_OPTIONS: AnswerOption[] = [
   { answer_key: "installation", label: "Setup & installation" },
+  { answer_key: "delivery", label: "Delivery & tracking" },
   { answer_key: "defect", label: "Chair malfunction" },
 ];
 
@@ -122,7 +110,6 @@ function resolveSuggestedIssueType(
     resp.suggested_issue_type ||
     "";
   const key = String(raw).trim().toLowerCase();
-  if (key === "delivery") return null;
   return ISSUE_TYPE_KEYS.has(key) ? key : null;
 }
 
@@ -170,6 +157,7 @@ export default function WarrantyChat({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warrantyState, setWarrantyState] = useState<WarrantyTicketState | null>(null);
+  const deliveryStoreDomain = warrantyState?.domain?.trim() || storeDomain;
   const [savedFollowup, setSavedFollowup] = useState<WarrantyFollowupAccess | null>(() => readWarrantyFollowup(sessionId));
   const rememberFollowup = useCallback((ticketId: string, token: string, issueType: string) => {
     const value = { sessionId, ticketId, token, issueType };
@@ -177,9 +165,13 @@ export default function WarrantyChat({
     saveWarrantyFollowup(value);
   }, [sessionId]);
   const [terminalEnrichment, setTerminalEnrichment] = useState<TerminalEnrichment | null>(null);
+  const [trackingResult, setTrackingResult] = useState<{ sessionId: string; ticketId: string; domain: string; summary: TrackingSummary } | null>(null);
+  const trackingSummary = trackingResult?.sessionId === sessionId && trackingResult.ticketId === warrantyState?.ticket_id && trackingResult.domain === deliveryStoreDomain ? trackingResult.summary : null;
+  const [handoff, setHandoff] = useState<WarrantyHandoff | null>(null);
   const [optionsUsed, setOptionsUsed] = useState(false);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [contactSubmitted, setContactSubmitted] = useState(false);
+  const [contactReceiptSent, setContactReceiptSent] = useState(false);
   const [showCaseLookup, setShowCaseLookup] = useState(() => {
     if (typeof window === "undefined") return false;
     return new URLSearchParams(window.location.search).has("check");
@@ -285,6 +277,12 @@ export default function WarrantyChat({
       followup_token: resp.followup_token ?? resp.ticket.followup_token,
     } : null);
     setTerminalEnrichment(resp.terminal_enrichment ?? null);
+    setHandoff(resp.handoff ?? null);
+    if (resp.tracking_summary && resp.ticket) {
+      setTrackingResult({ sessionId: resp.session_id, ticketId: resp.ticket.ticket_id, domain: resp.ticket.domain?.trim() || storeDomain, summary: resp.tracking_summary });
+    } else if (resp.tracking_summary !== undefined || !resp.ticket) {
+      setTrackingResult(null);
+    }
     if (resp.suggested_option?.answer_key) {
       setSuggestedOption(resp.suggested_option);
     } else if (!resp.side_question) {
@@ -308,7 +306,7 @@ export default function WarrantyChat({
     }
     setOptionsUsed(false);
     return resp;
-  }, [rememberFollowup]);
+  }, [rememberFollowup, storeDomain]);
 
   const refreshWarrantyState = useCallback(async () => {
     const resp = await getWarrantySession(sessionId);
@@ -340,12 +338,15 @@ export default function WarrantyChat({
       setMessages([{ role: "assistant", content: WARRANTY_WELCOME_MESSAGE }]);
       setWarrantyState(null);
       setTerminalEnrichment(null);
+      setTrackingResult(null);
+      setHandoff(null);
       setSuggestedIssueType(null);
       setPendingDefectStart(null);
       setSuggestedOption(null);
       setHelpConsent(null);
       setResolutionStage("review");
       setContactSubmitted(false);
+      setContactReceiptSent(false);
       setOptionsUsed(false);
       setEmailPanelCollapsed(false);
       setInput("");
@@ -485,7 +486,7 @@ export default function WarrantyChat({
         const resp = await refreshWarrantyState();
         if (cancelled) return;
         const ticket = resp.ticket;
-        if (ticket?.current_node?.is_terminal && ticket.current_node.prompt) {
+        if (resp.handoff?.requested || (ticket?.current_node?.is_terminal && ticket.current_node.prompt)) {
           const content = hydrationAssistantContent(ticket, resp);
           if (content) {
             setMessages([{ role: "assistant", content }]);
@@ -535,7 +536,7 @@ export default function WarrantyChat({
   const appendAssistantFromResponse = useCallback(
     async (
       ticket: WarrantyTicketState | null,
-      resp: Pick<WarrantySessionResponse, "assistant_message" | "terminal_enrichment">,
+      resp: Pick<WarrantySessionResponse, "assistant_message" | "terminal_enrichment" | "handoff">,
       options?: { skipDelay?: boolean }
     ) => {
       if (!options?.skipDelay) {
@@ -558,6 +559,7 @@ export default function WarrantyChat({
     async (issueType: "installation" | "delivery" | "defect", label: string) => {
       if (loading || !chatConsentAccepted || !emailGateDone) return;
       setSuggestedIssueType(null);
+      if (issueType !== "defect") setPendingDefectStart(null);
       if (issueType === "defect" && !warrantyState?.model_name?.trim()) {
         setError(null);
         setMessages((prev) => [...prev, { role: "user", content: label }]);
@@ -585,6 +587,35 @@ export default function WarrantyChat({
     },
     [loading, chatConsentAccepted, emailGateDone, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse, warrantyState?.model_name, promptModelForDefect]
   );
+
+  const handleDeliveryLookup = useCallback(async (identity: DeliveryLookupIdentity) => {
+    if (loading || !chatConsentAccepted || !emailGateDone) return;
+    setLoading(true);
+    setTrackingResult(null);
+    try {
+      const resp = await lookupDeliveryTracking(sessionId, { ...identity, domain: deliveryStoreDomain });
+      applySessionResponse(resp);
+      if (!resp.tracking_summary) throw new Error("A current delivery update was not returned. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, [loading, chatConsentAccepted, emailGateDone, sessionId, deliveryStoreDomain, applySessionResponse]);
+
+  const requestHumanSupport = useCallback(async () => {
+    if (loading || !chatConsentAccepted || !emailGateDone) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const resp = await requestWarrantyHandoff(sessionId, { domain: storeDomain, reason: "customer_request" });
+      applySessionResponse(resp);
+      setMessages((previous) => [...previous, { role: "user", content: "I'd like to speak with a person." }]);
+      await appendAssistantFromResponse(resp.ticket, resp, { skipDelay: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save your support request. Please use the support contact details below.");
+    } finally {
+      setLoading(false);
+    }
+  }, [loading, chatConsentAccepted, emailGateDone, sessionId, storeDomain, applySessionResponse, appendAssistantFromResponse]);
 
   const advanceWarranty = useCallback(
     async (answer: string, userLabel: string) => {
@@ -678,6 +709,11 @@ export default function WarrantyChat({
 
         applySessionResponse(resp);
 
+        if (resp.handoff?.requested) {
+          await appendAssistantFromResponse(resp.ticket, resp);
+          return;
+        }
+
         if (resp.order_cancel_escalated) {
           await sleep(THINKING_DELAY_MS);
           setMessages((prev) => [
@@ -753,6 +789,10 @@ export default function WarrantyChat({
           domain: storeDomain,
         });
         applySessionResponse(resp);
+        if (resp.handoff?.requested) {
+          await appendAssistantFromResponse(resp.ticket, resp);
+          return;
+        }
         await sleep(THINKING_DELAY_MS);
         setMessages((prev) => [
           ...prev,
@@ -790,7 +830,12 @@ export default function WarrantyChat({
       setMessages((prev) => [...prev, { role: "user", content: text }]);
       setInput("");
       try {
-        await submitCustomerNote(ticketId, text);
+        const resp = await submitCustomerNote(ticketId, text);
+        if ("session_id" in resp) {
+          applySessionResponse(resp);
+          await appendAssistantFromResponse(resp.ticket, resp);
+          return;
+        }
         await sleep(THINKING_DELAY_MS);
         setMessages((prev) => [
           ...prev,
@@ -804,7 +849,7 @@ export default function WarrantyChat({
         inputRef.current?.focus();
       }
     },
-    [loading, warrantyState?.ticket_id]
+    [loading, warrantyState?.ticket_id, applySessionResponse, appendAssistantFromResponse]
   );
 
   const handleResolutionOutcome = useCallback(
@@ -816,6 +861,12 @@ export default function WarrantyChat({
       setLoading(true);
       try {
         const resp = await submitTroubleshootingOutcome(ticketId, outcome);
+        if ("session_id" in resp) {
+          applySessionResponse(resp);
+          if (label) setMessages((previous) => [...previous, { role: "user", content: label }]);
+          await appendAssistantFromResponse(resp.ticket, resp);
+          return true;
+        }
         const recorded = resp.outcome;
         if (recorded === "resolved" && resp.followup_token) {
           rememberFollowup(ticketId, resp.followup_token, warrantyState?.issue_type || "");
@@ -871,7 +922,7 @@ export default function WarrantyChat({
         setLoading(false);
       }
     },
-    [loading, warrantyState, intakeContactEmail, rememberFollowup]
+    [loading, warrantyState, intakeContactEmail, rememberFollowup, applySessionResponse, appendAssistantFromResponse]
   );
 
   const sendMessage = useCallback(
@@ -935,6 +986,11 @@ export default function WarrantyChat({
         try {
           const resp = await registerWarrantyModel(sessionId, trimmed, storeDomain);
           applySessionResponse(resp);
+          if (resp.handoff?.requested) {
+            setPendingDefectStart(null);
+            await appendAssistantFromResponse(resp.ticket, resp);
+            return;
+          }
           const defectLabel = pendingDefectStart;
           setPendingDefectStart(null);
           await sleep(THINKING_DELAY_MS);
@@ -1067,7 +1123,7 @@ export default function WarrantyChat({
       : null;
   const caseReference = warrantyState?.case_reference ?? null;
   const isTerminal = warrantyState?.current_node?.is_terminal ?? false;
-  const canGoBack = Boolean(warrantyState?.can_go_back && !isTerminal && !loading);
+  const canGoBack = Boolean(warrantyState?.can_go_back && !isTerminal && !loading && !handoff?.requested);
 
   const atIssueTypeNode =
     !warrantyState?.issue_type &&
@@ -1076,6 +1132,7 @@ export default function WarrantyChat({
   const needsFirstIntake =
     sessionChecked &&
     !isTerminal &&
+    !handoff?.requested &&
     !warrantyState?.issue_type &&
     !atIssueTypeNode &&
     (!warrantyState?.ticket_id ||
@@ -1089,6 +1146,7 @@ export default function WarrantyChat({
     sessionChecked &&
     !loading &&
     !isTerminal &&
+    !handoff?.requested &&
     !needsModelConfirmation &&
     !warrantyState?.issue_type &&
     (warrantyState?.ready_for_issue_type ||
@@ -1101,6 +1159,7 @@ export default function WarrantyChat({
     !loading &&
     !showIssueTypeOptions &&
     !needsModelConfirmation &&
+    !handoff?.requested &&
     (warrantyState?.current_node?.options?.length ?? 0) > 0;
 
   useEffect(() => {
@@ -1113,12 +1172,13 @@ export default function WarrantyChat({
     chatConsentAccepted &&
     emailGateDone &&
     isTerminal &&
+    !handoff?.requested &&
     terminalEnrichment?.phase === "awaiting_help_consent" &&
     helpConsent === null &&
     !contactSubmitted;
 
   const inEmailStep = Boolean(
-    isTerminal && helpConsent === "yes" && !contactSubmitted && warrantyState?.ticket_id
+    isTerminal && !handoff?.requested && helpConsent === "yes" && !contactSubmitted && warrantyState?.ticket_id
   );
 
   const showEmailSection = chatConsentAccepted && emailGateDone && inEmailStep;
@@ -1135,7 +1195,7 @@ export default function WarrantyChat({
 
   // Keep the composer visible for the whole claim chat: buttons still work,
   // and free text can map to an option when the meaning is clear.
-  const chatFinished = contactSubmitted || helpConsent === "no";
+  const chatFinished = contactSubmitted || helpConsent === "no" || handoff?.requested;
   const showInputBar =
     chatConsentAccepted &&
     emailGateDone &&
@@ -1302,7 +1362,7 @@ export default function WarrantyChat({
         </div>
       )}
 
-      {isAwaitingAdmin && (
+      {isAwaitingAdmin && !handoff?.requested && (
         <div className="mx-4 mt-3 shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
           <p className="text-sm font-medium text-amber-800">
             {warrantyState?.issue_type === "installation"
@@ -1320,10 +1380,10 @@ export default function WarrantyChat({
             {caseReference ? (
               <>
                 Your case reference is <strong>{caseReference}</strong>. Save this
-                number — our team will follow up within 24 hours.
+                number for follow-up, or contact our support team directly.
               </>
             ) : (
-              "Our team will follow up within 24 hours."
+              "Your case is saved for review. You can also contact our support team directly."
             )}
           </p>
         </div>
@@ -1384,7 +1444,24 @@ export default function WarrantyChat({
 
         </div>
 
-        {pendingDefectStart && (
+        {chatConsentAccepted && emailGateDone && handoff?.requested && (
+          <div className="mt-4"><HumanHandoffNotice handoff={handoff} caseReference={caseReference} /></div>
+        )}
+
+        {chatConsentAccepted && emailGateDone && warrantyState?.issue_type === "delivery" && !handoff?.requested && (
+          <DeliveryTrackingPanel key={`${sessionId}:${deliveryStoreDomain}`} storeDomain={deliveryStoreDomain} initialEmail={intakeContactEmail} summary={trackingSummary} disabled={loading} onLookup={handleDeliveryLookup} />
+        )}
+
+        {chatConsentAccepted && emailGateDone && !handoff?.requested && (
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            {sessionChecked && !warrantyState?.issue_type && !showIssueTypeOptions && (
+              <button type="button" onClick={() => handleQuickStart("delivery", "Delivery & tracking")} disabled={loading} className="rounded-full border border-sky-300 bg-white px-4 py-2 text-sm font-medium text-sky-900 hover:bg-sky-50 disabled:opacity-50">Delivery & tracking</button>
+            )}
+            <button type="button" onClick={requestHumanSupport} disabled={loading} className="rounded-full border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Ask for a person</button>
+          </div>
+        )}
+
+        {pendingDefectStart && !handoff?.requested && (
           <div className="mt-3 sm:mt-4 rounded-xl border border-sky-200 bg-sky-50/90 px-4 py-3">
             <p className="text-sm font-medium text-sky-950">Chair model needed</p>
             <p className="mt-1 text-sm text-sky-900">
@@ -1393,7 +1470,7 @@ export default function WarrantyChat({
           </div>
         )}
 
-        {needsModelConfirmation && warrantyState?.model_name && (
+        {needsModelConfirmation && warrantyState?.model_name && !handoff?.requested && (
           <div className="mt-3 sm:mt-4 rounded-xl border border-violet-200 bg-violet-50/90 px-4 py-3">
             <p className="text-sm font-medium text-violet-950">Confirm your chair model</p>
             <p className="mt-1 text-sm text-violet-900">
@@ -1555,24 +1632,29 @@ export default function WarrantyChat({
             onToggleCollapsed={setEmailPanelCollapsed}
             onBack={goBackFromEmailStep}
             backDisabled={loading}
-            onContactSuccess={() => {
+            onContactSuccess={(_email, response) => {
               setContactSubmitted(true);
+              setContactReceiptSent(Boolean(response.receipt_email_sent));
+              if (response.case_reference) setWarrantyState((previous) => previous ? { ...previous, case_reference: response.case_reference } : previous);
               setMessages((prev) => [
                 ...prev,
                 assistantMessage(
-                  teamFollowUpThankYou(
-                    warrantyState?.issue_type,
-                    warrantyState?.case_reference
-                  )
+                  buildWarrantySubmissionMessage({
+                    issueType: warrantyState?.issue_type,
+                    caseReference: response.case_reference || warrantyState?.case_reference,
+                    receiptEmailSent: Boolean(response.receipt_email_sent),
+                  })
                 ),
               ]);
             }}
-            onUploadSuccess={(filename) => {
+            onUploadSuccess={(filename, response) => {
               setContactSubmitted(true);
+              setContactReceiptSent(Boolean(response.receipt_email_sent));
+              if (response.case_reference) setWarrantyState((previous) => previous ? { ...previous, case_reference: response.case_reference } : previous);
               setMessages((prev) => [
                 ...prev,
                 assistantMessage(
-                  `Thank you — "${filename}" has been received. ${teamFollowUpThankYou(warrantyState?.issue_type, warrantyState?.case_reference)}`
+                  `Thank you — "${filename}" has been received. ${buildWarrantySubmissionMessage({ issueType: warrantyState?.issue_type, caseReference: response.case_reference || warrantyState?.case_reference, receiptEmailSent: Boolean(response.receipt_email_sent) })}`
                 ),
               ]);
             }}
@@ -1639,7 +1721,7 @@ export default function WarrantyChat({
                 </p>
               )}
               <p className="text-sm text-gray-600">
-                We emailed a confirmation. Our team will be in touch.
+                {contactReceiptSent ? "We emailed a confirmation. Keep your case reference for follow-up." : "Your case is saved for review. For direct assistance, contact our support team below."}
               </p>
               <button
                 type="button"

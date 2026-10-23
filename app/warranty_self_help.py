@@ -1,7 +1,7 @@
 """
 Customer-safe diagnosis and self-help for warranty workflow terminals.
 
-Pulls from warranty_knowledge (Q&A CSV + Freshdesk + Auto-Check + fault judgment + Fonz).
+Uses curated manuals, published KB, and explicitly human-reviewed guidance.
 """
 
 from __future__ import annotations
@@ -12,8 +12,11 @@ from typing import Any, Optional
 from warranty_knowledge import (
     KnowledgeEntry,
     contextual_search_knowledge,
-    map_workflow_defect_category,
+    customer_knowledge_entries,
     search_knowledge,
+    is_customer_instruction_safe,
+    is_presentable_match_title,
+    _is_customer_safe_step,
 )
 
 _DEFECT_CATEGORY_KEYS = frozenset({
@@ -143,7 +146,7 @@ _GENERIC_CLOSINGS: tuple[str, ...] = (
 
 _CLOSING_CTA = {
     "installation": (
-        "**Please watch the install guide and try the setup checks first. "
+        "**Please review the install guide and try the setup checks first. "
         "Then use the check below to tell us whether the chair is set up correctly.**"
     ),
     "delivery": (
@@ -348,7 +351,6 @@ _ROLLING_NOISE_STEPS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-_FRESHDESK_PRIORITY_CATEGORIES = frozenset({"power", "remote", "mech"})
 
 _REMOTE_STEPS: dict[str, tuple[str, ...]] = {
     "no_power": (
@@ -551,7 +553,7 @@ _AIR_STEPS: dict[str, tuple[str, ...]] = {
     "wg_install": (
         "If the chair was installed by White Glove delivery, an air hose may have been pinched or blocked during setup.",
         "Check external hose connections at the footrest, base, or side panel if you can reach them safely.",
-        "Do not disassemble the chair further — our team can arrange a service visit if air still does not work.",
+        "Do not disassemble the chair further; our team must review the issue before deciding the next step.",
     ),
 }
 
@@ -707,27 +709,12 @@ def _friendly_match_summary(
     model_name: str,
     issue_type: str,
 ) -> str:
+    matches = customer_knowledge_entries(matches, model_name=model_name)
     model_display = (model_name or "your chair").strip()
     preferred = next((m for m in matches if m.source in {"qa_csv", "auto_check"}), None)
     top = preferred or (matches[0] if matches else None)
 
-    if top and top.source == "freshdesk":
-        if defect_category:
-            label = _CATEGORY_LABELS.get(defect_category, defect_category)
-            return (
-                f"Based on your answers, this looks like a **{label}** issue "
-                f"with your {model_display}."
-            )
-        if issue_type == "delivery":
-            return "Based on your delivery answers, here are the recommended next checks."
-        if issue_type == "installation":
-            return f"For your {model_display}, here are the recommended setup checks."
-        return (
-            f"Based on your answers, here are troubleshooting steps that often help "
-            f"with your {model_display}."
-        )
-
-    if top and top.title:
+    if top and is_presentable_match_title(top.title):
         return (
             f"Based on your answers, this looks related to "
             f"**{top.title}** on your {model_display}."
@@ -749,6 +736,8 @@ def _dedupe_steps(steps: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for step in steps:
+        if not is_customer_instruction_safe(step):
+            continue
         key = step.lower().strip()
         if not key or key in seen:
             continue
@@ -771,14 +760,11 @@ def build_install_air_hose_diagnosis(
         model_name=model_name,
         limit=3,
     )
+    matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(_INSTALL_AIR_HOSE_STEPS)
     for entry in matches:
-        if entry.source in ("qa_csv", "auto_check"):
-            steps.extend(entry.customer_steps[:2])
-    if len(steps) <= len(_INSTALL_AIR_HOSE_STEPS):
-        for entry in matches:
-            if entry.source == "freshdesk":
-                steps.extend(entry.customer_steps[:2])
+        if customer_knowledge_entries((entry,)):
+            steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     steps = _dedupe_steps(steps)
 
     model_display = (model_name or "your chair").strip()
@@ -807,7 +793,7 @@ def format_install_air_hose_message(
         for idx, step in enumerate(steps, start=1):
             parts.append(f"{idx}. {step}")
     if video_link_lines.strip():
-        parts.append("\n\n**Installation video for your model:**")
+        parts.append("\n\n**Installation resources (check the model label before following a guide):**")
         parts.append(video_link_lines.strip())
     parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
@@ -839,14 +825,11 @@ def build_voice_diagnosis(
         model_name=model_name,
         limit=3,
     )
+    matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     for entry in matches:
-        if entry.source in ("qa_csv", "auto_check"):
-            steps.extend(entry.customer_steps[:2])
-    if len(steps) <= len(base_steps):
-        for entry in matches:
-            if entry.source == "freshdesk":
-                steps.extend(entry.customer_steps[:2])
+        if customer_knowledge_entries((entry,)):
+            steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     steps = _dedupe_steps(steps)
 
     model_display = (model_name or "your chair").strip()
@@ -889,21 +872,9 @@ def _merge_knowledge_steps(
     fallback_len: int,
     defect_category: Optional[str],
 ) -> list[str]:
-    """Merge Q&A/Freshdesk steps; prefer Freshdesk for power, remote, and mech."""
-    mapped = map_workflow_defect_category(defect_category)
-    prefer_freshdesk = mapped in _FRESHDESK_PRIORITY_CATEGORIES
-
-    if prefer_freshdesk:
-        for entry in matches:
-            if entry.source == "freshdesk":
-                steps.extend(entry.customer_steps[:2])
-    for entry in matches:
-        if entry.source != "freshdesk":
-            steps.extend(entry.customer_steps[:2])
-    if not prefer_freshdesk and len(steps) <= fallback_len:
-        for entry in matches:
-            if entry.source == "freshdesk":
-                steps.extend(entry.customer_steps[:1])
+    """Merge instructions from curated and human-approved knowledge only."""
+    for entry in customer_knowledge_entries(matches):
+        steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     return steps
 
 
@@ -922,6 +893,7 @@ def build_rolling_noise_diagnosis(
         model_name=model_name,
         limit=3,
     )
+    matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     steps = _merge_knowledge_steps(
         steps=steps,
@@ -979,6 +951,7 @@ def build_remote_diagnosis(
         model_name=model_name,
         limit=3,
     )
+    matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     steps = _merge_knowledge_steps(
         steps=steps,
@@ -1031,6 +1004,7 @@ def build_power_diagnosis(
         model_name=model_name,
         limit=3,
     )
+    matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     steps = _merge_knowledge_steps(
         steps=steps,
@@ -1083,14 +1057,11 @@ def build_air_diagnosis(
         model_name=model_name,
         limit=3,
     )
+    matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     for entry in matches:
-        if entry.source in ("qa_csv", "auto_check"):
-            steps.extend(entry.customer_steps[:2])
-    if len(steps) <= len(base_steps):
-        for entry in matches:
-            if entry.source == "freshdesk":
-                steps.extend(entry.customer_steps[:2])
+        if customer_knowledge_entries((entry,)):
+            steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     steps = _dedupe_steps(steps)
 
     model_display = (model_name or "your chair").strip()
@@ -1140,14 +1111,11 @@ def build_footrest_diagnosis(
         model_name=model_name,
         limit=3,
     )
+    matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     for entry in matches:
-        if entry.source in ("qa_csv", "auto_check"):
-            steps.extend(entry.customer_steps[:2])
-    if len(steps) <= len(base_steps):
-        for entry in matches:
-            if entry.source == "freshdesk":
-                steps.extend(entry.customer_steps[:2])
+        if customer_knowledge_entries((entry,)):
+            steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     steps = _dedupe_steps(steps)
 
     model_display = (model_name or "your chair").strip()
@@ -1231,7 +1199,7 @@ _COSMETIC_STEPS: dict[str, tuple[str, ...]] = {
     "noticed_later": (
         "Take photos of the damage now, even if it appeared after a few days of use.",
         "Note approximately when you first saw the damage and what you were doing.",
-        "Our team will review and may offer a small compensation for minor cases.",
+        "Keep the photos and timing details for the team's review; any available options depend on that review.",
     ),
     "side_fixed": (
         "Now that the side panels are seated correctly, try the chair through one auto program.",
@@ -1304,10 +1272,11 @@ def build_cosmetic_diagnosis(
         model_name=model_name,
         limit=3,
     )
+    matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     for entry in matches:
-        if entry.source in ("qa_csv", "auto_check"):
-            steps.extend(entry.customer_steps[:2])
+        if customer_knowledge_entries((entry,)):
+            steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     steps = _dedupe_steps(steps)
 
     model_display = (model_name or "your chair").strip()
@@ -1318,8 +1287,8 @@ def build_cosmetic_diagnosis(
     )
     if symptom == "wg_install":
         summary = (
-            f"{summary} Because this was a White Glove delivery, we'll coordinate the "
-            "fix with the delivery provider at no cost to you."
+            f"{summary} Include the White Glove installation details. Our team must "
+            "review responsibility, eligibility, and any available remedy before making arrangements."
         )
     elif symptom == "signed_cleared":
         summary = (
@@ -1379,7 +1348,7 @@ _RECLINE_STEPS: dict[str, tuple[str, ...]] = {
     ),
     "moves_on_off": (
         "When you power the chair OFF, observe the stuck part — does it return to default on its own?",
-        "If it does return on power-off, the actuator likely needs replacement; note which one for our team.",
+        "Note which part returns to its resting position so our team can review the cause.",
         "Try the failing recline function one more time from the side panel buttons to confirm.",
     ),
     "stays_stuck": (
@@ -1439,6 +1408,7 @@ def build_recline_diagnosis(
         model_name=model_name,
         limit=3,
     )
+    matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     steps = _merge_knowledge_steps(
         steps=steps,
@@ -1451,8 +1421,8 @@ def build_recline_diagnosis(
     model_display = (model_name or "your chair").strip()
     label = _RECLINE_SUMMARY_LABELS.get(symptom, "a recline issue")
     summary = (
-        f"For your **{model_display}**, **{label}** is often related to a stuck "
-        "**actuator**, the **Main PCB**, or **blockage / power**. Try the steps below first."
+        f"For your **{model_display}**, you've described **{label}**. "
+        "These observations can help our team review the cause; they do not identify a failed part."
     )
     return {
         "summary": summary,
@@ -1495,10 +1465,10 @@ _HEATING_STEPS: dict[str, tuple[str, ...]] = {
         "Record what time of day and how long the chair has been on when heat fails — this helps our team.",
     ),
     "too_hot": (
-        "Stop using the heat function immediately and turn the chair off.",
+        "Stop using the chair immediately and turn it off.",
+        "If it is safe to do so, unplug the chair and keep it off until our warranty team advises you.",
         "Do not block the heating area with thick blankets or covers — the chair can build up trapped heat.",
-        "Let the chair cool down for at least 30 minutes before testing again.",
-        "If the heat still feels too hot or uneven on the next test, our team can check the heating element.",
+        "Do not restart the heating function to test it again.",
     ),
 }
 
@@ -1532,6 +1502,12 @@ def build_heating_diagnosis(
     model_name: str = "",
 ) -> dict[str, Any]:
     """DIY steps for heating issues before team review."""
+    if symptom == "too_hot":
+        return {
+            "summary": "Because the heat feels too hot or uneven, stop using the chair and keep it off. Our warranty team needs to review the next step before you use it again.",
+            "steps": list(_HEATING_STEPS["too_hot"]),
+            "sources": [], "top_match": None, "safety_stop": True,
+        }
     base_steps = _HEATING_STEPS.get(symptom, _HEATING_STEPS["not_heating"])
     query = f"{path_text} heat heating roller warm temperature element"
     matches: list[KnowledgeEntry] = search_knowledge(
@@ -1540,10 +1516,11 @@ def build_heating_diagnosis(
         model_name=model_name,
         limit=3,
     )
+    matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     for entry in matches:
-        if entry.source in ("qa_csv", "auto_check", "freshdesk"):
-            steps.extend(entry.customer_steps[:2])
+        if customer_knowledge_entries((entry,)):
+            steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     steps = _dedupe_steps(steps)
 
     model_display = (model_name or "your chair").strip()
@@ -1562,6 +1539,11 @@ def build_heating_diagnosis(
 
 
 def format_heating_self_help_message(*, diagnosis: dict[str, Any], repair_manual_url: str) -> str:
+    if diagnosis.get("safety_stop"):
+        lines = [str(diagnosis.get("summary") or ""), "\n**For your safety:**"]
+        lines.extend(f"{idx}. {step}" for idx, step in enumerate(diagnosis.get("steps") or [], 1))
+        lines.append("\nKeep the chair off and contact our warranty team. Do not restart it to test the heat.")
+        return "\n".join(lines)
     parts: list[str] = [str(diagnosis.get("summary") or "").strip()]
     steps: list[str] = list(diagnosis.get("steps") or [])
     if steps:
@@ -1626,7 +1608,7 @@ _DELIVERY_STEPS: dict[str, tuple[str, ...]] = {
         "Take photos of the damage now, even if it appeared after a few days of use.",
         "Note approximately when you first saw the damage and what you were doing.",
         "Keep your signed delivery receipt — our team will need it for any compensation review.",
-        "Minor cases are often resolved with a partial credit; major cases trigger a replacement review.",
+        "The team must review the damage before determining what options are available.",
     ),
 }
 
@@ -1696,6 +1678,7 @@ def build_delivery_diagnosis(
         model_name=model_name,
         limit=3,
     )
+    matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     steps = _dedupe_steps(steps)
 
@@ -1707,8 +1690,8 @@ def build_delivery_diagnosis(
     )
     if symptom == "visible_at_unboxing":
         summary = (
-            f"{summary} Because damage was visible right at unboxing and the receipt notes "
-            "'Damaged', we can usually arrange a replacement or repair at no cost to you."
+            f"{summary} Keep the receipt noting the damage. The team must review the case "
+            "before determining eligibility or any repair, replacement, or compensation."
         )
     elif symptom == "signed_cleared":
         summary = (
@@ -1757,6 +1740,7 @@ def build_workflow_diagnosis(
         model_name=model_name,
         limit=3,
     )
+    matches = customer_knowledge_entries(matches, model_name=model_name)
     fallback = _collect_fallback_hints(turns or (), node_id) if turns is not None else ()
     if node_id in _NODE_HINTS and not fallback:
         fallback = _NODE_HINTS[node_id]

@@ -395,7 +395,7 @@ def test_notify_email_endpoint_sends_transcript(client, monkeypatch):
     assert data["customer_email"] == "buyer@example.com"
 
 
-def test_submit_answer_notifies_on_email_in_text(client, monkeypatch):
+def test_delivery_email_lookup_does_not_send_unsolicited_transcript(client, monkeypatch):
     from delivery_lookup import TrackingSnapshot
 
     monkeypatch.setattr(
@@ -431,7 +431,7 @@ def test_submit_answer_notifies_on_email_in_text(client, monkeypatch):
         json={"answer": "follow up at buyer@example.com"},
     )
     assert resp.status_code == 200
-    assert resp.json().get("email_notified") is True
+    assert resp.json().get("email_notified") is not True
 
 
 def test_natural_start_clarifying_when_unclear(client, monkeypatch):
@@ -454,7 +454,7 @@ def test_natural_start_clarifying_when_unclear(client, monkeypatch):
     assert data["ticket"]["issue_type"] == ""
 
 
-def test_model_then_tracking_redirects_to_sales_phone(client):
+def test_model_then_tracking_opens_verified_delivery_lookup(client):
     session_id = "cust-api-model-then-issue"
     _register_model(client, session_id, model="3D LTX")
     resp = client.post(
@@ -463,9 +463,9 @@ def test_model_then_tracking_redirects_to_sales_phone(client):
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert "ext. 2" in data["assistant_message"]
-    assert "ext. 3" in data["assistant_message"]
-    assert "sales" in data["assistant_message"].lower()
+    assert data["delivery_lookup_required"] is True
+    assert data["ticket"]["issue_type"] == "delivery"
+    assert "order number" in data["assistant_message"].lower()
 
 
 def test_submit_answer_button_key_still_advances(client):
@@ -1050,7 +1050,7 @@ def test_smart_start_empty_prefill_does_not_default_to_defect(client, monkeypatc
     assert "defect" not in data["smart_start"]["applied_keys"]
 
 
-def test_smart_start_fedex_redirects_to_sales_phone(client):
+def test_smart_start_fedex_opens_verified_delivery_lookup(client):
     session_id = "cust-api-smart-routing-confirm"
     resp = client.post(
         f"/api/v1/warranty/session/{session_id}/smart-start",
@@ -1059,13 +1059,12 @@ def test_smart_start_fedex_redirects_to_sales_phone(client):
     assert resp.status_code == 200
     data = resp.json()
     msg = data["assistant_message"].lower()
-    assert "ext. 2" in data["assistant_message"]
-    assert "ext. 3" in data["assistant_message"]
-    assert "sales" in msg
-    assert "live shipment" in msg or "delivery" in msg
+    assert data["delivery_lookup_required"] is True
+    assert data["ticket"]["issue_type"] == "delivery"
+    assert "order number" in msg and "checkout" in msg
 
 
-def test_smart_start_shipping_help_redirects_to_sales_phone(client):
+def test_smart_start_shipping_help_opens_verified_delivery_lookup(client):
     session_id = "cust-api-smart-shipping-help"
     resp = client.post(
         f"/api/v1/warranty/session/{session_id}/smart-start",
@@ -1074,10 +1073,9 @@ def test_smart_start_shipping_help_redirects_to_sales_phone(client):
     assert resp.status_code == 200
     data = resp.json()
     msg = data["assistant_message"].lower()
-    assert "ext. 2" in data["assistant_message"]
-    assert "sales" in msg
-    assert data.get("suggested_issue_type") not in {"delivery"}
-    assert "delivery" not in (data.get("smart_start") or {}).get("applied_keys", [])
+    assert data["delivery_lookup_required"] is True
+    assert data["ticket"]["issue_type"] == "delivery"
+    assert "order number" in msg and "checkout" in msg
 
 
 def _start_defect_air_feet(client, session_id: str, model: str = "3D LTX") -> str:

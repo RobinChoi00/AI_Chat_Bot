@@ -308,8 +308,8 @@ def test_recommend_without_hints_asks_height(client):
     assert any(p.startswith("recommend:height:") for p in payloads)
 
 
-def test_recommend_budget_payload_ignored_still_asks_height(client):
-    """Legacy budget payloads no longer gate the flow — still fit-first."""
+def test_recommend_budget_payload_still_asks_for_missing_height(client):
+    """A stored budget does not substitute for an unanswered height question."""
     resp = client.post(
         "/api/v1/sales/chat",
         json={
@@ -349,7 +349,7 @@ def test_recommend_guided_flow_returns_tiered_picks(client):
         body = resp.json()
     assert body["intent"] == "recommend"
     reply = body["reply"].lower()
-    assert "value" in reply
+    assert body["products"] or "cases.nofit" in body["tools_used"]
     assert "mid-range" in reply or "mid" in reply
     assert "premium" in reply
     assert "titan pro cura" in reply or "osaki" in reply
@@ -358,8 +358,8 @@ def test_recommend_guided_flow_returns_tiered_picks(client):
     assert not any(p.startswith("recommend:budget:") for p in payloads)
 
 
-def test_recommend_budget_after_fit_still_returns_tiers(client):
-    """Budget refine payloads are ignored — always Value/Mid/Premium list."""
+def test_recommend_budget_after_fit_is_a_hard_ceiling(client):
+    """A supplied budget must limit returned prices, including button payloads."""
     sid = "s-budget-ignored"
     body = None
     for payload in (
@@ -381,8 +381,8 @@ def test_recommend_budget_after_fit_still_returns_tiers(client):
         assert resp.status_code == 200
         body = resp.json()
     reply = body["reply"].lower()
-    assert "value" in reply
-    assert "premium" in reply
+    assert body["products"] or "cases.nofit" in body["tools_used"]
+    assert all(p["price_usd"] <= 2999 for p in body["products"])
     assert "primary pick" not in reply
 
 
@@ -466,7 +466,7 @@ def test_recommend_demotes_oos_with_live_stock(client, monkeypatch):
     payloads = {q["payload"] for q in body["quick_replies"]}
     assert "lead:save_pick" in payloads
     assert "products/" in body["reply"] or "https://" in body["reply"]
-    assert "value" in body["reply"].lower()
+    assert body["products"]
     assert "https://" in body["reply"]
     assert "Open these links" not in body["reply"]
 
@@ -554,8 +554,8 @@ def test_free_text_skips_secondary_questions(client, monkeypatch):
     body = resp.json()
     assert body["intent"] == "recommend"
     reply = body["reply"].lower()
-    assert "value" in reply
-    assert "premium" in reply
+    assert body["products"] or "cases.nofit" in body["tools_used"]
+    assert all(p["price_usd"] <= 5000 for p in body["products"])
     assert "primary pick" not in reply
     assert "intensity" not in body["reply"].lower() or "defaults" in body["reply"].lower()
     assert "preferred **massage intensity**" not in body["reply"].lower()
@@ -576,7 +576,7 @@ def test_height_and_goal_are_enough_to_recommend(client, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["intent"] == "recommend"
-    assert "value" in body["reply"].lower()
+    assert body["products"]
     assert "weight range" not in body["reply"].lower()
     assert "lead:save_pick" in {q["payload"] for q in body["quick_replies"]}
 
@@ -598,7 +598,7 @@ def test_height_then_goal_buttons_recommend(client, monkeypatch):
         assert resp.status_code == 200
         body = resp.json()
     assert body is not None
-    assert "value" in body["reply"].lower()
+    assert body["products"]
     assert "premium" in body["reply"].lower()
     assert "assumed" in body["reply"].lower()
 
@@ -647,7 +647,7 @@ def test_tiered_recommend_includes_product_links_when_in_stock(client, monkeypat
         body = resp.json()
 
     assert body is not None
-    assert "value" in body["reply"].lower()
+    assert body["products"]
     assert "https://" in body["reply"]
     payloads = {q["payload"] for q in body["quick_replies"]}
     assert "lead:save_pick" in payloads

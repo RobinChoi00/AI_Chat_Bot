@@ -42,6 +42,7 @@ export interface AdminFonzDiagnostics {
 
 export interface AdminWarrantyTicket {
   ticket_id: string;
+  history_record_id?: string | null;
   case_reference?: string | null;
   session_id: string;
   domain: string;

@@ -9,6 +9,7 @@ grounded in retrieved data.
 from __future__ import annotations
 
 import re
+import json
 from typing import Iterable, Sequence
 
 _PRICE_RE = re.compile(
@@ -68,6 +69,38 @@ def _language(text: str) -> str:
     return "en"
 
 
+def conversation_language(text: str, history: Sequence | None = None) -> str:
+    """Keep the last explicit user language across numbers, model names and yes/no.
+
+    Assistant text is deliberately ignored: a prior accidental English footer
+    must not switch a customer's conversation away from their chosen language.
+    """
+    current = (text or "").strip()
+    explicit = re.search(r"(?:in|speak|reply|answer)\s+(English|Korean|Spanish)\b", current, re.I)
+    if explicit:
+        return {"english": "en", "korean": "ko", "spanish": "es"}[explicit.group(1).lower()]
+    if re.search(r"[가-힣]", current):
+        return "ko"
+    if _SPANISH_HINTS.search(current) or current.lower() in {"sí", "si", "no sé", "de acuerdo"}:
+        return "es"
+    # A substantive English sentence may deliberately switch language; short
+    # acknowledgements and product codes carry no reliable language evidence.
+    if len(re.findall(r"\b[a-zA-Z]{2,}\b", current)) >= 4:
+        return "en"
+    for message in reversed(history or []):
+        role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
+        content = message.get("content", "") if isinstance(message, dict) else getattr(message, "content", "")
+        if role != "user":
+            continue
+        if re.search(r"[가-힣]", str(content)):
+            return "ko"
+        if _SPANISH_HINTS.search(str(content)) or str(content).strip().lower() in {"sí", "si"}:
+            return "es"
+        if len(re.findall(r"\b[a-zA-Z]{2,}\b", str(content))) >= 4:
+            return "en"
+    return "en"
+
+
 _MESSAGES = {
     "tracking_input": {
         "en": "I can look up your order status if you share your order number (for example OSKMC1234) and the email used at checkout.",
@@ -94,11 +127,16 @@ _MESSAGES = {
         "es": "Lo siento, la fuente oficial no está disponible temporalmente y no quiero adivinar. Inténtelo de nuevo en unos minutos o llame al +1-888-848-2630.",
         "ko": "죄송하지만 현재 공식 정보 조회가 일시적으로 불가능해 추측해서 안내드릴 수 없습니다. 잠시 후 다시 시도하거나 +1-888-848-2630으로 연락해 주세요.",
     },
+    "unsupported_promise": {
+        "en": "Our team needs to confirm that request. I cannot approve warranty coverage, guarantee a delivery date, or promise a medical result here. I can help connect you with the appropriate team.",
+        "es": "Nuestro equipo debe confirmar esa solicitud. No puedo aprobar la garantía, garantizar una fecha de entrega ni prometer un resultado médico. Puedo ayudarle a contactar al equipo adecuado.",
+        "ko": "해당 요청은 담당 팀의 확인이 필요합니다. 이 상담에서 보증 승인, 배송일 보장 또는 의학적 효과를 약속할 수 없습니다. 적절한 담당 팀에 연결하는 방법을 안내드리겠습니다.",
+    },
 }
 
 
-def _message(key: str, user_query: str) -> str:
-    return _MESSAGES[key][_language(user_query)]
+def _message(key: str, user_query: str, language: str | None = None) -> str:
+    return _MESSAGES[key][language if language in {"en", "es", "ko"} else _language(user_query)]
 
 
 def _tool_blob(tool_results: Sequence[str]) -> str:
@@ -196,11 +234,11 @@ def _claimed_spec_numbers(text: str) -> set[float]:
     return nums
 
 
-def _number_is_allowed(value: float, allowed: set[float], tolerance: float = 0.08) -> bool:
+def _number_is_allowed(value: float, allowed: set[float], tolerance: float = 0.0001) -> bool:
     for candidate in allowed:
         if candidate <= 0:
             continue
-        if abs(value - candidate) <= max(0.5, candidate * tolerance):
+        if abs(value - candidate) <= max(0.01, candidate * tolerance):
             return True
     return False
 
@@ -217,12 +255,101 @@ def _has_ungrounded_spec_numbers(response: str, blob: str) -> bool:
     return any(not _number_is_allowed(n, allowed) for n in claims)
 
 
+def _model_facts(blob: str) -> list[dict]:
+    facts = []
+    for line in blob.splitlines():
+        if not line.startswith("MODEL_FACTS_JSON: "):
+            continue
+        try:
+            fact = json.loads(line.split(": ", 1)[1])
+            if isinstance(fact, dict) and isinstance(fact.get("model"), str) and isinstance(fact.get("specs"), dict):
+                facts.append(fact)
+        except (ValueError, TypeError):
+            continue
+    return facts
+
+
+def _fact_mentions(text: str, facts: list[dict]) -> list[tuple[int, int, dict]]:
+    matches = []
+    for fact in facts:
+        model = fact["model"].strip()
+        aliases = {model, re.sub(r"^(?:osaki|titan)\s+", "", model, flags=re.I)}
+        for alias in aliases:
+            if len(alias) < 4:
+                continue
+            pattern = r"(?<![a-z0-9])" + re.escape(alias).replace(r"\ ", r"\s+") + r"(?![a-z0-9])"
+            matches.extend((m.start(), m.end(), fact) for m in re.finditer(pattern, text, re.I))
+    # Prefer the complete model name over its shorter alias, and never interpret
+    # a shared prefix as a second model in the same character span.
+    selected = []
+    for item in sorted(matches, key=lambda value: (-(value[1] - value[0]), value[0])):
+        if not any(item[0] < other[1] and other[0] < item[1] for other in selected):
+            selected.append(item)
+    return sorted(selected, key=lambda value: value[0])
+
+
+def _bound_claim_conflicts(text: str, fact: dict) -> bool:
+    if re.search(r"€\s*\d|\b(?:EUR|CAD|GBP)\s*\d|\d[\d,.]*\s*(?:EUR|CAD|GBP)\b", text, re.I) and fact.get("currency") == "USD":
+        return True
+    prices = _PRICE_RE.findall(text)
+    expected_price = fact.get("price_usd")
+    for price in prices:
+        try:
+            if expected_price is None or abs(float(price.replace("$", "").replace(",", "").strip()) - float(expected_price)) > .011:
+                return True
+        except (TypeError, ValueError):
+            return True
+    specs = fact["specs"]
+    field_patterns = (
+        ("max_user_weight_lb", r"(?:max(?:imum)?\s+(?:user\s+)?(?:weight|capacity)|supports?\s+(?:users?\s+)?(?:up\s+to)?)[^\d\n]{0,25}(\d+(?:\.\d+)?)\s*(?:lb|pound)"),
+        ("doorway_assembled_in", r"(?:doorway|door\s+width|door\s+clearance)[^\d\n]{0,25}(\d+(?:\.\d+)?)\s*(?:inches|inch|in\b|\")"),
+        ("wall_clearance_in", r"wall\s+clearance[^\d\n]{0,25}(\d+(?:\.\d+)?)\s*(?:inches|inch|in\b|\")"),
+    )
+    for field, pattern in field_patterns:
+        for value in re.findall(pattern, text, re.I):
+            actual = specs.get(field)
+            if actual is None or not _number_is_allowed(float(value), {float(actual)}):
+                return True
+    mechanisms = re.findall(r"\b[2345]D\b", text, re.I)
+    source_mechanism = str(specs.get("massage_mechanism") or "").upper()
+    if mechanisms and source_mechanism and any(mechanism.upper() not in source_mechanism for mechanism in mechanisms):
+        return True
+    foot = str(specs.get("foot_roller") or "").strip().lower()
+    if foot:
+        claims_yes = bool(re.search(r"(?:has|have|includes?|with)\s+(?:\w+\s+){0,2}foot\s*rollers?", text, re.I))
+        claims_no = bool(re.search(r"(?:no|without|does not have|doesn't have)\s+foot\s*rollers?", text, re.I))
+        if (claims_yes and foot in {"no", "none", "false"}) or (claims_no and foot in {"yes", "true"}):
+            return True
+    return False
+
+
+def _has_model_fact_conflict(response: str, blob: str) -> bool:
+    facts = _model_facts(blob)
+    if not facts:
+        return False
+    current = facts[0] if len(facts) == 1 else None
+    for line in re.split(r"\n|(?<=[.;])\s+|\bwhile\b", response):
+        mentions = _fact_mentions(line, facts)
+        if not mentions:
+            if current is not None and _bound_claim_conflicts(line, current):
+                return True
+            continue
+        for index, (start, _, fact) in enumerate(mentions):
+            end = mentions[index + 1][0] if index + 1 < len(mentions) else len(line)
+            segment = line[0 if index == 0 else start:end]
+            if _bound_claim_conflicts(segment, fact):
+                return True
+            current = fact
+    return False
+
+
 def sanitize_agent_response(
     response: str,
     *,
     tools_called: Iterable[str],
     user_query: str,
     tool_results: Sequence[str] | None = None,
+    language: str | None = None,
 ) -> str:
     """
     Scrub or replace hallucinated price / repair / tracking content.
@@ -245,7 +372,40 @@ def sanitize_agent_response(
     lower = text.lower()
 
     if "tool_error:" in blob_lower:
-        return _message("source_unavailable", user_query)
+        return _message("source_unavailable", user_query, language)
+
+    unsupported_promise = re.search(
+        r"\b(?:your|the)\s+(?:claim|replacement|warranty)\s+(?:is|has been)\s+approved\b|"
+        r"\b(?:we|i)\s+(?:guarantee|have approved|approved your)\b|"
+        r"\b(?:will|guaranteed to)\s+(?:cure|heal)\b|"
+        r"\b(?:guaranteed delivery|will (?:arrive|be delivered))\s+tomorrow\b",
+        text, re.I,
+    )
+    if unsupported_promise:
+        return _message("unsupported_promise", user_query, language)
+
+    # Historical service correspondence is not the current customer's status.
+    # A tool name alone does not authorize closure, shipment or repair promises.
+    if re.search(
+        r"\bclos(?:e|ing|ed)\b.{0,35}\b(?:ticket|case)\b|"
+        r"\b(?:your|the)\s+chair\s+(?:is|has been)\s+(?:fixed|repaired)\b|"
+        r"\b(?:i|we)(?:'ll| will)\s+(?:go ahead and\s+)?(?:ship|send|replace|refund|dispatch)\b",
+        text, re.I,
+    ):
+        return _message("unsupported_promise", user_query, language)
+    status_claims = re.findall(
+        r"\b(?:parts?|replacement|technician|your order)\b[^.\n]{0,70}?"
+        r"\b(on (?:the|their) way|shipped|dispatched|scheduled|in transit|delivered)\b",
+        text, re.I,
+    )
+    if status_claims and not (
+        "lookup_order_status" in called and "VERIFIED_ORDER_STATUS:" in blob
+        and all(claim.lower() in blob_lower for claim in status_claims)
+    ):
+        return _message("unsupported_promise", user_query, language)
+
+    if _has_model_fact_conflict(text, blob):
+        return _message("spec_fallback", user_query, language)
 
     text = _DISCOUNT_NARRATIVE_RE.sub(
         "Please check the current price on our website.", text
@@ -254,22 +414,30 @@ def sanitize_agent_response(
     if not called.intersection(_TRACKING_BLOCK_TOOLS) and any(
         s in lower for s in _TRACKING_SIGNALS
     ):
-        return _message("tracking_input", user_query)
+        return _message("tracking_input", user_query, language)
 
-    numbered_steps = bool(_NUMBERED_STEPS_RE.search(text))
+    repair_actions = bool(re.search(
+        r"\b(?:turn\s+(?:off|on)|unplug|reconnect|reset|inspect|remove\s+the\s+(?:back|panel)|check\s+the\s+fuse|retire|cambie|desconecte|enchufe)\b|패널.*제거|퓨즈.*교체", lower,
+    ))
+    numbered_steps = bool(_NUMBERED_STEPS_RE.search(text)) and (not called.intersection(_PRICE_BLOCK_TOOLS) or repair_actions)
     repair_like = numbered_steps or any(s in lower for s in _REPAIR_SIGNALS)
-    if repair_like and not called.intersection(_REPAIR_BLOCK_TOOLS):
-        return _message("repair_unverified", user_query)
+    verified_repair = "get_repair_help" in called and "VERIFIED_REPAIR_GUIDANCE:" in blob
+    if repair_like and not verified_repair and "escalate_to_human" not in called:
+        return _message("repair_unverified", user_query, language)
 
     response_prices = _prices_in_text(text)
     if response_prices and not called.intersection(_PRICE_BLOCK_TOOLS):
         text = _PRICE_RE.sub("", text)
         text = re.sub(r"\s{2,}", " ", text).strip()
         if len(text) < 40:
-            return _message("price_model", user_query)
+            return _message("price_model", user_query, language)
 
     if response_prices and called.intersection(_PRICE_BLOCK_TOOLS):
         allowed = _prices_in_text(blob)
+        for fact in _model_facts(blob):
+            if fact.get("currency") == "USD" and isinstance(fact.get("price_usd"), (int, float)):
+                price = float(fact["price_usd"])
+                allowed.update({f"${price:,.2f}", f"${price:,.0f}"})
         for m in re.finditer(
             r"(?:price|variant price|base price)[^\n$]*\$?([\d,]+(?:\.\d{2})?)",
             blob_lower,
@@ -286,8 +454,8 @@ def sanitize_agent_response(
 
     if "search_chair_specs" in called:
         if "no_results" in blob_lower and any(kw in lower for kw in _SPEC_TOPIC_SIGNALS):
-            return _message("spec_fallback", user_query)
+            return _message("spec_fallback", user_query, language)
         if "authoritative spec values" in blob_lower and _has_ungrounded_spec_numbers(text, blob):
-            return _message("spec_fallback", user_query)
+            return _message("spec_fallback", user_query, language)
 
     return text.strip()

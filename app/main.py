@@ -444,9 +444,16 @@ def fetch_shopify_order_status(
 ) -> Dict[str, Any]:
     """접속 도메인에 맞춰 3개의 스토어 토큰 중 하나를 선택해 쇼피파이 API를 직접 호출합니다.
 
-    ``allow_order_only=False`` blocks order-number-only lookups so warranty chat
-    cannot disclose another customer's order from a guessed order id.
+    ``allow_order_only=False`` requires both validated identifiers and disables
+    identifier-only fallback for all public customer lookups.
     """
+    from delivery_intake import is_plausible_email, is_plausible_order_id
+    clean_order = str(order_number or "").replace("#", "").strip()
+    clean_email = str(email or "").strip()
+    if (clean_order and not is_plausible_order_id(clean_order)) or (clean_email and not is_plausible_email(clean_email)):
+        return {"error": "Please provide a valid order number and checkout email."}
+    if not allow_order_only and (not clean_order or not clean_email):
+        return {"error": "Both the order number and checkout email are required."}
     store_config = get_store_config(target_domain)
     SHOP_DOMAIN = store_config["shop_domain"]
     ACCESS_TOKEN = store_config["shop_access_token"]
@@ -493,8 +500,6 @@ def fetch_shopify_order_status(
     }
     """
     try:
-        clean_order = order_number.replace("#", "").strip()
-        clean_email = (email or "").strip()
         order_candidates = [clean_order] if clean_order else []
         if clean_order:
             digits_only = "".join(re.findall(r"\d+", clean_order))
@@ -532,7 +537,7 @@ def fetch_shopify_order_status(
                 "Skipping order-number-only Shopify search (email required for privacy)"
             )
 
-        if not edges and clean_email:
+        if not edges and clean_email and allow_order_only:
             logger.info("🔍 Trying email-only order fallback")
             edges = _shopify_orders_search(
                 url,
@@ -1435,6 +1440,11 @@ W6. NEVER skip the warranty_answer tool to jump to a conclusion. Every step must
 20. TOOL FAILURE: If a tool returns TOOL_ERROR or its authoritative source is
     unavailable, do not guess or expose internal error text. Apologize briefly,
     say the lookup is temporarily unavailable, and offer the correct human contact.
+21. MODEL-BOUND FACTS: MODEL_FACTS_JSON binds currency, price, mechanism and fit
+    measurements to exactly one model. Never transfer another model's numbers,
+    use unverified dimensions, or widen a customer's maximum budget. Preserve
+    explicit 4D, exact weight and doorway requirements. If no verified fit
+    remains, explain the limitation and offer a specialist; do not substitute.
 
 # CONTEXT-AWARE BEHAVIOR
 - On the FIRST message of a new conversation (empty chat history), if the user only
@@ -1466,7 +1476,7 @@ W6. NEVER skip the warranty_answer tool to jump to a conclusion. Every step must
 End your message with EXACTLY this line on its own paragraph ONLY when the user
 is exploring or shopping (asking about specs, recommendations, comparisons, prices):
 
-"💌 Interested in a personalized recommendation or exclusive pricing? Leave your email address and our team will get back to you within 24 hours!"
+"💌 Interested in a personalized recommendation or pricing assistance? You can leave your email address for our team to follow up."
 
 DO NOT include this footer when:
 - The user is tracking an order or asking about delivery status (already a customer).
@@ -1497,16 +1507,9 @@ def build_system_prompt(target_domain: str) -> str:
     )
 
 
-def _customer_language(text: str) -> str:
-    if re.search(r"[가-힣]", text or ""):
-        return "ko"
-    if re.search(
-        r"\b(hola|gracias|silla|precio|pedido|garant[ií]a|reparar|cu[aá]nto|necesito|escribe|dame|quiero|puedes|por\s+favor)\b|[¿¡]",
-        text or "",
-        re.IGNORECASE,
-    ):
-        return "es"
-    return "en"
+def _customer_language(text: str, history=None) -> str:
+    from app.answer_guard import conversation_language
+    return conversation_language(text, history)
 
 
 def _agent_completion_options(session_id: str) -> Dict[str, Any]:
@@ -1545,6 +1548,8 @@ def _execute_tool(
     target_domain: str,
     *,
     fallback_customer_text: str = "",
+    response_language: Optional[str] = None,
+    customer_context: str = "",
 ) -> str:
     """Dispatch a tool call to its Python handler. Always returns a string."""
     # Retrievers are None only if init failed; the chat endpoint already
@@ -1564,7 +1569,7 @@ def _execute_tool(
         if name == "recommend_chairs":
             return tool_recommend_chairs(
                 products_retriever=products_retriever,
-                user_need=args.get("user_need", "premium massage chair"),
+                user_need="\n".join(part for part in (str(args.get("user_need") or ""), customer_context or fallback_customer_text) if part),
                 budget_min=args.get("budget_min"),
                 budget_max=args.get("budget_max"),
                 exclude_models=args.get("exclude_models") or [],
@@ -1572,11 +1577,13 @@ def _execute_tool(
             )
         if name == "lookup_order_status":
             return tool_lookup_order_status(
-                fetch_fn=fetch_shopify_order_status,
+                fetch_fn=lambda order, email, domain: fetch_shopify_order_status(
+                    order, email, domain, allow_order_only=False,
+                ),
                 build_response_fn=lambda data, domain: build_deterministic_tracking_response(
                     data,
                     domain,
-                    _customer_language(fallback_customer_text),
+                    response_language or _customer_language(fallback_customer_text),
                 ),
                 target_domain=target_domain,
                 order_id=args.get("order_id", ""),
@@ -1587,6 +1594,7 @@ def _execute_tool(
                 qa_retriever=qa_retriever,
                 issue_description=args.get("issue_description", ""),
                 error_code=args.get("error_code") or None,
+                model_name=args.get("model_name") or None,
             )
         if name == "get_warranty_or_policy":
             return tool_get_warranty_or_policy(
@@ -1605,7 +1613,7 @@ def _execute_tool(
                 contact_msg_fn=lambda routing, domain: get_contact_msg(
                     routing,
                     domain,
-                    _customer_language(fallback_customer_text),
+                    response_language or _customer_language(fallback_customer_text),
                 ),
                 target_domain=target_domain,
                 reason=args.get("reason", "general"),
@@ -1739,6 +1747,7 @@ async def chat_endpoint(
     """
     user_query = chat_request.user_query
     target_domain = chat_request.current_domain.rstrip('/')
+    response_language = _customer_language(user_query, chat_request.chat_history)
 
     # ── Request trace (turn-level observability) ──
     try:
@@ -1835,8 +1844,9 @@ async def chat_endpoint(
     if (
         is_conversation_start(chat_request.chat_history)
         and is_opening_greeting(user_query)
+        and _active_warranty_ticket is None
     ):
-        welcome_reply = build_chat_welcome_message(_customer_language(user_query))
+        welcome_reply = build_chat_welcome_message(response_language)
         logger.info("⚡ Short-circuit: opening greeting → welcome reply (0 LLM calls)")
         trace.short_circuit = "welcome"
         trace.finish(welcome_reply)
@@ -1861,7 +1871,7 @@ async def chat_endpoint(
     if forced_first_tool == "get_showroom_info":
         deterministic_reply = _build_showroom_reply(
             target_domain,
-            _customer_language(user_query),
+            response_language,
         )
         logger.info("⚡ Short-circuit: showroom intent → deterministic reply (0 LLM calls)")
         trace.short_circuit = "showroom"
@@ -1885,6 +1895,15 @@ async def chat_endpoint(
 
     # ── 💰 Response cache: serve FAQ-style repeats with zero LLM calls ──
     cache_key = make_cache_key(user_query, target_domain, chat_request.chat_history)
+    # Stateful warranty answers must execute the workflow, never replay another
+    # node's cached reply. For general follow-ups, bind the whole recent context
+    # and language; just the previous user's text cannot identify the product.
+    if _active_warranty_ticket is not None:
+        cache_key = None
+    elif cache_key:
+        context = [{"role": msg.role, "content": msg.content} for msg in (chat_request.chat_history or [])[-12:]]
+        digest = hashlib.sha256(_json.dumps([cache_key, context, response_language], sort_keys=True).encode()).hexdigest()
+        cache_key = f"v2|{target_domain}|{response_language}|{digest}"
     cached_reply = cache_get(cache_key)
     if cached_reply and cache_key:
         logger.info(f"⚡ Cache HIT: served from response cache (key={cache_key[:60]}…)")
@@ -1913,6 +1932,12 @@ async def chat_endpoint(
 
     try:
         system_prompt = build_system_prompt(target_domain)
+        system_prompt += (
+            f"\nRESPONSE_LANGUAGE: {response_language}. Keep this customer language for short "
+            "acknowledgements, numbers and model names. Change it only when the customer clearly changes language.\n"
+            "Preserve every explicit budget, exact body measurement and required feature from customer turns; "
+            "a later correction replaces the earlier value. Do not silently relax a hard requirement."
+        )
 
         # ── Inject active warranty context (ticket + current node) ──
         if _active_warranty_ticket and _active_warranty_node:
@@ -1974,17 +1999,19 @@ async def chat_endpoint(
                 # When the LLM responds without tool_calls, msg.content IS the
                 # final answer. We do NOT re-call the model to "synthesize".
                 for turn in range(MAX_TOOL_TURNS):
-                    # On synthesis turns (after at least one tool ran), drop
-                    # the tool schema so we don't pay for ~2KB of schema tokens
-                    # the LLM will probably not use. If the LLM still wants
-                    # another tool, it'll request it on the next turn (we keep
-                    # tools available until at least one has executed).
-                    # In warranty mode, restrict to warranty-only tool schemas.
+                    # General comparisons can need more than one factual lookup.
+                    # Keep read-only tools available until the final synthesis,
+                    # while never advancing two warranty nodes for one answer.
                     active_schema = WARRANTY_TOOL_SCHEMAS if _active_warranty_ticket else TOOL_SCHEMAS
 
-                    if tools_called:
+                    warranty_advanced = any(name in {"start_warranty_workflow", "answer_warranty_question", "warranty_start", "warranty_answer"} for name in tools_called)
+                    if tools_called and (warranty_advanced or _active_warranty_ticket or turn == MAX_TOOL_TURNS - 1):
                         tools_payload: Optional[List[Any]] = None
                         tool_choice: Any = "none"
+                    elif tools_called:
+                        readonly_names = {"search_chair_specs", "recommend_chairs", "lookup_order_status", "get_repair_help", "get_warranty_or_policy", "get_showroom_info"}
+                        tools_payload = [schema for schema in active_schema if schema["function"]["name"] in readonly_names]
+                        tool_choice = "auto"
                     elif turn == 0 and forced_first_tool:
                         tools_payload = active_schema
                         tool_choice = {
@@ -2009,7 +2036,9 @@ async def chat_endpoint(
                         create_kwargs["tool_choice"] = tool_choice
                         create_kwargs["parallel_tool_calls"] = False
 
+                    _llm_t0 = time.perf_counter()
                     response = openai_client.chat.completions.create(**create_kwargs)
+                    _llm_ms = int((time.perf_counter() - _llm_t0) * 1000)
                     usage.record(response)
                     msg = response.choices[0].message
                     tool_calls = getattr(msg, "tool_calls", None) or []
@@ -2044,7 +2073,9 @@ async def chat_endpoint(
                                 "parallel_tool_calls": False,
                                 **_agent_completion_options(chat_request.session_id),
                             }
+                            _llm_t0 = time.perf_counter()
                             response = openai_client.chat.completions.create(**retry_kwargs)
+                            _llm_ms += int((time.perf_counter() - _llm_t0) * 1000)
                             usage.record(response)
                             msg = response.choices[0].message
                             tool_calls = getattr(msg, "tool_calls", None) or []
@@ -2091,7 +2122,10 @@ async def chat_endpoint(
                                 args,
                                 target_domain,
                                 fallback_customer_text=user_query,
+                                response_language=response_language,
+                                customer_context="\n".join([str(msg.content) for msg in (chat_request.chat_history or [])[-12:] if msg.role == "user"] + [user_query]),
                             )
+                            _tool_ok = not result.strip().startswith(("TOOL_ERROR:", "UNKNOWN_TOOL:", "WARRANTY_ERROR:", "WARRANTY_UNAVAILABLE:"))
                         except Exception as _tool_exc:
                             result = f"TOOL_ERROR: {_tool_exc}"
                             _tool_ok = False
@@ -2108,7 +2142,7 @@ async def chat_endpoint(
                                 llm_prompt_tokens=_p,
                                 llm_completion_tokens=_o,
                                 llm_cached_tokens=_c,
-                                llm_latency_ms=_tool_ms,
+                                llm_latency_ms=_llm_ms,
                             ))
                         tools_called.append(tc.function.name)
                         tool_results.append(result)
@@ -2143,6 +2177,7 @@ async def chat_endpoint(
                     tools_called=tools_called,
                     user_query=user_query,
                     tool_results=tool_results,
+                    language=response_language,
                 )
                 _guard_changed = (full_response != _pre_guard)
 
@@ -2155,6 +2190,8 @@ async def chat_endpoint(
                     "get_repair_help",      # service / repair
                     "escalate_to_human",    # already handed off
                     "capture_sales_lead",   # already captured
+                    "start_warranty_workflow", "answer_warranty_question",
+                    "warranty_start", "warranty_answer",
                 }
                 tool_suppress = any(t in tools_called for t in SUPPRESS_TOOLS)
 
@@ -2222,11 +2259,11 @@ async def chat_endpoint(
                 )
 
                 if should_append_footer:
-                    customer_language = _customer_language(user_query)
+                    customer_language = response_language
                     lead_footer = {
-                        "en": "💌 Interested in a personalized recommendation or exclusive pricing? Leave your email address and our team will get back to you within 24 hours!",
-                        "es": "💌 ¿Desea una recomendación personalizada o un precio especial? Deje su correo y nuestro equipo le responderá en un plazo de 24 horas.",
-                        "ko": "💌 맞춤 추천이나 특별 가격 상담을 원하시나요? 이메일을 남겨주시면 담당 팀이 24시간 이내에 연락드리겠습니다.",
+                        "en": "💌 Interested in a personalized recommendation or pricing assistance? You can leave your email address for our team to follow up.",
+                        "es": "💌 ¿Desea una recomendación personalizada o ayuda con el precio? Puede dejar su correo para que nuestro equipo le contacte.",
+                        "ko": "💌 맞춤 추천이나 가격 상담을 원하시나요? 담당 팀의 후속 상담을 원하시면 이메일을 남겨주세요.",
                     }[customer_language]
                     full_response += f"\n\n{lead_footer}"
 
@@ -2311,7 +2348,8 @@ async def chat_endpoint(
 
                 # 7) Close with the correct department's contact info and hours.
                 if (
-                    "get_repair_help" in tools_called
+                    any(name in tools_called for name in ("start_warranty_workflow", "answer_warranty_question", "warranty_start", "warranty_answer"))
+                    or "get_repair_help" in tools_called
                     or "escalate_to_human" in tools_called
                     or "lookup_order_status" in tools_called
                     or repair_like
@@ -2335,7 +2373,7 @@ async def chat_endpoint(
                     contact_line = get_contact_msg(
                         contact_routing,
                         target_domain,
-                        _customer_language(user_query),
+                        response_language,
                     )
                     full_response = full_response.rstrip() + f"\n\n{contact_line}"
 
@@ -2386,10 +2424,16 @@ async def chat_endpoint(
                 background_tasks.add_task(persist_trace, trace, engine)
 
             except Exception as e:
-                logger.error(f"🚨 Agent loop error: {e}")
-                trace.finish("", guard_changed=False)
+                logger.error("Agent loop failed: %s", type(e).__name__)
+                error_reply = {
+                    "en": "We could not complete this lookup. Please try again or contact our support team.",
+                    "es": "No pudimos completar esta consulta. Inténtelo de nuevo o contacte con nuestro equipo de soporte.",
+                    "ko": "현재 조회를 완료하지 못했습니다. 다시 시도하거나 고객지원 팀에 문의해 주세요.",
+                }[response_language]
+                trace.finish(error_reply, guard_changed=False)
                 background_tasks.add_task(persist_trace, trace, engine)
-                yield "🚨 An unexpected error occurred. Please try again."
+                background_tasks.add_task(_persist_chat_log, chat_request.session_id, user_query, error_reply, target_domain)
+                yield error_reply
 
         return StreamingResponse(generate_stream(), media_type="text/event-stream")
 

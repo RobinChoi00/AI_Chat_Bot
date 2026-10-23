@@ -119,6 +119,48 @@ export async function getWarrantySession(
   return res.json() as Promise<WarrantySessionResponse>;
 }
 
+/** Each request checks the provider again; lookup identity stays in the POST body. */
+export async function lookupDeliveryTracking(
+  sessionId: string,
+  payload: { order_number: string; email: string; domain: string }
+): Promise<WarrantySessionResponse> {
+  const res = await fetch(`${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/delivery-tracking`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let detail = `Could not check delivery status (HTTP ${res.status}).`;
+    try {
+      const err = await res.json();
+      if (typeof err.detail === "string") detail = err.detail;
+    } catch { /* Keep the customer-safe fallback. */ }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<WarrantySessionResponse>;
+}
+
+export async function requestWarrantyHandoff(
+  sessionId: string,
+  payload: { domain: string; reason: "customer_request" | "callback_request"; message?: string }
+): Promise<WarrantySessionResponse> {
+  const res = await fetch(`${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/handoff`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let detail = `Could not save your support request (HTTP ${res.status}).`;
+    try {
+      const err = await res.json();
+      if (typeof err.detail === "string") detail = err.detail;
+    } catch { /* Keep the customer-safe fallback. */ }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<WarrantySessionResponse>;
+}
+
 /**
  * Record live-chat privacy / recording consent (I Agree tap).
  *
@@ -648,7 +690,7 @@ export interface CustomerNoteEntry {
 export async function submitCustomerNote(
   ticketId: string,
   note: string
-): Promise<{ ticket_id: string; customer_notes: CustomerNoteEntry[] }> {
+): Promise<{ ticket_id: string; customer_notes: CustomerNoteEntry[] } | WarrantySessionResponse> {
   const url = `${getApiBase()}/api/v1/warranty/${encodeURIComponent(ticketId)}/customer-note`;
   const res = await fetch(url, {
     method: "POST",
@@ -665,10 +707,7 @@ export async function submitCustomerNote(
     }
     throw new Error(detail);
   }
-  return res.json() as Promise<{
-    ticket_id: string;
-    customer_notes: CustomerNoteEntry[];
-  }>;
+  return res.json();
 }
 
 /** Persist progress through the resolution-first troubleshooting gate. */
@@ -681,7 +720,7 @@ export async function submitTroubleshootingOutcome(
   status: string;
   self_service_resolved: boolean;
   followup_token?: string | null;
-}> {
+} | WarrantySessionResponse> {
   const url = `${getApiBase()}/api/v1/warranty/${encodeURIComponent(ticketId)}/troubleshooting-outcome`;
   const res = await fetch(url, {
     method: "POST",

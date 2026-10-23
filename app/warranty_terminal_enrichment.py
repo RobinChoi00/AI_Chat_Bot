@@ -174,13 +174,16 @@ def _finalize_issue_copy(result: dict[str, Any], issue_type: str) -> dict[str, A
         body = body[: -len(suffix)]
     elif body.endswith(footer):
         body = body[: -len(footer)].rstrip()
-    result["message"] = f"{apply_issue_closing(body, issue)}\n\n{footer}"
+    safety_stop = bool((result.get("diagnosis") or {}).get("safety_stop"))
+    result["message"] = f"{body if safety_stop else apply_issue_closing(body, issue)}\n\n{footer}"
     result["issue_type"] = issue
     result["help_offer_options"] = list(help_offer_options_for(issue))
     if issue == "delivery":
         result["interaction_mode"] = "preparation"
     elif issue == "installation" and result.get("interaction_mode") != "preparation":
         result["interaction_mode"] = "troubleshooting"
+    if safety_stop:
+        result["interaction_mode"] = "preparation"
     return result
 
 
@@ -189,11 +192,19 @@ def _install_message(model_name: str, base_prompt: str) -> dict[str, Any]:
     model_display = (model_name or "your chair").strip()
     clips = video.get("videos") or [{"url": video["url"], "label": video["label"]}]
     link_lines = "\n".join(
-        f"[Watch — {clip['label']}]({clip['url']})" for clip in clips
+        f"[{'Watch' if 'youtu' in clip['url'] else 'Open guide'} — {clip['label']}]({clip['url']})" for clip in clips
     )
 
+    match = video.get("match")
+    if match == "model":
+        intro = f"Here is the installation guide for your **{model_display}**:"
+    elif match == "series":
+        intro = f"Here is a related series resource for **{model_display}**. Check that its model label matches your chair before following it:"
+    else:
+        intro = f"I couldn't find a verified model-specific installation video for **{model_display}**. You can look up your exact model in the general support guides:"
+
     body = (
-        f"Here is the installation guide for your **{model_display}**:\n"
+        f"{intro}\n"
         f"{link_lines}\n\n"
         f"If **air does not work anywhere on the chair** after setup, check that the "
         f"**air hose between the footrest and base** is firmly connected.\n\n"
@@ -215,7 +226,7 @@ def _install_air_hose_message(engine, ticket_id: str, ticket) -> dict[str, Any]:
     video = lookup_install_video(model_name)
     clips = video.get("videos") or [{"url": video["url"], "label": video["label"]}]
     link_lines = "\n".join(
-        f"[Watch — {clip['label']}]({clip['url']})" for clip in clips
+        f"[{'Watch' if 'youtu' in clip['url'] else 'Open guide'} — {clip['label']}]({clip['url']})" for clip in clips
     )
     body = format_install_air_hose_message(
         diagnosis=diagnosis,
@@ -373,6 +384,12 @@ def _heating_self_help_message(engine, ticket_id: str, ticket, node_id: str) -> 
         path_text=path_text,
         model_name=model_name,
     )
+    from warranty_intake_context import completed_check_topics, filter_completed_check_steps
+
+    if not diagnosis.get("safety_stop"):
+        diagnosis["steps"] = filter_completed_check_steps(diagnosis.get("steps") or [], ticket=ticket, turns=turns)
+        if "heat_warmup" in completed_check_topics(ticket, turns):
+            diagnosis["summary"] = "You've already completed the heating warm-up check. Since the heat still isn't working, our warranty team can review the next step."
     body = format_heating_self_help_message(
         diagnosis=diagnosis,
         repair_manual_url=REPAIR_MANUAL_URL,
@@ -505,4 +522,36 @@ def build_terminal_enrichment(
 
     from warranty_error_code_gate import append_fonz_to_terminal_enrichment  # noqa: WPS433
 
-    return append_fonz_to_terminal_enrichment(result, ticket)
+    result = append_fonz_to_terminal_enrichment(result, ticket)
+
+    if result and isinstance(result.get("diagnosis"), dict) and not result["diagnosis"].get("safety_stop"):
+        from warranty_intake_context import filter_completed_check_steps
+        import re
+
+        original = list(result["diagnosis"].get("steps") or [])
+        kept = filter_completed_check_steps(original, ticket=ticket, turns=engine.get_turns(ticket_id))
+        removed = set(original) - set(kept)
+        if removed:
+            result["diagnosis"]["steps"] = kept
+            lines = []
+            number = 0
+            for line in str(result.get("message") or "").splitlines():
+                match = re.match(r"^\d+\.\s*(.*)$", line)
+                if match and match.group(1) in removed:
+                    continue
+                if match:
+                    number += 1
+                    line = f"{number}. {match.group(1)}"
+                lines.append(line)
+            result["message"] = "\n".join(lines)
+    if result:
+        from warranty_knowledge import is_customer_instruction_safe, sanitize_customer_answer
+
+        result["message"] = sanitize_customer_answer(str(result.get("message") or ""))
+        if isinstance(result.get("diagnosis"), dict):
+            result["diagnosis"]["summary"] = sanitize_customer_answer(str(result["diagnosis"].get("summary") or ""))
+            result["diagnosis"]["steps"] = [
+                step for step in result["diagnosis"].get("steps") or []
+                if is_customer_instruction_safe(str(step))
+            ]
+    return result

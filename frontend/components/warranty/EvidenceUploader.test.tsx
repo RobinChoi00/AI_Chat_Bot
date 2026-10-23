@@ -28,6 +28,8 @@ describe("EvidenceUploader", () => {
     expect(markup).toContain("Yes — notify warranty team");
     expect(markup).toContain("Use a different email");
     expect(markup).not.toContain("Enter your email so our warranty team");
+    expect(markup).not.toContain("24 hours");
+    expect(markup).not.toContain("We emailed");
   });
 
   it("keeps the back control available when the email form is collapsed", () => {

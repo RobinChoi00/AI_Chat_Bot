@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "Synthetic challenge conversations, not historical customer data or expert-approved clinical/repair answers. Review and extend with anonymized, human-reviewed held-out cases before release decisions.",
+  "description": "Synthetic challenges plus deidentified, reviewed historical failure patterns. Incident-derived cases identify their source; added clarifying turns are marked as adaptations. Fixture validation or mocked regression passes do not measure live AI quality or customer resolution.",
   "cases": [
     {
       "id": "sales-complete-fit-recommendation",
@@ -440,6 +440,213 @@
             "not_contains": [
               "def main("
             ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "reviewed-sales-530-direct-foot-roller-no-interview",
+      "surface": "sales",
+      "provenance": "reviewed_anonymized",
+      "source_ref": "sales/530",
+      "adaptation": "Original feature question and frustration; repeated exact feature question makes whole-dialogue topic retention explicit. No personal information.",
+      "turns": [
+        {
+          "message": "Does Titan TP-Epic 4D have foot rollers?",
+          "expect": {
+            "expected_intent": "specs",
+            "contains_any": [
+              "foot roller",
+              "foot massage"
+            ],
+            "not_contains": [
+              "user height",
+              "Tap a range",
+              "Value / Mid / Premium"
+            ]
+          }
+        },
+        {
+          "message": "Does Titan TP-Epic 4D have foot rollers?",
+          "expect": {
+            "expected_intent": "specs",
+            "contains_any": [
+              "foot roller",
+              "foot massage"
+            ],
+            "not_contains": [
+              "user height",
+              "Tap a range",
+              "Value / Mid / Premium"
+            ]
+          }
+        },
+        {
+          "message": "Just answer my question",
+          "expect": {
+            "expected_handoff": true,
+            "contains_any": [
+              "human",
+              "specialist",
+              "unresolved"
+            ],
+            "not_contains": [
+              "user height",
+              "Tap a range",
+              "Value / Mid / Premium",
+              "already connected",
+              "technician has been dispatched"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "reviewed-sales-625-replacement-remote-not-new-chair",
+      "surface": "sales",
+      "provenance": "reviewed_anonymized",
+      "source_ref": "sales/625",
+      "adaptation": "Deidentified original issue; repeat is added to verify routing does not drift into chair sales.",
+      "turns": [
+        {
+          "message": "I have an Osaki 4000xt that I need a replacement remote for but I also found a connection that does not seem to have a mate to connect to",
+          "expect": {
+            "expected_intent": "parts_technician",
+            "expected_handoff": true,
+            "contains_any": [
+              "parts",
+              "warranty",
+              "remote"
+            ],
+            "max_products": 0,
+            "not_contains": [
+              "Shop:",
+              "Email me this pick",
+              "$4,799",
+              "remove the back panel"
+            ]
+          }
+        },
+        {
+          "message": "I need a replacement remote for my OS-4000XT, not a new chair",
+          "expect": {
+            "expected_intent": "parts_technician",
+            "expected_handoff": true,
+            "max_products": 0,
+            "not_contains": [
+              "Shop:",
+              "Email me this pick",
+              "replacement is approved"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "reviewed-sales-631-positive-purchase-feedback",
+      "surface": "sales",
+      "provenance": "reviewed_anonymized",
+      "source_ref": "sales/631",
+      "adaptation": "Deidentified original customer message. Correct acknowledgment must not open a service flow.",
+      "turns": [
+        {
+          "message": "I already purchased a chair and I love it!",
+          "expect": {
+            "expected_intent": "greeting",
+            "expected_handoff": false,
+            "contains_any": [
+              "glad",
+              "happy",
+              "enjoy",
+              "thank"
+            ],
+            "max_products": 0,
+            "not_contains": [
+              "create a service ticket",
+              "Warranty Department",
+              "user height"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "reviewed-sales-628-exact-capacity-and-4d",
+      "surface": "sales",
+      "provenance": "reviewed_anonymized",
+      "source_ref": "sales/628",
+      "adaptation": "Original exact 350 lb, 4D and deep-tissue requirements; height and focus are added in the first message to complete preferences and require actual recommendations. Budget correction is a synthetic follow-up. Published height fit and subjective deep tissue must not be guaranteed.",
+      "turns": [
+        {
+          "message": "Recommend a massage chair for up to 350 lbs with a 4D massage system. I am 6 ft 2 and want deep tissue for my lower back.",
+          "expect": {
+            "expected_intent": "recommend",
+            "min_products": 1,
+            "max_products": 3,
+            "min_product_capacity_lb": 350,
+            "required_product_mechanism": "4D",
+            "not_contains": [
+              "guaranteed to fit",
+              "guaranteed to cure"
+            ]
+          }
+        },
+        {
+          "message": "Actually my hard maximum budget is $5000. Keep the 350 lb capacity and 4D requirements.",
+          "expect": {
+            "expected_intent": "recommend",
+            "max_products": 3,
+            "max_product_price": 5000,
+            "min_product_capacity_lb": 350,
+            "required_product_mechanism": "4D",
+            "contains_any": [
+              "budget",
+              "match",
+              "specialist",
+              "requirements"
+            ],
+            "not_contains": [
+              "guaranteed to fit",
+              "guaranteed to cure"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "reviewed-warranty-429-no-copied-case-closure",
+      "surface": "warranty",
+      "provenance": "reviewed_anonymized",
+      "source_ref": "warranty/429; warranty/428",
+      "adaptation": "Deidentified damaged-remote symptom derived from reviewed old-case correspondence leakage. Smart-start/state is an API adaptation, not a replay of a verified customer outcome. Unit regressions separately inject the contaminated source.",
+      "turns": [
+        {
+          "action": "smart-start",
+          "body": {
+            "message": "My remote controller cable has a short and looks damaged. The chair has power and there is no error code."
+          },
+          "expect": {
+            "not_contains": [
+              "parts are on the way",
+              "close this ticket",
+              "your chair is fixed",
+              "replacement is approved",
+              "free of charge"
+            ]
+          }
+        },
+        {
+          "action": "state",
+          "expect": {
+            "not_contains": [
+              "parts are on the way",
+              "close this ticket",
+              "your chair is fixed",
+              "replacement is approved"
+            ],
+            "json_equals": {
+              "ticket.collected_data.troubleshooting_outcome": null
+            }
           }
         }
       ]

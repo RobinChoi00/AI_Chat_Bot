@@ -113,7 +113,7 @@ def parse_track123_record(record: Dict[str, Any]) -> Dict[str, Any]:
 
     eta = _pick_first(
         record,
-        ["expectedDeliveryTime", "deliveredTime", "nextUpdateTime", "lastTrackingTime"],
+        ["expectedDeliveryTime"],
     ) or "Pending carrier update"
 
     courier_name = _pick_first(logistics, ["courierNameEN", "courierNameCN", "courierCode"])
@@ -122,7 +122,7 @@ def parse_track123_record(record: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "track123_source": "enabled",
         "status": _pick_first(record, ["transitStatus", "transitSubStatus", "trackingStatus"])
-        or "IN_TRANSIT",
+        or "UNKNOWN",
         "company": courier_name,
         "tracking_url": tracking_url,
         "current_location": latest.get("location", "") or "Carrier network",

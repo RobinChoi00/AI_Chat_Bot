@@ -56,13 +56,13 @@ export function buildEvidenceRequestMessage(
     );
   }
 
-  return `Please submit your email using the form below so our team can follow up within 24 hours.`;
+  return `Please submit your email using the form below so our team can follow up.`;
 }
 
 /** Remind customers that email is the final step after the workflow completes. */
 export function buildEvidenceEmailRequiredNote(): string {
   return (
-    "As a final step, please enter your email address below so our team can follow up within 24 hours. " +
+    "As a final step, please enter your email address below so our team can follow up. " +
     "Photos or videos are optional — you can submit with email only."
   );
 }

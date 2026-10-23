@@ -35,6 +35,7 @@ INTENT_PARTS_TECHNICIAN = "parts_technician"
 INTENT_DISCOUNT = "discount"
 INTENT_ETA_SHIPPING = "eta_shipping"
 INTENT_ORDER_STATUS = "order_status"
+INTENT_ORDER_CHANGE = "order_change"
 INTENT_PRICE = "price"
 INTENT_STOCK = "stock"
 INTENT_RECOMMEND = "recommend"
@@ -55,6 +56,7 @@ HANDOFF_INTENTS = frozenset(
         INTENT_DISCOUNT,
         INTENT_ETA_SHIPPING,
         INTENT_ORDER_STATUS,  # tracking / "where's my order" → sales phone
+        INTENT_ORDER_CHANGE,
         INTENT_HUMAN,
     }
 )
@@ -134,6 +136,12 @@ _WARRANTY_REDIRECT_RE = re.compile(
 _PARTS_TECHNICIAN_RE = re.compile(
     r"\b("
     r"replacement\s+parts?|spare\s+parts?|need\s+(?:a\s+)?parts?|order\s+(?:a\s+)?parts?|"
+    r"(?:replacement|spare)\s+(?:remote(?:\s+control(?:ler)?)?|tablet|controller|"
+    r"screen|touchscreen|foot[\s-]*rest|head(?:\s+and\s+shoulder)?\s+cushion|shoulder\s+cushion)|"
+    r"(?:remote(?:\s+control(?:ler)?)?|tablet|controller|screen|foot[\s-]*rest|"
+    r"cushion)\s+replacement|"
+    r"(?:replace|replacing)\s+(?:(?:the|my|a)\s+)?(?:remote(?:\s+control(?:ler)?)?|"
+    r"tablet|controller|screen|foot[\s-]*rest|head(?:\s+and\s+shoulder)?\s+cushion|shoulder\s+cushion)|"
     r"send\s+(?:me\s+)?(?:a\s+)?parts?|buy\s+(?:a\s+)?parts?|"
     # Bare "part(s)" covers Tidio short triggers; longer phrases stay above.
     r"parts?|"
@@ -252,6 +260,35 @@ _HUMAN_RE = re.compile(
     r"사람|상담원|담당자"
     r")\b",
     re.IGNORECASE,
+)
+
+_NEGATED_REQUEST_PREFIX = re.compile(
+    r"\b(?:do\s+not|don't|dont|not|never|no)\s+"
+    r"(?:(?:want|need|wish|intend|plan|ask(?:ing)?|request(?:ing)?)\s+(?:to\s+|for\s+)?)?"
+    r"(?:an?\s+|the\s+)?$",
+    re.I,
+)
+
+_POSITIVE_PURCHASE_RE = re.compile(
+    r"\b(?:love\s+(?:it|this|my\s+chair|the\s+chair)|works?\s+(?:great|perfectly)|"
+    r"(?:very\s+)?happy\s+with|thank\s+you|thanks)\b",
+    re.I,
+)
+
+_EXISTING_ORDER_CHANGE_RE = re.compile(
+    r"forgot\s+(?:to\s+)?(?:add|choose|select)|"
+    r"(?:add|upgrade|change|modify).{0,55}(?:white[\s-]*glove|delivery\s+(?:method|service)|"
+    r"shipping\s+(?:address|method)|delivery\s+address)|"
+    r"(?:white[\s-]*glove|delivery\s+address).{0,45}(?:add|change|upgrade|too\s+late)",
+    re.I,
+)
+
+_DIRECT_SPEC_QUESTION_RE = re.compile(
+    r"\b(?:does|do|has|have|can|what|how|is|are)\b.{0,160}"
+    r"\b(?:rollers?|heat(?:ing)?|airbags?|recline|capacity|dimensions?|weight|height|"
+    r"wide|heavy|track|bluetooth|wifi|wi-fi|body\s+scan|upholstery|leather)\b|"
+    r"\b(?:foot|calf)\s+rollers?\s+(?:on|for)\b",
+    re.I,
 )
 
 # --- Sales sub-intents -----------------------------------------------------
@@ -442,6 +479,15 @@ def _matched(pattern: re.Pattern, text: str) -> tuple[str, ...]:
     return tuple(m.group(0).strip().lower() for m in pattern.finditer(text))
 
 
+def _requested_matches(pattern: re.Pattern, text: str) -> tuple[str, ...]:
+    """Skip only locally negated requests; defects such as 'not working' remain intact."""
+    return tuple(
+        match.group(0).strip().lower()
+        for match in pattern.finditer(text)
+        if not _NEGATED_REQUEST_PREFIX.search(text[max(0, match.start() - 70):match.start()])
+    )
+
+
 def looks_like_price_gap(text: str) -> bool:
     """True when the shopper is comparing our price to Costco/Amazon/etc."""
     return bool(_PRICE_GAP_RE.search(text or ""))
@@ -471,9 +517,47 @@ def classify(text: str) -> SalesIntent:
     single message like *"my chair is broken and how much is the OS-Pro 4D?"*
     is routed to warranty (not price), which is the safe behavior.
     """
-    raw = (text or "").strip()
+    raw = (text or "").strip().replace("’", "'")
     if not raw:
         return SalesIntent(label=INTENT_UNCLEAR, confidence="none")
+
+    from sales_policy import is_post_purchase
+
+    if (
+        is_post_purchase(raw)
+        and _POSITIVE_PURCHASE_RE.search(raw)
+        and not re.search(
+            rf"\?|{_WARRANTY_DEFECT_VERBS}|"
+            r"\b(?:but|however|except|problem|issue|need|refund|cancel|warranty|"
+            r"repair|replacement|manual|defect|damaged|error|tracking|delivery)\b",
+            raw,
+            re.I,
+        )
+        and not _requested_matches(_PARTS_TECHNICIAN_RE, raw)
+        and not _requested_matches(_HUMAN_RE, raw)
+    ):
+        return SalesIntent(
+            label=INTENT_GREETING,
+            confidence="high",
+            matched_terms=("positive_feedback",),
+        )
+
+    cancellation_hits = _requested_matches(_CANCEL_REFUND_RE, raw)
+    explicit_cancellation = any(
+        not re.fullmatch(r"(?:switch|change|modify)\s+my\s+order", term, re.I)
+        for term in cancellation_hits
+    )
+    if (
+        is_post_purchase(raw)
+        and _requested_matches(_EXISTING_ORDER_CHANGE_RE, raw)
+        and not explicit_cancellation
+    ):
+        return SalesIntent(
+            label=INTENT_ORDER_CHANGE,
+            confidence="high",
+            handoff=True,
+            matched_terms=("existing_order_change",),
+        )
 
     # 0) Pre-purchase policy questions ("what's your return policy?", "how long
     #    is the warranty?", "how much is shipping?"). These have published
@@ -492,7 +576,7 @@ def classify(text: str) -> SalesIntent:
     # 1) Cancel / refund / return → warranty team (silent AI). Highest priority
     #    because a message like "I want to cancel my broken chair" must not
     #    fall into the defect flow.
-    hits = _matched(_CANCEL_REFUND_RE, raw)
+    hits = cancellation_hits
     if hits:
         return SalesIntent(
             label=INTENT_CANCEL_REFUND,
@@ -504,7 +588,7 @@ def classify(text: str) -> SalesIntent:
     # 2) Parts / technician requests. Checked *before* generic warranty so a
     #    phrase like "dispatch a repair tech" is labeled parts_technician
     #    rather than the broader warranty bucket.
-    hits = _matched(_PARTS_TECHNICIAN_RE, raw)
+    hits = _requested_matches(_PARTS_TECHNICIAN_RE, raw)
     if hits:
         return SalesIntent(
             label=INTENT_PARTS_TECHNICIAN,
@@ -556,7 +640,7 @@ def classify(text: str) -> SalesIntent:
         )
 
     # 7) Explicit human request.
-    hits = _matched(_HUMAN_RE, raw)
+    hits = _requested_matches(_HUMAN_RE, raw)
     if hits:
         return SalesIntent(
             label=INTENT_HUMAN,
@@ -599,6 +683,8 @@ def classify(text: str) -> SalesIntent:
         return SalesIntent(label=INTENT_STOCK, confidence="high", matched_terms=stock_hits)
     if compare_hits:
         return SalesIntent(label=INTENT_COMPARE, confidence="high", matched_terms=compare_hits)
+    if specs_hits and not recommend_hits and _DIRECT_SPEC_QUESTION_RE.search(raw):
+        return SalesIntent(label=INTENT_SPECS, confidence="high", matched_terms=specs_hits)
     # Body-fit cues (height/weight/body-part) win over intensity — a customer
     # who shares physical details wants a recommendation, not a lecture on
     # massage strength.
@@ -722,6 +808,13 @@ def handoff_message(intent: SalesIntent) -> Optional[str]:
         return _WARRANTY_SERVICE_CONTACT
     if label == INTENT_CANCEL_REFUND:
         return _AGENT_CONNECT_CANCEL
+    if label == INTENT_ORDER_CHANGE:
+        return (
+            "Sales needs to check whether the requested change can still be added to your existing order. "
+            "Please share your **order number** and **email** so the team can review it. "
+            "No delivery upgrade or order change has been confirmed by this chat.\n\n"
+            f"{_phone_directory()}"
+        )
     if label == INTENT_DISCOUNT:
         return _AGENT_CONNECT
     if label == INTENT_HUMAN:
