@@ -1201,7 +1201,8 @@ TOOL_SCHEMAS: List[Any] = [
             "name": "lookup_order_status",
             "description": (
                 "Get real-time shipping status, hub, and ETA for a customer's order. "
-                "Requires order number and/or the email used at checkout."
+                "Requires BOTH the order number and the email used at checkout. "
+                "Ask for whichever identifier is missing; never use an email-only or order-only lookup."
             ),
             "parameters": {
                 "type": "object",
