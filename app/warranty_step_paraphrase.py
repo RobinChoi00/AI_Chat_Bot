@@ -136,7 +136,7 @@ def _model_name() -> str:
             return ROUTER_MODEL
     except Exception:
         pass
-    return os.environ.get("OPENAI_ROUTER_MODEL", "gpt-4.1-mini")
+    return os.environ.get("OPENAI_ROUTER_MODEL", "gpt-6-luna")
 
 
 def _normalize(text: str) -> str:
@@ -278,9 +278,12 @@ def paraphrase_step_message(
         user_parts.append(opt_hint)
 
     try:
-        completion = client.chat.completions.create(
+        from app.model_runtime import create_completion
+        completion = create_completion(
+            client,
             model=_model_name(),
-            max_tokens=_MAX_TOKENS,
+            role="router",
+            max_output_tokens=max(_MAX_TOKENS, 2048),
             temperature=0.25,
             messages=[
                 {

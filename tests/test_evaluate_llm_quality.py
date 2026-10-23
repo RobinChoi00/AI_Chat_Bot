@@ -114,6 +114,41 @@ def test_tool_checks_use_authenticated_runtime_evidence_and_model_mismatch_fails
     assert "test-key" not in json.dumps(result)
 
 
+@pytest.mark.parametrize("evidence", [
+    {"model": "gpt-6.1-sol"},
+    {"model": "gpt-6.1-sol", "cache_hit": True, "provider_models": [], "model_calls_successful": 0},
+    {"model": "gpt-6.1-sol", "requested_models": ["gpt-6.1-sol"], "provider_models": ["gpt-6.1-sol"], "model_calls_successful": 0},
+    {"model": "gpt-6.1-sol", "requested_models": ["gpt-6.1-sol"], "provider_models": ["gpt-6.1-sol"], "model_calls_successful": 2, "model_calls_unverified": 1},
+])
+def test_expected_model_requires_actual_successful_provider_evidence(evidence):
+    def handler(request):
+        return httpx.Response(200, json=evidence) if request.method == "GET" else httpx.Response(200, content=b"An answer")
+    with client_for(handler) as client:
+        result = ev.run_case(case(), client, base_url="http://localhost", domain="osakiusa.com", admin_key="synthetic-key", expected_model="gpt-6.1-sol")
+    assert not result["passed"]
+    assert "successful provider model execution was not verified" in result["turns"][0]["errors"]
+
+
+@pytest.mark.parametrize("provider", ["gpt-6.1-sol", "gpt-6.1-sol-2026-10-23"])
+def test_expected_model_accepts_actual_exact_or_iso_dated_provider_snapshot(provider):
+    evidence = {"model": "gpt-6.1-sol", "requested_models": ["gpt-6.1-sol"], "provider_models": [provider], "model_calls_successful": 1, "model_calls_unverified": 0}
+    def handler(request):
+        return httpx.Response(200, json=evidence) if request.method == "GET" else httpx.Response(200, content=b"An answer")
+    with client_for(handler) as client:
+        result = ev.run_case(case(), client, base_url="http://localhost", domain="osakiusa.com", admin_key="synthetic-key", expected_model="gpt-6.1-sol")
+    assert result["passed"]
+    row = result["turns"][0]
+    assert row["requested_model"] == "gpt-6.1-sol"
+    assert row["provider_models"] == [provider]
+    assert row["observed_model"] == provider
+
+
+@pytest.mark.parametrize("provider", ["gpt-6-luna", "gpt-6.1-sol-other", "gpt-6.1-sol-2026-99-99", "gpt-6.1-sol-2026-10-23-extra"])
+def test_expected_model_rejects_other_models_and_arbitrary_alias_suffixes(provider):
+    _, errors = ev.model_evidence({"model": "gpt-6.1-sol", "requested_models": ["gpt-6.1-sol"], "provider_models": [provider], "model_calls_successful": 1}, "gpt-6.1-sol")
+    assert "provider-returned model differs from expected model" in errors
+
+
 def test_sales_reuses_session_and_scores_structured_handoff_and_budget():
     seen = []
     def handler(request):

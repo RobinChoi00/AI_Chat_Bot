@@ -31,7 +31,35 @@ export interface KnowledgeReview {
 
 export interface AIHealth {
   models: { agent: string; router: string; embedding: string };
+  app_release_id?: string;
+  model_configuration?: Partial<Record<"agent" | "router", {
+    effective_model: string | null;
+    default_model: string | null;
+    source: "env" | "default" | "unknown";
+  }>>;
+  model_calls?: {
+    days: number;
+    retention_days: number;
+    max_retained_calls: number;
+    roles: Record<"agent" | "router", {
+      calls: number;
+      successful_calls: number;
+      failed_calls: number;
+      latest_call: ModelCallObservation | null;
+      latest_successful_call: ModelCallObservation | null;
+    }>;
+    scope: string;
+  };
   latency: Record<string, { samples: number; p50_ms: number | null; p95_ms: number | null }>;
   stock_cache: Record<string, unknown>;
   warranty_embeddings: Record<string, unknown>;
+}
+
+export interface ModelCallObservation {
+  requested_model: string;
+  provider_model: string | null;
+  succeeded: boolean;
+  error_code: string | null;
+  release_id: string;
+  observed_at: string | null;
 }

@@ -175,7 +175,7 @@ def _router_model() -> str:
             return ROUTER_MODEL
     except Exception:
         pass
-    return os.environ.get("OPENAI_ROUTER_MODEL", "gpt-4.1-mini")
+    return os.environ.get("OPENAI_ROUTER_MODEL", "gpt-6-luna")
 
 
 # ---------------------------------------------------------------------------
@@ -819,10 +819,13 @@ def extract_workflow_prefill(
     )
 
     try:
-        response = client.chat.completions.create(
+        from app.model_runtime import create_completion
+        response = create_completion(
+            client,
             model=_router_model(),
+            role="router",
             temperature=0,
-            response_format={"type": "json_object"},
+            json_mode=True,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},

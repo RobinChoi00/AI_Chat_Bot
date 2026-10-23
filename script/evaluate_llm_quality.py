@@ -27,6 +27,7 @@ import re
 import sys
 import time
 import uuid
+from datetime import date
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -322,6 +323,53 @@ def _trace(client, base_url: str, request_id: str, admin_key: str) -> dict[str, 
     raise RuntimeError("trace unavailable")
 
 
+def _model_identifier(value: Any) -> str | None:
+    return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", value) else None
+
+
+def _provider_model_matches(expected: str, observed: str) -> bool:
+    """An alias may resolve to its exact ISO-dated provider snapshot only."""
+    if observed == expected:
+        return True
+    suffix = observed.removeprefix(expected + "-")
+    if suffix == observed or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", suffix):
+        return False
+    try:
+        date.fromisoformat(suffix)
+    except ValueError:
+        return False
+    return True
+
+
+def model_evidence(trace: dict[str, Any] | None, expected_model: str | None = None) -> tuple[dict[str, Any], list[str]]:
+    """Keep requested configuration separate from successful provider evidence."""
+    trace = trace or {}
+    requested = _model_identifier(trace.get("model"))
+    requested_models = trace.get("requested_models", [])
+    providers = trace.get("provider_models", [])
+    requested_models = list(dict.fromkeys(item for item in requested_models if _model_identifier(item)))[:16] if isinstance(requested_models, list) else []
+    providers = list(dict.fromkeys(item for item in providers if _model_identifier(item)))[:16] if isinstance(providers, list) else []
+    successful = trace.get("model_calls_successful", 0)
+    successful = successful if isinstance(successful, int) and not isinstance(successful, bool) and successful >= 0 else 0
+    unverified = trace.get("model_calls_unverified", 0)
+    errors: list[str] = []
+    if expected_model:
+        if requested != expected_model or (requested_models and any(item != expected_model for item in requested_models)):
+            errors.append("observed runtime model differs from expected model")
+        if (successful <= 0 or not providers or not requested_models
+            or not isinstance(unverified, int) or isinstance(unverified, bool) or unverified != 0):
+            errors.append("successful provider model execution was not verified")
+        if any(not _provider_model_matches(expected_model, model) for model in providers):
+            errors.append("provider-returned model differs from expected model")
+    return {
+        "requested_model": requested,
+        "requested_models": requested_models,
+        "provider_models": providers,
+        "observed_model": providers[0] if len(providers) == 1 else None,
+        "model_calls_successful": successful,
+    }, errors
+
+
 def run_case(case: dict[str, Any], client, *, base_url: str, domain: str, admin_key: str = "", expected_model: str | None = None) -> dict[str, Any]:
     session_id = f"eval-{uuid.uuid4().hex}"
     history: list[dict[str, str]] = []
@@ -373,10 +421,9 @@ def run_case(case: dict[str, Any], client, *, base_url: str, domain: str, admin_
             elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
             replies.append(text)
             errors = check_answer(text, payload, turn["expect"], trace)
-            observed_model = trace.get("model") if trace else None
-            if expected_model and surface == "general" and observed_model != expected_model:
-                errors.append("observed runtime model differs from expected model")
-            results.append({"turn": index + 1, "passed": not errors, "errors": errors, "latency_ms": elapsed_ms, "response_sha256": hashlib.sha256(text.encode()).hexdigest(), "response_chars": len(text), "observed_model": observed_model})
+            evidence, model_errors = model_evidence(trace, expected_model if surface == "general" else None)
+            errors.extend(model_errors)
+            results.append({"turn": index + 1, "passed": not errors, "errors": errors, "latency_ms": elapsed_ms, "response_sha256": hashlib.sha256(text.encode()).hexdigest(), "response_chars": len(text), **evidence})
         except Exception as exc:
             # Do not echo provider errors, response bodies or credential-bearing URLs.
             results.append({"turn": index + 1, "passed": False, "errors": [f"request/evidence failed: {type(exc).__name__}"], "latency_ms": round((time.perf_counter() - started) * 1000, 2)})
@@ -436,7 +483,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cases", type=Path, default=CONVERSATIONS_PATH)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--baseline", type=Path)
-    parser.add_argument("--expected-model", help="Verify general-chat traces; configure the candidate on the isolated server first")
+    parser.add_argument("--expected-model", help="Require successful general-chat provider model evidence; exact ID or its ISO-dated snapshot. Configure the isolated server first.")
     parser.add_argument("--max-p95-ms", type=float)
     parser.add_argument("--timeout", type=float, default=120)
     args = parser.parse_args(argv)

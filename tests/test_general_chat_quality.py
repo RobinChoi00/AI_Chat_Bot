@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -11,10 +12,14 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def main_module(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / 'app'))
     monkeypatch.setenv('APP_ENV','development')
     monkeypatch.setenv('OPENAI_API_KEY','test-key')
     monkeypatch.setenv('SHOPIFY_WEBHOOK_SECRET','test-webhook-secret')
     module=importlib.import_module('app.main')
+    # These regression fixtures exercise the legacy Chat Completions adapter.
+    # Separate tests below exercise the upgraded Responses endpoint.
+    monkeypatch.setattr(module, 'AGENT_MODEL', 'gpt-5.6')
     monkeypatch.setattr(module,'vs_products',object())
     monkeypatch.setattr(module,'vs_qa',object())
     monkeypatch.setattr(module,'vs_web',object())
@@ -41,6 +46,67 @@ def reply(text='',calls=None):
 
 def model(module,monkeypatch,completion):
     monkeypatch.setattr(module,'openai_client',SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=completion))))
+
+
+def response_reply(text='', *, name=None, call_id=None):
+    output = []
+    if name:
+        output = [
+            {'type': 'reasoning', 'id': 'rs_fixture', 'summary': [], 'encrypted_content': 'fixture-encrypted-reasoning'},
+            {'type': 'function_call', 'id': 'fc_fixture', 'call_id': call_id,
+             'name': name, 'arguments': '{"model_name":"Fixture Alpha","spec_topic":"features"}', 'status': 'completed'},
+        ]
+    else:
+        output = [{'type': 'message', 'role': 'assistant', 'status': 'completed',
+                   'content': [{'type': 'output_text', 'text': text}]}]
+    return SimpleNamespace(status='completed', error=None, output=output, model='gpt-6.1-sol', usage=None)
+
+
+def test_upgraded_responses_tool_roundtrip_preserves_guards_and_provider_evidence(main_module, monkeypatch):
+    module, logs, traces = main_module
+    monkeypatch.setattr(module, 'AGENT_MODEL', 'gpt-6.1-sol')
+    requests = []
+    replies = iter([
+        response_reply(name='search_chair_specs', call_id='call_provider_exact'),
+        response_reply('Here are the verified model features.'),
+    ])
+    def create(**kwargs):
+        requests.append(kwargs)
+        return next(replies)
+    monkeypatch.setattr(module, 'openai_client', SimpleNamespace(responses=SimpleNamespace(create=create)))
+    executed = []
+    monkeypatch.setattr(module, '_execute_tool', lambda name, args, domain, **kwargs: executed.append(name) or 'Verified model facts')
+    with TestClient(module.app) as client:
+        result = client.post('/api/v1/chat', json={'session_id': 'upgrade-response-roundtrip', 'user_query': 'Tell me the features of Fixture Alpha'})
+    assert result.status_code == 200
+    assert 'verified model features' in result.text
+    assert executed == ['search_chair_specs']
+    assert requests[0]['store'] is False
+    assert requests[0]['parallel_tool_calls'] is False
+    assert requests[0]['reasoning']['effort'] == 'medium'
+    assert all(tool['type'] == 'function' and 'function' not in tool for tool in requests[0]['tools'])
+    assert any(item.get('type') == 'reasoning' for item in requests[1]['input'])
+    assert any(item.get('type') == 'function_call_output' and item['call_id'] == 'call_provider_exact' for item in requests[1]['input'])
+    assert traces[-1]['model_calls_successful'] == 2
+    assert traces[-1]['provider_models'] == ['gpt-6.1-sol']
+    assert 'fixture-encrypted-reasoning' not in json.dumps(traces[-1])
+    assert logs[-1][2] == result.text
+
+
+def test_upgraded_provider_failure_is_safe_and_has_no_successful_model_evidence(main_module, monkeypatch):
+    module, logs, traces = main_module
+    monkeypatch.setattr(module, 'AGENT_MODEL', 'gpt-6.1-sol')
+    def fail(**kwargs):
+        raise RuntimeError('fixture-private-provider-details')
+    monkeypatch.setattr(module, 'openai_client', SimpleNamespace(responses=SimpleNamespace(create=fail)))
+    with TestClient(module.app) as client:
+        result = client.post('/api/v1/chat', json={'session_id': 'upgrade-response-failure', 'user_query': 'Tell me about Fixture Alpha'})
+    assert result.status_code == 200
+    assert 'fixture-private-provider-details' not in result.text
+    assert traces[-1]['model_calls_failed'] == 1
+    assert traces[-1]['model_calls_successful'] == 0
+    assert traces[-1]['provider_models'] == []
+    assert logs[-1][2] == result.text
 
 
 def test_neutral_followup_keeps_korean_model_context_and_department_footer(main_module,monkeypatch):

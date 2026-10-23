@@ -8,14 +8,18 @@ interface CostSummary {
   cached_tokens?: number;
   completion_tokens?: number;
   cache_hit_ratio?: number;
-  total_cost_usd?: number;
-  avg_cost_per_request_usd?: number;
+  total_cost_usd?: number | null;
+  avg_cost_per_request_usd?: number | null;
+  known_cost_usd?: number;
+  unknown_cost_requests?: number;
+  cost_scope?: string;
   by_model?: Record<
     string,
     {
       requests: number;
       calls: number;
-      cost_usd: number;
+      cost_usd: number | null;
+      unknown_cost_requests?: number;
     }
   >;
   summary?: string;
@@ -51,16 +55,31 @@ export default function AdminOpsDashboard({
   days: number;
 }) {
   const contexts = Object.entries(feedbackSummary?.summary ?? {});
+  const modelCosts = Object.entries(cost?.by_model ?? {}).sort((a, b) => {
+    const left = a[1].unknown_cost_requests ? null : a[1].cost_usd;
+    const right = b[1].unknown_cost_requests ? null : b[1].cost_usd;
+    if (left == null) return right == null ? a[0].localeCompare(b[0]) : 1;
+    if (right == null) return -1;
+    return right - left || a[0].localeCompare(b[0]);
+  });
+  const unknownCostRequests = cost?.unknown_cost_requests ?? 0;
+  const incompleteCost = unknownCostRequests > 0 || modelCosts.some(([, row]) => row.cost_usd == null || (row.unknown_cost_requests ?? 0) > 0);
 
   return (
     <div className="space-y-6">
+      <p className="text-xs text-gray-500">{cost?.cost_scope ?? "Recorded general-chat model calls only; router, embeddings, OCR and speech are not included."}</p>
+      {incompleteCost && <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+        {unknownCostRequests > 0 ? `Cost is unmeasured for ${unknownCostRequests} logged ${unknownCostRequests === 1 ? "request" : "requests"}. ` : "Some model costs are unmeasured. "}
+        {cost?.known_cost_usd != null ? `Priced subtotal: $${cost.known_cost_usd.toFixed(4)}. ` : ""}
+        The priced subtotal covers only requests with known costs; it is not complete spend.
+      </p>}
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Kpi
-          label={`OpenAI spend (${days}d)`}
+          label={`Logged general-chat cost (${days}d)`}
           value={
-            cost?.total_cost_usd != null
+            !incompleteCost && cost?.total_cost_usd != null
               ? `$${cost.total_cost_usd.toFixed(2)}`
-              : "—"
+              : "Unmeasured"
           }
           hint={
             cost?.requests
@@ -69,11 +88,11 @@ export default function AdminOpsDashboard({
           }
         />
         <Kpi
-          label="Avg $/request"
+          label="Avg $/logged request"
           value={
-            cost?.avg_cost_per_request_usd != null
+            !incompleteCost && cost?.avg_cost_per_request_usd != null
               ? `$${cost.avg_cost_per_request_usd.toFixed(4)}`
-              : "—"
+              : "Unmeasured"
           }
           hint={
             cost?.openai_calls != null
@@ -103,21 +122,20 @@ export default function AdminOpsDashboard({
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-sm font-semibold text-gray-900">Spend by model</h2>
-        {!cost?.by_model || Object.keys(cost.by_model).length === 0 ? (
+        <h2 className="mb-3 text-sm font-semibold text-gray-900">Logged general-chat cost by model</h2>
+        {modelCosts.length === 0 ? (
           <p className="text-sm text-gray-500">No model breakdown in this window.</p>
         ) : (
           <ul className="divide-y divide-gray-100">
-            {Object.entries(cost.by_model)
-              .sort((a, b) => b[1].cost_usd - a[1].cost_usd)
-              .map(([model, row]) => (
+            {modelCosts.map(([model, row]) => (
                 <li
                   key={model}
                   className="flex items-center justify-between py-2 text-sm"
                 >
                   <span className="font-mono text-xs text-gray-800">{model}</span>
                   <span className="text-gray-600">
-                    ${row.cost_usd.toFixed(4)} · {row.requests} req
+                    {row.cost_usd != null && !row.unknown_cost_requests ? `$${row.cost_usd.toFixed(4)}` : "Unmeasured"} · {row.requests} req
+                    {(row.unknown_cost_requests ?? 0) > 0 ? ` · ${row.unknown_cost_requests} with unknown cost` : ""}
                   </span>
                 </li>
               ))}

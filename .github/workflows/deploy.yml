@@ -35,4 +35,11 @@ jobs:
           script: |
             set -e
             cd ~/AI_Chat_Bot
-            ./script/deploy.sh "$DEPLOY_SHA"
+            # Execute the tested release's script, not the older host copy.
+            # Its own checkout/backup/overlay protection and rollback stay in charge.
+            git fetch --prune origin main
+            git cat-file -e "${DEPLOY_SHA}^{commit}"
+            deploy_script="$(mktemp)"
+            trap 'rm -f "$deploy_script"' EXIT
+            git show "${DEPLOY_SHA}:script/deploy.sh" > "$deploy_script"
+            DEPLOY_REPOSITORY_ROOT="$PWD" bash "$deploy_script" "$DEPLOY_SHA"
