@@ -245,6 +245,10 @@ export default function WarrantyChat({
           customerEmail: email,
           skipped: false,
         });
+        if (!response.recorded || response.email_gate_status !== "provided" ||
+            !canAccessWarrantyHelp(true, true, response.privacy)) {
+          throw new Error("Your email was not saved. Please try again.");
+        }
         if (response.privacy) setPrivacy(response.privacy);
       } catch (err) {
         console.warn("warranty session contact email failed", err);
@@ -1151,7 +1155,7 @@ export default function WarrantyChat({
       : null;
   const caseReference = warrantyState?.case_reference ?? null;
   const isTerminal = warrantyState?.current_node?.is_terminal ?? false;
-  const canGoBack = Boolean(warrantyState?.can_go_back && !isTerminal && !loading && !handoff?.requested);
+  const canGoBack = Boolean(helpAccessReady && warrantyState?.can_go_back && !isTerminal && !loading && !handoff?.requested);
 
   const atIssueTypeNode =
     !warrantyState?.issue_type &&
@@ -1496,7 +1500,7 @@ export default function WarrantyChat({
             onContinue={(email) => completeEmailGate({ email })}
           />
         )}
-        <div className="space-y-4">
+        {helpAccessReady && <div className="space-y-4">
           {messages.map((msg, i) => (
             <ChatMessageBubble
               key={i}
@@ -1509,7 +1513,7 @@ export default function WarrantyChat({
             />
           ))}
 
-        </div>
+        </div>}
 
         {helpAccessReady && handoff?.requested && (
           <div className="mt-4"><HumanHandoffNotice handoff={handoff} caseReference={caseReference} /></div>

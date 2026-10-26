@@ -2,17 +2,29 @@ import { describe, expect, it } from "vitest";
 import { applyWarrantyOutcome, canAccessWarrantyHelp, canSaveWarrantyProgress } from "./warrantyProgress";
 import type { WarrantyPrivacyState, WarrantyTicketState } from "./types";
 
-const privacy: WarrantyPrivacyState = { consent_required: true, consent_recorded: true, email_required_before_help: false, email_gate_status: "pending", contact_email_available: false };
+const privacy: WarrantyPrivacyState = { consent_required: true, consent_recorded: true, email_required_before_help: true, email_gate_status: "pending", contact_email_available: false };
 const ticket: WarrantyTicketState = { ticket_id: "case", status: "awaiting_evidence", issue_type: "delivery", model_name: "", current_node: { node_id: "delivery_terminal", node_type: "terminal", prompt: "Review", is_terminal: true, options: [] } };
 
 describe("warranty progress boundaries", () => {
-  it("permits basic help without email only after consent and an explicit server mode", () => {
-    expect(canAccessWarrantyHelp(true, false, privacy)).toBe(true);
+  it("requires consent and a server-confirmed email before starting chat", () => {
+    const saved = { ...privacy, email_gate_status: "provided", contact_email_available: true };
+    expect(canAccessWarrantyHelp(true, false, privacy)).toBe(false);
     expect(canAccessWarrantyHelp(false, true, privacy)).toBe(false);
-    expect(canAccessWarrantyHelp(true, true, { ...privacy, consent_recorded: false })).toBe(false);
+    expect(canAccessWarrantyHelp(true, true, { ...saved, consent_recorded: false })).toBe(false);
     expect(canAccessWarrantyHelp(true, false)).toBe(false);
-    expect(canAccessWarrantyHelp(true, false, { ...privacy, email_required_before_help: true })).toBe(false);
-    expect(canAccessWarrantyHelp(true, true, { ...privacy, email_required_before_help: true })).toBe(true);
+    expect(canAccessWarrantyHelp(true, true)).toBe(false);
+    expect(canAccessWarrantyHelp(true, true, privacy)).toBe(false);
+    expect(canAccessWarrantyHelp(true, true, { ...saved, contact_email_available: false })).toBe(false);
+    expect(canAccessWarrantyHelp(true, true, { ...saved, email_gate_status: "skipped" })).toBe(false);
+    expect(canAccessWarrantyHelp(true, false, saved)).toBe(false);
+    expect(canAccessWarrantyHelp(true, true, saved)).toBe(true);
+  });
+
+  it("allows email-free help only when the server explicitly disables the prerequisite", () => {
+    const optional = { ...privacy, email_required_before_help: false };
+    expect(canAccessWarrantyHelp(true, false, optional)).toBe(true);
+    expect(canAccessWarrantyHelp(false, false, optional)).toBe(false);
+    expect(canAccessWarrantyHelp(true, false, { ...optional, consent_recorded: false })).toBe(false);
   });
 
   it("keeps deferred cases open and distinct from customer-confirmed fixes", () => {

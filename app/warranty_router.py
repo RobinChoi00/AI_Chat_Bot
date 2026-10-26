@@ -72,8 +72,22 @@ def _chat_privacy_enforced() -> bool:
     }
 
 
+def _session_email_gate_state(row) -> tuple[str, bool]:
+    """Recognize saved email, including consent rows from before gate status existed."""
+    from warranty_email import extract_email  # noqa: WPS433
+
+    email = str(getattr(row, "contact_email", "") or "").strip().lower()
+    status = str(getattr(row, "email_gate_status", "") or "").strip().lower()
+    email_available = bool(email and extract_email(email) == email)
+    if email_available and status in {"", "provided"}:
+        status = "provided"
+    elif status != "skipped":
+        status = "pending"
+    return status, email_available
+
+
 def _require_web_chat_privacy(session_id: str) -> None:
-    """Recording consent is required; basic help does not require contact email."""
+    """Require recording consent and a saved contact email before browser chat."""
     if not _chat_privacy_enforced():
         return
     from warranty_consent import (  # noqa: WPS433
@@ -86,16 +100,25 @@ def _require_web_chat_privacy(session_id: str) -> None:
             status_code=403,
             detail="Please agree to the privacy notice before continuing.",
         )
+    if _session_email_gate_state(row)[0] != "provided":
+        raise HTTPException(
+            status_code=403,
+            detail="Please enter your email address before starting the chat.",
+        )
 
 
 def _public_privacy_state(session_id: str) -> dict:
     from warranty_consent import get_chat_consent
 
     row = get_chat_consent(session_id)
-    status = str(getattr(row, "email_gate_status", "") or "pending")
-    return {"consent_required": _chat_privacy_enforced(), "email_required_before_help": False,
-            "consent_recorded": row is not None, "email_gate_status": status,
-            "contact_email_available": bool(str(getattr(row, "contact_email", "") or "").strip())}
+    status, email_available = _session_email_gate_state(row)
+    return {
+        "consent_required": _chat_privacy_enforced(),
+        "email_required_before_help": _chat_privacy_enforced(),
+        "consent_recorded": row is not None,
+        "email_gate_status": status,
+        "contact_email_available": email_available,
+    }
 
 
 def _require_web_chat_privacy_for_ticket(ticket) -> None:
@@ -994,8 +1017,8 @@ class WarrantyConsentRequest(BaseModel):
 
 
 class WarrantySessionContactEmailRequest(BaseModel):
-    """Optional post-consent contact email; basic help does not require it."""
-    customer_email: str = ""
+    """Save the contact email required after consent and before browser chat."""
+    customer_email: str = Field(default="", max_length=254)
     skipped: bool = False
 
 
@@ -2245,7 +2268,7 @@ async def record_warranty_session_contact_email(
     body: WarrantySessionContactEmailRequest,
 ):
     """
-    Soft-required email after I Agree: store on the session so it copies onto
+    Required email after I Agree: store on the session so it copies onto
     the ticket when the warranty workflow starts. Skip is disabled when
     ``WARRANTY_REQUIRE_CHAT_PRIVACY`` is on (default).
     """
@@ -2259,6 +2282,17 @@ async def record_warranty_session_contact_email(
             status_code=403,
             detail="Please agree to the privacy notice before providing your email.",
         )
+    if body.skipped and _chat_privacy_enforced():
+        raise HTTPException(
+            status_code=422,
+            detail="Please enter your email address before starting the chat.",
+        )
+    if not body.skipped:
+        from warranty_email import extract_email  # noqa: WPS433
+
+        email = body.customer_email.strip().lower()
+        if not email or extract_email(email) != email:
+            raise HTTPException(status_code=422, detail="Please enter a valid email address.")
     try:
         result = record_session_contact_email(
             session_id,
@@ -2820,6 +2854,10 @@ async def go_back_warranty(ticket_id: str):
     exists. Returns the same session payload shape as ``/answer``.
     """
     engine = _lazy_engine()
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Ticket not found.")
+    _require_web_chat_privacy_for_ticket(ticket)
     try:
         rewind = engine.go_back(ticket_id)
     except ValueError as exc:
