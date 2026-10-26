@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assistantContentFromResponse,
   hydrationAssistantContent,
+  hydrationMessages,
 } from "./warrantyHydration";
 import type { WarrantySessionResponse, WarrantyTicketState } from "./types";
 
@@ -91,5 +92,39 @@ describe("hydrationAssistantContent", () => {
     expect(content).toBe("How can I help you today?");
     expect(content).not.toContain("888-848-2630");
     expect(content).not.toContain("final step");
+  });
+});
+
+describe("saved conversation hydration", () => {
+  it("restores user answers and exact saved replies instead of replacing them with the current question", () => {
+    const conversation = [
+      { id: 11, role: "user" as const, content: "The left airbag stopped inflating." },
+      { id: 12, role: "assistant" as const, content: "Check the left hose first, then tell me what happens." },
+      { id: 13, role: "user" as const, content: "The hose is connected." },
+      { id: 14, role: "assistant" as const, content: "Thanks for checking. Which part is affected?" },
+    ];
+    const restored = hydrationMessages({ session_id: "saved", ticket: midFlowTicket, conversation_messages: conversation });
+    expect(restored).toEqual(conversation);
+    expect(restored.filter((message) => message.content.includes("Which part is affected?"))).toHaveLength(1);
+    expect(restored.every((message) => !message.animate)).toBe(true);
+  });
+
+  it("keeps an unanswered saved turn and adds the current question when no assistant reply was recorded", () => {
+    const saved = { id: 21, role: "user" as const, content: "It is the left side." };
+    expect(hydrationMessages({ session_id: "partial", ticket: midFlowTicket, conversation_messages: [saved] })).toEqual([
+      saved,
+      { role: "assistant", content: "Which part is affected?" },
+    ]);
+  });
+
+  it("retains a usable current prompt when an older backend has no saved-conversation field", () => {
+    expect(hydrationMessages({ session_id: "legacy", ticket: midFlowTicket })).toEqual([
+      { role: "assistant", content: "Which part is affected?" },
+    ]);
+  });
+
+  it("does not add warranty instructions after a saved handoff reply", () => {
+    const messages = [{ id: 31, role: "assistant" as const, content: "Your request for a person is saved. Call our team for assistance." }];
+    expect(hydrationMessages({ session_id: "handoff", ticket: { ...midFlowTicket, status: "sales_handoff" }, conversation_messages: messages })).toEqual(messages);
   });
 });

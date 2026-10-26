@@ -373,10 +373,10 @@ def test_get_session_returns_ticket_after_admin_terminal(client, monkeypatch):
     assert ticket["current_node"]["is_terminal"] is True
 
 
-def test_notify_email_endpoint_sends_transcript(client, monkeypatch):
+def test_notify_email_cannot_send_for_a_nonexistent_session(client, monkeypatch):
     monkeypatch.setattr(
         "warranty_email.send_warranty_transcript_email",
-        lambda **_k: True,
+        lambda **_k: pytest.fail("An unknown session sent an email"),
     )
 
     resp = client.post(
@@ -389,10 +389,7 @@ def test_notify_email_endpoint_sends_transcript(client, monkeypatch):
             ],
         },
     )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["sent"] is True
-    assert data["customer_email"] == "buyer@example.com"
+    assert resp.status_code == 404
 
 
 def test_delivery_email_lookup_does_not_send_unsolicited_transcript(client, monkeypatch):
@@ -862,7 +859,9 @@ def test_resolved_troubleshooting_closes_shipping_review_ticket(client):
     assert duplicate.status_code == 200
 
     hydrated = client.get(f"/api/v1/warranty/session/{session_id}").json()
-    assert hydrated["ticket"] is None
+    assert hydrated["ticket"]["ticket_id"] == ticket_id
+    assert hydrated["ticket"]["status"] == "resolved"
+    assert hydrated["ticket"]["troubleshooting_outcome"] == "resolved"
     with wm.warranty_db_session() as db:
         ticket = db.query(wm.WarrantyTicket).filter_by(ticket_id=ticket_id).one()
         assert ticket.status == "resolved"

@@ -131,9 +131,36 @@ Poll both health endpoints every minute from outside the host. Alert when:
 - the daily off-site backup object or success log is missing by 05:00;
 - OpenAI/integration 401, 403, 429, or sustained timeout rates increase;
 - `/rc/health` reports failed callbacks or any dead-letter callback;
+- `/admin/warranty/notification-jobs` reports failed or dead-letter warranty
+  notifications, or an enabled notification worker is unexpectedly stopped;
 - admin login 429s or repeated backend admin 401s spike.
 
 Forward application and reverse-proxy logs to a remote log service. Correlate requests with `X-Request-ID`. Do not log message bodies, customer emails, phone numbers, credentials, uploaded filenames, or evidence paths.
+
+Application and Uvicorn logs redact bearer paths and sensitive query parameters.
+Configure the TLS reverse proxy and external log collectors to apply the same
+policy: `/warranty?resume=...` and `/api/v1/warranty/resume/...` must never retain
+the token in access logs. Application redaction cannot sanitize logs created
+before a request reaches the application.
+
+Keep `WARRANTY_NOTIFICATION_WORKER_ENABLED=true` in production. Evidence/contact
+submissions, human-support requests, and resume saves persist their notification
+reference with the source transaction. The worker recovers expired claims and
+retries transient delivery failures, with bounded attempts. It does not replay
+historic unemailed evidence automatically.
+
+Use the authenticated `GET /admin/warranty/notification-jobs?status=dead_letter`
+to inspect exhausted jobs. `POST /admin/warranty/notification-jobs/{id}/retry`
+queues a failed or exhausted job; completed and active jobs cannot be replayed
+through that operation. Both require the existing `X-Admin-Key` authentication.
+Queue records contain references and failure codes, not copied messages or
+recipients. Back up the SQLite database because it contains the queue.
+
+SMTP acceptance confirms submission to the mail server, not inbox delivery or
+a staff response. Delivery is at least once: a process failure after SMTP
+acceptance but before its database acknowledgement can cause a resend. A saved
+human-support request does not book a callback or confirm that a staff member
+has read it.
 
 ## 6. Incident response
 
@@ -162,13 +189,14 @@ du -sh db_data uploaded_evidence faiss_index backups
 - Monthly: patch the host and dependencies, review `npm audit`/Python advisories, rotate any expiring provider credentials, and validate S3 lifecycle/versioning.
 - Before changing `OPENAI_AGENT_MODEL`, run the candidate against representative production-derived cases in staging and compare factual accuracy, correct tool use, latency, and cost. Promote only on a measured gain.
 - Quarterly: execute the restore drill and review CORS origins, trusted hosts, operators, retention, and incident contacts.
-- Before scaling beyond one backend replica: migrate SQLite to managed PostgreSQL, uploads/audio to object storage, sessions/rate limits to Redis, and async email/sync/rebuild jobs to a durable queue.
+- Before scaling beyond one backend replica: migrate SQLite and its notification queue to shared managed storage, uploads/audio to object storage, sessions/rate limits to Redis, and the remaining sync/rebuild jobs to shared durable workers.
 
 ## 8. Recording consent and retention
 
 General browser chat (`/api/v1/chat`), direct sales chat/lead APIs, and warranty chat require the same recorded
 session consent before message processing or storage. `WARRANTY_REQUIRE_CHAT_PRIVACY=1`
-is the default. Contact email remains optional for basic help. The widget identifies
+is the default. Warranty browser chat additionally requires a saved contact email;
+general and direct Sales chat retain optional email until a requested action needs it. The widget identifies
 AI processing, helpdesk, tracking lookup, and email delivery in its disclosure.
 Direct sales API clients must record consent via the session consent endpoint
 before sending messages. Authenticated Tidio Flow/webhook integrations continue

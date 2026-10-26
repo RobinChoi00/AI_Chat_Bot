@@ -86,6 +86,19 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
+      - name: Install Chromium for customer browser checks
+        run: npx playwright install --with-deps chromium
+      - name: Run customer browser checks against production build
+        run: npm run test:e2e
+        env:
+          E2E_USE_PRODUCTION: "1"
+      - name: Upload customer browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: customer-browser-results
+          path: /tmp/ai-chat-playwright-results
+          if-no-files-found: ignore
       - run: npm audit --omit=dev --audit-level=moderate
 
   containers:

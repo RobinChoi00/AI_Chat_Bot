@@ -42,6 +42,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Query,
     Request,
     UploadFile,
 )
@@ -349,6 +350,7 @@ async def upload_evidence(
         mime_type=mime,
         file_size_bytes=file_size,
         customer_email=normalized_email,
+        notification_kind="evidence",
     )
 
     from warranty_models import WarrantyTicket, warranty_db_session
@@ -472,6 +474,7 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
         mime_type="",
         file_size_bytes=0,
         customer_email=normalized_email,
+        notification_kind="contact",
     )
 
     with warranty_db_session() as db:
@@ -896,7 +899,7 @@ async def go_back_from_warranty_contact(ticket_id: str):
             raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
 
         collected = ticket_row.get_collected()
-        if str(collected.get("customer_contact_email") or "").strip():
+        if collected.get("contact_submitted_at") or str(collected.get("evidence_na") or "") == "1":
             raise HTTPException(
                 status_code=409,
                 detail="Contact information has already been submitted.",
@@ -1269,23 +1272,27 @@ _DEFECT_MODEL_REQUIRED_MSG = (
 )
 
 
-def _handoff_message(reason: str, department: str = "warranty") -> str:
+def _handoff_message(reason: str, department: str = "warranty", *, notification_sent: bool = False) -> str:
     from warranty_scope import support_contact  # noqa: WPS433
 
     phone = support_contact("warranty" if reason == "safety_hazard" else department)["phone"]
+    notification = (
+        "A notification has been submitted to our support inbox. A callback has not been booked. "
+        if notification_sent else "I haven't sent a notification or booked a callback. "
+    )
 
     if reason == "safety_hazard":
         return (
             "Stop using the chair. Switch it off and unplug it only if you can do so safely. "
             "Do not run another test, resume use, or open panels. "
             "I've saved the reported safety concern and conversation context with this case for team review. "
-            "I haven't sent a notification or booked a callback. "
+            f"{notification}"
             f"Please call **{phone}** for direct support."
         )
     request = "callback request" if reason == "callback_request" else "request for a person"
     return (
         f"I've saved your {request} with this case and its conversation context for team review. "
-        "I haven't sent a notification or booked a callback. "
+        f"{notification}"
         f"For direct help, please call **{phone}**. "
         "You do not need to repeat the troubleshooting steps here."
     )
@@ -1303,6 +1310,10 @@ def _support_interrupt_reason(text: str) -> Optional[str]:
 def _request_human_handoff(engine, session_id: str, message: str, domain: str, *, reason: str = "customer_request") -> Dict[str, Any]:
     """Persist a visible support request without claiming a live transfer/email."""
     from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+    from warranty_notification_jobs import initialize_notification_storage, enqueue_notification
+    from sqlalchemy import text as sql_text
+
+    initialize_notification_storage()
 
     ticket = _get_open_session_ticket(engine, session_id)
     if ticket is None:
@@ -1310,6 +1321,7 @@ def _request_human_handoff(engine, session_id: str, message: str, domain: str, *
     else:
         ticket_id = str(ticket.ticket_id)
     with warranty_db_session() as db:
+        db.execute(sql_text("BEGIN IMMEDIATE"))
         row = db.query(WarrantyTicket).filter(WarrantyTicket.ticket_id == ticket_id).first()
         if row is None:
             raise HTTPException(status_code=404, detail="Warranty session not found.")
@@ -1328,7 +1340,10 @@ def _request_human_handoff(engine, session_id: str, message: str, domain: str, *
         row.set_collected("human_support_requested_at", _now_cst_iso())
         row.set_collected("human_support_request", message[:2000])
         row.set_collected("human_support_previous_node", str(row.current_node_id or ""))
+        source_key = f"{ticket_id}:{department}:{'safety' if reason == 'safety_hazard' else 'support'}"
+        row.set_collected("human_support_notification_source", source_key)
         row.status = "awaiting_admin_review"
+        enqueue_notification(kind="handoff", ticket_id=ticket_id, source_key=source_key, db=db)
     ticket = engine.get_ticket(ticket_id)
     payload = _serialize_ticket_state(session_id, ticket, engine.get_current_node(ticket_id), engine=engine)
     payload["side_question"] = True
@@ -1980,9 +1995,15 @@ def _serialize_ticket_state(
     ticket_id = str(ticket.ticket_id)
     collected = ticket.get_collected()
     human_requested = bool(collected.get("human_support_requested"))
+    notification_status = "not_scheduled"
+    if human_requested:
+        from warranty_handoff_notifications import handoff_notification_state
+
+        notification_status = handoff_notification_state(ticket_id, str(collected.get("human_support_notification_source") or ""))
+    notification_sent = notification_status == "completed"
     if human_requested:
         node = {"node_id": str(ticket.current_node_id or ""), "type": "terminal",
-                "prompt": _handoff_message(str(collected.get("human_support_reason") or "customer_request"), str(collected.get("human_support_department") or "warranty")),
+                "prompt": _handoff_message(str(collected.get("human_support_reason") or "customer_request"), str(collected.get("human_support_department") or "warranty"), notification_sent=notification_sent),
                 "options": [], "evidence_required": []}
     options: List[Dict[str, Any]] = []
     node_prompt: Optional[str] = None
@@ -2113,9 +2134,10 @@ def _serialize_ticket_state(
 
         reason = str(collected.get("human_support_reason") or "customer_request")
         department = str(collected.get("human_support_department") or "warranty")
-        message = _handoff_message(reason, department)
+        message = _handoff_message(reason, department, notification_sent=notification_sent)
         payload["assistant_message"] = message
-        payload["handoff"] = {"requested": True, "reason": reason, "notification_sent": False,
+        payload["handoff"] = {"requested": True, "reason": reason, "notification_sent": notification_sent,
+                              "notification_status": notification_status,
                               **support_contact(department, str(getattr(ticket, "domain", "") or "")), "message": message}
         payload["ticket"]["ready_for_issue_type"] = False
         payload["ticket"]["needs_model_confirmation"] = False
@@ -2148,6 +2170,20 @@ class WarrantyStatusLookupRequest(BaseModel):
 
     case_reference: str
     email: str
+
+
+def _get_display_session_ticket(engine, session_id: str):
+    """Restore a completed conversation without reopening it for mutation."""
+    ticket = _get_open_session_ticket(engine, session_id)
+    if ticket is not None:
+        return ticket
+    from warranty_models import WarrantyTicket, warranty_db_session
+
+    with warranty_db_session() as db:
+        latest = db.query(WarrantyTicket).filter_by(session_id=session_id).order_by(WarrantyTicket.created_at.desc()).first()
+        # Start over explicitly abandons the previous conversation. Do not
+        # unexpectedly display an older completed case behind that reset.
+        return latest if latest is not None and str(latest.admin_decision or "") != "abandoned" else None
 
 
 @router.post("/api/v1/warranty/status", tags=["warranty"])
@@ -2194,16 +2230,47 @@ async def get_warranty_session_state(session_id: str):
     - the current node prompt and answer options (for rendering clickable buttons)
     - the current ticket status (for showing status badges)
 
-    Returns 200 with ticket=null if no open ticket exists.
+    Returns the latest completed conversation when no open ticket exists.
+    Returns ticket=null for a new or explicitly restarted session.
     This endpoint is SAFE to call from the browser — it exposes no admin data.
     """
     engine = _lazy_engine()
-    ticket = _get_open_session_ticket(engine, session_id)
+    ticket = _get_display_session_ticket(engine, session_id)
     if ticket is None:
         return _serialize_ticket_state(session_id, None, None, engine=engine)
 
     node = engine.get_current_node(str(ticket.ticket_id))
-    return _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    privacy = payload["privacy"]
+    if privacy["consent_recorded"] and (
+        not privacy["email_required_before_help"] or
+        (privacy["email_gate_status"] == "provided" and privacy["contact_email_available"])
+    ):
+        from warranty_conversation import customer_conversation_page
+
+        page = customer_conversation_page(ticket_id=str(ticket.ticket_id), session_id=session_id)
+        payload["conversation_messages"] = page["messages"]
+        payload["conversation_has_more"] = page["has_more"]
+        payload["conversation_before_id"] = page["before_id"]
+    return payload
+
+
+@router.get("/api/v1/warranty/session/{session_id}/messages", tags=["warranty"])
+async def get_warranty_conversation_messages(
+    session_id: str,
+    before_id: Optional[int] = Query(default=None, ge=1),
+    limit: int = Query(default=100, ge=1, le=100),
+):
+    """Load earlier customer exchanges using the session's existing capability."""
+    _require_web_chat_privacy(session_id)
+    ticket = _get_display_session_ticket(_lazy_engine(), session_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Warranty case not found.")
+    from warranty_conversation import customer_conversation_page
+
+    return customer_conversation_page(
+        ticket_id=str(ticket.ticket_id), session_id=session_id, before_id=before_id, limit=limit,
+    )
 
 
 @router.post("/api/v1/warranty/session/{session_id}/restart", tags=["warranty"])
@@ -2872,15 +2939,20 @@ async def go_back_warranty(ticket_id: str):
 
 
 @router.post("/api/v1/warranty/session/{session_id}/notify-email", tags=["warranty"])
-async def notify_warranty_email(session_id: str, body: WarrantyEmailNotifyRequest):
+@limiter.limit("3/hour")
+async def notify_warranty_email(request: Request, session_id: str, body: WarrantyEmailNotifyRequest):
     """
     Send the warranty chat transcript to the warranty inbox when the customer
     leaves their email address in free-text chat.
     """
-    from warranty_email import extract_email, maybe_send_warranty_transcript, send_warranty_transcript_email  # noqa: WPS433
+    from warranty_email import extract_email, maybe_send_warranty_transcript  # noqa: WPS433
     from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
 
     engine = _lazy_engine()
+    _require_web_chat_privacy(session_id)
+    ticket = _get_open_session_ticket(engine, session_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Warranty case not found.")
 
     email = extract_email(body.message)
     if not email and body.chat_messages:
@@ -2893,33 +2965,21 @@ async def notify_warranty_email(session_id: str, body: WarrantyEmailNotifyReques
     if not email:
         return {"sent": False, "reason": "no_email_found"}
 
-    ticket = _get_open_session_ticket(engine, session_id)
-    if ticket is not None:
-        with warranty_db_session() as db:
-            ticket_row = (
-                db.query(WarrantyTicket)
-                .filter(WarrantyTicket.ticket_id == ticket.ticket_id)
-                .first()
-            )
-            if ticket_row is None:
-                return {"sent": False, "reason": "ticket_not_found"}
+    saved_email = str(ticket.get_collected().get("customer_contact_email") or "").strip().lower()
+    if not saved_email or email != saved_email:
+        raise HTTPException(status_code=422, detail="Please use the contact email saved for this case.")
+    from warranty_conversation import customer_conversation_page
 
-            turns = engine.get_turns(str(ticket.ticket_id))
-            _detected, sent_now = maybe_send_warranty_transcript(
-                ticket=ticket_row,
-                answer_text=email,
-                turns=turns,
-                chat_messages=body.chat_messages,
-            )
-            sent = sent_now
-        return {"sent": sent, "customer_email": email}
-
-    sent = send_warranty_transcript_email(
-        customer_email=email,
-        session_id=session_id,
-        chat_messages=body.chat_messages,
-    )
-    return {"sent": sent, "customer_email": email}
+    history = customer_conversation_page(ticket_id=str(ticket.ticket_id), session_id=session_id)
+    with warranty_db_session() as db:
+        ticket_row = db.query(WarrantyTicket).filter(WarrantyTicket.ticket_id == ticket.ticket_id).first()
+        if ticket_row is None:
+            raise HTTPException(status_code=404, detail="Warranty case not found.")
+        _detected, sent = maybe_send_warranty_transcript(
+            ticket=ticket_row, answer_text=email, turns=engine.get_turns(str(ticket.ticket_id)),
+            chat_messages=[{"role": message["role"], "content": message["content"]} for message in history["messages"]],
+        )
+    return {"sent": sent, "customer_email": _masked_public_email(email)}
 
 
 @router.get("/api/v1/warranty/{ticket_id}/evidence", tags=["warranty"])

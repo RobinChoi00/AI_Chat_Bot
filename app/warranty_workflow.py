@@ -1080,15 +1080,22 @@ class WarrantyEngine:
         mime_type: str = "",
         file_size_bytes: int = 0,
         customer_email: str = "",
+        notification_kind: Optional[str] = None,
     ) -> WarrantyEvidence:
         """
         Persist an evidence record for a ticket.
 
-        Does NOT upload files or send email — it only writes the metadata row.
-        The file upload and (future) email notification are handled by the API layer.
+        Does not upload files or send email. Explicit browser submissions can
+        atomically record a durable notification with the evidence metadata.
 
         Raises ValueError if ticket does not exist.
         """
+        if notification_kind is not None:
+            if notification_kind not in {"evidence", "contact"}:
+                raise ValueError("Unsupported evidence notification kind")
+            from warranty_notification_jobs import initialize_notification_storage
+
+            initialize_notification_storage()
         with warranty_db_session() as db:
             ticket = (
                 db.query(WarrantyTicket)
@@ -1118,6 +1125,13 @@ class WarrantyEngine:
                 emailed=0,
             )
             db.add(ev)
+            if notification_kind is not None:
+                from warranty_notification_jobs import enqueue_notification
+                from datetime import datetime, timezone
+
+                ticket.set_collected("contact_submitted_at", datetime.now(timezone.utc).isoformat())
+                db.flush()
+                enqueue_notification(kind=notification_kind, ticket_id=ticket_id, evidence_id=int(ev.id), db=db)
             return ev
 
     @staticmethod

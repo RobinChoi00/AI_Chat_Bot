@@ -17,6 +17,7 @@ import type {
   WarrantyStatusLookupResponse,
   WarrantyPrivacyState,
   WarrantyTroubleshootingResponse,
+  WarrantyConversationHistoryResponse,
 } from "./types";
 import type { JourneyEvent, JourneyStage } from "./customerJourney";
 
@@ -136,6 +137,18 @@ export async function getWarrantySession(
     throw new Error(`Failed to fetch warranty session: HTTP ${res.status}`);
   }
   return res.json() as Promise<WarrantySessionResponse>;
+}
+
+/** Page through the saved customer conversation; never cache private messages. */
+export async function getWarrantyConversationMessages(
+  sessionId: string,
+  { beforeId, limit = 100 }: { beforeId: number; limit?: number },
+): Promise<WarrantyConversationHistoryResponse> {
+  const params = new URLSearchParams({ before_id: String(beforeId), limit: String(limit) });
+  const url = `${getApiBase()}/api/v1/warranty/session/${encodeURIComponent(sessionId)}/messages?${params}`;
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error("Could not load earlier messages. Please try again.");
+  return response.json() as Promise<WarrantyConversationHistoryResponse>;
 }
 
 /** Each request checks the provider again; lookup identity stays in the POST body. */

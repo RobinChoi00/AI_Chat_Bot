@@ -17,7 +17,8 @@ Design
   restores that session locally and the existing session endpoint hydrates
   chat state.
 
-No new dependencies — pure ``hmac`` + ``base64`` + ``json``.
+Uses the existing SQLAlchemy database and durable notification queue. Signed
+tokens use the standard-library ``hmac`` + ``base64`` + ``json`` modules.
 """
 
 from __future__ import annotations
@@ -30,7 +31,6 @@ import logging
 import os
 import smtplib
 import ssl
-import threading
 import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -38,8 +38,9 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 
 from pii_redact import mask_email
 
@@ -139,7 +140,7 @@ def verify_resume_token(token: str) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Email helper (fire-and-forget)
+# Email transport and durable worker adapter
 # ---------------------------------------------------------------------------
 
 def _send_resume_email(
@@ -204,29 +205,48 @@ def _send_resume_email(
         return False
 
 
-def _deliver_resume_email(*, attempt_id: str, **kwargs) -> None:
-    """Persist transport acceptance only for the matching explicit save request."""
-    from warranty_models import WarrantyTicket, warranty_db_session, _now_cst
+def _deliver_resume_email(*, attempt_id: str, **_legacy_kwargs) -> bool:
+    """Resolve the reserved recipient and deliver at most once per active lease."""
+    from warranty_resume_limits import claim_resume_attempt, finish_resume_attempt, supersede_resume_attempt
+
+    attempt = claim_resume_attempt(attempt_id)
+    if attempt is None:
+        return True
+    lease_token = attempt["lease_token"]
+    ticket = _lazy_engine().get_ticket(attempt["ticket_id"])
+    if ticket is None:
+        finish_resume_attempt(attempt_id, sent=False, lease_token=lease_token)
+        return False
+    if ticket.get_collected().get("resume_delivery_attempt_id") != attempt_id:
+        supersede_resume_attempt(attempt_id, lease_token=lease_token)
+        return True
+    resume_url = build_warranty_resume_url(str(ticket.ticket_id), str(ticket.session_id), str(ticket.domain or ""))
+    if not resume_url:
+        finish_resume_attempt(attempt_id, sent=False, lease_token=lease_token)
+        return False
     try:
-        sent = _send_resume_email(**kwargs)
+        sent = _send_resume_email(
+            customer_email=attempt["recipient_email"], resume_url=resume_url,
+            ticket_id=str(ticket.ticket_id), model_name=str(ticket.model_name or ""),
+            domain=str(ticket.domain or ""),
+        )
     except Exception as exc:
         logger.warning("Resume email attempt failed (%s)", type(exc).__name__)
         sent = False
-    try:
-        with warranty_db_session() as db:
-            ticket = db.query(WarrantyTicket).filter_by(ticket_id=kwargs['ticket_id']).first()
-            if ticket is not None:
-                data = ticket.get_collected()
-                if data.get('resume_delivery_attempt_id') == attempt_id:
-                    data['resume_delivery_status'] = 'sent' if sent else 'failed'
-                    data['resume_delivery_checked_at'] = _now_cst().isoformat()
-                    ticket.collected_data = json.dumps(data)
-    except Exception as exc:
-        logger.warning("Resume delivery result recording failed (%s)", type(exc).__name__)
+    finish_resume_attempt(attempt_id, sent=bool(sent), lease_token=lease_token)
+    return bool(sent)
+
+
+def deliver_resume_attempt(attempt_id: str) -> None:
+    """Durable notification-worker entry point; failures must remain retryable."""
+    if not _deliver_resume_email(attempt_id=attempt_id):
+        raise RuntimeError("Resume email delivery failed")
 
 
 def _send_resume_email_async(**kwargs) -> None:
-    threading.Thread(target=_deliver_resume_email, kwargs=kwargs, daemon=True).start()
+    from warranty_notification_jobs import enqueue_notification
+
+    enqueue_notification(kind="resume", ticket_id=kwargs["ticket_id"], source_key=kwargs["attempt_id"])
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +257,7 @@ router = APIRouter(tags=["warranty-resume"])
 
 
 class ResumeLinkRequest(BaseModel):
-    customer_email: str
+    customer_email: str = Field(min_length=3, max_length=254)
 
 
 def _lazy_engine():
@@ -281,12 +301,12 @@ def build_warranty_resume_url(
 
 
 @router.post("/api/v1/warranty/session/{session_id}/resume-link")
-async def send_warranty_resume_link(session_id: str, body: ResumeLinkRequest):
+async def send_warranty_resume_link(request: Request, session_id: str, body: ResumeLinkRequest):
     """Email the customer a signed URL to resume the active warranty case."""
     from warranty_email import extract_email  # noqa: WPS433
 
-    email = extract_email(body.customer_email or "")
-    if not email:
+    email = body.customer_email.strip().lower()
+    if not email or extract_email(email) != email:
         raise HTTPException(status_code=422, detail="A valid email address is required.")
 
     engine = _lazy_engine()
@@ -308,37 +328,28 @@ async def send_warranty_resume_link(session_id: str, body: ResumeLinkRequest):
             detail="Save & continue is temporarily unavailable.",
         )
 
-    from warranty_models import WarrantyTicket, warranty_db_session, _now_cst
+    from warranty_resume_limits import reserve_resume_attempt
 
     attempt_id = str(uuid4())
-    with warranty_db_session() as db:
-        saved = db.query(WarrantyTicket).filter_by(ticket_id=ticket_id).first()
-        if saved is None:
-            raise HTTPException(404, "Warranty case not found.")
-        data = saved.get_collected()
-        data.update(resume_email=email, resume_delivery_attempt_id=attempt_id,
-            resume_delivery_status='pending', resume_requested_at=_now_cst().isoformat())
-        saved.collected_data = json.dumps(data)
+    try:
+        reserve_resume_attempt(
+            attempt_id=attempt_id, ticket_id=ticket_id, session_id=session_id,
+            recipient=email, client_ip=request.client.host if request.client else "unknown",
+        )
+    except SQLAlchemyError as exc:
+        logger.warning("Resume request persistence failed kind=%s", type(exc).__name__)
+        raise HTTPException(503, "Save & continue is temporarily unavailable. Please try again.",
+                            headers={"Retry-After": "5"}) from None
     queued = True
     try:
         _send_resume_email_async(
             attempt_id=attempt_id,
-            customer_email=email,
-            resume_url=resume_url,
             ticket_id=ticket_id,
-            model_name=str(ticket.model_name or ""),
-            domain=str(ticket.domain or ""),
         )
     except Exception as exc:
-        queued = False
-        logger.warning("Resume delivery scheduling failed (%s)", type(exc).__name__)
-        with warranty_db_session() as db:
-            saved = db.query(WarrantyTicket).filter_by(ticket_id=ticket_id).first()
-            if saved is not None:
-                data = saved.get_collected()
-                if data.get('resume_delivery_attempt_id') == attempt_id:
-                    data['resume_delivery_status'] = 'failed'
-                    saved.collected_data = json.dumps(data)
+        # Admission already committed the queue row atomically. Its periodic
+        # worker can recover even if the optional wake-up fails here.
+        logger.warning("Resume worker wake-up failed (%s)", type(exc).__name__)
 
     return {
         "sent": False,

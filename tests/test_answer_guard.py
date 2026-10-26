@@ -362,3 +362,65 @@ def test_single_model_table_checks_header_units():
     correct = "| Feature | Fixture Alpha |\n|---|---|\n| Doorway (cm) | 81.28 |"
     assert guarded_measurement(correct) == correct
     assert "accurate information" in guarded_measurement(correct.replace("81.28", "86.36"))
+
+
+@pytest.mark.parametrize("language,text", [
+    ("ko", "보증 교환이 승인되었습니다. 내일 배송됩니다."),
+    ("ko", "내일 도착합니다."),
+    ("ko", "배송일을 보장합니다."),
+    ("ko", "이 의자는 허리 통증을 완치합니다."),
+    ("ko", "교체품이 발송되었습니다."),
+    ("ko", "환불해 드리겠습니다."),
+    ("es", "Su garantía ha sido aprobada. La silla llegará mañana."),
+    ("es", "Le garantizamos la entrega mañana."),
+    ("es", "Esta silla curará su dolor."),
+    ("es", "Su reemplazo ha sido enviado."),
+    ("es", "Enviaremos una pieza gratis."),
+])
+def test_unsupported_promises_are_blocked_in_supported_languages(language, text):
+    output = sanitize_agent_response(text, tools_called=[], user_query="help", language=language)
+    assert output != text
+    assert ("약속할 수 없습니다" if language == "ko" else "No puedo aprobar") in output
+
+
+@pytest.mark.parametrize("text", [
+    "If your warranty is approved, our team can discuss replacement options.",
+    "Once the claim is approved, the team may explain the next steps.",
+    "보증이 승인되었다면 담당자가 교환 가능 여부를 안내합니다.",
+    "보증 교환이 승인되지 않았습니다. 배송일을 보장하지 않습니다.",
+    "Si su garantía ha sido aprobada, podemos revisar los próximos pasos.",
+    "Su garantía no ha sido aprobada. No garantizamos la entrega mañana.",
+    "Esta silla no curará el dolor.",
+    'You wrote: "Your warranty is approved." I cannot confirm that claim here.',
+    '고객님이 쓰신 내용: "보증 교환이 승인되었습니다." 담당자의 확인이 필요합니다.',
+    '"보증 교환이 승인되었습니다."라고 말씀하셨지만 담당자 확인이 필요합니다.',
+    'Su mensaje: "Su garantía ha sido aprobada." Nuestro equipo debe confirmarlo.',
+])
+def test_negation_conditional_prerequisites_and_attributed_quotes_are_not_promises(text):
+    assert sanitize_agent_response(text, tools_called=[], user_query="help") == text
+
+
+def test_quote_attribution_does_not_authorize_other_assistant_promises():
+    text = 'You wrote: "Your warranty is approved." We guarantee delivery tomorrow.'
+    output = sanitize_agent_response(text, tools_called=[], user_query="help")
+    assert "cannot approve" in output
+    assert "guarantee delivery tomorrow" not in output
+    # Quotation marks alone do not establish that a claim came from the user.
+    output = sanitize_agent_response('"Your warranty is approved."', tools_called=[], user_query="help")
+    assert "cannot approve" in output
+
+
+def test_retrieved_correspondence_does_not_authorize_current_customer_status():
+    text = "보증 교환이 승인되었습니다."
+    output = sanitize_agent_response(text, tools_called=["get_repair_help"], user_query="보증 상태", tool_results=[text])
+    assert output != text
+    assert "약속할 수 없습니다" in output
+
+
+@pytest.mark.parametrize("message", ["교체품이 배송 중입니다.", "Su pedido está en camino."])
+def test_verified_order_tool_preserves_its_canonical_customer_status(message):
+    import json
+
+    tool = "ORDER_LOOKUP_RESULT_JSON: " + json.dumps({"customer_message": message}, ensure_ascii=False)
+    output = sanitize_agent_response("Invented delivery guarantee tomorrow.", tools_called=["lookup_order_status"], user_query="track order", tool_results=[tool])
+    assert output == message

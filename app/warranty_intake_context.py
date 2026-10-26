@@ -349,23 +349,79 @@ def filter_completed_check_steps(steps: list[str], *, ticket, turns) -> list[str
     return kept
 
 
+_EN_HAZARD = (
+    r"(?:too hot|overheat\w*|smok\w*|burn(?:ing|t) smell|sparks?|"
+    r"electric(?:al)? shock|electrocut\w*|short circuit|has a short|"
+    r"(?:caught|catching|on) fire|fire|flames?|pain(?:ful)?|hurts?|discomfort)"
+)
+_ES_HAZARD = (
+    r"(?:humo|humea\w*|incendio|fuego|en llamas|(?:hay|salen|veo) llamas|"
+    r"olor a quemado|chispas?|descargas? el[eé]ctricas?|electrocut\w*|"
+    r"cortocircuito|sobrecalent\w*|demasiado caliente|dolor|duele\w*|molestias?)"
+)
+_KO_HAZARD_ROOT = (
+    r"(?:연기|불꽃|화재|스파크|감전|전기\s*충격|누전|합선|과열|통증|"
+    r"타는\s*냄새|탄\s*냄새|불|너무\s*뜨겁|지나치게\s*뜨겁|아프|아파)"
+)
+_KO_HAZARD = (
+    r"(?:연기|불꽃|화재|스파크|감전|전기\s*충격|누전|합선|과열|통증|"
+    r"타는\s*냄새|탄\s*냄새|불(?:이|은|도)?\s*(?:나|났|난|납|붙|타)|"
+    r"너무\s*뜨겁|지나치게\s*뜨겁|아프|아파)"
+)
+_HAZARD_RE = re.compile(rf"\b(?:{_EN_HAZARD}|{_ES_HAZARD})\b|{_KO_HAZARD}", re.I)
+_EN_NEGATED_HAZARD_RE = re.compile(
+    rf"\b(?:no|not|without|never|isn't|aren't|hasn't|doesn't|don't|didn't)\s+"
+    rf"(?:(?:any|signs? of|experiencing|feel(?:ing)?|caus(?:e|es|ed|ing)|have|had|"
+    rf"emit(?:ting)?|produc(?:e|es|ed|ing)|show(?:ing)?)\s+)*"
+    rf"{_EN_HAZARD}(?:\s*,?\s*(?:or|and)\s+(?:any\s+)?{_EN_HAZARD})*\b|"
+    rf"\b{_EN_HAZARD}\s+(?:is|are|was|were)\s+not\s+(?:present|visible|seen|detected)\b",
+    re.I,
+)
+_ES_NEGATED_HAZARD_RE = re.compile(
+    rf"\b(?:no|sin|nunca)\s+"
+    rf"(?:(?:hay|veo|tiene|tengo|siento|sufro|presento|noto|percibo|me|ha|est[aá]|se|produce|sale|salen|signos de|ning[uú]n(?:a)?)\s+)*"
+    rf"{_ES_HAZARD}(?:\s*,?\s*(?:ni|o|y)\s+{_ES_HAZARD})*\b",
+    re.I,
+)
+_KO_NEGATED_HAZARD_RE = re.compile(
+    rf"{_KO_HAZARD_ROOT}(?:\s*(?:와|과|나|및|또는)\s*{_KO_HAZARD_ROOT})*"
+    r"(?:은|는|이|가|도|을|를)?\s*(?:전혀\s*)?"
+    r"(?:(?:난|붙은|발생한|된|당한|겪은)\s*(?:적(?:이|은|도)?|일(?:이|은|도)?)\s*)?"
+    r"(?:없(?:습니다|어요|었어요|었고|었지만|음|다|고|지만|는데|는)?|"
+    r"아니(?:에요|었어요|고|지만|라|다)?|"
+    r"(?:나지|발생하지|보이지|느껴지지|(?:되|하)?지)\s*않(?:습니다|아요|았어요|고|지만|는데|음|다)?|"
+    r"안\s*(?:나요|납니다|났어요|났습니다|붙었어요|붙었습니다|나|보여요|보입니다|보여|느껴져요|뜨거워요|뜨겁습니다|아파요|아픕니다))"
+)
+_KO_SCHEDULE_TOPIC = r"(?:배송|배달|일정|예약|주문|도착|날짜|시간|설치|방문|수령|약속)"
+_KO_POSTPONEMENT_ACTION_RE = re.compile(
+    rf"(?P<context>{_KO_SCHEDULE_TOPIC}(?:(?!연기|의자|안마기|제품|기기)[^.!?\n]){{0,60}})"
+    r"연기(?=하|해|했|합|할|되|돼|됐|된|될)"
+)
+_KO_POSTPONEMENT_NOUN_RE = re.compile(
+    rf"(?P<context>{_KO_SCHEDULE_TOPIC}(?:\s*(?:날짜|일정|시간))?(?:을|를|이|가|은|는|의)?\s*)"
+    r"연기(?=(?:은|는|도)?\s*(?:요청|부탁|가능|불가|변경|문의|사유|관련|방법|안내)|\s*(?:[.!?]|$))"
+)
+
+
 def reported_safety_hazard(ticket=None, turns=(), text: str = "") -> bool:
-    """Recognize an explicit unsafe-use report before suggesting more testing."""
+    """Stop unsafe-use reports in supported languages without relying on a model.
+
+    Negation removes only the stated hazard, not the rest of the sentence:
+    "no smoke, but there are sparks" must still stop the workflow.
+    "연기" used to postpone delivery is not a smoke report.
+    """
     collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
     texts = [text, str(collected.get("intake_summary") or ""), str(collected.get("intake_raw_message") or "")]
     texts.extend(str(getattr(turn, "customer_answer", "") or "") for turn in turns or ())
-    hazard = r"(?:too hot|overheat\w*|smok\w*|burn(?:ing|t) smell|sparks?|electric(?:al)? shock|short circuit|has a short|pain(?:ful)?|hurts?|discomfort)"
-    pattern = re.compile(rf"\b{hazard}\b", re.I)
-    # Negation applies only to a concrete hazard phrase/list, not the rest of
-    # the sentence: "no smoke, but there are sparks" still requires a stop.
-    negative = re.compile(
-        rf"\b(?:no|not|without|never|isn't|aren't|hasn't|doesn't|don't)\s+"
-        rf"(?:(?:any|signs? of|experiencing|feel(?:ing)?|caus(?:e|es|ed|ing)|have|had|emit(?:ting)?|produc(?:e|es|ed|ing)|show(?:ing)?)\s+)*"
-        rf"{hazard}(?:\s*(?:,|or|and)\s*(?:any\s+)?{hazard})*\b", re.I,
-    )
     for value in texts:
-        value = negative.sub("", value.replace("’", "'"))
-        if pattern.search(value):
+        value = value.replace("’", "'")
+        # Only remove the ambiguous word itself: a hazard elsewhere in the
+        # same request ("sparks, so postpone delivery") must remain visible.
+        for postpone in (_KO_POSTPONEMENT_ACTION_RE, _KO_POSTPONEMENT_NOUN_RE):
+            value = postpone.sub(lambda match: match.group("context"), value)
+        for negative in (_EN_NEGATED_HAZARD_RE, _ES_NEGATED_HAZARD_RE, _KO_NEGATED_HAZARD_RE):
+            value = negative.sub("", value)
+        if _HAZARD_RE.search(value):
             return True
     return False
 

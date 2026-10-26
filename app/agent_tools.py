@@ -415,7 +415,7 @@ def tool_search_chair_specs(
     # Try typo-normalized form if the original returned nothing useful
     if not docs and norm_model and norm_model.lower() != (model_name or "").lower():
         retry_query = f"{norm_model} {query}".strip()
-        logger.info(f"[search_chair_specs] retrying with normalized: {retry_query!r}")
+        logger.info("[search_chair_specs] retrying normalized query chars=%s", len(retry_query))
         docs = products_retriever.search(retry_query, k=5, model_hint=norm_model)
         docs = [doc for doc in docs if _usd_document(doc) and _same_model(doc, norm_model)]
 
@@ -432,7 +432,7 @@ def tool_search_chair_specs(
         core_tokens = re.findall(r"[a-zA-Z]{3,}|\d{3,}", (norm_model or model_name or ""))
         if core_tokens:
             core_query = " ".join(core_tokens)
-            logger.info(f"[search_chair_specs] retrying with core tokens: {core_query!r}")
+            logger.info("[search_chair_specs] retrying core query chars=%s", len(core_query))
             docs = products_retriever.search(core_query, k=5, model_hint=core_query)
             docs = [doc for doc in docs if _usd_document(doc) and _same_model(doc, model_name or norm_model or "")]
 
@@ -1083,7 +1083,7 @@ def tool_answer_warranty_question(
             f"INSTRUCTION: Ask the customer to clarify which option they meant and retry."
         )
     except Exception as e:
-        logger.error(f"answer_warranty_question error: {e}")
+        logger.error("answer_warranty_question failed kind=%s", type(e).__name__)
         return f"WARRANTY_ERROR: {e}"
 
 

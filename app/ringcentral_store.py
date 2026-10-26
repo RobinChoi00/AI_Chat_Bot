@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Optional
 
 from sqlalchemy import and_, or_, text
@@ -29,7 +29,7 @@ _RETRY_DELAYS_SECONDS = (1, 2, 5, 10, 30, 60, 120, 300)
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def event_key(route: str, payload: Mapping[str, Any]) -> str:
@@ -70,7 +70,7 @@ def enqueue_event(route: str, payload: dict[str, Any]) -> tuple[int, bool]:
         return int(row.id), True
 
 
-def _claim_event(event_id: int) -> Optional[tuple[str, dict[str, Any]]]:
+def _claim_event(event_id: int) -> Optional[tuple[str, dict[str, Any], int]]:
     now = _utcnow()
     stale_before = now - timedelta(seconds=_PROCESSING_LEASE_SECONDS)
     with warranty_db_session() as db:
@@ -105,6 +105,7 @@ def _claim_event(event_id: int) -> Optional[tuple[str, dict[str, Any]]]:
         row.status = "processing"
         row.attempts = int(row.attempts or 0) + 1
         row.next_attempt_at = None
+        row.updated_at = now
         route = str(row.route)
         try:
             payload = json.loads(str(row.payload_json))
@@ -116,25 +117,32 @@ def _claim_event(event_id: int) -> Optional[tuple[str, dict[str, Any]]]:
             row.status = "dead_letter"
             row.last_error = "stored_payload_not_object"
             return None
-        return route, payload
+        return route, payload, int(row.attempts)
 
 
-def _mark_completed(event_id: int) -> None:
+def _mark_completed(event_id: int, attempt: int) -> bool:
     with warranty_db_session() as db:
-        row = db.get(RingCentralWebhookEvent, event_id)
-        if row is not None:
-            row.status = "completed"
-            row.last_error = None
-            row.completed_at = _utcnow()
+        updated = db.query(RingCentralWebhookEvent).filter(
+            RingCentralWebhookEvent.id == event_id,
+            RingCentralWebhookEvent.status == "processing",
+            RingCentralWebhookEvent.attempts == attempt,
+        ).update({
+            RingCentralWebhookEvent.status: "completed",
+            RingCentralWebhookEvent.last_error: None,
+            RingCentralWebhookEvent.completed_at: _utcnow(),
+        }, synchronize_session=False)
+        return bool(updated)
 
 
-def _mark_failed(event_id: int, exc: BaseException) -> None:
+def _mark_failed(event_id: int, attempt: int, exc: BaseException) -> None:
     with warranty_db_session() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
         row = db.get(RingCentralWebhookEvent, event_id)
-        if row is None:
+        if row is None or row.status != "processing" or row.attempts != attempt:
             return
         attempts = int(row.attempts or 1)
-        row.last_error = f"{type(exc).__name__}: {exc}"[:500]
+        # Integration exceptions may contain credentials or customer content.
+        row.last_error = type(exc).__name__[:100]
         if attempts >= MAX_EVENT_ATTEMPTS:
             row.status = "dead_letter"
             row.next_attempt_at = None
@@ -152,24 +160,24 @@ def process_event(
     claimed = _claim_event(event_id)
     if claimed is None:
         return False
-    route, payload = claimed
+    route, payload, attempt = claimed
     handler = handlers.get(route)
     if handler is None:
         exc = RuntimeError(f"No RingCentral handler registered for {route}")
-        _mark_failed(event_id, exc)
+        _mark_failed(event_id, attempt, exc)
         return False
     try:
         handler(payload)
     except Exception as exc:
-        logger.exception(
-            "RingCentral event processing failed event_id=%s route=%s",
+        logger.warning(
+            "RingCentral event processing failed event_id=%s route=%s error_type=%s",
             event_id,
             route,
+            type(exc).__name__,
         )
-        _mark_failed(event_id, exc)
+        _mark_failed(event_id, attempt, exc)
         return False
-    _mark_completed(event_id)
-    return True
+    return _mark_completed(event_id, attempt)
 
 
 def pending_event_ids(limit: int = 25) -> list[int]:

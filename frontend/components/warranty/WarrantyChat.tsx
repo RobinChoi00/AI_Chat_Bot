@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import {
   confirmWarrantyModel,
   getWarrantySession,
+  getWarrantyConversationMessages,
   goBackFromWarrantyContact,
   goBackWarranty,
   lookupDeliveryTracking,
@@ -35,6 +36,7 @@ import type {
 import {
   assistantContentFromResponse,
   hydrationAssistantContent,
+  hydrationMessages,
 } from "@/lib/warrantyHydration";
 import ChatMessageBubble from "./ChatMessageBubble";
 import AnswerOptions from "./AnswerOptions";
@@ -162,7 +164,7 @@ export default function WarrantyChat({
   const [warrantyState, setWarrantyState] = useState<WarrantyTicketState | null>(null);
   const journeyDomain = warrantyState?.domain?.trim() || storeDomain;
   const deliveryStoreDomain = warrantyState?.domain?.trim() || storeDomain;
-  const [savedFollowup, setSavedFollowup] = useState<WarrantyFollowupAccess | null>(() => readWarrantyFollowup(sessionId));
+  const [savedFollowup, setSavedFollowup] = useState<WarrantyFollowupAccess | null>(null);
   const rememberFollowup = useCallback((ticketId: string, token: string, issueType: string) => {
     const value = { sessionId, ticketId, token, issueType };
     setSavedFollowup(value);
@@ -174,12 +176,16 @@ export default function WarrantyChat({
   const [handoff, setHandoff] = useState<WarrantyHandoff | null>(null);
   const [optionsUsed, setOptionsUsed] = useState(false);
   const [sessionChecked, setSessionChecked] = useState(false);
+  const [sessionLoadError, setSessionLoadError] = useState<string | null>(null);
+  const [sessionLoadAttempt, setSessionLoadAttempt] = useState(0);
+  const [conversationHasMore, setConversationHasMore] = useState(false);
+  const [conversationBeforeId, setConversationBeforeId] = useState<number | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const historyRequestId = useRef(0);
   const [contactSubmitted, setContactSubmitted] = useState(false);
   const [contactReceiptSent, setContactReceiptSent] = useState(false);
-  const [showCaseLookup, setShowCaseLookup] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return new URLSearchParams(window.location.search).has("check");
-  });
+  const [showCaseLookup, setShowCaseLookup] = useState(false);
   const [helpConsent, setHelpConsent] = useState<"yes" | "no" | null>(null);
   const [resolutionStage, setResolutionStage] = useState<"review" | "outcome">("review");
   const [deferredPaused, setDeferredPaused] = useState(false);
@@ -189,15 +195,10 @@ export default function WarrantyChat({
   const [pendingDefectStart, setPendingDefectStart] = useState<string | null>(null);
   const [suggestedIssueType, setSuggestedIssueType] = useState<string | null>(null);
   const [suggestedOption, setSuggestedOption] = useState<AnswerOption | null>(null);
-  const [chatConsentAccepted, setChatConsentAccepted] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return sessionStorage.getItem(CHAT_CONSENT_STORAGE_KEY) === "1";
-  });
-  const [emailGateDone, setEmailGateDone] = useState(() => {
-    if (typeof window === "undefined") return false;
-    const status = sessionStorage.getItem(CHAT_EMAIL_GATE_STORAGE_KEY);
-    return status === "provided";
-  });
+  // Server state is authoritative; matching initial server/client markup also
+  // prevents a returning browser's stored flags from breaking hydration.
+  const [chatConsentAccepted, setChatConsentAccepted] = useState(false);
+  const [emailGateDone, setEmailGateDone] = useState(false);
   const [intakeContactEmail, setIntakeContactEmail] = useState("");
   const [privacy, setPrivacy] = useState<WarrantyPrivacyState | null>(null);
   const [consentSaving, setConsentSaving] = useState(false);
@@ -267,11 +268,23 @@ export default function WarrantyChat({
   );
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const previousHistoryScroll = useRef<{ height: number; top: number } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
+    if (previousHistoryScroll.current && chatScrollRef.current) {
+      const { height, top } = previousHistoryScroll.current;
+      chatScrollRef.current.scrollTop = top + chatScrollRef.current.scrollHeight - height;
+      previousHistoryScroll.current = null;
+      return;
+    }
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading, helpConsent, resolutionStage]);
+
+  useEffect(() => {
+    if (helpAccessReady) inputRef.current?.focus();
+  }, [helpAccessReady]);
 
   const applySessionResponse = useCallback((resp: WarrantySessionResponse) => {
     if (resp.privacy) {
@@ -282,6 +295,8 @@ export default function WarrantyChat({
     const token = resp.followup_token ?? resp.ticket?.followup_token;
     if (resp.ticket?.status === "resolved" && token) {
       rememberFollowup(resp.ticket.ticket_id, token, resp.ticket.issue_type);
+    } else {
+      setSavedFollowup(readWarrantyFollowup(resp.session_id));
     }
     setWarrantyState(resp.ticket ? {
       ...resp.ticket,
@@ -349,6 +364,13 @@ export default function WarrantyChat({
         sessionStorage.setItem("warranty_session_id", newId);
       }
       setSessionId(newId);
+      setSessionChecked(false);
+      setSessionLoadError(null);
+      setConversationHasMore(false);
+      setConversationBeforeId(null);
+      setHistoryError(null);
+      setHistoryLoading(false);
+      historyRequestId.current += 1;
       setMessages([{ role: "assistant", content: WARRANTY_WELCOME_MESSAGE }]);
       setWarrantyState(null);
       setTerminalEnrichment(null);
@@ -471,6 +493,8 @@ export default function WarrantyChat({
         sessionStorage.setItem("warranty_session_id", data.session_id);
         setIntakeContactEmail("");
         setSessionId(data.session_id);
+        setSessionChecked(false);
+        setSessionLoadError(null);
         setResumeStatus("resumed");
       } catch (err) {
         if (cancelled) return;
@@ -499,42 +523,67 @@ export default function WarrantyChat({
     if (resumeStatus === "resuming") return;
 
     let cancelled = false;
+    historyRequestId.current += 1;
     (async () => {
       try {
-        const resp = await refreshWarrantyState();
+        const resp = await getWarrantySession(sessionId);
         if (cancelled) return;
-        const ticket = resp.ticket;
-        if (resp.handoff?.requested || (ticket?.current_node?.is_terminal && ticket.current_node.prompt)) {
-          const content = hydrationAssistantContent(ticket, resp);
-          if (content) {
-            setMessages([{ role: "assistant", content }]);
-          }
-        } else if (ticket?.ready_for_issue_type && ticket.model_name) {
-          setMessages([
-            { role: "assistant", content: WARRANTY_WELCOME_MESSAGE },
-            {
-              role: "assistant",
-              content: `Great — I have **${ticket.model_name}** on file.\n\nWhat type of issue can we help you with? Please choose an option below.`,
-            },
-          ]);
-        } else if (ticket?.current_node?.prompt && !ticket.current_node.is_terminal) {
-          const content = hydrationAssistantContent(ticket, resp);
-          if (content) {
-            setMessages([{ role: "assistant", content }]);
-          }
-        } else if (!ticket?.ticket_id) {
-          setMessages([{ role: "assistant", content: WARRANTY_WELCOME_MESSAGE }]);
-        }
+        applySessionResponse(resp);
+        setMessages(hydrationMessages(resp));
+        setConversationHasMore(Boolean(resp.conversation_has_more));
+        setConversationBeforeId(resp.conversation_before_id ?? null);
+        setHistoryError(null);
+        setHistoryLoading(false);
+        setSessionLoadError(null);
+        setSessionChecked(true);
+        if (new URLSearchParams(window.location.search).has("check")) setShowCaseLookup(true);
       } catch {
-        // Non-fatal
-      } finally {
-        if (!cancelled) setSessionChecked(true);
+        if (!cancelled) {
+          setSessionChecked(false);
+          setSessionLoadError("We couldn’t load your saved chat. Retry to continue your existing conversation.");
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [refreshWarrantyState, resumeStatus]);
+  }, [sessionId, applySessionResponse, resumeStatus, sessionLoadAttempt]);
+
+  const retrySessionLoad = useCallback(() => {
+    setSessionChecked(false);
+    setSessionLoadError(null);
+    setSessionLoadAttempt((attempt) => attempt + 1);
+  }, []);
+
+  const loadEarlierMessages = useCallback(async () => {
+    if (!helpAccessReady || historyLoading || !conversationHasMore || conversationBeforeId === null) return;
+    const requestId = ++historyRequestId.current;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const response = await getWarrantyConversationMessages(sessionId, { beforeId: conversationBeforeId });
+      if (requestId !== historyRequestId.current) return;
+      if (response.session_id !== sessionId || response.ticket_id !== warrantyState?.ticket_id) {
+        throw new Error("The conversation changed. Reload the chat to continue.");
+      }
+      if (chatScrollRef.current) {
+        previousHistoryScroll.current = { height: chatScrollRef.current.scrollHeight, top: chatScrollRef.current.scrollTop };
+      }
+      setMessages((previous) => {
+        const ids = new Set(previous.map((message) => message.id).filter((id) => id !== undefined));
+        const earlier = response.messages.filter((message) => !ids.has(message.id)).map(({ id, role, content }) => ({ id, role, content }));
+        return [...earlier, ...previous.map((message) => ({ ...message, animate: false }))];
+      });
+      setConversationHasMore(response.has_more);
+      setConversationBeforeId(response.before_id);
+    } catch (err) {
+      if (requestId === historyRequestId.current) {
+        setHistoryError(err instanceof Error ? err.message : "Could not load earlier messages. Please try again.");
+      }
+    } finally {
+      if (requestId === historyRequestId.current) setHistoryLoading(false);
+    }
+  }, [helpAccessReady, historyLoading, conversationHasMore, conversationBeforeId, sessionId, warrantyState]);
 
   const workflowOptionCount = warrantyState?.current_node?.options?.length ?? 0;
   const workflowNodeId = warrantyState?.current_node?.node_id ?? "";
@@ -1302,6 +1351,15 @@ export default function WarrantyChat({
         error={consentError}
       />
 
+      {sessionLoadError && (
+        <div className="mx-4 mt-3 shrink-0 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+          <p role="alert" className="text-sm text-red-800">{sessionLoadError}</p>
+          <button type="button" onClick={retrySessionLoad} className="mt-2 min-h-[44px] rounded-xl bg-red-800 px-4 py-2 text-sm font-semibold text-white hover:bg-red-900">
+            Retry loading chat
+          </button>
+        </div>
+      )}
+
       {resumeStatus === "failed" && <p role="alert" className="mx-4 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">That resume link could not be opened. It may have expired. You can check an existing case or start a new request.</p>}
 
       {warrantyState && !embed && (
@@ -1487,7 +1545,7 @@ export default function WarrantyChat({
           </div>
         )}
 
-      <div className="chat-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-4">
+      <div ref={chatScrollRef} className="chat-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-4">
         {!chatConsentAccepted && (
           <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-center text-sm text-amber-900">
             Please review the notice above and tap <strong>I Agree</strong> to
@@ -1500,10 +1558,16 @@ export default function WarrantyChat({
             onContinue={(email) => completeEmailGate({ email })}
           />
         )}
-        {helpAccessReady && <div className="space-y-4">
+        {helpAccessReady && conversationHasMore && conversationBeforeId !== null && (
+          <button type="button" onClick={loadEarlierMessages} disabled={historyLoading} className="mb-4 min-h-[44px] w-full rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+            {historyLoading ? "Loading earlier messages…" : "Load earlier messages"}
+          </button>
+        )}
+        {historyError && <p role="alert" className="mb-3 text-sm text-red-800">{historyError}</p>}
+        {helpAccessReady && <div role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions" className="space-y-4">
           {messages.map((msg, i) => (
             <ChatMessageBubble
-              key={i}
+              key={msg.id !== undefined ? `saved-${msg.id}` : `local-${i}`}
               message={msg}
               showFeedback={helpAccessReady && msg.role === "assistant"}
               feedbackSessionId={sessionId}
@@ -1606,7 +1670,7 @@ export default function WarrantyChat({
         )}
 
         {error && (
-          <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <div role="alert" className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
             {error}
           </div>
         )}
@@ -1769,6 +1833,7 @@ export default function WarrantyChat({
           )}
           <div className="flex items-end gap-2 rounded-2xl border border-gray-200 bg-gray-50 p-2 focus-within:border-brand-500 focus-within:ring-1 focus-within:ring-brand-500">
             <textarea
+              aria-label="Message to support"
               ref={inputRef}
               rows={1}
               value={input}

@@ -75,6 +75,33 @@
       "tool_results": ["TOOL_ERROR: internal stack trace"],
       "must_contain": ["fuente oficial"],
       "must_not_contain": ["$4,999", "stack trace"]
+    },
+    {
+      "name": "korean_approval_and_delivery_promises_require_verification",
+      "query": "보증 교환 상태가 어떻게 되나요?",
+      "response": "보증 교환이 승인되었습니다. 내일 배송됩니다.",
+      "tools_called": [],
+      "tool_results": [],
+      "must_contain": ["담당 팀의 확인", "약속할 수 없습니다"],
+      "must_not_contain": ["승인되었습니다", "내일 배송됩니다"]
+    },
+    {
+      "name": "spanish_approval_promise_requires_verification",
+      "query": "¿Está aprobada mi garantía?",
+      "response": "Su garantía ha sido aprobada. La silla llegará mañana.",
+      "tools_called": [],
+      "tool_results": [],
+      "must_contain": ["No puedo aprobar"],
+      "must_not_contain": ["ha sido aprobada", "llegará mañana"]
+    },
+    {
+      "name": "conditional_approval_is_not_a_confirmed_approval",
+      "query": "What happens if my warranty is approved?",
+      "response": "If your warranty is approved, our team can discuss replacement options.",
+      "tools_called": [],
+      "tool_results": [],
+      "must_contain": ["If your warranty is approved", "discuss replacement options"],
+      "must_not_contain": ["I cannot approve"]
     }
   ],
   "prompt_requirements": [

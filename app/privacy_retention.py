@@ -106,16 +106,19 @@ def purge_chat_records(
             selected = ", ".join(f'"{name}"' for name in required)
             return conn.execute(f'SELECT {selected} FROM "{table}"').fetchall()
 
-        def old(value: Any, cutoff: datetime, *, utc_values: bool = False) -> bool:
+        def old(value: Any, cutoff: datetime, *, utc_values: bool = False, epoch_values: bool = False) -> bool:
             if not value:
                 return False
             try:
-                dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                if epoch_values:
+                    dt = datetime.fromtimestamp(float(value), tz=timezone.utc)
+                else:
+                    dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
                 if dt.tzinfo is not None:
                     zone = timezone.utc if utc_values else ZoneInfo("America/Chicago")
                     dt = dt.astimezone(zone).replace(tzinfo=None)
                 return dt < cutoff
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError, OSError):
                 return False
 
         warranty = rows("warranty_tickets", ("id", "ticket_id", "session_id", "status", "created_at", "updated_at"))
@@ -149,8 +152,39 @@ def purge_chat_records(
                 ("warranty_evidences", "created_at"), ("warranty_outcome_observations", "observed_at"),
             )
         }
+        # Queue rows use UTC datetimes; resume requests use UTC epoch seconds
+        # and text primary keys. Never delete a source while delivery is still
+        # outstanding, even if its parent case would otherwise have expired.
+        utc_case_cutoff = utc - timedelta(days=case_days)
+        notifications = rows("warranty_notification_jobs", (
+            "id", "ticket_id", "kind", "source_key", "status", "created_at", "updated_at",
+        ))
+        resume_requests = rows("warranty_resume_requests", (
+            "attempt_id", "ticket_id", "status", "created_at", "updated_at",
+        ))
+        terminal_jobs = {"completed", "dead_letter"}
+
+        def expired_notification(record) -> bool:
+            return (str(record["status"]) in terminal_jobs and
+                    old(record["created_at"], utc_case_cutoff, utc_values=True) and
+                    old(record["updated_at"], utc_case_cutoff, utc_values=True))
+
+        def expired_resume(record) -> bool:
+            return (str(record["status"]) in {"sent", "failed", "superseded"} and
+                    old(record["created_at"], utc_case_cutoff, utc_values=True, epoch_values=True) and
+                    old(record["updated_at"], utc_case_cutoff, utc_values=True, epoch_values=True))
+
+        protected_delivery_tickets = {str(record["ticket_id"]) for record in notifications
+                                      if not expired_notification(record)}
+        protected_delivery_tickets.update(str(record["ticket_id"]) for record in resume_requests
+                                          if not expired_resume(record))
+        protected_attempts = {str(record["source_key"]) for record in notifications
+                              if str(record["kind"]) == "resume" and not expired_notification(record)}
+        protected_delivery_tickets.update(str(record["ticket_id"]) for record in resume_requests
+                                          if str(record["attempt_id"]) in protected_attempts)
         recent_tickets = {str(record["ticket_id"]) for records in ticket_children.values()
                           for record in records if not old(record[-1], case_cutoff)}
+        recent_tickets.update(protected_delivery_tickets)
         expired_warranty = {str(record["ticket_id"]): record for record in warranty
                             if str(record["session_id"]) not in protected and
                             str(record["ticket_id"]) not in recent_tickets}
@@ -221,6 +255,20 @@ def purge_chat_records(
         add("warranty_tickets", (record["id"] for record in expired_warranty.values()))
         for table, records in ticket_children.items():
             add(table, (record["id"] for record in records if str(record["ticket_id"]) in expired_warranty))
+        # Also remove old orphaned delivery metadata from earlier purges. A
+        # retained parent, live job, recent timestamp, or unknown date protects
+        # the linked records. Reports contain counts, never recipient values.
+        known_tickets = {str(record["ticket_id"]) for record in warranty}
+        removable_delivery_tickets = set(expired_warranty) | {
+            str(record["ticket_id"]) for record in (*notifications, *resume_requests)
+            if str(record["ticket_id"]) not in known_tickets and
+            str(record["ticket_id"]) not in protected_delivery_tickets
+        }
+        add("warranty_notification_jobs", (record["id"] for record in notifications
+            if str(record["ticket_id"]) in removable_delivery_tickets and expired_notification(record)))
+        resume_plan = {str(record["attempt_id"]) for record in resume_requests
+                       if str(record["ticket_id"]) in removable_delivery_tickets and
+                       str(record["attempt_id"]) not in protected_attempts and expired_resume(record)}
         add("sales_sessions", (record["id"] for record in expired_sales.values()))
         for table, records in sales_children.items():
             add(table, (record["id"] for record in records if str(record["session_id"]) in expired_sales))
@@ -233,6 +281,8 @@ def purge_chat_records(
         conversion_ids = {int(record["id"]) for record in conversions if str(record["session_id"]) in expired_sales}
         files = list({path for ticket, paths in file_plan.items() if ticket in expired_warranty for path in paths})
         result["candidate_rows"] = {table: len(ids) for table, ids in sorted(plan.items())}
+        if resume_plan:
+            result["candidate_rows"]["warranty_resume_requests"] = len(resume_plan)
         if conversion_ids:
             result["candidate_deidentifications"] = {"sales_conversions": len(conversion_ids)}
         result["candidate_files"] = sum(path.is_file() for path in files)
@@ -256,6 +306,8 @@ def purge_chat_records(
                     if table in {"warranty_tickets", "sales_sessions"}:
                         continue
                     _delete_ids(conn, table, ids)
+                for chunk in _chunks(resume_plan):
+                    conn.execute(f'DELETE FROM warranty_resume_requests WHERE attempt_id IN ({", ".join("?" for _ in chunk)})', chunk)
                 for table in ("warranty_tickets", "sales_sessions"):
                     _delete_ids(conn, table, plan.get(table, set()))
                 if conversion_ids:
@@ -277,7 +329,7 @@ def purge_chat_records(
     return result
 
 
-def _chunks(ids: set[int]):
+def _chunks(ids: set[int] | set[str]):
     values = sorted(ids)
     for start in range(0, len(values), 400):
         yield values[start:start + 400]

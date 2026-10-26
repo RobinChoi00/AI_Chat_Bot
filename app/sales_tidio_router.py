@@ -354,7 +354,7 @@ def _process_ticket_reply_event(payload: dict) -> None:
     if isinstance(message_obj, dict):
         author = str(message_obj.get("author_type") or "").lower()
         if author and author != "contact":
-            logger.info("tidio ticket.replied ignored author=%s", author)
+            logger.info("tidio ticket.replied ignored non_customer_author")
             return
 
     text = extract_visitor_text(content)
@@ -388,7 +388,7 @@ def _process_ticket_reply_event(payload: dict) -> None:
         turn["intent"],
     )
     if status >= 400:
-        logger.error("tidio ticket reply failed: %s", data)
+        logger.error("tidio ticket reply failed status=%s", status)
 
 
 def _process_human_takeover(payload: dict) -> None:
@@ -499,11 +499,9 @@ async def tidio_turn(
         background_tasks=background_tasks,
     )
     logger.info(
-        "tidio_turn session=%s contact=%s msg=%r payload=%r intent=%s resolved=%s stage=%s",
-        session_id,
-        contact_id,
-        (message or "")[:120],
-        payload,
+        "tidio_turn message_chars=%s has_payload=%s intent=%s resolved=%s stage=%s",
+        len(message or ""),
+        bool(payload),
         result.get("intent"),
         result.get("resolved_from_button"),
         result.get("flow_stage"),

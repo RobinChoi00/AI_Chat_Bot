@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import re
 import smtplib
-import threading
+import ssl
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
@@ -43,6 +43,26 @@ _ADMIN_DECISION_SUBJECT = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+def _submit_message(message) -> None:
+    """Submit through certificate-verified TLS with bounded network waits."""
+    context = ssl.create_default_context()
+    port = int(SMTP_PORT)
+    connection = (
+        smtplib.SMTP_SSL(SMTP_SERVER, port, timeout=15, context=context)
+        if port == 465 else smtplib.SMTP(SMTP_SERVER, port, timeout=15)
+    )
+    with connection as server:
+        server.ehlo()
+        if port != 465:
+            server.starttls(context=context)
+            server.ehlo()
+        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+        rejected = server.send_message(message)
+        if rejected:
+            raise smtplib.SMTPRecipientsRefused(rejected)
+
 
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+", re.IGNORECASE)
 
@@ -325,21 +345,14 @@ def send_warranty_transcript_email(
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
+        _submit_message(msg)
         logger.info(
-            "Warranty transcript emailed to %s for ticket=%s session=%s",
-            WARRANTY_TEAM_EMAIL,
+            "Warranty transcript submitted ticket=%s",
             ticket_id,
-            session_id,
         )
         return True
-    except smtplib.SMTPException as exc:
-        logger.error("Warranty transcript email failed: %s", exc)
+    except (smtplib.SMTPException, OSError) as exc:
+        logger.error("Warranty transcript email failed: %s", type(exc).__name__)
         return False
 
 
@@ -406,22 +419,14 @@ def send_phone_ivr_team_email(
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
+        _submit_message(msg)
         logger.info(
-            "Phone IVR team email sent to %s ticket=%s session=%s caller=%s",
-            WARRANTY_TEAM_EMAIL,
+            "Phone IVR team email submitted ticket=%s",
             ticket_id,
-            session_id,
-            mask_phone(caller_phone),
         )
         return True
-    except smtplib.SMTPException as exc:
-        logger.error("Phone IVR team email failed: %s", exc)
+    except (smtplib.SMTPException, OSError) as exc:
+        logger.error("Phone IVR team email failed: %s", type(exc).__name__)
         return False
 
 
@@ -596,7 +601,7 @@ def send_evidence_upload_notification(
 
     path = Path(file_path)
     if not path.is_file():
-        logger.error("Evidence notification failed — file not found: %s", file_path)
+        logger.error("Evidence notification failed — attachment unavailable")
         return False
 
     summary_payload = _resolve_case_summary(
@@ -642,21 +647,15 @@ def send_evidence_upload_notification(
     msg.attach(attachment)
 
     try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
+        _submit_message(msg)
         logger.info(
-            "Evidence notification emailed for ticket=%s file=%s to %d recipients",
+            "Evidence notification submitted for ticket=%s to %d recipients",
             ticket_id,
-            original_filename,
             len(to_addrs),
         )
         return True
-    except smtplib.SMTPException as exc:
-        logger.error("Evidence notification email failed: %s", exc)
+    except (smtplib.SMTPException, OSError) as exc:
+        logger.error("Evidence notification email failed: %s", type(exc).__name__)
         return False
 
 
@@ -677,34 +676,15 @@ def notify_evidence_upload_async(
     case_summary: str = "",
     case_summary_source: str = "",
 ) -> None:
-    """Send evidence notification in a background thread and mark emailed=1 on success."""
+    """Persist the evidence notification before returning to the customer.
 
-    def _worker() -> None:
-        sent = send_evidence_upload_notification(
-            ticket_id=ticket_id,
-            customer_email=customer_email,
-            evidence_type=evidence_type,
-            original_filename=original_filename,
-            file_path=file_path,
-            mime_type=mime_type,
-            file_size_bytes=file_size_bytes,
-            issue_type=issue_type,
-            model_name=model_name,
-            turns=turns,
-            terminal_node_id=terminal_node_id,
-            case_summary=case_summary,
-            case_summary_source=case_summary_source,
-        )
-        if not sent:
-            return
-        from warranty_models import WarrantyEvidence, warranty_db_session  # noqa: WPS433
+    The worker loads contact details and attachment metadata from this evidence
+    record, so the queue does not keep a second copy of personal information.
+    Extra arguments remain accepted for existing callers.
+    """
+    from warranty_notification_jobs import enqueue_notification
 
-        with warranty_db_session() as db:
-            row = db.query(WarrantyEvidence).filter(WarrantyEvidence.id == evidence_id).first()
-            if row:
-                row.emailed = 1
-
-    threading.Thread(target=_worker, daemon=True).start()
+    enqueue_notification(kind="evidence", evidence_id=evidence_id, ticket_id=ticket_id)
 
 
 def send_email_only_contact_notification(
@@ -772,20 +752,15 @@ def send_email_only_contact_notification(
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
+        _submit_message(msg)
         logger.info(
             "Email-only warranty contact sent for ticket=%s to %d recipients",
             ticket_id,
             len(to_addrs),
         )
         return True
-    except smtplib.SMTPException as exc:
-        logger.error("Email-only contact notification failed: %s", exc)
+    except (smtplib.SMTPException, OSError) as exc:
+        logger.error("Email-only contact notification failed: %s", type(exc).__name__)
         return False
 
 
@@ -804,32 +779,10 @@ def notify_email_only_contact_async(
     case_summary: str = "",
     case_summary_source: str = "",
 ) -> None:
-    """Send email-only contact notification in a background thread."""
+    """Persist a restart-safe team notification for an email-only submission."""
+    from warranty_notification_jobs import enqueue_notification
 
-    def _worker() -> None:
-        sent = send_email_only_contact_notification(
-            ticket_id=ticket_id,
-            customer_email=customer_email,
-            session_id=session_id,
-            domain=domain,
-            ticket_status=ticket_status,
-            issue_type=issue_type,
-            model_name=model_name,
-            turns=turns,
-            terminal_node_id=terminal_node_id,
-            case_summary=case_summary,
-            case_summary_source=case_summary_source,
-        )
-        if not sent:
-            return
-        from warranty_models import WarrantyEvidence, warranty_db_session  # noqa: WPS433
-
-        with warranty_db_session() as db:
-            row = db.query(WarrantyEvidence).filter(WarrantyEvidence.id == evidence_id).first()
-            if row:
-                row.emailed = 1
-
-    threading.Thread(target=_worker, daemon=True).start()
+    enqueue_notification(kind="contact", evidence_id=evidence_id, ticket_id=ticket_id)
 
 
 def build_admin_decision_customer_body(
@@ -964,20 +917,15 @@ def send_customer_receipt_email(
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
+        _submit_message(msg)
         logger.info(
             "Customer receipt emailed — case=%s to=%s",
             case_reference,
             mask_email(to_email),
         )
         return True
-    except smtplib.SMTPException as exc:
-        logger.error("Customer receipt email failed: %s", exc)
+    except (smtplib.SMTPException, OSError) as exc:
+        logger.error("Customer receipt email failed: %s", type(exc).__name__)
         return False
 
 
@@ -1080,21 +1028,16 @@ def send_admin_decision_customer_email(
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
+        _submit_message(msg)
         logger.info(
             "Admin decision customer email sent — ticket=%s decision=%s to=%s",
             ticket_id,
             decision,
-            to_email,
+            mask_email(to_email),
         )
         return True
-    except smtplib.SMTPException as exc:
-        logger.error("Admin decision customer email failed: %s", exc)
+    except (smtplib.SMTPException, OSError) as exc:
+        logger.error("Admin decision customer email failed: %s", type(exc).__name__)
         return False
 
 
@@ -1180,14 +1123,9 @@ def send_customer_followup_notification(
     msg.attach(MIMEText("\n".join(body_lines), "plain", "utf-8"))
 
     try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
+        _submit_message(msg)
         logger.info("Customer follow-up email sent for ticket=%s ref=%s", ticket.ticket_id, case_ref)
         return True
-    except smtplib.SMTPException as exc:
-        logger.error("Customer follow-up email failed: %s", exc)
+    except (smtplib.SMTPException, OSError) as exc:
+        logger.error("Customer follow-up email failed: %s", type(exc).__name__)
         return False

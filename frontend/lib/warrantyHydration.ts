@@ -1,5 +1,7 @@
 import { formatTerminalPrompt } from "@/lib/evidenceMessage";
+import { WARRANTY_WELCOME_MESSAGE } from "@/lib/welcomeMessage";
 import type {
+  ChatMessage,
   WarrantySessionResponse,
   WarrantyTicketState,
 } from "@/lib/types";
@@ -57,4 +59,31 @@ export function hydrationAssistantContent(
   }
 
   return node.prompt ?? null;
+}
+
+/** Restore actual customer-visible replies without reanimating or repeating them. */
+export function hydrationMessages(resp: WarrantySessionResponse): ChatMessage[] {
+  const saved = (resp.conversation_messages ?? [])
+    .filter((message) => (message.role === "user" || message.role === "assistant") && message.content.trim())
+    .map(({ id, role, content }) => ({ id, role, content }));
+  if (saved.length && saved[saved.length - 1].role === "assistant") return saved;
+
+  const ticket = resp.ticket;
+  let current: string | null = null;
+  if (resp.handoff?.requested || ticket?.current_node?.is_terminal) {
+    current = hydrationAssistantContent(ticket, resp);
+  } else if (ticket?.ready_for_issue_type && ticket.model_name) {
+    current = `Great — I have **${ticket.model_name}** on file.\n\nWhat type of issue can we help you with? Please choose an option below.`;
+  } else if (ticket?.current_node?.prompt) {
+    current = hydrationAssistantContent(ticket, resp);
+  } else if (!ticket?.ticket_id) {
+    current = WARRANTY_WELCOME_MESSAGE;
+  }
+
+  if (saved.length) return current ? [...saved, { role: "assistant", content: current }] : saved;
+  if (!current) return [];
+  if (ticket?.ready_for_issue_type && ticket.model_name && !ticket.current_node?.is_terminal && !resp.handoff?.requested) {
+    return [{ role: "assistant", content: WARRANTY_WELCOME_MESSAGE }, { role: "assistant", content: current }];
+  }
+  return [{ role: "assistant", content: current }];
 }

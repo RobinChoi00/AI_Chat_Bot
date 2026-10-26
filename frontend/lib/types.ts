@@ -7,6 +7,8 @@
 // ------------------------------------------------------------
 
 export interface ChatMessage {
+  /** Saved server message ID, when restored from conversation history. */
+  id?: number;
   role: "user" | "assistant";
   content: string;
   /**
@@ -179,6 +181,9 @@ export interface ModelConfirmationMetadata {
 export interface WarrantySessionResponse {
   session_id: string;
   ticket: WarrantyTicketState | null;
+  conversation_messages?: WarrantyConversationMessage[];
+  conversation_has_more?: boolean;
+  conversation_before_id?: number | null;
   privacy?: WarrantyPrivacyState;
   followup_token?: string | null;
   tracking_summary?: TrackingSummary | null;
@@ -201,6 +206,18 @@ export interface WarrantySessionResponse {
   side_question?: boolean;
   went_back?: boolean;
   rewind?: { restored_node_id: string; turn_count: number; can_go_back: boolean };
+}
+
+export interface WarrantyConversationMessage extends ChatMessage {
+  id: number;
+}
+
+export interface WarrantyConversationHistoryResponse {
+  session_id: string;
+  ticket_id: string | null;
+  messages: WarrantyConversationMessage[];
+  has_more: boolean;
+  before_id: number | null;
 }
 
 export interface WarrantyContactResponse {

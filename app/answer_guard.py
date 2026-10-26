@@ -156,6 +156,67 @@ def _message(key: str, user_query: str, language: str | None = None) -> str:
     return _MESSAGES[key][language if language in {"en", "es", "ko"} else _language(user_query)]
 
 
+_QUOTED_REPORT_RE = re.compile(r'''"[^"\n]{1,400}"|“[^”\n]{1,400}”|‘[^’\n]{1,400}’|'[^'\n]{1,400}' ''', re.X)
+_REPORT_ATTRIBUTION_BEFORE_RE = re.compile(
+    r"(?:you\s+(?:wrote|said|asked)|your\s+(?:message|question)|"
+    r"고객님(?:이|께서)\s*(?:쓰신|말씀하신|문의하신|입력하신)(?:\s*(?:내용|문구|질문))?|"
+    r"(?:dijo|escribi[oó]|pregunt[oó])(?:\s+usted)?|su\s+(?:mensaje|pregunta))\s*[:,-]?\s*$",
+    re.I,
+)
+_REPORT_ATTRIBUTION_AFTER_RE = re.compile(
+    r"^\s*(?:(?:이)?라고\s*(?:말씀|문의|입력|쓰)|(?:was|is)\s+what\s+you\s+(?:wrote|said|asked))",
+    re.I,
+)
+_CONDITIONAL_APPROVAL_RE = re.compile(
+    r"\b(?:if|once|when|provided\s+that)\s+[^.!?\n,]{0,120}\b(?:approved|confirmed)\b[^.!?\n,]{0,30},|"
+    r"\b(?:si|cuando|una\s+vez\s+que)\s+[^.!?\n,]{0,120}\baprobad[oa]s?\b[^.!?\n,]{0,30},|"
+    r"(?:보증|청구|교환|환불|요청)[^.!?\n,]{0,50}승인(?:되었다면|됐으면|되었으면|된다면|되면|된\s*경우|될\s*경우)",
+    re.I,
+)
+_MULTILINGUAL_PROMISE_RE = re.compile(
+    # Explicit approvals, confirmed actions, and unverified arrival claims.
+    r"(?:보증|청구|교환|환불|클레임|교체|신청|요청)[^.!?\n]{0,35}"
+    r"(?:승인(?:되었|됐|되었습니다|됐습니다|되었어요|됐어요|합니다)|승인해\s*드(?:렸|립니다)|확정(?:되었|됐))|"
+    r"(?:오늘|내일|다음\s*날)[^.!?\n]{0,25}(?:도착(?:합니다|해요|할\s*(?:것|예정))|배송(?:됩니다|될\s*(?:것|예정))|배달(?:됩니다|될\s*(?:것|예정)))|"
+    r"(?:배송|도착|배송일|도착일|치료|효과)[^.!?\n]{0,25}보장(?:합니다|해\s*드립니다|됩니다)|"
+    r"완치(?:합니다|됩니다|시킵니다|해\s*드립니다|될\s*것|시킬\s*것)|"
+    r"(?:부품|교체품|주문|제품|의자)[^.!?\n]{0,30}(?:발송되었습니다|배송\s*중입니다|수리되었습니다|수리가\s*완료되었습니다)|"
+    r"(?:교체품|부품)[^.!?\n]{0,20}보내\s*드(?:리겠습니다|릴게요)|환불해\s*드(?:리겠습니다|릴게요)|"
+    r"\b(?:su|tu|la|el)\s+(?:garant[ií]a|reemplazo|reclamaci[oó]n|reembolso)\s+"
+    r"(?:(?:ha|han)\s+sido|est[aá]n?|fue(?:ron)?)\s+aprobad[oa]s?\b|"
+    r"\b(?:hemos|he)\s+aprobado\b|\b(?:le\s+)?garantiz(?:amos|o)\b|"
+    r"\b(?:llegar[aá]|se\s+entregar[aá]|ser[aá]\s+entregad[oa])\s+ma[ñn]ana\b|"
+    r"\b(?:curar[aá]|sanar[aá])\b|"
+    r"\b(?:su|tu|la|el)\s+(?:silla|pedido|reemplazo|pieza)[^.!?\n]{0,40}"
+    r"(?:ha\s+sido\s+(?:enviad[oa]|reparad[oa])|est[aá]\s+en\s+camino|ya\s+se\s+envi[oó])\b|"
+    r"\b(?:enviaremos|reembolsaremos|reemplazaremos)\b",
+    re.I,
+)
+
+
+def _unattributed_claim_text(text: str) -> str:
+    """Evaluate the assistant's claims, retaining un-attributed quoted promises.
+
+    A customer's quoted assertion is not evidence that it is true. Remove only
+    clearly attributed quotation spans; any affirmative claim outside the quote
+    is still checked. Conditional approval prerequisites are not approvals.
+    """
+    def replace_quote(match: re.Match[str]) -> str:
+        before = text[max(0, match.start() - 120):match.start()]
+        after = text[match.end():match.end() + 100]
+        if _REPORT_ATTRIBUTION_BEFORE_RE.search(before) or _REPORT_ATTRIBUTION_AFTER_RE.search(after):
+            return ""
+        return match.group(0)
+
+    claim_text = _QUOTED_REPORT_RE.sub(replace_quote, text)
+    claim_text = _CONDITIONAL_APPROVAL_RE.sub("", claim_text)
+    # Spanish refusals must not be interpreted as a guarantee.
+    return re.sub(
+        r"\bno\s+(?:le\s+|se\s+)?(?:garantiz(?:amos|o)|curar[aá]|sanar[aá]|enviaremos|reembolsaremos|reemplazaremos)\b",
+        "", claim_text, flags=re.I,
+    )
+
+
 def _tool_blob(tool_results: Sequence[str]) -> str:
     return "\n".join(tool_results or [])
 
@@ -598,14 +659,15 @@ def sanitize_agent_response(
     if "search_chair_specs" in called and "no_results:" in blob_lower and not _model_facts(blob):
         return _message("spec_fallback", user_query, language)
 
+    claim_text = _unattributed_claim_text(text)
     unsupported_promise = re.search(
         r"\b(?:your|the)\s+(?:claim|replacement|warranty)\s+(?:is|has been)\s+approved\b|"
         r"\b(?:we|i)\s+(?:guarantee|have approved|approved your)\b|"
         r"\b(?:will|guaranteed to)\s+(?:cure|heal)\b|"
         r"\b(?:guaranteed delivery|will (?:arrive|be delivered))\s+tomorrow\b",
-        text, re.I,
+        claim_text, re.I,
     )
-    if unsupported_promise:
+    if unsupported_promise or _MULTILINGUAL_PROMISE_RE.search(claim_text):
         return _message("unsupported_promise", user_query, language)
 
     # Historical service correspondence is not the current customer's status.
@@ -614,13 +676,13 @@ def sanitize_agent_response(
         r"\bclos(?:e|ing|ed)\b.{0,35}\b(?:ticket|case)\b|"
         r"\b(?:your|the)\s+chair\s+(?:is|has been)\s+(?:fixed|repaired)\b|"
         r"\b(?:i|we)(?:'ll| will)\s+(?:go ahead and\s+)?(?:ship|send|replace|refund|dispatch)\b",
-        text, re.I,
+        claim_text, re.I,
     ):
         return _message("unsupported_promise", user_query, language)
     status_claims = re.findall(
         r"\b(?:parts?|replacement|technician|your order)\b[^.\n]{0,70}?"
         r"\b(on (?:the|their) way|shipped|dispatched|scheduled|in transit|delivered)\b",
-        text, re.I,
+        claim_text, re.I,
     )
     if status_claims and not (
         "lookup_order_status" in called and "VERIFIED_ORDER_STATUS:" in blob

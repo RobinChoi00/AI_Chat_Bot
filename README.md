@@ -78,6 +78,11 @@ See the [AI improvement and model upgrade runbook (Korean)](docs/ai_improvement_
 [Warranty review workflow](docs/warranty_quality_workflow.md), and
 [Sales analytics integration](docs/sales_analytics_integration.md).
 
+The [customer reliability verification guide (Korean)](docs/customer_reliability_verification.ko.md)
+documents mandatory email, restored conversation history, deterministic safety
+interruptions, private logs, durable notifications, operator retries, and the
+desktop/mobile browser checks used to verify them.
+
 ## Production
 
 1. Copy `.env.example` to `.env` on the host and replace every required placeholder.

@@ -25,6 +25,50 @@ from warranty_email import (  # noqa: E402
 )
 
 
+@pytest.mark.parametrize("port", [465, 587])
+def test_warranty_smtp_uses_verified_tls_and_finite_timeouts(monkeypatch, port):
+    import ssl
+    import warranty_email
+    options = []
+    tls = []
+    class Transport:
+        def __init__(self, host, selected_port, **kwargs):
+            assert selected_port == port
+            options.append(kwargs)
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def ehlo(self): pass
+        def starttls(self, **kwargs): tls.append(kwargs)
+        def login(self, *_args): pass
+        def send_message(self, message): return {}
+    monkeypatch.setattr(warranty_email, "SMTP_PORT", port)
+    monkeypatch.setattr(warranty_email.smtplib, "SMTP", Transport)
+    monkeypatch.setattr(warranty_email.smtplib, "SMTP_SSL", Transport)
+    warranty_email._submit_message(object())
+    assert options[0]["timeout"] == 15
+    context = options[0]["context"] if port == 465 else tls[0]["context"]
+    assert context.check_hostname is True
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert bool(tls) is (port != 465)
+
+
+def test_partial_smtp_rejection_is_not_reported_as_sent(monkeypatch):
+    import smtplib
+    import warranty_email
+    class Transport:
+        def __init__(self, *_args, **_kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def ehlo(self): pass
+        def starttls(self, **_kwargs): pass
+        def login(self, *_args): pass
+        def send_message(self, message): return {"synthetic@example.test": (550, b"rejected")}
+    monkeypatch.setattr(warranty_email, "SMTP_PORT", 587)
+    monkeypatch.setattr(warranty_email.smtplib, "SMTP", Transport)
+    with pytest.raises(smtplib.SMTPRecipientsRefused):
+        warranty_email._submit_message(object())
+
+
 class FakeTurn:
     def __init__(self, node_id, prompt, answer):
         self.node_id = node_id
@@ -198,7 +242,7 @@ def test_send_evidence_upload_notification(monkeypatch, tmp_path):
         def ehlo(self):
             return None
 
-        def starttls(self):
+        def starttls(self, **_kwargs):
             return None
 
         def login(self, *_args, **_kwargs):
@@ -318,7 +362,7 @@ def test_send_admin_decision_customer_email_sets_reply_to_team(monkeypatch):
         def ehlo(self):
             return None
 
-        def starttls(self):
+        def starttls(self, **_kwargs):
             return None
 
         def login(self, *_args, **_kwargs):

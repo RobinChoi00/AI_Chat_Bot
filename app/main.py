@@ -1,5 +1,8 @@
 import os
 import logging
+from app.safe_logging import install_log_redaction, safe_log_path
+
+install_log_redaction()
 import hmac
 import hashlib
 import base64
@@ -155,11 +158,11 @@ def send_sales_lead_email(customer_email: str, query_content: str, product_info:
         logger.info(f"✅ [Email Sent] Sales lead → {target_email}")
         return True
     except smtplib.SMTPAuthenticationError as e:
-        logger.error(f"🚨 [Email Auth Failed] Check EMAIL_SENDER/PASSWORD in .env: {e}")
+        logger.error("Email authentication failed kind=%s", type(e).__name__)
     except smtplib.SMTPException as e:
-        logger.error(f"🚨 [Email SMTP Error] {e}")
+        logger.error("Email transport failed kind=%s", type(e).__name__)
     except Exception as e:
-        logger.error(f"🚨 [Email Unknown Error] {e}")
+        logger.error("Email sending failed kind=%s", type(e).__name__)
     return False
 
 
@@ -620,7 +623,7 @@ def fetch_shopify_order_status(
             tracking_data.update(enriched)
         return tracking_data
     except Exception as e:
-        logger.error(f"🚨 Shopify API Error: {e}")
+        logger.error("Shopify API failed kind=%s", type(e).__name__)
         return {"error": "A temporary logistics server communication error occurred."}
 
 CARRIER_PATTERNS = [
@@ -754,7 +757,7 @@ def enrich_tracking_from_aftership(company: str, tracking_number: str) -> Dict[s
             "events": recent_events,
         }
     except Exception as e:
-        logger.warning(f"⚠️ AfterShip enrich error: {e}")
+        logger.warning("AfterShip enrichment failed kind=%s", type(e).__name__)
         return {}
 
 def build_deterministic_tracking_response(
@@ -945,7 +948,7 @@ try:
     # routing now happens through OpenAI function-calling on the main model.
     logger.info("✅ 3-Core Agentic RAG Engine Initialized Successfully.")
 except Exception as e:
-    logger.error(f"🚨 Initialization Failed: {e}")
+    logger.error("Initialization failed kind=%s", type(e).__name__)
     vs_products, vs_qa, vs_web = None, None, None
     products_retriever = qa_retriever = web_retriever = None
 
@@ -1024,7 +1027,7 @@ def _persist_chat_log(session_id: str, user_query: str, bot_response: str, domai
         finally:
             db.close()
     except Exception as e:
-        logger.error(f"DB Save Error: {e}")
+        logger.error("Database save failed kind=%s", type(e).__name__)
 
 
 def _persist_usage_log(
@@ -1060,7 +1063,7 @@ def _persist_usage_log(
         finally:
             db.close()
     except Exception as e:
-        logger.error(f"Usage Log Save Error: {e}")
+        logger.error("Usage recording failed kind=%s", type(e).__name__)
 
 with engine.connect() as conn:
     import sqlite3 as _sq
@@ -1086,13 +1089,19 @@ async def app_lifespan(_app: FastAPI):
     except ImportError:
         from ringcentral_router import start_event_worker, stop_event_worker  # type: ignore
 
+    from warranty_notification_jobs import start_notification_worker, stop_notification_worker
+
     start_event_worker()
-    from warranty_embeddings import warmup_semantic_index
-    warmup_semantic_index()  # Explicit opt-in; default startup makes no embedding requests.
     try:
+        start_notification_worker()
+        from warranty_embeddings import warmup_semantic_index
+        warmup_semantic_index()  # Explicit opt-in; default startup makes no embedding requests.
         yield
     finally:
-        stop_event_worker()
+        try:
+            stop_notification_worker()
+        finally:
+            stop_event_worker()
 
 
 app = FastAPI(
@@ -1110,6 +1119,9 @@ try:
 except ImportError:
     from warranty_router import router as warranty_router  # type: ignore
 app.include_router(warranty_router)
+
+from notification_admin import router as notification_admin_router
+app.include_router(notification_admin_router)
 
 # RingCentral warranty phone IVR (ApplicationExtension webhooks)
 try:
@@ -1235,7 +1247,7 @@ async def request_context_middleware(request: Request, call_next):
             "request_failed request_id=%s method=%s path=%s",
             request_id,
             request.method,
-            request.url.path,
+            safe_log_path(request.url.path),
         )
         raise
 
@@ -1259,7 +1271,7 @@ async def request_context_middleware(request: Request, call_next):
         "request_complete request_id=%s method=%s path=%s status=%s elapsed_ms=%s",
         request_id,
         request.method,
-        request.url.path,
+        safe_log_path(request.url.path),
         response.status_code,
         elapsed_ms,
     )
@@ -1820,7 +1832,7 @@ async def chat_endpoint(
                 f"status={_active_warranty_ticket.status}"
             )
     except Exception as _we:
-        logger.warning(f"⚠️ Warranty ticket lookup failed: {_we}")
+        logger.warning("Warranty ticket lookup failed kind=%s", type(_we).__name__)
 
     # ── Heuristic intent detection (computed once, reused below) ──
     # The LLM frequently skips tools and produces "Let me check..." stalls
@@ -1844,10 +1856,9 @@ async def chat_endpoint(
         if scope_decision.is_blocked:
             scope_refusal = build_scope_refusal(user_query)
             logger.info(
-                "🚫 Scope blocked (%s%s): %s",
+                "🚫 Scope blocked reason=%s used_llm=%s",
                 scope_decision.reason,
-                ", llm" if scope_decision.used_llm else "",
-                user_query[:120],
+                scope_decision.used_llm,
             )
             trace.scope_blocked = True
             trace.finish(scope_refusal)
@@ -2485,7 +2496,7 @@ async def chat_endpoint(
         return StreamingResponse(generate_stream(), media_type="text/event-stream")
 
     except Exception as e:
-        logger.error(f"API Processing Error: {e}")
+        logger.error("API processing failed kind=%s", type(e).__name__)
         raise HTTPException(status_code=500, detail="Internal AI Server Error")
 
 
@@ -2667,7 +2678,7 @@ def update_faiss_index_background(payload: dict, shop_domain: Optional[str] = No
                 logger.error("🚨 [FAISS] Update failed: 'vs_products' is not loaded.")
                 
     except Exception as e:
-        logger.error(f"🚨 [Background Task] Fatal error during FAISS update: {e}")
+        logger.error("FAISS update failed kind=%s", type(e).__name__)
 
 @app.post("/webhook/shopify/product-update")
 async def shopify_webhook(
