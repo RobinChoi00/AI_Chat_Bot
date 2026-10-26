@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Optional
 
-from sqlalchemy import or_, text
+from sqlalchemy import and_, or_, text
 
 from warranty_models import (
     RingCentralCallState,
@@ -24,6 +24,7 @@ from warranty_models import (
 logger = logging.getLogger(__name__)
 
 MAX_EVENT_ATTEMPTS = 8
+_PROCESSING_LEASE_SECONDS = 10 * 60
 _RETRY_DELAYS_SECONDS = (1, 2, 5, 10, 30, 60, 120, 300)
 
 
@@ -71,7 +72,7 @@ def enqueue_event(route: str, payload: dict[str, Any]) -> tuple[int, bool]:
 
 def _claim_event(event_id: int) -> Optional[tuple[str, dict[str, Any]]]:
     now = _utcnow()
-    stale_before = now - timedelta(minutes=10)
+    stale_before = now - timedelta(seconds=_PROCESSING_LEASE_SECONDS)
     with warranty_db_session() as db:
         db.execute(text("BEGIN IMMEDIATE"))
         # A worker can die after setting ``processing``. Reclaim that row after
@@ -97,6 +98,7 @@ def _claim_event(event_id: int) -> Optional[tuple[str, dict[str, Any]]]:
             return None
         if row.attempts >= MAX_EVENT_ATTEMPTS:
             row.status = "dead_letter"
+            row.next_attempt_at = None
             return None
         if row.next_attempt_at is not None and row.next_attempt_at > now:
             return None
@@ -171,16 +173,32 @@ def process_event(
 
 
 def pending_event_ids(limit: int = 25) -> list[int]:
+    """Find due callbacks, including expired claims left by a stopped worker.
+
+    Selection does not claim the rows. ``_claim_event`` serializes the claim in
+    a write transaction and rechecks the lease, so concurrent workers may select
+    the same candidate without both running its handler. Expired claims at the
+    attempt limit are included so that claim processing can dead-letter them.
+    """
     now = _utcnow()
+    stale_before = now - timedelta(seconds=_PROCESSING_LEASE_SECONDS)
     with warranty_db_session() as db:
         rows = (
             db.query(RingCentralWebhookEvent.id)
             .filter(
-                RingCentralWebhookEvent.status.in_(("pending", "failed")),
-                RingCentralWebhookEvent.attempts < MAX_EVENT_ATTEMPTS,
                 or_(
-                    RingCentralWebhookEvent.next_attempt_at.is_(None),
-                    RingCentralWebhookEvent.next_attempt_at <= now,
+                    and_(
+                        RingCentralWebhookEvent.status.in_(("pending", "failed")),
+                        RingCentralWebhookEvent.attempts < MAX_EVENT_ATTEMPTS,
+                        or_(
+                            RingCentralWebhookEvent.next_attempt_at.is_(None),
+                            RingCentralWebhookEvent.next_attempt_at <= now,
+                        ),
+                    ),
+                    and_(
+                        RingCentralWebhookEvent.status == "processing",
+                        RingCentralWebhookEvent.updated_at < stale_before,
+                    ),
                 ),
             )
             .order_by(RingCentralWebhookEvent.id.asc())

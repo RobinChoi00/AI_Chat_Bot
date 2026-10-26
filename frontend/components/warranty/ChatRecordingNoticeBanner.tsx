@@ -62,9 +62,9 @@ export default function ChatRecordingNoticeBanner({
         <p className="mt-2 text-xs leading-relaxed">
           Messages, order or tracking details, email, and photos or videos you share
           may be reviewed by our support team and processors used for this case
-          (including helpdesk, shipping lookup, and email delivery). We keep case
-          records as needed for warranty support and remove uploaded evidence on a
-          regular retention schedule.
+          (including OpenAI to prepare AI-assisted responses, helpdesk, shipping
+          lookup, and email delivery). We retain support records and attachments
+          under our retention policy, and may preserve them for legal obligations.
         </p>
       </details>
       {!consentAccepted ? (

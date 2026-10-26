@@ -48,13 +48,13 @@ def model(module,monkeypatch,completion):
     monkeypatch.setattr(module,'openai_client',SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=completion))))
 
 
-def response_reply(text='', *, name=None, call_id=None):
+def response_reply(text='', *, name=None, call_id=None, model_name='Fixture Alpha'):
     output = []
     if name:
         output = [
             {'type': 'reasoning', 'id': 'rs_fixture', 'summary': [], 'encrypted_content': 'fixture-encrypted-reasoning'},
             {'type': 'function_call', 'id': 'fc_fixture', 'call_id': call_id,
-             'name': name, 'arguments': '{"model_name":"Fixture Alpha","spec_topic":"features"}', 'status': 'completed'},
+             'name': name, 'arguments': json.dumps({'model_name': model_name, 'spec_topic': 'features'}), 'status': 'completed'},
         ]
     else:
         output = [{'type': 'message', 'role': 'assistant', 'status': 'completed',
@@ -107,6 +107,70 @@ def test_upgraded_provider_failure_is_safe_and_has_no_successful_model_evidence(
     assert traces[-1]['model_calls_successful'] == 0
     assert traces[-1]['provider_models'] == []
     assert logs[-1][2] == result.text
+
+
+@pytest.mark.parametrize("final_answer,expected_pass", [
+    ("The verified features include adjustable massage intensity.", True),
+    ("Here is a fluent reply that does not answer the customer's question.", False),
+])
+def test_evaluator_scores_complete_production_chat_conversation_with_consent(
+    main_module, monkeypatch, final_answer, expected_pass,
+):
+    """Exercise consent, both HTTP turns, tool loops, final replies and traces."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from script import evaluate_llm_quality as evaluator
+
+    module, logs, traces = main_module
+    monkeypatch.setenv("WARRANTY_REQUIRE_CHAT_PRIVACY", "1")
+    monkeypatch.setenv("ADMIN_API_KEY", "synthetic-eval-key")
+    monkeypatch.setattr(module, "AGENT_MODEL", "gpt-6.1-sol")
+    wm = importlib.import_module("warranty_models")
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    wm.Base.metadata.create_all(engine)
+    monkeypatch.setattr(wm, "_SessionFactory", sessionmaker(bind=engine, expire_on_commit=False))
+    trace_module = importlib.import_module("app.request_trace")
+    monkeypatch.setattr(trace_module, "get_trace", lambda _, request_id: next((row for row in traces if row["request_id"] == request_id), None))
+    requests = []
+    responses = iter([
+        response_reply(name="search_chair_specs", call_id="first-lookup", model_name="Solo Flex"),
+        response_reply("The verified features include adjustable massage intensity."),
+        response_reply(name="search_chair_specs", call_id="followup-lookup", model_name="Solo Flex"),
+        response_reply(final_answer),
+    ])
+    def create(**kwargs):
+        requests.append(kwargs)
+        return next(responses)
+    monkeypatch.setattr(module, "openai_client", SimpleNamespace(responses=SimpleNamespace(create=create)))
+    executed = []
+    facts = {"model": "Osaki Solo Flex 4D", "currency": "USD", "features": ["adjustable massage intensity"], "specs": {}}
+    monkeypatch.setattr(module, "_execute_tool", lambda name, args, domain, **_: executed.append(name) or "MODEL_FACTS_JSON: " + json.dumps(facts))
+    checks = {
+        "contains": ["adjustable massage intensity"],
+        "expected_tool_sequence": ["search_chair_specs"],
+        "expected_sources": [{"source_type": "catalog", "model": "Osaki Solo Flex 4D"}],
+    }
+    spec = {"id": "endpoint-conversation", "surface": "general", "provenance": "synthetic", "turns": [
+        {"message": "Tell me the features of Solo Flex", "expect": checks},
+        {"message": "Confirm the adjustable intensity feature on the same model", "expect": checks},
+    ]}
+    try:
+        with TestClient(module.app) as client:
+            result = evaluator.run_case(spec, client, base_url="http://testserver", domain="osakiusa.com", admin_key="synthetic-eval-key", expected_model="gpt-6.1-sol")
+        assert result["passed"] is expected_pass, result
+        assert len(result["turns"]) == 2 and result["turns"][0]["passed"]
+        assert executed == ["search_chair_specs", "search_chair_specs"]
+        assert len(requests) == 4
+        assert any(item.get("role") == "assistant" and "adjustable massage intensity" in item.get("content", "") for item in requests[2]["input"])
+        assert len(logs) == 2 and logs[-1][2] == traces[-1]["final_response"]
+        assert all(row["model_calls_successful"] == 2 for row in result["turns"])
+        assert "synthetic-eval-key" not in json.dumps(result)
+        assert final_answer not in json.dumps(result)
+        if not expected_pass:
+            assert "missing required text: adjustable massage intensity" in result["turns"][1]["errors"]
+    finally:
+        engine.dispose()
 
 
 def test_neutral_followup_keeps_korean_model_context_and_department_footer(main_module,monkeypatch):

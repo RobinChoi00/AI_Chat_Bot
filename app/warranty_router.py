@@ -64,28 +64,16 @@ logger = logging.getLogger(__name__)
 
 
 def _chat_privacy_enforced() -> bool:
-    return os.getenv("WARRANTY_REQUIRE_CHAT_PRIVACY", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
+    from warranty_consent import chat_privacy_enforced
+
+    return chat_privacy_enforced()
 
 
 def _require_web_chat_privacy(session_id: str) -> None:
     """Recording consent is required; basic help does not require contact email."""
-    if not _chat_privacy_enforced():
-        return
-    from warranty_consent import (  # noqa: WPS433
-        get_chat_consent,
-    )
+    from warranty_consent import require_chat_privacy
 
-    row = get_chat_consent(session_id)
-    if row is None:
-        raise HTTPException(
-            status_code=403,
-            detail="Please agree to the privacy notice before continuing.",
-        )
+    require_chat_privacy(session_id)
 
 
 def _public_privacy_state(session_id: str) -> dict:

@@ -14,8 +14,13 @@ def case(surface="general", turns=None):
     return {"id": "synthetic-test", "surface": surface, "provenance": "synthetic", "turns": turns or [{"message": "A question", "expect": {"contains": ["answer"]}}]}
 
 
-def client_for(handler):
-    return httpx.Client(transport=httpx.MockTransport(handler))
+def client_for(handler, *, observe_setup=False):
+    def with_consent(request):
+        # Most tests below focus on evaluated turns. Setup has separate tests.
+        if not observe_setup and request.url.path.endswith("/consent"):
+            return httpx.Response(200, json={"ok": True})
+        return handler(request)
+    return httpx.Client(transport=httpx.MockTransport(with_consent))
 
 
 def test_uses_actual_runtime_config_name(monkeypatch):
@@ -56,6 +61,18 @@ def test_fixture_validation_rejects_vacuous_or_mistyped_assertions():
     assert len(ev.validate_conversations({"cases": [spec]})) == 4
 
 
+@pytest.mark.parametrize("surface,sequence", [("sales", ["lookup"]), ("general", "lookup"), ("general", [""]), ("general", [None])])
+def test_tool_sequence_validation_rejects_unsupported_surface_or_malformed_names(surface, sequence):
+    spec = case(surface, [{"message": "A question", "expect": {"expected_tool_sequence": sequence}}])
+    assert ev.validate_conversations({"cases": [spec]})
+
+
+def test_tool_sequence_allows_an_explicit_no_tool_expectation():
+    spec = case(turns=[{"message": "A greeting", "expect": {"expected_tool_sequence": []}}])
+    assert ev.validate_conversations({"cases": [spec]}) == []
+    assert ev._needs_trace(spec["turns"][0]["expect"])
+
+
 @pytest.mark.parametrize("target", ["https://production.example.com", "http://127.0.0.1@evil.example", "http://localhost:8000/path", "http://user:password@localhost:8000", "file:///tmp/db"])
 def test_unsafe_or_remote_targets_need_explicit_authorization(target):
     with pytest.raises(ValueError):
@@ -84,6 +101,40 @@ def test_general_route_reads_stream_and_replays_full_history():
     assert bodies[1]["chat_history"] == [{"role": "user", "content": "first"}, {"role": "assistant", "content": "Complete answer from tools"}]
     assert "response_sha256" in result["turns"][0]
     assert "Complete answer" not in json.dumps(result)  # no raw provider/knowledge text in reports
+
+
+@pytest.mark.parametrize("surface,path", [("general", "/api/v1/chat"), ("sales", "/api/v1/sales/chat")])
+def test_public_chat_records_session_consent_before_first_customer_turn(surface, path):
+    seen = []
+    def handler(request):
+        seen.append(request)
+        if request.url.path.endswith("/consent"):
+            return httpx.Response(200, json={"consent_recorded": True})
+        return httpx.Response(200, json={"reply": "An answer"}) if surface == "sales" else httpx.Response(200, content=b"An answer")
+    with client_for(handler, observe_setup=True) as client:
+        result = ev.run_case(case(surface), client, base_url="http://localhost", domain="osakiusa.com")
+    assert result["passed"]
+    consent, chat = seen
+    session = json.loads(chat.content)["session_id"]
+    assert chat.url.path == path
+    assert consent.url.path == f"/api/v1/warranty/session/{session}/consent"
+    assert json.loads(consent.content) == {"domain": "osakiusa.com"}
+
+
+@pytest.mark.parametrize("surface", ["general", "sales"])
+def test_failed_consent_stops_before_any_customer_turn_and_is_counted(surface):
+    seen = []
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(503, text="private backend detail")
+    with client_for(handler, observe_setup=True) as client:
+        result = ev.run_case(case(surface), client, base_url="http://localhost", domain="osakiusa.com")
+    assert len(seen) == 1 and seen[0].url.path.endswith("/consent")
+    assert not result["passed"] and result["unrun_turns"] == 1
+    report = ev.summarize([result])
+    assert not report["quality_evaluated"]
+    assert report["assertion_failure_counts"]["request_or_availability"] == 1
+    assert "private backend detail" not in json.dumps(report)
 
 
 def test_tool_call_alone_cannot_pass_without_final_answer():
@@ -188,7 +239,7 @@ def test_warranty_runs_real_session_setup_and_uses_returned_ticket_id():
             return httpx.Response(200, json={"ok": True})
         return httpx.Response(200, json={"ticket": {"ticket_id": "generated-ticket", "model_name": "Solo Flex", "status": "in_progress"}})
     spec = case("warranty", [{"action": "register-model", "body": {"model": "Solo Flex"}, "expect": {"json_equals": {"ticket.model_name": "Solo Flex"}}}, {"action": "answer", "body": {"answer": "defect"}, "expect": {"json_equals": {"ticket.status": "in_progress"}}}])
-    with client_for(handler) as client:
+    with client_for(handler, observe_setup=True) as client:
         result = ev.run_case(spec, client, base_url="http://localhost", domain="osakiusa.com")
     assert result["passed"]
     assert seen[0].url.path.endswith("/consent")
@@ -248,6 +299,36 @@ def test_recorded_tool_failure_cannot_satisfy_tool_execution_check():
     errors=ev.check_answer('A fluent reply',{}, {'expected_tool':'search_chair_specs'},
                            {'tools_called':['search_chair_specs'],'turns':[{'tool_name':'search_chair_specs','tool_success':False}]})
     assert 'required tool did not execute successfully' in errors
+
+
+@pytest.mark.parametrize("names", [["search_chair_specs", "search_chair_specs"], ["capture_sales_lead", "search_chair_specs"], ["recommend_chairs"], []])
+def test_exact_tool_sequence_rejects_duplicate_extra_wrong_and_missing_actions(names):
+    trace = {"turns": [{"tool_name": name, "tool_success": True} for name in names]}
+    errors = ev.check_answer("A fluent answer", {}, {"expected_tool_sequence": ["search_chair_specs"]}, trace)
+    assert "executed tool sequence differs from expected sequence" in errors
+
+
+@pytest.mark.parametrize("trace", [None, {}, {"turns": None}, {"turns": ["malformed"]}])
+def test_missing_execution_records_cannot_prove_no_tool_was_used(trace):
+    assert ev.check_answer("A fluent answer", {}, {"expected_tool_sequence": []}, trace)
+
+
+def test_exact_tool_sequence_requires_successful_execution_and_authenticated_trace():
+    checks = {"expected_tool_sequence": ["search_chair_specs", "get_warranty_or_policy"]}
+    trace = {"turns": [{"tool_name": name, "tool_success": True} for name in checks["expected_tool_sequence"]]}
+    assert ev.check_answer("A grounded answer", {}, checks, trace) == []
+    trace["turns"][1]["tool_success"] = False
+    assert "tool sequence contains an unsuccessful execution" in ev.check_answer("A fluent answer", {}, checks, trace)
+    requested = []
+    def handler(request):
+        requested.append(request)
+        return httpx.Response(200, json={"turns": []}) if request.method == "GET" else httpx.Response(200, content=b"A grounded answer")
+    spec = case(turns=[{"message": "A greeting", "expect": {"expected_tool_sequence": []}}])
+    with client_for(handler) as client:
+        result = ev.run_case(spec, client, base_url="http://localhost", domain="osakiusa.com", admin_key="synthetic-key")
+    assert result["passed"]
+    assert requested[1].url.path.startswith("/admin/traces/eval-")
+    assert requested[1].headers["X-Admin-Key"] == "synthetic-key"
 
 
 def test_expected_source_requires_successful_available_exact_model_evidence():

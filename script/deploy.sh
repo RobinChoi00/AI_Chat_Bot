@@ -39,22 +39,18 @@ is_host_overlay() {
 }
 
 stash_blocking_changes() {
-  local -a dirty=() to_stash=()
+  local -a to_stash=()
   local path
 
   protect_host_overlays
 
   while IFS= read -r path; do
-    [[ -n "$path" ]] && dirty+=("$path")
-  done < <({ git diff --name-only; git diff --cached --name-only; } | sort -u)
-
-  for path in "${dirty[@]}"; do
-    if ! is_host_overlay "$path"; then
+    if [[ -n "$path" ]] && ! is_host_overlay "$path"; then
       to_stash+=("$path")
     fi
-  done
+  done < <({ git diff --name-only; git diff --cached --name-only; } | sort -u)
 
-  if ((${#to_stash[@]} > 0)); then
+  if [[ -n "${to_stash[*]:-}" ]]; then
     echo "Stashing host changes that would block checkout: ${to_stash[*]}"
     git stash push -m "deploy.sh: stash host dirty tree before ${TARGET_SHA}" -- "${to_stash[@]}"
   fi

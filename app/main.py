@@ -1768,6 +1768,11 @@ async def chat_endpoint(
     - Repeat FAQ-style questions are served straight from the in-memory cache
       with no LLM call at all (configurable via CHAT_CACHE_ENABLED).
     """
+    # All browser chat surfaces share the same server-side consent gate. Keep
+    # this before traces, scope classification, caches, tools, and model calls.
+    from warranty_consent import require_chat_privacy
+
+    require_chat_privacy(chat_request.session_id)
     user_query = chat_request.user_query
     target_domain = chat_request.current_domain.rstrip('/')
     response_language = _customer_language(user_query, chat_request.chat_history)

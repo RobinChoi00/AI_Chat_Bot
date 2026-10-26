@@ -1,7 +1,10 @@
 """Tests for answer_guard — hallucination blocking."""
 
 import sys
+import json
 from pathlib import Path
+
+import pytest
 
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(APP_DIR))
@@ -211,3 +214,151 @@ def test_failed_tracking_cannot_leave_a_fabricated_carrier_or_eta():
                                    tool_results=['MISSING_INPUT: Need both a valid order number and the email used at checkout.'])
     assert 'ExampleCarrier' not in output and 'June 15' not in output
     assert 'order number' in output and 'email' in output
+
+
+def measurement_facts(model="Fixture Alpha", **specs):
+    return "MODEL_FACTS_JSON: " + json.dumps({
+        "model": model,
+        "currency": "USD",
+        "specs": {
+            "doorway_assembled_in": 32,
+            "doorway_disassembled_in": 28,
+            "chair_weight_lb": 285,
+            "max_user_weight_lb": 260,
+            "standing_width_in": 30,
+            "standing_height_in": 48,
+            "reclined_width_in": 34,
+            "reclined_height_in": 40,
+            **specs,
+        },
+    })
+
+
+def guarded_measurement(text, blob=None, query="Fixture Alpha specifications"):
+    return sanitize_agent_response(
+        text, tools_called=["search_chair_specs"], user_query=query,
+        tool_results=[blob or measurement_facts()],
+    )
+
+
+@pytest.mark.parametrize("text", [
+    "Fixture Alpha needs a 34 inch doorway and weighs 300 lbs.",
+    "Fixture Alpha minimum doorway is 32.1 inches.",
+    "Fixture Alpha needs a 34-inch doorway.",
+    "Fixture Alpha has a 280-pound capacity.",
+    "Fixture Alpha chair weight is 286 lbs.",
+    "Fixture Alpha maximum user weight is 285 lbs.",
+    "Fixture Alpha doorway is 30 inches.",
+    "Fixture Alpha doorway is 28 inches assembled.",
+    "Fixture Alpha disassembled doorway is 32 inches.",
+    "Fixture Alpha standing width is 34 inches.",
+    "Fixture Alpha reclined height is 48 inches.",
+    "Fixture Alpha maximum user weight is 300.",
+    "Fixture Alpha chair weight is 285 kg.",
+])
+def test_measurement_guard_rejects_nearby_values_and_field_or_unit_swaps(text):
+    assert "accurate information" in guarded_measurement(text)
+
+
+@pytest.mark.parametrize("text", [
+    "Fixture Alpha needs a 32 inch doorway and weighs 285 lbs.",
+    "Fixture Alpha minimum doorway is 32.0 inches.",
+    "Fixture Alpha needs a 32-inch doorway.",
+    "Fixture Alpha has a 260-pound capacity.",
+    "Fixture Alpha disassembled doorway is 28 inches.",
+    "Fixture Alpha is 30 inches wide and 48 inches tall.",
+    "Fixture Alpha reclined width is 34 inches and reclined height is 40 inches.",
+    "Fixture Alpha doorway is 81.28 cm and chair weight is 129.3 kg.",
+    "Fixture Alpha doorway is 812.8 mm.",
+    "Fixture Alpha doorway is 2.667 ft.",
+])
+def test_measurement_guard_preserves_exact_fields_and_precise_conversions(text):
+    assert guarded_measurement(text) == text
+
+
+@pytest.mark.parametrize("text", [
+    "Fixture Alpha doorway is 81 cm.",
+    "Fixture Alpha doorway is 86.4 cm.",
+    "Fixture Alpha chair weight is 136.1 kg.",
+])
+def test_conversions_do_not_reintroduce_percentage_rounding_loophole(text):
+    assert "accurate information" in guarded_measurement(text)
+
+
+def test_legacy_authoritative_specs_are_field_bound_and_not_a_numeric_pool():
+    blob = (
+        "--- Result 1: Fixture Alpha ---\n"
+        "AUTHORITATIVE SPEC VALUES:\n"
+        "- Minimum Doorway (inch): 32\n"
+        "- Chair Weight: 285 lbs\n"
+        "- Dimension - Standing - Width (inch): 30\n"
+        "- Dimension - Reclined - Width (inch): 34\n"
+    )
+    correct = "Fixture Alpha doorway is 32 inches, chair weight is 285 lbs, and standing width is 30 inches."
+    assert guarded_measurement(correct, blob) == correct
+    for wrong in ("Fixture Alpha doorway is 30 inches.", "Fixture Alpha chair weight is 300 lbs.",
+                  "Fixture Alpha standing width is 34 inches."):
+        assert "accurate information" in guarded_measurement(wrong, blob)
+
+
+def test_structured_facts_override_conflicting_supplemental_measurements():
+    blob = measurement_facts() + "\nAUTHORITATIVE SPEC VALUES:\n- Minimum Doorway: 34 inches\n"
+    assert "accurate information" in guarded_measurement("Fixture Alpha doorway is 34 inches.", blob)
+
+
+def test_height_ranges_check_every_endpoint_and_order():
+    blob = measurement_facts(minimum_user_height_in=58, maximum_user_height_in=75)
+    correct = "Fixture Alpha user height range is 58–75 inches."
+    assert guarded_measurement(correct, blob) == correct
+    repeated_unit = "Fixture Alpha user height range is 58 inches to 75 inches."
+    assert guarded_measurement(repeated_unit, blob) == repeated_unit
+    for wrong in ("Fixture Alpha user height range is 60–75 inches.",
+                  "Fixture Alpha user height range is 58–77 inches.",
+                  "Fixture Alpha user height range is 75–58 inches.",
+                  "Fixture Alpha user height range is 75 inches to 58 inches.",
+                  "Fixture Alpha user height range is 58–58 inches."):
+        assert "accurate information" in guarded_measurement(wrong, blob)
+
+
+def test_legacy_source_range_is_not_ignored():
+    blob = "--- Result 1: Fixture Alpha ---\nAUTHORITATIVE SPEC VALUES:\n- User Height Range: 58–75 inches\n"
+    correct = "Fixture Alpha user height range is 58–75 inches."
+    assert guarded_measurement(correct, blob) == correct
+    assert "accurate information" in guarded_measurement(correct.replace("58", "60"), blob)
+
+
+def test_measurements_remain_bound_to_models_in_prose_and_query_context():
+    blob = measurement_facts() + "\n" + measurement_facts("Fixture Beta", doorway_assembled_in=36)
+    correct = "Fixture Alpha doorway is 32 inches, while Fixture Beta doorway is 36 inches."
+    assert guarded_measurement(correct, blob) == correct
+    assert "accurate information" in guarded_measurement(correct.replace("32", "36"), blob)
+    assert guarded_measurement("32 inches.", blob, "Fixture Alpha doorway") == "32 inches."
+    assert "accurate information" in guarded_measurement("36 inches.", blob, "Fixture Alpha doorway")
+
+
+def test_feature_by_model_tables_bind_bare_numbers_to_header_units_and_fields():
+    blob = measurement_facts() + "\n" + measurement_facts("Fixture Beta", doorway_assembled_in=36, chair_weight_lb=300)
+    correct = (
+        "| Feature | Fixture Alpha | Fixture Beta |\n|---|---|---|\n"
+        "| Doorway (in) | 32 | 36 |\n| Chair weight (lb) | 285 | 300 |"
+    )
+    assert guarded_measurement(correct, blob) == correct
+    assert "accurate information" in guarded_measurement(correct.replace("32 | 36", "36 | 32"), blob)
+    assert "accurate information" in guarded_measurement(correct.replace("285 | 300", "300 | 285"), blob)
+
+
+def test_model_by_feature_tables_bind_values_to_each_header():
+    blob = measurement_facts() + "\n" + measurement_facts("Fixture Beta", doorway_assembled_in=36, chair_weight_lb=300)
+    correct = (
+        "| Model | Doorway (in) | Chair weight (lb) |\n|---|---|---|\n"
+        "| Fixture Alpha | 32 | 285 |\n| Fixture Beta | 36 | 300 |"
+    )
+    assert guarded_measurement(correct, blob) == correct
+    assert "accurate information" in guarded_measurement(correct.replace("32 | 285", "36 | 285"), blob)
+    assert "accurate information" in guarded_measurement(correct.replace("36 | 300", "300 | 36"), blob)
+
+
+def test_single_model_table_checks_header_units():
+    correct = "| Feature | Fixture Alpha |\n|---|---|\n| Doorway (cm) | 81.28 |"
+    assert guarded_measurement(correct) == correct
+    assert "accurate information" in guarded_measurement(correct.replace("81.28", "86.36"))

@@ -30,10 +30,25 @@ else
   echo "WARNING: BACKUP_S3_URI is empty; backup is local-only." >&2
 fi
 
-# Keep 8 local restore points. S3 lifecycle policy controls off-site retention.
-find "$ROOT/backups" -mindepth 1 -maxdepth 1 -type d -print0 \
-  | sort -z -r \
-  | tail -z -n +9 \
-  | xargs -0 -r rm -rf
+# A preservation hold covers backups too. Read only the non-secret flag; never
+# source .env as shell code. Missing/invalid values preserve existing backups.
+HOLD_FLAG="${PRIVACY_RETENTION_LEGAL_HOLD:-}"
+if [[ -z "$HOLD_FLAG" && -f "$ROOT/.env" ]]; then
+  HOLD_FLAG="$(awk -F= '$1 ~ /^[[:space:]]*PRIVACY_RETENTION_LEGAL_HOLD[[:space:]]*$/ {sub(/^[^=]*=/, ""); gsub(/[[:space:]\047\042]/, ""); print tolower($0); exit}' "$ROOT/.env")"
+fi
+case "${HOLD_FLAG:-1}" in
+  0|false|no|off)
+    # Keep 8 local restore points when a hold has explicitly been released.
+    find "$ROOT/backups" -mindepth 1 -maxdepth 1 -type d -name '????????T??????Z' -print \
+      | sort -r \
+      | tail -n +9 \
+      | while IFS= read -r backup_path; do
+          if [[ "${backup_path##*/}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
+            rm -rf -- "$backup_path"
+          fi
+        done
+    ;;
+  *) echo "Preservation hold active; existing backup restore points retained." ;;
+esac
 
 echo "Backup completed: $DEST"

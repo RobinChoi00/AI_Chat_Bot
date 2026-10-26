@@ -23,13 +23,22 @@ _NUMBERED_STEPS_RE = re.compile(
     r"(?:^|\n)\s*(?:\d+[\).:]|step\s+\d+)",
     re.IGNORECASE,
 )
-_SPEC_NUMBER_CTX_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(?:inch|inches|\"|\s*in\b|lb|lbs|pound|kg|cm|mm|ft|feet)",
-    re.IGNORECASE,
+_UNIT_PATTERN = r'inches\b|inch\b|in\b|["″]|pounds?\b|lbs?\b|kilograms?\b|kg\b|centimeters?\b|cm\b|millimeters?\b|mm\b|feet\b|foot\b|ft\b|meters?\b|m\b'
+_MEASUREMENT_RE = re.compile(
+    r"(?<![a-z\d.])(?:(?P<low>\d+(?:\.\d+)?)\s*(?:[-–—]|to)\s*)?"
+    r"(?P<number>\d+(?:\.\d+)?)\s*-?\s*(?P<unit>" + _UNIT_PATTERN + r")",
+    re.I,
 )
-_SPEC_NUMBER_REV_RE = re.compile(
-    r"(?:doorway|width|height|depth|weight|clearance|maximum\s+user)[^\d]{0,24}(\d+(?:\.\d+)?)",
-    re.IGNORECASE,
+# Match the named field, not an arbitrary number elsewhere in the tool output.
+_FIELD_RE = re.compile(
+    r"(?:min(?:imum)?|max(?:imum)?)\s+user\s+height|(?:recommended\s+)?user\s+height(?:\s+range)?|height\s+range|"
+    r"maximum\s+user\s+weight|max(?:imum)?\s+(?:user\s+)?(?:weight|capacity)|"
+    r"user\s+weight|weight\s+(?:limit|capacity)|supports?\s+(?:users?\s+)?(?:up\s+to)?|capacity|"
+    r"minimum\s+doorway|doorway|door\s+(?:width|clearance)|entrance\s+width|"
+    r"wall\s+clearance|space[ -]saving|clearance\s+(?:from|to|behind)\s+(?:the\s+)?wall|"
+    r"chair\s+weight|weighs?|weight|footrest\s+extension|track\s+(?:length|moving\s+range)|"
+    r"(?:inside\s+of\s+)?shoulder\s+width|seat\s+width|width|wide|height|high|length|depth|deep|tall",
+    re.I,
 )
 
 _WARRANTY_TOOLS = frozenset({
@@ -196,85 +205,224 @@ def _strip_ungrounded_prices(response: str, allowed_prices: set[str]) -> str:
     return _PRICE_RE.sub(repl, response)
 
 
-def _floats_in_line(line: str) -> set[float]:
-    nums: set[float] = set()
-    for m in re.finditer(r"(\d+(?:\.\d+)?)", line):
-        try:
-            val = float(m.group(1))
-            if val > 0:
-                nums.add(val)
-        except ValueError:
-            pass
-    return nums
+def _unit_info(unit: str) -> tuple[str, float]:
+    unit = unit.lower()
+    if unit in {'"', '″', 'in', 'inch', 'inches'}:
+        return "length", 1.0
+    if unit in {"ft", "feet", "foot"}:
+        return "length", 12.0
+    if unit in {"cm", "centimeter", "centimeters"}:
+        return "length", 1 / 2.54
+    if unit in {"mm", "millimeter", "millimeters"}:
+        return "length", 1 / 25.4
+    if unit in {"m", "meter", "meters"}:
+        return "length", 100 / 2.54
+    if unit in {"kg", "kilogram", "kilograms"}:
+        return "weight", 1 / 0.45359237
+    return "weight", 1.0
 
 
-def _allowed_spec_numbers(blob: str) -> set[float]:
-    """Collect numeric spec values present in tool output."""
-    allowed: set[float] = set()
-    in_authoritative = False
-
-    for line in blob.splitlines():
-        if "AUTHORITATIVE SPEC VALUES" in line:
-            in_authoritative = True
-            continue
-        if in_authoritative:
-            stripped = line.strip()
-            if stripped.startswith("---") or stripped.startswith("Additional context"):
-                in_authoritative = False
-            elif stripped:
-                allowed.update(_floats_in_line(line))
-
-        lower = line.lower()
-        if any(kw in lower for kw in _SPEC_TOPIC_SIGNALS):
-            allowed.update(_floats_in_line(line))
-
-    return allowed
-
-
-def _claimed_spec_numbers(text: str) -> set[float]:
-    nums: set[float] = set()
-    for pattern in (_SPEC_NUMBER_CTX_RE, _SPEC_NUMBER_REV_RE):
-        for m in pattern.finditer(text or ""):
-            try:
-                nums.add(float(m.group(1)))
-            except ValueError:
-                pass
-    return nums
-
-
-def _number_is_allowed(value: float, allowed: set[float], tolerance: float = 0.0001) -> bool:
-    for candidate in allowed:
-        if candidate <= 0:
-            continue
-        if abs(value - candidate) <= max(0.01, candidate * tolerance):
-            return True
-    return False
+def _spec_field(label: str) -> str | None:
+    """Normalize a field while retaining assembled/reclined distinctions."""
+    text = re.sub(r"[^a-z0-9]+", " ", label.lower())
+    if re.search(r"doorway|door (?:width|clearance)|entrance width", text):
+        return "doorway_disassembled_in" if "disassembled" in text else "doorway_assembled_in"
+    if re.search(r"user weight|(?:maximum|max) weight|weight (?:limit|capacity)|capacity|supports?", text):
+        return "max_user_weight_lb"
+    if re.search(r"wall|space saving", text):
+        return "wall_clearance_in"
+    if re.search(r"user height|height range", text):
+        if re.search(r"\bmin(?:imum)?\b", text):
+            return "minimum_user_height_in"
+        if re.search(r"\bmax(?:imum)?\b", text):
+            return "maximum_user_height_in"
+        return "user_height_in"
+    if re.search(r"weigh", text):
+        return "chair_weight_lb"
+    if "footrest" in text and "extension" in text:
+        return "footrest_extension_in"
+    if "track" in text:
+        return "track_moving_range_in" if "moving" in text else "track_length_in"
+    if "shoulder" in text and "width" in text:
+        return "shoulder_width_in"
+    if "seat" in text and "width" in text:
+        return "seat_width_in"
+    pose = "reclined" if "reclined" in text else "standing"
+    if re.search(r"width|wide", text):
+        return f"{pose}_width_in"
+    if re.search(r"height|high|tall", text):
+        return f"{pose}_height_in"
+    if re.search(r"length|depth|deep", text):
+        return f"{pose}_length_in"
+    return None
 
 
-def _has_ungrounded_spec_numbers(response: str, blob: str) -> bool:
-    allowed = _allowed_spec_numbers(blob)
-    if not allowed:
+def _measurements(text: str, default_unit: str | None = None) -> list[tuple[str, str, int, int]]:
+    values = []
+    for match in _MEASUREMENT_RE.finditer(text):
+        if match.group("low"):
+            values.append((match.group("low"), match.group("unit"), match.start(), match.end()))
+        values.append((match.group("number"), match.group("unit"), match.start(), match.end()))
+    if not values and default_unit:
+        values = [(match.group(), default_unit, match.start(), match.end())
+                  for match in re.finditer(r"(?<![a-z\d.])\d+(?:\.\d+)?", text, re.I)]
+    return values
+
+
+def _claim_field(text: str, start: int, end: int, query: str = "") -> str | None:
+    fields = list(_FIELD_RE.finditer(text))
+    before = [field for field in fields if field.end() <= start]
+    after = [field for field in fields if field.start() >= end]
+    # "32 inches wide" binds to width, rather than an earlier field in a sentence.
+    field = (after[0] if after and after[0].start() - end <= 3
+             and not text[end:after[0].start()].strip()
+             else (before[-1] if before else None))
+    if field is None:
+        field = after[0] if after else None
+    if field is None:
+        return _spec_field(query)
+    context = field.group()
+    # A previous field in the same sentence must not change this field's
+    # identity ("doorway 32 in and chair weight 285 lb"). Only borrow pose
+    # qualifiers from this field's local clause.
+    previous = max((item.end() for item in fields if item.end() < field.start()), default=0)
+    context_start = max(previous, text.rfind(";", 0, field.start()) + 1,
+                        text.rfind("\n", 0, field.start()) + 1)
+    if re.search(r"\breclined\b", text[context_start:field.start()], re.I):
+        context += " reclined"
+    if re.search(r"\bdisassembled\b", text[context_start:field.start()], re.I):
+        context += " disassembled"
+    # Qualifiers may follow the measurement ("doorway: 28 in disassembled").
+    next_field = min((item.start() for item in fields if item.start() > field.end()), default=len(text))
+    qualifier = text[field.start():min(next_field, end + 35)]
+    if re.search(r"\breclined\b", qualifier, re.I):
+        context += " reclined"
+    if re.search(r"\bdisassembled\b", qualifier, re.I):
+        context += " disassembled"
+    return _spec_field(context)
+
+
+def _measurement_matches(number: str, unit: str, expected: tuple[float, str]) -> bool:
+    value, expected_unit = expected
+    kind, factor = _unit_info(unit)
+    expected_kind, expected_factor = _unit_info(expected_unit)
+    if kind != expected_kind:
         return False
-
-    claims = _claimed_spec_numbers(response)
-    if not claims:
-        return False
-
-    return any(not _number_is_allowed(n, allowed) for n in claims)
+    claim = float(number)
+    if factor == expected_factor:
+        # The same unit must preserve the source value; no percentage allowance.
+        return abs(claim - value) < 1e-8
+    converted = value * expected_factor / factor
+    # Conversion may round to the displayed precision, but never more coarsely
+    # than one decimal place. E.g. 32 in -> 81.3 cm, 285 lb -> 129.3 kg.
+    decimals = len(number.partition(".")[2])
+    tolerance = 0.5 * (10 ** -max(1, decimals)) + 1e-8
+    return abs(claim - converted) <= tolerance
 
 
 def _model_facts(blob: str) -> list[dict]:
     facts = []
+    current = None
+    in_authoritative = False
     for line in blob.splitlines():
-        if not line.startswith("MODEL_FACTS_JSON: "):
+        heading = re.match(r"\s*--- Result \d+: (.*?) ---\s*$", line)
+        if heading:
+            current = {"model": heading.group(1), "specs": {}, "_measurements": {}}
+            facts.append(current)
+            in_authoritative = False
             continue
-        try:
-            fact = json.loads(line.split(": ", 1)[1])
-            if isinstance(fact, dict) and isinstance(fact.get("model"), str) and isinstance(fact.get("specs"), dict):
-                facts.append(fact)
-        except (ValueError, TypeError):
-            continue
-    return facts
+        if line.startswith("MODEL_FACTS_JSON: "):
+            try:
+                fact = json.loads(line.split(": ", 1)[1])
+                if isinstance(fact, dict) and isinstance(fact.get("model"), str) and isinstance(fact.get("specs"), dict):
+                    if current is None or current["model"].lower() != fact["model"].lower():
+                        current = fact
+                        facts.append(current)
+                    else:
+                        current.update(fact)
+            except (ValueError, TypeError):
+                continue
+        elif re.match(r"\s*BASE PRICE \(USD\):", line, re.I):
+            if current is None:
+                current = {"model": "", "specs": {}}
+                facts.append(current)
+            price = _PRICE_RE.search(line)
+            if price:
+                current.setdefault("price_usd", float(price.group().replace("$", "").replace(",", "")))
+                current.setdefault("currency", "USD")
+        elif "AUTHORITATIVE SPEC VALUES" in line:
+            in_authoritative = True
+            if current is None:
+                current = {"model": "", "specs": {}}
+                facts.append(current)
+        elif line.strip().startswith("Additional context"):
+            in_authoritative = False
+        elif in_authoritative and ":" in line:
+            label, value = line.split(":", 1)
+            field = _spec_field(label)
+            if field is None:
+                continue
+            label_unit = re.search(r"(?<![a-z])(?:" + _UNIT_PATTERN + r")", label, re.I)
+            unit = label_unit.group() if label_unit else ("lb" if field.endswith("_lb") else "in")
+            for number, value_unit, _, _ in _measurements(value, unit):
+                current.setdefault("_measurements", {}).setdefault(field, []).append((float(number), value_unit))
+    for fact in facts:
+        measurements = fact.setdefault("_measurements", {})
+        for field, value in fact["specs"].items():
+            if isinstance(value, (float, int)) and not isinstance(value, bool) and field.endswith(("_lb", "_in")):
+                # Structured model facts take precedence over supplemental text.
+                measurements[field] = [(float(value), "lb" if field.endswith("_lb") else "in")]
+        for field in ("minimum_user_height_in", "maximum_user_height_in"):
+            if field in measurements:
+                measurements.setdefault("user_height_in", []).extend(measurements[field])
+    return [fact for fact in facts if fact["model"] or fact["specs"] or fact.get("_measurements")]
+
+
+def _measurement_conflicts(text: str, fact: dict, query: str = "", default_unit: str | None = None) -> bool:
+    measurements = fact.get("_measurements", {})
+    matches = list(_MEASUREMENT_RE.finditer(text))
+    ranges = []
+    for match in matches:
+        if match.group("low"):
+            ranges.append((match.group("low"), match.group("unit"), match.group("number"),
+                           match.group("unit"), match.start(), match.end()))
+    for first, second in zip(matches, matches[1:]):
+        if re.fullmatch(r"\s*(?:[-–—]|to)\s*", text[first.end():second.start()], re.I):
+            ranges.append((first.group("number"), first.group("unit"), second.group("number"),
+                           second.group("unit"), first.start(), second.end()))
+    for low, low_unit, high, high_unit, start, end in ranges:
+        low_kind, low_factor = _unit_info(low_unit)
+        high_kind, high_factor = _unit_info(high_unit)
+        if low_kind != high_kind or float(low) * low_factor > float(high) * high_factor:
+            return True
+        field = _claim_field(text, start, end, query)
+        expected = measurements.get(field, [])
+        if len(expected) > 1:
+            ordered = sorted(expected, key=lambda item: item[0] * _unit_info(item[1])[1])
+            if not (_measurement_matches(low, low_unit, ordered[0])
+                    and _measurement_matches(high, high_unit, ordered[-1])):
+                return True
+    claims = _measurements(text, default_unit)
+    # Tool-authored units may be implicit in prose ("maximum user weight is
+    # 300"). Guard those values too, without interpreting model/price numbers.
+    for label in _FIELD_RE.finditer(text):
+        tail = re.match(r"[^\d\n$|]{0,30}(\d+(?:\.\d+)?)", text[label.end():])
+        if tail:
+            start, end = label.end() + tail.start(1), label.end() + tail.end(1)
+            if any(existing_start <= start < existing_end for _, _, existing_start, existing_end in claims):
+                continue
+            field = _claim_field(text, start, end, query)
+            if field:
+                claims.append((tail.group(1), "lb" if field.endswith("_lb") else "in", start, end))
+    for number, unit, start, end in claims:
+        field = _claim_field(text, start, end, query)
+        if field is None:
+            # A bare measurement cannot borrow a number from an unrelated field.
+            return True
+        expected = measurements.get(field, [])
+        if not any(_measurement_matches(number, unit, value) for value in expected):
+            return True
+    return False
 
 
 def _fact_mentions(text: str, facts: list[dict]) -> list[tuple[int, int, dict]]:
@@ -296,7 +444,7 @@ def _fact_mentions(text: str, facts: list[dict]) -> list[tuple[int, int, dict]]:
     return sorted(selected, key=lambda value: value[0])
 
 
-def _bound_claim_conflicts(text: str, fact: dict) -> bool:
+def _bound_claim_conflicts(text: str, fact: dict, query: str = "", default_unit: str | None = None) -> bool:
     if re.search(r"€\s*\d|\b(?:EUR|CAD|GBP)\s*\d|\d[\d,.]*\s*(?:EUR|CAD|GBP)\b", text, re.I) and fact.get("currency") == "USD":
         return True
     prices = _PRICE_RE.findall(text)
@@ -308,16 +456,8 @@ def _bound_claim_conflicts(text: str, fact: dict) -> bool:
         except (TypeError, ValueError):
             return True
     specs = fact["specs"]
-    field_patterns = (
-        ("max_user_weight_lb", r"(?:max(?:imum)?\s+(?:user\s+)?(?:weight|capacity)|supports?\s+(?:users?\s+)?(?:up\s+to)?)[^\d\n]{0,25}(\d+(?:\.\d+)?)\s*(?:lb|pound)"),
-        ("doorway_assembled_in", r"(?:doorway|door\s+width|door\s+clearance)[^\d\n]{0,25}(\d+(?:\.\d+)?)\s*(?:inches|inch|in\b|\")"),
-        ("wall_clearance_in", r"wall\s+clearance[^\d\n]{0,25}(\d+(?:\.\d+)?)\s*(?:inches|inch|in\b|\")"),
-    )
-    for field, pattern in field_patterns:
-        for value in re.findall(pattern, text, re.I):
-            actual = specs.get(field)
-            if actual is None or not _number_is_allowed(float(value), {float(actual)}):
-                return True
+    if _measurement_conflicts(text, fact, query, default_unit):
+        return True
     mechanisms = re.findall(r"\b[2345]D\b", text, re.I)
     source_mechanism = str(specs.get("massage_mechanism") or "").upper()
     if mechanisms and source_mechanism and any(mechanism.upper() not in source_mechanism for mechanism in mechanisms):
@@ -331,43 +471,72 @@ def _bound_claim_conflicts(text: str, fact: dict) -> bool:
     return False
 
 
-def _has_model_fact_conflict(response: str, blob: str) -> bool:
+def _table_claim_conflicts(label: str, cell: str, fact: dict) -> bool:
+    unit = re.search(r"(?<![a-z])(?:" + _UNIT_PATTERN + r")", label, re.I)
+    # Units may live in a header. Bare counts/prices are not measurements.
+    default_unit = unit.group() if unit and _spec_field(label) else None
+    return _bound_claim_conflicts(f"{label}: {cell}", fact, label, default_unit)
+
+
+def _has_model_fact_conflict(response: str, blob: str, query: str = "") -> bool:
     facts = _model_facts(blob)
     if not facts:
         return False
     # A feature-by-model table carries its model identity in the header, not
     # in each value row. Check the column binding before ordinary prose.
     columns: dict[int, dict] = {}
+    field_headers: list[str] = []
     bound_table_rows: set[str] = set()
     for row in response.splitlines():
         if row.count("|") < 2:
             columns = {}
+            field_headers = []
             continue
         cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
         header = {index: mentions[0][2] for index, cell in enumerate(cells)
                   if (mentions := _fact_mentions(cell, facts)) and len(mentions) == 1}
-        if len(header) >= 2:
+        if header:
+            # A model in column zero normally identifies a data row. A model
+            # elsewhere identifies feature-by-model column headers.
+            if not columns and 0 in header and field_headers:
+                fact = header[0]
+                bound_table_rows.add(row.strip())
+                for index, label in enumerate(field_headers[1:], 1):
+                    if index < len(cells) and _table_claim_conflicts(label, cells[index], fact):
+                        return True
+                continue
+        if header and 0 not in header:
             columns = header
+            field_headers = []
             bound_table_rows.add(row.strip())
             continue
         if columns and cells:
             bound_table_rows.add(row.strip())
             for index, fact in columns.items():
-                if index < len(cells) and _bound_claim_conflicts(f"{cells[0]}: {cells[index]}", fact):
+                if index < len(cells) and _table_claim_conflicts(cells[0], cells[index], fact):
                     return True
-    current = facts[0] if len(facts) == 1 else None
+            continue
+        if any(_spec_field(cell) or re.search(r"price|mechanism|foot roller", cell, re.I) for cell in cells[1:]):
+            field_headers = cells
+            bound_table_rows.add(row.strip())
+    query_mentions = _fact_mentions(query, facts)
+    current = facts[0] if len(facts) == 1 else (query_mentions[0][2] if len(query_mentions) == 1 else None)
     for line in re.split(r"\n|(?<=[.;])\s+|\bwhile\b", response):
         if line.strip() in bound_table_rows:
             continue
         mentions = _fact_mentions(line, facts)
         if not mentions:
-            if current is not None and _bound_claim_conflicts(line, current):
+            if current is not None and _bound_claim_conflicts(line, current, query):
                 return True
+            if current is None and (_measurements(line) or _PRICE_RE.search(line)):
+                # Unnamed comparison values must agree for every possible model.
+                if any(_bound_claim_conflicts(line, fact, query) for fact in facts):
+                    return True
             continue
         for index, (start, _, fact) in enumerate(mentions):
             end = mentions[index + 1][0] if index + 1 < len(mentions) else len(line)
             segment = line[0 if index == 0 else start:end]
-            if _bound_claim_conflicts(segment, fact):
+            if _bound_claim_conflicts(segment, fact, query):
                 return True
             current = fact
     return False
@@ -459,7 +628,7 @@ def sanitize_agent_response(
     ):
         return _message("unsupported_promise", user_query, language)
 
-    if _has_model_fact_conflict(text, blob):
+    if _has_model_fact_conflict(text, blob, user_query):
         return _message("spec_fallback", user_query, language)
 
     text = _DISCOUNT_NARRATIVE_RE.sub(
@@ -510,7 +679,4 @@ def sanitize_agent_response(
     if "search_chair_specs" in called:
         if "no_results" in blob_lower and any(kw in lower for kw in _SPEC_TOPIC_SIGNALS):
             return _message("spec_fallback", user_query, language)
-        if "authoritative spec values" in blob_lower and _has_ungrounded_spec_numbers(text, blob):
-            return _message("spec_fallback", user_query, language)
-
     return text.strip()

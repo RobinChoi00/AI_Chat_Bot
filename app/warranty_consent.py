@@ -8,14 +8,32 @@ onto the ticket's collected_data when the workflow starts.
 from __future__ import annotations
 
 from datetime import datetime
+import os
 from typing import Optional, cast
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from warranty_models import WarrantyChatConsent, WarrantyTicket, _now_cst, warranty_db_session
 
 EMAIL_GATE_PROVIDED = "provided"
 EMAIL_GATE_SKIPPED = "skipped"
+
+
+def chat_privacy_enforced() -> bool:
+    """Use one recording-consent policy for every browser chat entry point."""
+    return os.getenv("WARRANTY_REQUIRE_CHAT_PRIVACY", "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
+def require_chat_privacy(session_id: str) -> None:
+    """Reject unconsented chat before calling processors or storing messages."""
+    if chat_privacy_enforced() and get_chat_consent(session_id) is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Please agree to the privacy notice before continuing.",
+        )
 
 
 def record_chat_consent(

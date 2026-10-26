@@ -23,12 +23,14 @@ from script import evaluate_llm_quality as evaluation
 @pytest.fixture
 def isolated_sales_api(monkeypatch):
     monkeypatch.setenv('SALES_INTENT_LLM','0')
+    monkeypatch.setenv('WARRANTY_REQUIRE_CHAT_PRIVACY','1')
     monkeypatch.delenv('OPENAI_API_KEY',raising=False)
     import requests
     import smtplib
     import sales_agent
     import sales_router
     import warranty_models
+    import warranty_router
     monkeypatch.setattr(requests.sessions.Session,'request',lambda *args,**kwargs:pytest.fail('No outbound customer or stock requests'))
     monkeypatch.setattr(smtplib,'SMTP',lambda *args,**kwargs:pytest.fail('No actual emails'))
     monkeypatch.setattr(sales_agent,'fetch_live_stock',lambda *args,**kwargs:None)
@@ -39,6 +41,7 @@ def isolated_sales_api(monkeypatch):
     monkeypatch.setattr(warranty_models,'_SessionFactory',sessionmaker(bind=database,expire_on_commit=False))
     app=FastAPI()
     app.include_router(sales_router.router)
+    app.include_router(warranty_router.router)
     with TestClient(app) as client:
         yield client
     database.dispose()

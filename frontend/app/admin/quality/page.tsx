@@ -21,7 +21,7 @@ async function readAdmin<T>(path: string): Promise<{ data: T | null; error: stri
   }
 }
 
-export default async function AIQualityPage({ searchParams }: { searchParams?: Promise<{ cohort?: string }> } = {}) {
+export default async function AIQualityPage({ searchParams }: { searchParams?: Promise<{ cohort?: string }> }) {
   const cohort = metricCohort((await searchParams)?.cohort);
   const [outcomes, reviews, health] = await Promise.all([
     readAdmin<OutcomeQuality>(withMetricCohort("/admin/warranty/quality?all_time=true", cohort)),

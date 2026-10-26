@@ -38,7 +38,7 @@ CASES_PATH = ROOT / "data" / "llm_eval_cases.json"
 CONVERSATIONS_PATH = ROOT / "data" / "ai_conversation_eval_cases.json"
 LEGACY_SECTIONS = ("tool_selection", "faithfulness", "refusal", "language_consistency")
 WARRANTY_ACTIONS = frozenset({"register-model", "confirm-model", "quick-start", "natural-start", "smart-start", "answer", "state"})
-CHECK_KEYS = frozenset({"contains", "contains_any", "not_contains", "json_equals", "expected_intent", "expected_handoff", "expected_tool", "expected_sources", "expected_language", "expect_refusal", "min_products", "max_products", "max_product_price", "min_product_capacity_lb", "required_product_mechanism"})
+CHECK_KEYS = frozenset({"contains", "contains_any", "not_contains", "json_equals", "expected_intent", "expected_handoff", "expected_tool", "expected_tool_sequence", "expected_sources", "expected_language", "expect_refusal", "min_products", "max_products", "max_product_price", "min_product_capacity_lb", "required_product_mechanism"})
 DIALOGUE_CHECK_KEYS = frozenset({"not_contains", "final_contains_any", "max_identical_assistant_replies"})
 
 
@@ -129,6 +129,11 @@ def validate_conversations(payload: dict[str, Any]) -> list[str]:
                         errors.append(f"{cid}/{index}: {key} must be nonnegative")
                 if "required_product_mechanism" in checks and checks["required_product_mechanism"] not in {"2D", "3D", "4D", "5D"}:
                     errors.append(f"{cid}/{index}: required_product_mechanism must name a supported mechanism")
+                if "expected_tool_sequence" in checks:
+                    sequence = checks["expected_tool_sequence"]
+                    if (case.get("surface") != "general" or not isinstance(sequence, list)
+                        or any(not isinstance(name, str) or not name.strip() for name in sequence)):
+                        errors.append(f"{cid}/{index}: expected_tool_sequence needs tool names on general chat")
                 if "expected_sources" in checks:
                     sources = checks["expected_sources"]
                     if (case.get("surface") != "general" or not isinstance(sources, list) or not sources
@@ -230,6 +235,17 @@ def check_answer(text: str, payload: dict[str, Any], checks: dict[str, Any], tra
         matching = [turn for turn in (trace or {}).get("turns", []) if turn.get("tool_name") == checks["expected_tool"]]
         if matching and not any(turn.get("tool_success") is True for turn in matching):
             errors.append("required tool did not execute successfully")
+    if "expected_tool_sequence" in checks:
+        # Membership alone misses duplicate loops and unauthorized intermediate
+        # actions. Use authenticated execution records, including failed calls.
+        events = (trace or {}).get("turns")
+        valid_events = isinstance(events, list) and all(isinstance(turn, dict) for turn in events)
+        turns = [turn for turn in events if turn.get("tool_name")] if valid_events else []
+        sequence = [turn["tool_name"] for turn in turns]
+        if not valid_events or sequence != checks["expected_tool_sequence"]:
+            errors.append("executed tool sequence differs from expected sequence")
+        if any(turn.get("tool_success") is not True for turn in turns):
+            errors.append("tool sequence contains an unsuccessful execution")
     if "expected_sources" in checks:
         evidence = [item for turn in (trace or {}).get("turns", []) if turn.get("tool_success") is True
                     for item in turn.get("source_evidence", []) if item.get("available") is True]
@@ -280,7 +296,7 @@ def check_dialogue(replies: list[str], checks: dict[str, Any]) -> list[str]:
 
 
 def _needs_trace(checks: dict[str, Any], expected_model: str | None = None) -> bool:
-    return bool(checks.get("expected_tool") or checks.get("expected_sources") or expected_model)
+    return bool(checks.get("expected_tool") or "expected_tool_sequence" in checks or checks.get("expected_sources") or expected_model)
 
 
 def _read_stream(response) -> str:
@@ -377,13 +393,16 @@ def run_case(case: dict[str, Any], client, *, base_url: str, domain: str, admin_
     results: list[dict[str, Any]] = []
     replies: list[str] = []
     surface = case["surface"]
-    if surface == "warranty":
+    if surface in {"general", "sales", "warranty"}:
         try:
-            for action, body in (("consent", {"domain": domain}), ("contact-email", {"customer_email": f"{session_id}@example.invalid"})):
+            setup = [("consent", {"domain": domain})]
+            if surface == "warranty":
+                setup.append(("contact-email", {"customer_email": f"{session_id}@example.invalid"}))
+            for action, body in setup:
                 response = client.post(f"{base_url}/api/v1/warranty/session/{session_id}/{action}", json=body)
                 response.raise_for_status()
         except Exception as exc:
-            return {"id": case["id"], "surface": surface, "provenance": case["provenance"], "passed": False, "turns": [], "unrun_turns": len(case["turns"]), "error": f"warranty setup failed: {type(exc).__name__}"}
+            return {"id": case["id"], "surface": surface, "provenance": case["provenance"], "passed": False, "turns": [], "unrun_turns": len(case["turns"]), "error": f"{surface} consent setup failed: {type(exc).__name__}"}
     for index, turn in enumerate(case["turns"]):
         started = time.perf_counter()
         request_id = f"eval-{uuid.uuid4().hex}"
@@ -461,9 +480,9 @@ def summarize(results: list[dict[str, Any]], baseline: dict[str, Any] | None = N
     all_errors = [error for case in results for turn in case["turns"] for error in turn.get("errors", [])]
     failure_counts = {
         "route_or_handoff": sum(error in {"unexpected intent", "unexpected handoff"} for error in all_errors),
-        "source_evidence": sum("source/model evidence" in error or "required tool" in error for error in all_errors),
+        "source_evidence": sum("source/model evidence" in error or "required tool" in error or "tool sequence" in error for error in all_errors),
         "fit_or_budget": sum(any(word in error for word in ("capacity", "mechanism", "budget", "product price")) for error in all_errors),
-        "request_or_availability": sum("request/evidence failed" in error or "application error fallback" in error for error in all_errors),
+        "request_or_availability": sum("request/evidence failed" in error or "application error fallback" in error for error in all_errors) + sum(bool(case.get("error")) for case in results),
         "dialogue_goal_or_loop": sum(len(case.get("dialogue_errors", [])) for case in results),
     }
     observed = sum("response_sha256" in turn for case in results for turn in case["turns"])

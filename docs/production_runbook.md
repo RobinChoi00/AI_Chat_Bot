@@ -163,3 +163,31 @@ du -sh db_data uploaded_evidence faiss_index backups
 - Before changing `OPENAI_AGENT_MODEL`, run the candidate against representative production-derived cases in staging and compare factual accuracy, correct tool use, latency, and cost. Promote only on a measured gain.
 - Quarterly: execute the restore drill and review CORS origins, trusted hosts, operators, retention, and incident contacts.
 - Before scaling beyond one backend replica: migrate SQLite to managed PostgreSQL, uploads/audio to object storage, sessions/rate limits to Redis, and async email/sync/rebuild jobs to a durable queue.
+
+## 8. Recording consent and retention
+
+General browser chat (`/api/v1/chat`), direct sales chat/lead APIs, and warranty chat require the same recorded
+session consent before message processing or storage. `WARRANTY_REQUIRE_CHAT_PRIVACY=1`
+is the default. Contact email remains optional for basic help. The widget identifies
+AI processing, helpdesk, tracking lookup, and email delivery in its disclosure.
+Direct sales API clients must record consent via the session consent endpoint
+before sending messages. Authenticated Tidio Flow/webhook integrations continue
+to use their provider-managed customer disclosure; ensure that disclosure is
+enabled in the storefront/Tidio configuration.
+
+`script/purge_chat_records.py` is a dry-run by default. Retention windows are
+`CHAT_LOG_RETENTION_DAYS=90`, `TRACE_RETENTION_DAYS=30`, and
+`CLOSED_CASE_RETENTION_DAYS=730`. Only eligible inactive/closed records are
+candidates; active cases and their session records are preserved.
+
+`PRIVACY_RETENTION_LEGAL_HOLD=1` is the fail-closed default. It prevents deletion
+by the record-retention job and the existing evidence purge, and preserves local
+backup restore points. Release this hold only after the business/legal owner has
+confirmed the applicable preservation requirements and retention windows. Do not
+disable it merely to free disk space. The defaults are operational settings, not
+a statement of a legally required retention period.
+
+Install the weekly reporting job with `bash script/install_privacy_retention_cron.sh`.
+Review `logs/privacy_retention.log`; results contain counts, never chat text or
+contact details. Keep external helpdesk/email and off-site backup retention aligned
+with the approved policy; local cleanup does not erase those external copies.

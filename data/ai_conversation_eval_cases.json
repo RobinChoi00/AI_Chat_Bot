@@ -371,6 +371,7 @@
           "message": "What is the price of Solo Flex?",
           "expect": {
             "expected_tool": "search_chair_specs",
+            "expected_tool_sequence": ["search_chair_specs"],
             "not_contains": [
               "guaranteed lowest price"
             ],
@@ -387,6 +388,7 @@
           "message": "What doorway width does that same model need?",
           "expect": {
             "expected_tool": "search_chair_specs",
+            "expected_tool_sequence": ["search_chair_specs"],
             "not_contains": [
               "guaranteed to fit any doorway"
             ],

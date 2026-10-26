@@ -185,6 +185,9 @@ async def sales_chat(
     background_tasks: BackgroundTasks,
 ):  # noqa: WPS231 — router glue
     """Main sales chat turn — deterministic, no LLM."""
+    from warranty_consent import require_chat_privacy
+
+    require_chat_privacy(body.session_id)
     message = _sanitize_message(body.message)
     payload = (body.payload or "").strip()[:200] or None
 
@@ -318,6 +321,9 @@ async def sales_lead(
     background_tasks: BackgroundTasks,
 ):
     """Capture a sales lead for human follow-up."""
+    from warranty_consent import require_chat_privacy
+
+    require_chat_privacy(body.session_id)
     email = (body.email or "").strip()
     phone = (body.phone or "").strip()
     if not email and not phone:

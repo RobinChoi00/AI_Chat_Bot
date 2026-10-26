@@ -43,6 +43,7 @@ def test_candidate_probe_precedes_service_replacement_and_rolls_back(tmp_path, p
     log = tmp_path / "docker.log"
     env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"], DEPLOY_REPOSITORY_ROOT=str(repo), DEPLOY_TEST_LOG=str(log), DEPLOY_TEST_PROBE_FAILS="1" if probe_fails else "0")
     result = subprocess.run(["bash", str(ROOT / "script/deploy.sh"), candidate], cwd=repo, env=env, capture_output=True, text=True, timeout=15)
+    assert log.exists(), result.stdout + result.stderr
     calls = log.read_text().splitlines()
     probe_index = next(i for i, line in enumerate(calls) if "compose run " in line)
     assert "verify_model_upgrade.py --live" in calls[probe_index]
