@@ -295,6 +295,24 @@ def test_recommendation_metadata_rejects_wrong_or_missing_fit_and_mechanism():
     assert ev.check_answer('No products',{'products':[]},checks)
 
 
+@pytest.mark.parametrize('check,field', [
+    ('max_product_doorway_assembled_in', 'doorway_assembled_in'),
+    ('max_product_doorway_disassembled_in', 'doorway_disassembled_in'),
+])
+def test_doorway_constraint_requires_verified_compatible_product_metadata(check, field):
+    checks = {check: 29}
+    assert ev.check_answer('A compatible chair', {'products': [{'fit': {field: 28}}]}, checks) == []
+    for width in (34, None, 0, -1, True, 'unknown', float('nan')):
+        assert ev.check_answer('It fits your door', {'products': [{'fit': {field: width}}]}, checks)
+    assert ev.check_answer('No verified products meet that doorway limit', {'products': []}, checks) == []
+
+
+def test_expected_null_cannot_pass_when_the_json_field_is_absent():
+    checks = {'json_equals': {'ticket.troubleshooting_outcome': None}}
+    assert ev.check_answer('No outcome yet', {'ticket': {'troubleshooting_outcome': None}}, checks) == []
+    assert ev.check_answer('No outcome yet', {'ticket': {}}, checks)
+
+
 def test_recorded_tool_failure_cannot_satisfy_tool_execution_check():
     errors=ev.check_answer('A fluent reply',{}, {'expected_tool':'search_chair_specs'},
                            {'tools_called':['search_chair_specs'],'turns':[{'tool_name':'search_chair_specs','tool_success':False}]})

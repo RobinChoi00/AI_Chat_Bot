@@ -242,9 +242,11 @@ def resolve_button_choice(
     numbered = re.match(r"^([1-9])[).:\-\s]+(.+)$", text)
     if numbered:
         idx = int(numbered.group(1)) - 1
-        if 0 <= idx < len(buttons):
+        if 0 <= idx < len(buttons) and numbered.group(2).strip().casefold() == buttons[idx]['label'].casefold():
             return buttons[idx]["payload"]
-        text = numbered.group(2).strip()
+        # A numbered sentence with extra requirements is customer input, not
+        # a button echo whose text the router may safely discard.
+        return None
 
     lowered = text.lower()
     for btn in buttons:
@@ -259,7 +261,7 @@ def resolve_button_choice(
     hits = [
         btn
         for btn in buttons
-        if lowered in btn["label"].lower() or btn["label"].lower() in lowered
+        if lowered in btn["label"].lower()
     ]
     if len(hits) == 1:
         return hits[0]["payload"]

@@ -537,36 +537,30 @@ def parse_recommendation_hints(text: str) -> RecommendationRequest:
     if not raw:
         return req
 
-    ft_in = re.search(r"(\d)\s*(?:'|ft|feet)\s*(\d{1,2})?\s*(?:\"|in|inches)?", raw, re.I)
-    if ft_in:
-        feet = int(ft_in.group(1))
-        inches = int(ft_in.group(2) or 0)
-        if inches < 12 and 3 <= feet <= 7:
-            req.height_in = feet * 12 + inches
+    from sales_constraints import extract_constraints, height_measurements, without_height_measurements
 
-    cm_match = re.search(r"(\d{3})\s*cm\b", raw, re.I)
-    if cm_match and not req.height_in:
-        req.height_in = int(round(int(cm_match.group(1)) / 2.54))
+    heights = height_measurements(raw)
+    if heights:
+        req.height_in = heights[-1][2]
 
-    weight_match = re.search(r"(\d{2,3})\s*(?:lb|lbs|pounds?)\b", raw, re.I)
-    if weight_match:
-        req.weight_lb = int(weight_match.group(1))
+    exact = extract_constraints(raw)
+    if exact.get('weight_lb'):
+        req.weight_lb = int(round(float(exact['weight_lb'])))
+    if 'budget_max_usd' in exact:
+        req.budget_usd = int(float(exact['budget_max_usd'])) if exact['budget_max_usd'] else None
     else:
-        kg_match = re.search(r"(\d{2,3})\s*kg\b", raw, re.I)
-        if kg_match:
-            req.weight_lb = int(round(int(kg_match.group(1)) * 2.20462))
-
-    req.budget_usd = _parse_budget_usd(raw)
+        req.budget_usd = _parse_budget_usd(raw)
 
     # Bare "tall" / "petite" is not a measured height. Ask instead of guessing
     # Extra Tall (6'3"+) or Petite (<5'4").
 
     focus = []
-    if _BACK_HINT_RE.search(raw):
+    focus_text = without_height_measurements(raw)
+    if _BACK_HINT_RE.search(focus_text):
         focus.append("back")
-    if _NECK_HINT_RE.search(raw):
+    if _NECK_HINT_RE.search(focus_text):
         focus.append("neck")
-    if _FEET_HINT_RE.search(raw):
+    if _FEET_HINT_RE.search(focus_text):
         focus.append("feet")
     req.focus_areas = focus
     return req

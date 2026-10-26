@@ -135,6 +135,7 @@ export interface WarrantyHandoff extends SupportContact {
   requested: boolean;
   reason: "customer_request" | "callback_request" | "clarification_loop" | "safety_hazard";
   notification_sent: boolean;
+  language?: "en" | "ko" | "es";
   message: string;
 }
 

@@ -338,18 +338,25 @@ def _extract_catalog_model(text: str) -> str:
             continue
         cleaned = re.sub(rf"\b{re.escape(code)}\b", " ", cleaned, flags=re.I)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.-")
+    def is_mentioned(candidate: str) -> bool:
+        # The catalog's fuzzy search is useful for a model field, but a short
+        # sentence word such as "on" must not become "Manhattan Duo" here.
+        noise = {"osaki", "titan", "massage", "chair", "chairs", "series", "premium", "model", "black", "brown", "white", "with", "free", "warranty", "years", "gift", "extended", "parts", "labor", "delivery"}
+        anchors = [word for word in re.findall(r"[a-z]+", candidate.lower()) if len(word) >= 4 and word not in noise]
+        return any(re.search(rf"\b{re.escape(word)}\b", text, re.I) for word in anchors)
+
     if cleaned:
         resolved = resolve_model_name(cleaned)
-        if resolved:
+        if resolved and is_mentioned(resolved):
             return resolved
     for word in re.findall(r"[A-Za-z][A-Za-z0-9\-]{1,}", text):
         lower = word.lower()
-        if lower in _FILLER_WORDS:
+        if lower in _FILLER_WORDS or len(word) < 4:
             continue
         if normalize_error_code(word) in codes:
             continue
         resolved = resolve_model_name(word)
-        if resolved:
+        if resolved and is_mentioned(resolved):
             return resolved
     return ""
 
@@ -382,6 +389,11 @@ def _match_fonz_entry_for_code(text: str, code: str) -> Optional[dict[str, Any]]
 
 def _extract_model_from_intake(text: str) -> str:
     """Best-effort chair model from mixed intake like 'hiro error code 68'."""
+    # Preserve a customer-stated model code even if that older model is no
+    # longer in the storefront catalog. Error codes such as C6 are excluded.
+    explicit = re.search(r"\b(?:OS|TP|TITAN)[ -]?\d{3,5}[A-Za-z]{0,3}\b|\b\d{4}[A-Za-z]{1,3}\b", text, re.I)
+    if explicit:
+        return re.sub(r"\s+", "-", explicit.group(0)).upper()
     catalog = _extract_catalog_model(text)
     if catalog:
         return catalog
@@ -563,6 +575,29 @@ def _norm_intake(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").lower()).strip()
 
 
+def is_obvious_delivery_inquiry(text: str) -> bool:
+    """Recognize post-purchase delivery language before model classification.
+
+    These phrases request an order lookup or delivery help; they do not assert
+    a carrier status or change a delivery date.
+    """
+    raw = (text or "").replace("’", "'").strip()
+    if not raw:
+        return False
+    if re.search(r"배송[^.!?\n]{0,15}아니|entrega\s+no\s+es\s+el\s+problema", raw, re.I):
+        return False
+    return bool(re.search(
+        r"\b(?:my\s+)?(?:chair|order|package|shipment)\s+(?:hasn'?t|has\s+not|never)\s+(?:arrived|shown\s+up)\b|"
+        r"\border\s*(?:number\s*)?#?\s*[A-Za-z]*\d+[A-Za-z\d-]*[^.!?\n]{0,35}\b(?:late|delayed|missing|arrived)\b|"
+        r"\b(?:check|track|locate|find)\s+(?:my|the)\s+(?:order|package|shipment)\b|"
+        r"배송[^.!?\n]{0,35}(?:조회|확인|상태|언제|안\s*왔|오지\s*않|안\s*와|지연|연기|날짜|바꾸)|"
+        r"(?:주문|택배|의자)[^.!?\n]{0,25}(?:아직\s*)?(?:안\s*왔|오지\s*않|안\s*와)|"
+        r"\b(?:mi\s+)?(?:pedido|silla|paquete|env[ií]o)\s+(?:no\s+ha\s+llegado|est[aá]\s+(?:retrasad[oa]|tarde))\b|"
+        r"\b(?:rastrear|consultar|comprobar|localizar)\s+(?:mi|el)\s+(?:pedido|paquete|env[ií]o)\b",
+        raw, re.I,
+    ))
+
+
 def _has_any(text: str, words: tuple[str, ...]) -> bool:
     """Match whole words/phrases; avoid ``air`` matching inside ``chair``."""
     for word in words:
@@ -635,6 +670,13 @@ def _keyword_workflow_prefill(text: str) -> Optional[dict[str, Any]]:
     norm = _norm_intake(text)
     if not norm:
         return None
+
+    # An explicit heating failure outranks an incidental mention of the
+    # remote setting or an already completed check of the controller.
+    if re.search(r"\bheat(?:ing)?\s+(?:(?:stays?|is|still|remains?)\s+)?cold\b|\b(?:heat|heating)\s+(?:doesn'?t|does\s+not|won'?t)\s+(?:warm|work|heat)\b|\bno\s+warmth\b", norm):
+        return {"answer_keys": ["warranty", "defect", "heat"],
+                "model_name": _extract_model_from_intake(text), "confidence": "high",
+                "summary": "Heating stays cold.", "source": "keyword"}
 
     has_air = _has_any(norm, _AIR_WORDS)
     has_foot = _has_any(norm, _FOOTREST_WORDS)

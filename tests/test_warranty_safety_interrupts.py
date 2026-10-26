@@ -138,8 +138,14 @@ def test_real_api_stops_for_hazard_without_requiring_model(offline_client, actio
     payload = response.json()
     assert payload["handoff"]["reason"] == "safety_hazard"
     assert payload["handoff"]["requested"] is True
-    assert "Stop using the chair" in payload["assistant_message"]
-    assert "Do not run another test" in payload["assistant_message"]
+    language = "ko" if any("가" <= character <= "힣" for character in message) else "es" if message.startswith("Mi silla") else "en"
+    assert payload["handoff"]["language"] == language
+    required = {
+        "en": ("Stop using the chair", "unplug it only if you can do so safely", "Do not run another test"),
+        "ko": ("사용을 즉시 중단", "안전하게 할 수 있을 때만", "다시 시험하거나 사용을 재개하지 말고"),
+        "es": ("Deje de usar la silla", "solo si puede hacerlo de forma segura", "No haga otra prueba"),
+    }
+    assert all(phrase in payload["assistant_message"] for phrase in required[language])
     assert "tap one of the options" not in payload["assistant_message"]
     ticket = workflow.WarrantyEngine.get_ticket(ticket_id)
     assert ticket.get_collected()["human_support_reason"] == "safety_hazard"

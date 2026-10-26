@@ -20,6 +20,7 @@ class CustomerApi {
   email = "";
   sessionId = "";
   ticket: WarrantyTicketState | null = null;
+  handoff: WarrantySessionResponse["handoff"] = null;
   conversation: WarrantyConversationMessage[] = [];
   failSessionLoads = false;
   failNextEmail = false;
@@ -44,6 +45,7 @@ class CustomerApi {
     return {
       session_id: this.sessionId,
       ticket: this.ticket,
+      handoff: this.handoff,
       privacy: this.privacy(),
       conversation_messages: this.conversation,
       conversation_has_more: this.historyHasMore,
@@ -305,3 +307,70 @@ test("keeps a closed conversation readable after reload without reopening the ca
   expect(api.ticket.status).toBe("resolved");
   expect(api.unexpected).toEqual([]);
 });
+
+for (const localized of [
+  {
+    language: "ko" as const,
+    heading: "안전 안내 및 지원",
+    report: "의자에서 연기가 나요.",
+    message: "의자 사용을 즉시 중단하세요. 다시 켜서 시험하지 마세요.",
+    call: "보증 지원팀 전화",
+    email: "보증 지원팀에 이메일 보내기",
+    pending: "지원팀 알림 전송이 아직 확인되지 않았습니다.",
+    reference: "접수 번호: WR-SAFETY",
+  },
+  {
+    language: "es" as const,
+    heading: "Orientación de seguridad y asistencia",
+    report: "Se ven llamas debajo de mi silla.",
+    message: "Deje de usar la silla. No vuelva a encenderla para probarla.",
+    call: "Llamar a Garantía",
+    email: "Enviar correo a Garantía",
+    pending: "No se ha confirmado el envío de una notificación al equipo.",
+    reference: "Referencia del caso: WR-SAFETY",
+  },
+]) {
+  test(`restores ${localized.language} safety guidance and truthful notification status`, async ({ page }) => {
+    const api = new CustomerApi();
+    api.consent = true;
+    api.email = buyerEmail;
+    api.ticket = { ...makeTicket("defect", localized.message), case_reference: "WR-SAFETY" };
+    api.handoff = {
+      requested: true,
+      reason: "safety_hazard",
+      language: localized.language,
+      notification_sent: false,
+      message: localized.message,
+      department: "warranty",
+      phone: "+1-888-848-2630 ext. 3",
+      phone_href: "tel:+18888482630,3",
+      email: "service@osakititan.com",
+    };
+    api.conversation = [
+      { id: 1, role: "user", content: localized.report },
+      { id: 2, role: "assistant", content: localized.message },
+    ];
+    await api.install(page);
+    await page.goto("/warranty");
+
+    const notice = page.getByRole("region", { name: localized.heading, exact: true });
+    await expect(notice).toBeVisible();
+    await expect(notice).toHaveAttribute("lang", localized.language);
+    await expect(notice).toContainText(localized.message);
+    await expect(notice).toContainText(localized.reference);
+    await expect(notice).toContainText(localized.pending);
+    await expect(notice.getByRole("link", { name: localized.call })).toHaveAttribute("href", "tel:+18888482630,3");
+    await expect(notice.getByRole("link", { name: localized.email, exact: true })).toHaveAttribute("href", "mailto:service@osakititan.com");
+    await expect(page.getByRole("textbox", { name: "Message to support" })).toHaveCount(0);
+
+    api.handoff.notification_sent = true;
+    await page.reload();
+    await expect(notice).toBeVisible();
+    await expect(notice).toHaveAttribute("lang", localized.language);
+    await expect(notice).toContainText(localized.message);
+    await expect(notice.getByText(localized.pending, { exact: false })).toHaveCount(0);
+    await expect(page.getByRole("log", { name: "Conversation" })).toContainText(localized.report);
+    await expect(page.getByRole("textbox", { name: "Message to support" })).toHaveCount(0);
+    expect(api.unexpected).toEqual([]);
+  });
+}

@@ -249,8 +249,10 @@ _HUMAN_RE = re.compile(
     r"\b("
     r"talk\s+to\s+(?:a\s+)?(?:human|person|representative|rep|agent|sales|someone)|"
     r"speak\s+(?:with|to)\s+(?:a\s+)?(?:human|person|rep|agent|sales|someone)|"
-    r"connect\s+me\s+(?:to|with)\s+(?:a\s+)?(?:human|person|rep|agent|sales)|"
-    r"call\s+me|phone\s+me|human\s+please|real\s+person|"
+    r"connect\s+me\s+(?:(?:to|with)\s+(?:a\s+)?(?:human|person|rep|agent|sales|someone|somebody)|now)|"
+    r"(?:have|get|ask)\s+(?:a\s+)?(?:someone|somebody|sales\s+(?:person|rep|representative)|person|rep|representative)\s+"
+    r"(?:to\s+)?(?:call|phone|contact|follow\s*up)\b|"
+    r"call\s+me|phone\s+me|human\s+please|(?:real|live)\s+(?:sales\s+)?(?:person|rep|representative|agent)|"
     r"have\s+feedback|feedback\s+for\s+you|"
     r"answer\s+my\s+question\s+above|question\s+above|"
     r"create\s+an?\s+invoice|need\s+an?\s+invoice|"
@@ -565,8 +567,18 @@ def classify(text: str) -> SalesIntent:
     #    otherwise send a shopper to the Warranty Department. `detect_topic`
     #    returns None the moment the message mentions an existing order or
     #    chair, so post-purchase messages still fall through to the guardrails.
+    human_hits = _requested_matches(_HUMAN_RE, raw)
     policy_topic = _prepurchase_policy_topic(raw)
     if policy_topic:
+        # A requested callback is the task even when the reason mentions a
+        # shipping policy. Medical eligibility still gets its clinical caution.
+        if human_hits and policy_topic != "limits":
+            return SalesIntent(
+                label=INTENT_HUMAN,
+                confidence="high",
+                handoff=True,
+                matched_terms=human_hits,
+            )
         return SalesIntent(
             label=INTENT_PREPURCHASE_POLICY,
             confidence="high",
@@ -629,21 +641,21 @@ def classify(text: str) -> SalesIntent:
             matched_terms=hits,
         )
 
+    # An explicit person/callback request takes precedence over an ETA mention;
+    # cancellation, repairs, and order status above retain their specialist route.
+    if human_hits:
+        return SalesIntent(
+            label=INTENT_HUMAN,
+            confidence="high",
+            handoff=True,
+            matched_terms=human_hits,
+        )
+
     # 6) ETA / delivery date promise → Warranty Department redirect.
     hits = _matched(_ETA_SHIPPING_RE, raw)
     if hits:
         return SalesIntent(
             label=INTENT_ETA_SHIPPING,
-            confidence="high",
-            handoff=True,
-            matched_terms=hits,
-        )
-
-    # 7) Explicit human request.
-    hits = _requested_matches(_HUMAN_RE, raw)
-    if hits:
-        return SalesIntent(
-            label=INTENT_HUMAN,
             confidence="high",
             handoff=True,
             matched_terms=hits,

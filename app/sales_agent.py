@@ -4757,6 +4757,46 @@ _TRANSIENT_FLOW_KEYS = (
 )
 
 
+def _retain_shopper_constraints(message: str, data: dict, intent: Optional[SalesIntent]) -> dict:
+    """Keep explicit fit answers even when the turn routes to policy or a person."""
+    exact = extract_constraints(message)
+    previous = dict(data.get('recommend_prefs') or {})
+    label = intent.label if intent is not None else INTENT_UNCLEAR
+    shopper = bool(re.search(r"\b(?:i(?:'m| am| weigh| have)|my|our|we|buyer|user|person|husband|wife|father|mother|dad|mom)\b", message, re.I))
+    hints = parse_recommendation_hints(message)
+    body_answer = bool(hints.focus_areas) and (
+        label in {INTENT_RECOMMEND, INTENT_INTENSITY}
+        or shopper and bool(re.search(r'\b(?:massage|relief|pain|focus|target|want|need|prefer)\b', message, re.I))
+    )
+    if not exact and not body_answer:
+        return {}
+    measured = any(key in exact for key in ('height_in', 'weight_lb', 'doorway_in'))
+    if not (previous or label in {INTENT_RECOMMEND, INTENT_INTENSITY} or (shopper and measured)):
+        return {}
+    # A product's advertised capacity or price is not a new limit for its buyer.
+    if label in {INTENT_SPECS, INTENT_PRICE, INTENT_STOCK, INTENT_COMPARE} and not shopper:
+        return {}
+    budget_answer = re.search(r'\b(?:budget|under|below|at most|maximum|max|up to|no more than)\b', message, re.I) or re.fullmatch(r'\s*\$?\s*\d[\d,.]*\s*(?:k|dollars?|usd)?\s*', message, re.I)
+    if not budget_answer:
+        exact.pop('budget_max_usd', None)
+    mechanism_answer = re.search(r'\b(?:require|need|want|prefer|must have|must be|only)\b.{0,35}\b[2345]\s*D\b', message, re.I) or re.fullmatch(r'\s*[2345]\s*D\s*', message, re.I)
+    if not mechanism_answer:
+        exact.pop('mechanism', None)
+    if not exact and not body_answer:
+        return {}
+    retained = {**previous, **exact}
+    retained = merge_prefs_from_hints(
+        retained,
+        height_in=int(exact['height_in']) if exact.get('height_in') else None,
+        weight_lb=float(exact['weight_lb']) if exact.get('weight_lb') else None,
+        budget_usd=int(float(exact['budget_max_usd'])) if exact.get('budget_max_usd') else None,
+        focus_areas=hints.focus_areas if body_answer else None,
+        free_text=message if body_answer else '',
+    )
+    data['recommend_prefs'] = retained
+    return {'recommend_prefs': retained} if retained != previous else {}
+
+
 def respond(message: str, *, payload: Optional[str] = None,
             domain: str = 'osakiusa.com', prefs: Optional[dict] = None,
             before_handoff: bool = False) -> SalesReply:
@@ -4766,6 +4806,7 @@ def respond(message: str, *, payload: Optional[str] = None,
     reset = {}
     intent = classify(raw) if raw and not payload else None
     menu = (payload or '').lower() in {'menu', 'root', 'start', 'start_over'} or (not payload and bool(re.fullmatch(r'(?:back to )?menu|start over|cancel(?: that)?|never mind|nevermind', raw, re.I)))
+    captured = _retain_shopper_constraints(raw, data, intent) if raw and not payload and not menu else {}
     waiting_form = any(data.get(key) for key in _TRANSIENT_FLOW_KEYS if key != 'awaiting_pre_human_question')
     # A showroom request must look like a day/time. A technical question,
     # cancellation or request for a person is never an appointment window.
@@ -4789,7 +4830,9 @@ def respond(message: str, *, payload: Optional[str] = None,
         result = _finalize_flow_stage(result)
     else:
         result = _respond_turn(message, payload=payload, domain=domain, prefs=data, before_handoff=before_handoff)
-    patch = {**reset, **(result.prefs_patch or {})}
+    patch = {**captured, **reset, **(result.prefs_patch or {})}
+    if captured and isinstance(patch.get('recommend_prefs'), dict):
+        patch['recommend_prefs'] = {**captured['recommend_prefs'], **patch['recommend_prefs']}
     if result.intent == INTENT_RECOMMEND and result.products:
         retained = dict(data.get('recommend_prefs') or {})
         retained.update(patch.get('recommend_prefs') or {})

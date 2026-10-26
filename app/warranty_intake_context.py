@@ -310,9 +310,56 @@ _CHECK_TOPICS = {
     "power_cord": re.compile(r"\bpower\s*cord\b", re.I),
     "power_cycle": re.compile(r"\b(?:power[ -]?cycl\w*|restart\w*|reboot\w*|toggl\w*.{0,35}switch|turn\w*.{0,25}off.{0,25}on)\b", re.I),
     "remote_cable": re.compile(r"\b(?:remote.{0,30}(?:cable|connection)|cable.{0,30}remote)\b", re.I),
-    "heat_warmup": re.compile(r"\b(?:heat\w*.{0,55}(?:10|ten)\s*minutes?|(?:10|ten)\s*minutes?.{0,55}heat\w*)\b", re.I),
-    "heat_on": re.compile(r"\bheat\w*.{0,35}(?:turned? on|enabled|switched on)|\bturn\w*.{0,35}heat\w*.{0,15}on\b", re.I),
+    "heat_warmup": re.compile(r"\b(?:heat\w*.{0,55}(?:10|ten)\s*minutes?|(?:10|ten)\s*minutes?.{0,55}heat\w*|note how long.{0,35}heat)\b", re.I),
+    "heat_on": re.compile(r"\bheat(?:ing)?\s+(?:(?:function|setting|mode)\s+)?(?:(?:is|was)\s+)?(?:(?:turned?|switched)\s+)?(?:on|enabled)\b|\b(?:turn(?:ed)?|switch(?:ed)?)\s+(?:the\s+)?heat(?:ing)?\s+on\b", re.I),
 }
+_WARMUP_DURATION_RE = re.compile(r"\b(\d+(?:\.\d+)?|ten|eleven|twelve|fifteen|twenty|thirty|forty|sixty)\s*\+?\s*(?:minutes?|mins?)\b", re.I)
+_WRITTEN_MINUTES = {"ten": 10, "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40, "sixty": 60}
+_WARMUP_ACTIVITY_RE = re.compile(r"\b(?:ran|run|used|tried|completed|waited|waiting|finished|tested|spent|called|checked)\b", re.I)
+
+
+def _has_completed_heat_warmup(text: str) -> bool:
+    """Require an explicit completed heated run of at least ten minutes."""
+    normalized = text.replace("’", "'")
+    if re.search(r"\bheat\w*\s+(?:(?:was|is)\s+)?off\b|\bheat\w*\s+was\s+not\s+on\b", normalized, re.I):
+        return False
+    for clause in re.split(r"(?<!\d)\.(?!\d)|[!?;]|\b(?:but|however)\b", normalized, flags=re.I):
+        if not re.search(r"\bheat(?:ing|ed)?\b", clause, re.I):
+            continue
+        if re.search(r"\b(?:haven'?t|have not|not yet|never|didn'?t|did not|will|would|should|plan to|going to)\b|\bheat\w*\s+(?:was\s+|is\s+)?off\b", clause, re.I):
+            continue
+        if not re.search(r"\b(?:already|tried|ran|used|completed|waited|finished)\b", clause, re.I):
+            continue
+        activities = list(_WARMUP_ACTIVITY_RE.finditer(clause))
+        for duration in _WARMUP_DURATION_RE.finditer(clause):
+            prior = clause[max(0, duration.start()-20):duration.start()]
+            if re.search(r"(?:less than|under|nearly|almost|about|around)\s*$|\d+\s*[-–—]\s*$", prior, re.I):
+                continue
+            word = duration.group(1).lower()
+            minutes = _WRITTEN_MINUTES.get(word)
+            if minutes is None:
+                minutes = float(word)
+            if minutes < 10:
+                continue
+            # Bind the duration to its nearest activity, not another heat
+            # mention elsewhere: five minutes heating plus twenty on hold
+            # is not a completed twenty-minute heating run.
+            preceding = [activity for activity in activities if activity.end() <= duration.start()]
+            if not preceding:
+                continue
+            activity = preceding[-1]
+            if activity.group(0).lower() not in {"ran", "run", "used", "tried", "completed", "waited", "finished", "tested", "spent"}:
+                continue
+            following = next((other.start() for other in activities if other.start() >= duration.end()), len(clause))
+            before = clause[activity.start():duration.start()]
+            after = clause[duration.end():following]
+            if re.search(r"\bon hold\b|\bfor\s+(?:support|(?:a\s+)?callback|(?:the\s+)?(?:agent|technician|warranty\s+team))\b", before, re.I):
+                continue
+            heat_subject = re.search(r"\bheat(?:ing|ed)?\b", before, re.I)
+            heated_run = re.match(r"\s*(?:with|using)\s+(?:the\s+)?heat(?:ing)?\b", after, re.I)
+            if heat_subject or heated_run:
+                return True
+    return False
 
 
 def completed_check_topics(ticket, turns) -> set[str]:
@@ -328,11 +375,15 @@ def completed_check_topics(ticket, turns) -> set[str]:
         texts.append(str(getattr(turn, "customer_answer", "") or ""))
     for text in texts:
         text = text.replace("’", "'")
+        if _has_completed_heat_warmup(text):
+            topics.add("heat_warmup")
+            if _CHECK_TOPICS["heat_on"].search(text):
+                topics.add("heat_on")
         if not re.search(r"\b(?:already|tried|checked|tested|completed|reseated|reconnected|cycled|restarted|rebooted)\b", text, re.I):
             continue
         if re.search(r"\b(?:haven'?t|have not|not yet|never|didn'?t|did not)\b", text, re.I):
             continue
-        topics.update(name for name, pattern in _CHECK_TOPICS.items() if pattern.search(text))
+        topics.update(name for name, pattern in _CHECK_TOPICS.items() if name != "heat_warmup" and pattern.search(text))
     return topics
 
 
@@ -343,87 +394,22 @@ def filter_completed_check_steps(steps: list[str], *, ticket, turns) -> list[str
     kept = []
     for step in steps:
         topics = {name for name, pattern in _CHECK_TOPICS.items() if pattern.search(step)}
+        # A completed heat run must not lead to a further ten-minute test,
+        # even when that request is bundled with another generic check.
+        if "heat_warmup" in completed and ("heat_warmup" in topics or re.search(r"\bafter\s+(?:10|ten)\s+minutes?\b", step, re.I)):
+            continue
         if topics and topics <= completed:
             continue
         kept.append(step)
     return kept
 
 
-_EN_HAZARD = (
-    r"(?:too hot|overheat\w*|smok\w*|burn(?:ing|t) smell|sparks?|"
-    r"electric(?:al)? shock|electrocut\w*|short circuit|has a short|"
-    r"(?:caught|catching|on) fire|fire|flames?|pain(?:ful)?|hurts?|discomfort)"
-)
-_ES_HAZARD = (
-    r"(?:humo|humea\w*|incendio|fuego|en llamas|(?:hay|salen|veo) llamas|"
-    r"olor a quemado|chispas?|descargas? el[eé]ctricas?|electrocut\w*|"
-    r"cortocircuito|sobrecalent\w*|demasiado caliente|dolor|duele\w*|molestias?)"
-)
-_KO_HAZARD_ROOT = (
-    r"(?:연기|불꽃|화재|스파크|감전|전기\s*충격|누전|합선|과열|통증|"
-    r"타는\s*냄새|탄\s*냄새|불|너무\s*뜨겁|지나치게\s*뜨겁|아프|아파)"
-)
-_KO_HAZARD = (
-    r"(?:연기|불꽃|화재|스파크|감전|전기\s*충격|누전|합선|과열|통증|"
-    r"타는\s*냄새|탄\s*냄새|불(?:이|은|도)?\s*(?:나|났|난|납|붙|타)|"
-    r"너무\s*뜨겁|지나치게\s*뜨겁|아프|아파)"
-)
-_HAZARD_RE = re.compile(rf"\b(?:{_EN_HAZARD}|{_ES_HAZARD})\b|{_KO_HAZARD}", re.I)
-_EN_NEGATED_HAZARD_RE = re.compile(
-    rf"\b(?:no|not|without|never|isn't|aren't|hasn't|doesn't|don't|didn't)\s+"
-    rf"(?:(?:any|signs? of|experiencing|feel(?:ing)?|caus(?:e|es|ed|ing)|have|had|"
-    rf"emit(?:ting)?|produc(?:e|es|ed|ing)|show(?:ing)?)\s+)*"
-    rf"{_EN_HAZARD}(?:\s*,?\s*(?:or|and)\s+(?:any\s+)?{_EN_HAZARD})*\b|"
-    rf"\b{_EN_HAZARD}\s+(?:is|are|was|were)\s+not\s+(?:present|visible|seen|detected)\b",
-    re.I,
-)
-_ES_NEGATED_HAZARD_RE = re.compile(
-    rf"\b(?:no|sin|nunca)\s+"
-    rf"(?:(?:hay|veo|tiene|tengo|siento|sufro|presento|noto|percibo|me|ha|est[aá]|se|produce|sale|salen|signos de|ning[uú]n(?:a)?)\s+)*"
-    rf"{_ES_HAZARD}(?:\s*,?\s*(?:ni|o|y)\s+{_ES_HAZARD})*\b",
-    re.I,
-)
-_KO_NEGATED_HAZARD_RE = re.compile(
-    rf"{_KO_HAZARD_ROOT}(?:\s*(?:와|과|나|및|또는)\s*{_KO_HAZARD_ROOT})*"
-    r"(?:은|는|이|가|도|을|를)?\s*(?:전혀\s*)?"
-    r"(?:(?:난|붙은|발생한|된|당한|겪은)\s*(?:적(?:이|은|도)?|일(?:이|은|도)?)\s*)?"
-    r"(?:없(?:습니다|어요|었어요|었고|었지만|음|다|고|지만|는데|는)?|"
-    r"아니(?:에요|었어요|고|지만|라|다)?|"
-    r"(?:나지|발생하지|보이지|느껴지지|(?:되|하)?지)\s*않(?:습니다|아요|았어요|고|지만|는데|음|다)?|"
-    r"안\s*(?:나요|납니다|났어요|났습니다|붙었어요|붙었습니다|나|보여요|보입니다|보여|느껴져요|뜨거워요|뜨겁습니다|아파요|아픕니다))"
-)
-_KO_SCHEDULE_TOPIC = r"(?:배송|배달|일정|예약|주문|도착|날짜|시간|설치|방문|수령|약속)"
-_KO_POSTPONEMENT_ACTION_RE = re.compile(
-    rf"(?P<context>{_KO_SCHEDULE_TOPIC}(?:(?!연기|의자|안마기|제품|기기)[^.!?\n]){{0,60}})"
-    r"연기(?=하|해|했|합|할|되|돼|됐|된|될)"
-)
-_KO_POSTPONEMENT_NOUN_RE = re.compile(
-    rf"(?P<context>{_KO_SCHEDULE_TOPIC}(?:\s*(?:날짜|일정|시간))?(?:을|를|이|가|은|는|의)?\s*)"
-    r"연기(?=(?:은|는|도)?\s*(?:요청|부탁|가능|불가|변경|문의|사유|관련|방법|안내)|\s*(?:[.!?]|$))"
-)
-
 
 def reported_safety_hazard(ticket=None, turns=(), text: str = "") -> bool:
-    """Stop unsafe-use reports in supported languages without relying on a model.
+    """Use the shared deterministic incident guard on every warranty surface."""
+    from customer_safety import reported_safety_hazard as detect_hazard
 
-    Negation removes only the stated hazard, not the rest of the sentence:
-    "no smoke, but there are sparks" must still stop the workflow.
-    "연기" used to postpone delivery is not a smoke report.
-    """
-    collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
-    texts = [text, str(collected.get("intake_summary") or ""), str(collected.get("intake_raw_message") or "")]
-    texts.extend(str(getattr(turn, "customer_answer", "") or "") for turn in turns or ())
-    for value in texts:
-        value = value.replace("’", "'")
-        # Only remove the ambiguous word itself: a hazard elsewhere in the
-        # same request ("sparks, so postpone delivery") must remain visible.
-        for postpone in (_KO_POSTPONEMENT_ACTION_RE, _KO_POSTPONEMENT_NOUN_RE):
-            value = postpone.sub(lambda match: match.group("context"), value)
-        for negative in (_EN_NEGATED_HAZARD_RE, _ES_NEGATED_HAZARD_RE, _KO_NEGATED_HAZARD_RE):
-            value = negative.sub("", value)
-        if _HAZARD_RE.search(value):
-            return True
-    return False
+    return detect_hazard(ticket=ticket, turns=turns, text=text)
 
 
 def try_side_question_for_ticket(engine, ticket_id: str, answer: str) -> Optional[str]:

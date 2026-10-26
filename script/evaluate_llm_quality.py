@@ -38,7 +38,7 @@ CASES_PATH = ROOT / "data" / "llm_eval_cases.json"
 CONVERSATIONS_PATH = ROOT / "data" / "ai_conversation_eval_cases.json"
 LEGACY_SECTIONS = ("tool_selection", "faithfulness", "refusal", "language_consistency")
 WARRANTY_ACTIONS = frozenset({"register-model", "confirm-model", "quick-start", "natural-start", "smart-start", "answer", "state"})
-CHECK_KEYS = frozenset({"contains", "contains_any", "not_contains", "json_equals", "expected_intent", "expected_handoff", "expected_tool", "expected_tool_sequence", "expected_sources", "expected_language", "expect_refusal", "min_products", "max_products", "max_product_price", "min_product_capacity_lb", "required_product_mechanism"})
+CHECK_KEYS = frozenset({"contains", "contains_any", "not_contains", "json_equals", "expected_intent", "expected_handoff", "expected_tool", "expected_tool_sequence", "expected_sources", "expected_language", "expect_refusal", "min_products", "max_products", "max_product_price", "min_product_capacity_lb", "required_product_mechanism", "max_product_doorway_assembled_in", "max_product_doorway_disassembled_in"})
 DIALOGUE_CHECK_KEYS = frozenset({"not_contains", "final_contains_any", "max_identical_assistant_replies"})
 
 
@@ -124,7 +124,7 @@ def validate_conversations(payload: dict[str, Any]) -> list[str]:
                 for key in ("expected_handoff", "expect_refusal"):
                     if key in checks and not isinstance(checks[key], bool):
                         errors.append(f"{cid}/{index}: {key} must be boolean")
-                for key in ("min_products", "max_products", "max_product_price", "min_product_capacity_lb"):
+                for key in ("min_products", "max_products", "max_product_price", "min_product_capacity_lb", "max_product_doorway_assembled_in", "max_product_doorway_disassembled_in"):
                     if key in checks and (isinstance(checks[key], bool) or not isinstance(checks[key], (int, float)) or not math.isfinite(checks[key]) or checks[key] < 0):
                         errors.append(f"{cid}/{index}: {key} must be nonnegative")
                 if "required_product_mechanism" in checks and checks["required_product_mechanism"] not in {"2D", "3D", "4D", "5D"}:
@@ -173,15 +173,15 @@ def validate_target(base_url: str, allow_remote: bool) -> str:
     return base_url.rstrip("/")
 
 
-def _lookup(payload: Any, path: str) -> Any:
+def _lookup(payload: Any, path: str, default: Any = None) -> Any:
     current = payload
     for segment in path.split("."):
         if isinstance(current, dict):
-            current = current.get(segment)
+            current = current.get(segment, default)
         elif isinstance(current, list) and segment.isdigit() and int(segment) < len(current):
             current = current[int(segment)]
         else:
-            return None
+            return default
     return current
 
 
@@ -214,7 +214,8 @@ def check_answer(text: str, payload: dict[str, Any], checks: dict[str, Any], tra
         if needle.lower() in lower:
             errors.append(f"forbidden text appeared: {needle}")
     for path, expected in checks.get("json_equals", {}).items():
-        if _lookup(payload, path) != expected:
+        missing = object()
+        if _lookup(payload, path, missing) != expected:
             errors.append(f"unexpected JSON field: {path}")
     for check, field in (("expected_intent", "intent"), ("expected_handoff", "handoff")):
         if check in checks and payload.get(field) != checks[check]:
@@ -273,6 +274,19 @@ def check_answer(text: str, payload: dict[str, Any], checks: dict[str, Any], tra
                     errors.append("recommended capacity missing or below the customer's exact weight")
             except (TypeError, ValueError):
                 errors.append("recommended capacity cannot be checked")
+    for check, field in (
+        ("max_product_doorway_assembled_in", "fit.doorway_assembled_in"),
+        ("max_product_doorway_disassembled_in", "fit.doorway_disassembled_in"),
+    ):
+        if check not in checks:
+            continue
+        for product in products:
+            value = _lookup(product, field)
+            try:
+                if isinstance(value, bool) or value is None or not math.isfinite(float(value)) or float(value) <= 0 or float(value) > checks[check]:
+                    errors.append("recommended doorway requirement missing or exceeds the customer's opening")
+            except (TypeError, ValueError):
+                errors.append("recommended doorway requirement cannot be checked")
     if "required_product_mechanism" in checks:
         for product in products:
             if str(_lookup(product, "specs.massage_mechanism") or "").upper() != checks["required_product_mechanism"]:

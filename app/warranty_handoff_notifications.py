@@ -28,8 +28,13 @@ def send_handoff_notification(ticket_id: str) -> bool:
             f"Model: {ticket.model_name or 'Not provided'}",
             f"Issue: {ticket.issue_type or 'Not classified'}", "",
             "Customer request:", str(data.get("human_support_request") or ""), "",
-            "Recent customer conversation:",
         ]
+        original_safety_report = str(data.get("human_support_safety_report") or "")
+        if original_safety_report and original_safety_report != str(data.get("human_support_request") or ""):
+            lines.extend([
+                "Original safety report:", original_safety_report, "",
+            ])
+        lines.append("Recent customer conversation:")
         # Only actual customer exchanges are included. Staff notes, source
         # documents and legacy workflow references are never copied.
         rows = db.query(WarrantyConversationMessage).filter(

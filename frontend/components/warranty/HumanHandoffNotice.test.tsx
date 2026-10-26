@@ -62,4 +62,20 @@ describe("human support handoff", () => {
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ domain: "titanchair.com", reason: "customer_request" });
     expect(fetch.mock.calls[0][1].headers).not.toHaveProperty("X-Admin-Key");
   });
+
+  it.each([
+    { language: "ko" as const, message: "의자 사용을 즉시 중단하세요.", heading: "안전 안내 및 지원", contact: "보증 지원팀 전화", pending: "지원팀 알림 전송이 아직 확인되지 않았습니다." },
+    { language: "es" as const, message: "Deje de usar la silla.", heading: "Orientación de seguridad y asistencia", contact: "Llamar a Garantía", pending: "No se ha confirmado el envío de una notificación al equipo." },
+  ])("localizes safety instructions and contact controls for $language", ({ language, message, heading, contact, pending }) => {
+    const props = { ...handoff, reason: "safety_hazard" as const, language, message };
+    const html = renderToStaticMarkup(<HumanHandoffNotice handoff={props} caseReference="WR-123456" />);
+    expect(html).toContain(`lang="${language}"`);
+    expect(html).toContain(heading);
+    expect(html).toContain(message);
+    expect(html).toContain(contact);
+    expect(html).toContain(pending);
+    expect(html).not.toContain("A support notification has not been confirmed");
+    const submitted = renderToStaticMarkup(<HumanHandoffNotice handoff={{ ...props, notification_sent: true }} />);
+    expect(submitted).not.toContain(pending);
+  });
 });

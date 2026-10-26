@@ -1272,29 +1272,13 @@ _DEFECT_MODEL_REQUIRED_MSG = (
 )
 
 
-def _handoff_message(reason: str, department: str = "warranty", *, notification_sent: bool = False) -> str:
+def _handoff_message(reason: str, department: str = "warranty", *, notification_sent: bool = False, language: str = "en", notification_status: Optional[str] = None) -> str:
     from warranty_scope import support_contact  # noqa: WPS433
+    from customer_safety import support_handoff_message
 
     phone = support_contact("warranty" if reason == "safety_hazard" else department)["phone"]
-    notification = (
-        "A notification has been submitted to our support inbox. A callback has not been booked. "
-        if notification_sent else "I haven't sent a notification or booked a callback. "
-    )
-
-    if reason == "safety_hazard":
-        return (
-            "Stop using the chair. Switch it off and unplug it only if you can do so safely. "
-            "Do not run another test, resume use, or open panels. "
-            "I've saved the reported safety concern and conversation context with this case for team review. "
-            f"{notification}"
-            f"Please call **{phone}** for direct support."
-        )
-    request = "callback request" if reason == "callback_request" else "request for a person"
-    return (
-        f"I've saved your {request} with this case and its conversation context for team review. "
-        f"{notification}"
-        f"For direct help, please call **{phone}**. "
-        "You do not need to repeat the troubleshooting steps here."
+    return support_handoff_message(
+        language, phone, reason, notification_sent, notification_status=notification_status,
     )
 
 
@@ -1311,6 +1295,7 @@ def _request_human_handoff(engine, session_id: str, message: str, domain: str, *
     """Persist a visible support request without claiming a live transfer/email."""
     from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
     from warranty_notification_jobs import initialize_notification_storage, enqueue_notification
+    from customer_safety import detect_customer_language, reported_safety_hazard
     from sqlalchemy import text as sql_text
 
     initialize_notification_storage()
@@ -1325,8 +1310,23 @@ def _request_human_handoff(engine, session_id: str, message: str, domain: str, *
         row = db.query(WarrantyTicket).filter(WarrantyTicket.ticket_id == ticket_id).first()
         if row is None:
             raise HTTPException(status_code=404, detail="Warranty session not found.")
-        if row.get_collected().get("human_support_reason") == "safety_hazard":
+        collected = row.get_collected()
+        had_safety_report = collected.get("human_support_reason") == "safety_hazard"
+        saved_safety_report = str(collected.get("human_support_safety_report") or "")
+        if had_safety_report and not saved_safety_report:
+            previous_request = str(collected.get("human_support_request") or "")
+            if reported_safety_hazard(text=previous_request):
+                saved_safety_report = previous_request
+                row.set_collected("human_support_safety_report", previous_request[:2000])
+        prior_language = str(collected.get("human_support_language") or detect_customer_language(str(collected.get("human_support_request") or "")))
+        language = detect_customer_language(message, default=prior_language)
+        current_hazard = reported_safety_hazard(text=message)
+        if had_safety_report:
             reason = "safety_hazard"
+            # A short English acknowledgement must not replace instructions
+            # the customer has already received in their original language.
+            if not current_hazard and not re.search(r"\b(?:speak|reply|answer)\b.{0,20}\b(?:english|korean|spanish)\b|영어로|한국어로|스페인어로|en ingl[eé]s|en espa[nñ]ol", message, re.I):
+                language = prior_language
         from warranty_scope import is_delivery_inquiry  # noqa: WPS433
 
         department = str(row.get_collected().get("human_support_department") or "warranty")
@@ -1339,6 +1339,9 @@ def _request_human_handoff(engine, session_id: str, message: str, domain: str, *
         row.set_collected("human_support_department", department)
         row.set_collected("human_support_requested_at", _now_cst_iso())
         row.set_collected("human_support_request", message[:2000])
+        row.set_collected("human_support_language", language)
+        if reason == "safety_hazard" and current_hazard and not saved_safety_report:
+            row.set_collected("human_support_safety_report", message[:2000])
         row.set_collected("human_support_previous_node", str(row.current_node_id or ""))
         source_key = f"{ticket_id}:{department}:{'safety' if reason == 'safety_hazard' else 'support'}"
         row.set_collected("human_support_notification_source", source_key)
@@ -1372,6 +1375,19 @@ def _clarification_response(engine, ticket_id: str, answer: str, clarify: str) -
     if count >= 2:
         payload["handoff"] = {"requested": False, "offered": True, "notification_sent": False}
     return payload
+
+
+def _is_workflow_confusion(text: str) -> bool:
+    """Recognize confusion about the choices, not genuine product questions."""
+    return bool(re.search(
+        r"\b(?:can(?:not|'t)|could(?:not|n't))\s+(?:tell|choose|understand)\b[^.!?\n]{0,60}\b(?:which|those|choices?|options?|labels?)\b|"
+        r"\b(?:do\s+not|don't)\s+understand\s+(?:these|those|the)\s+(?:choices?|options?|labels?)\b|"
+        r"\bnone\s+of\s+(?:these|those|the)\s+(?:choices?|options?|labels?)\b|"
+        r"\b(?:choices?|options?|labels?)\s+(?:don't|do\s+not)\s+make\s+sense\b|"
+        r"(?:어떤|어느)[^.!?\n]{0,20}(?:선택|항목)[^.!?\n]{0,20}모르|선택지[^.!?\n]{0,20}이해[^.!?\n]{0,10}안|"
+        r"\bno\s+(?:entiendo|s[eé])\b[^.!?\n]{0,35}\b(?:opci[oó]n|opciones|elegir)\b",
+        text.replace("’", "'"), re.I,
+    ))
 
 
 def _answer_selects_defect(node: Optional[dict], answer: str) -> bool:
@@ -1817,6 +1833,17 @@ def _finalize_answer_response(
     interpreted_option: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Build the browser payload after a successful submit_answer."""
+    # Reuse an explicit customer-completed heat run instead of asking the
+    # same warm-up question again. Record its original evidence on the turn.
+    next_node = engine.get_current_node(ticket_id)
+    if (next_node or {}).get("node_id") == "defect_heating_warmup_q":
+        from warranty_intake_context import completed_check_topics
+
+        current_ticket = engine.get_ticket(ticket_id)
+        if {"heat_warmup", "heat_on"} <= completed_check_topics(current_ticket, engine.get_turns(ticket_id)):
+            collected = current_ticket.get_collected()
+            evidence = str(collected.get("intake_raw_message") or collected.get("intake_summary") or "")
+            engine.submit_answer(ticket_id, "still_no_heat", customer_display=evidence)
     tracking_summary: Optional[Dict[str, Any]] = None
     previous_node = result.get("previous_node_id")
     if previous_node in (
@@ -2001,9 +2028,14 @@ def _serialize_ticket_state(
 
         notification_status = handoff_notification_state(ticket_id, str(collected.get("human_support_notification_source") or ""))
     notification_sent = notification_status == "completed"
+    from customer_safety import detect_customer_language
+
+    handoff_language = str(collected.get("human_support_language") or detect_customer_language(str(collected.get("human_support_request") or "")))
+    if handoff_language not in {"en", "ko", "es"}:
+        handoff_language = "en"
     if human_requested:
         node = {"node_id": str(ticket.current_node_id or ""), "type": "terminal",
-                "prompt": _handoff_message(str(collected.get("human_support_reason") or "customer_request"), str(collected.get("human_support_department") or "warranty"), notification_sent=notification_sent),
+                "prompt": _handoff_message(str(collected.get("human_support_reason") or "customer_request"), str(collected.get("human_support_department") or "warranty"), notification_sent=notification_sent, language=handoff_language, notification_status=notification_status),
                 "options": [], "evidence_required": []}
     options: List[Dict[str, Any]] = []
     node_prompt: Optional[str] = None
@@ -2134,9 +2166,10 @@ def _serialize_ticket_state(
 
         reason = str(collected.get("human_support_reason") or "customer_request")
         department = str(collected.get("human_support_department") or "warranty")
-        message = _handoff_message(reason, department, notification_sent=notification_sent)
+        message = _handoff_message(reason, department, notification_sent=notification_sent, language=handoff_language, notification_status=notification_status)
         payload["assistant_message"] = message
         payload["handoff"] = {"requested": True, "reason": reason, "notification_sent": notification_sent,
+                              "language": handoff_language,
                               "notification_status": notification_status,
                               **support_contact(department, str(getattr(ticket, "domain", "") or "")), "message": message}
         payload["ticket"]["ready_for_issue_type"] = False
@@ -2537,11 +2570,12 @@ async def natural_start_warranty(
         raise HTTPException(status_code=422, detail="message must not be empty")
 
     from warranty_scope import human_support_reason, is_delivery_inquiry, is_pre_purchase_shipping_policy  # noqa: WPS433
+    from warranty_intake import is_obvious_delivery_inquiry
 
     human_reason = _support_interrupt_reason(message)
     if human_reason:
         return _request_human_handoff(_lazy_engine(), session_id, message, body.domain, reason=human_reason)
-    if is_delivery_inquiry(message) and not is_pre_purchase_shipping_policy(message):
+    if (is_delivery_inquiry(message) or is_obvious_delivery_inquiry(message)) and not is_pre_purchase_shipping_policy(message):
         return _quick_start_ticket(_lazy_engine(), session_id, "delivery", body.domain)
 
     from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
@@ -2576,16 +2610,16 @@ async def natural_start_warranty(
         _require_registered_model(ticket)
 
     if ticket is not None and needs_model_confirmation(ticket):
-        from product_catalog import looks_like_model_only, resolve_model_name  # noqa: WPS433
+        from product_catalog import resolve_model_name  # noqa: WPS433
+        from warranty_intake import _extract_model_from_intake
 
         issue_type = interpret_issue_type(message)
-        model_candidate = looks_like_model_only(message)
-        if not model_candidate and not issue_type:
-            model_candidate = resolve_model_name(message)
+        model_candidate = _extract_model_from_intake(message)
 
         from warranty_intake_context import is_valid_model_input, normalize_model_input  # noqa: WPS433
 
-        if (model_candidate or (not issue_type and len(message.split()) <= 6)) and is_valid_model_input(model_candidate or message):
+        short_model_reply = not issue_type and len(message.split()) <= 6 and message.lower().strip() not in {"on", "off", "it", "sure", "yes please", "no thanks"}
+        if (model_candidate or short_model_reply) and is_valid_model_input(model_candidate or message):
             ticket_id = str(ticket.ticket_id)
             resolved = model_candidate or resolve_model_name(message) or normalize_model_input(message)
             engine.set_model_name(ticket_id, resolved)
@@ -2682,11 +2716,12 @@ async def smart_start_warranty(
         raise HTTPException(status_code=422, detail="message must not be empty")
 
     from warranty_scope import human_support_reason, is_delivery_inquiry, is_pre_purchase_shipping_policy  # noqa: WPS433
+    from warranty_intake import is_obvious_delivery_inquiry
 
     human_reason = _support_interrupt_reason(message)
     if human_reason:
         return _request_human_handoff(_lazy_engine(), session_id, message, body.domain, reason=human_reason)
-    if is_delivery_inquiry(message) and not is_pre_purchase_shipping_policy(message):
+    if (is_delivery_inquiry(message) or is_obvious_delivery_inquiry(message)) and not is_pre_purchase_shipping_policy(message):
         return _quick_start_ticket(_lazy_engine(), session_id, "delivery", body.domain)
 
     from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
@@ -2763,7 +2798,13 @@ async def smart_start_warranty(
     from warranty_intake_context import is_valid_model_input, normalize_model_input  # noqa: WPS433
 
     model_hint = normalize_model_input(str(extraction.get("model_name") or ""))
-    if model_hint and is_valid_model_input(model_hint):
+    existing_model = str(getattr(existing, "model_name", "") or "").strip()
+    if existing_model:
+        # Updating a model uses register/confirm-model, never a fuzzy guess
+        # from later symptom text. Preserve both identity and confirmation.
+        model_hint = existing_model
+        extraction = {**extraction, "model_name": existing_model}
+    elif model_hint and is_valid_model_input(model_hint):
         from product_catalog import resolve_model_name  # noqa: WPS433
 
         resolved_model = resolve_model_name(model_hint) or model_hint
@@ -2871,6 +2912,14 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
             answer,
             domain,
         )
+
+    node = engine.get_current_node(ticket_id)
+    if node and node.get("options") and _is_workflow_confusion(answer):
+        from warranty_nlp import build_clarifying_workflow_message
+        from warranty_side_questions import _looks_like_valid_workflow_answer
+
+        if not _looks_like_valid_workflow_answer(node, answer):
+            return _clarification_response(engine, ticket_id, answer, build_clarifying_workflow_message(node, answer))
 
     side_message = _maybe_side_question_message(engine, ticket_id, answer)
     if side_message:

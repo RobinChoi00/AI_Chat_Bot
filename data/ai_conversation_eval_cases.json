@@ -271,7 +271,7 @@
           "expect": {
             "json_equals": {
               "ticket.status": "in_progress",
-              "ticket.collected_data.troubleshooting_outcome": null
+              "ticket.troubleshooting_outcome": null
             }
           }
         },
@@ -280,7 +280,7 @@
           "expect": {
             "json_equals": {
               "ticket.status": "in_progress",
-              "ticket.collected_data.troubleshooting_outcome": null
+              "ticket.troubleshooting_outcome": null
             },
             "not_contains": [
               "self_resolved"
@@ -371,7 +371,9 @@
           "message": "What is the price of Solo Flex?",
           "expect": {
             "expected_tool": "search_chair_specs",
-            "expected_tool_sequence": ["search_chair_specs"],
+            "expected_tool_sequence": [
+              "search_chair_specs"
+            ],
             "not_contains": [
               "guaranteed lowest price"
             ],
@@ -388,7 +390,9 @@
           "message": "What doorway width does that same model need?",
           "expect": {
             "expected_tool": "search_chair_specs",
-            "expected_tool_sequence": ["search_chair_specs"],
+            "expected_tool_sequence": [
+              "search_chair_specs"
+            ],
             "not_contains": [
               "guaranteed to fit any doorway"
             ],
@@ -727,7 +731,7 @@
               "replacement is approved"
             ],
             "json_equals": {
-              "ticket.collected_data.troubleshooting_outcome": null
+              "ticket.troubleshooting_outcome": null
             }
           }
         }
@@ -742,6 +746,276 @@
           "free of charge"
         ]
       }
+    },
+    {
+      "id": "simulation-sales-doorway-survives-policy-interrupt",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "source_ref": "Synthetic customer simulation, 2026-10-26; retained after exposing failures during development.",
+      "turns": [
+        {
+          "message": "I have at most $2,500. I'm 6 foot 4 and about 290 pounds. What would you shortlist?",
+          "expect": {
+            "max_product_price": 2500,
+            "max_products": 3
+          }
+        },
+        {
+          "message": "My door opening is 29 inches, assembled only.",
+          "expect": {
+            "max_product_price": 2500,
+            "max_product_doorway_assembled_in": 29,
+            "max_products": 3,
+            "not_contains": [
+              "Assumed no doorway constraint",
+              "No Space Constraint",
+              "guaranteed to fit"
+            ]
+          }
+        },
+        {
+          "message": "Soft massage, mostly calves. Can you still recommend one?",
+          "expect": {
+            "max_product_price": 2500,
+            "max_product_doorway_assembled_in": 29,
+            "max_products": 3,
+            "not_contains": [
+              "Assumed no doorway constraint",
+              "No Space Constraint",
+              "guaranteed to fit"
+            ]
+          }
+        },
+        {
+          "message": "I'm 6'4\". Please use that height and the limits I already gave.",
+          "expect": {
+            "max_product_price": 2500,
+            "max_product_doorway_assembled_in": 29,
+            "max_products": 3,
+            "not_contains": [
+              "Assumed no doorway constraint",
+              "No Space Constraint",
+              "guaranteed to fit"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "simulation-sales-spoken-height-is-not-foot-focus",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "source_ref": "Synthetic customer simulation, 2026-10-26; retained after exposing failures during development.",
+      "turns": [
+        {
+          "message": "Recommend a chair. I am five feet seven inches and weigh 180 pounds. My budget is $2500 and I want gentle full-body relaxation.",
+          "expect": {
+            "expected_intent": "recommend",
+            "max_product_price": 2500,
+            "not_contains": [
+              "Foot & Calf",
+              "What's the **user height**"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "simulation-confirmed-model-and-completed-heat-check",
+      "surface": "warranty",
+      "provenance": "synthetic",
+      "split": "regression",
+      "source_ref": "Synthetic customer simulation, 2026-10-26; retained after exposing failures during development.",
+      "turns": [
+        {
+          "action": "register-model",
+          "body": {
+            "model": "OS-4000T"
+          },
+          "expect": {
+            "json_equals": {
+              "ticket.model_name": "OS-4000T"
+            }
+          }
+        },
+        {
+          "action": "smart-start",
+          "body": {
+            "message": "My OS-4000T heat stays cold. I already ran it for twenty minutes with heat ON and checked the remote setting."
+          },
+          "expect": {
+            "json_equals": {
+              "ticket.model_name": "OS-4000T"
+            },
+            "not_contains": [
+              "Manhattan Duo",
+              "Remote / controller issue"
+            ]
+          }
+        },
+        {
+          "action": "quick-start",
+          "body": {
+            "issue_type": "defect"
+          },
+          "expect": {
+            "json_equals": {
+              "ticket.model_name": "OS-4000T"
+            }
+          }
+        },
+        {
+          "action": "answer",
+          "body": {
+            "answer": "heat"
+          },
+          "expect": {
+            "json_equals": {
+              "ticket.model_name": "OS-4000T"
+            }
+          }
+        },
+        {
+          "action": "answer",
+          "body": {
+            "answer": "not_heating"
+          },
+          "expect": {
+            "json_equals": {
+              "ticket.model_name": "OS-4000T",
+              "ticket.current_node.node_id": "defect_heating_not_heating_terminal"
+            },
+            "not_contains": [
+              "Have you run the heated program for at least 10 minutes",
+              "Power cycle the chair once and retest heat for at least 10 minutes"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "simulation-spanish-reported-flames",
+      "surface": "warranty",
+      "provenance": "synthetic",
+      "split": "regression",
+      "source_ref": "Synthetic customer simulation, 2026-10-26; retained after exposing failures during development.",
+      "turns": [
+        {
+          "action": "smart-start",
+          "body": {
+            "message": "Se ven llamas debajo de mi silla."
+          },
+          "expect": {
+            "json_equals": {
+              "handoff.reason": "safety_hazard",
+              "handoff.language": "es",
+              "handoff.requested": true
+            },
+            "contains": [
+              "Deje de usar"
+            ],
+            "not_contains": [
+              "Which chair part or function is affected"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "simulation-korean-reported-smoke",
+      "surface": "warranty",
+      "provenance": "synthetic",
+      "split": "regression",
+      "source_ref": "Synthetic customer simulation, 2026-10-26; retained after exposing failures during development.",
+      "turns": [
+        {
+          "action": "smart-start",
+          "body": {
+            "message": "의자 아래에서 연기가 나고 있어요."
+          },
+          "expect": {
+            "json_equals": {
+              "handoff.reason": "safety_hazard",
+              "handoff.language": "ko",
+              "handoff.requested": true
+            },
+            "contains": [
+              "사용을"
+            ],
+            "not_contains": [
+              "Which chair part or function is affected"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "simulation-free-text-late-delivery",
+      "surface": "warranty",
+      "provenance": "synthetic",
+      "split": "regression",
+      "source_ref": "Synthetic customer simulation, 2026-10-26; retained after exposing failures during development.",
+      "turns": [
+        {
+          "action": "smart-start",
+          "body": {
+            "message": "My chair hasn't arrived. Can you check my order?"
+          },
+          "expect": {
+            "json_equals": {
+              "ticket.issue_type": "delivery",
+              "delivery_lookup_required": true,
+              "ticket.model_name": ""
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "simulation-free-text-korean-delivery",
+      "surface": "warranty",
+      "provenance": "synthetic",
+      "split": "regression",
+      "source_ref": "Synthetic customer simulation, 2026-10-26; retained after exposing failures during development.",
+      "turns": [
+        {
+          "action": "smart-start",
+          "body": {
+            "message": "주문한 의자가 아직 안 왔어요. 배송 조회해 주세요."
+          },
+          "expect": {
+            "json_equals": {
+              "ticket.issue_type": "delivery",
+              "delivery_lookup_required": true,
+              "ticket.model_name": ""
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "simulation-free-text-spanish-delivery",
+      "surface": "warranty",
+      "provenance": "synthetic",
+      "split": "regression",
+      "source_ref": "Synthetic customer simulation, 2026-10-26; retained after exposing failures during development.",
+      "turns": [
+        {
+          "action": "smart-start",
+          "body": {
+            "message": "Mi pedido no ha llegado. ¿Puede comprobar el envío?"
+          },
+          "expect": {
+            "json_equals": {
+              "ticket.issue_type": "delivery",
+              "delivery_lookup_required": true,
+              "ticket.model_name": ""
+            }
+          }
+        }
+      ]
     }
   ],
   "evaluation_split_note": "All current incidents and synthetic challenges are regression cases already used during development. No independent held-out customer dataset is claimed. Add separately reviewed cases with split=held_out and use --split held_out; an empty selection fails."

@@ -106,6 +106,14 @@ def test_resolve_falls_back_to_default_menu_when_session_lost():
     assert resolve_button_choice("Recommend a chair", None) == "recommend"
 
 
+def test_rich_customer_message_containing_a_button_label_is_not_discarded():
+    assert resolve_button_choice('Recommend a chair. I am five feet seven inches and weigh 180 pounds. My budget is $2500 and I want gentle full-body relaxation.', None) is None
+    assert resolve_button_choice('Talk to a human. My doorway is 29 inches, assembled only.', None) is None
+    assert resolve_button_choice('1) Recommend a chair, but keep the price below $2500.', None) is None
+    assert resolve_button_choice('Recommend', None) == 'recommend'
+    assert resolve_button_choice('1) Recommend a chair', None) == 'recommend'
+
+
 def test_recommend_results_keep_compare_not_email_under_tidio_cap():
     raw = [
         {"label": "Value: Champ", "payload": "tier:1"},

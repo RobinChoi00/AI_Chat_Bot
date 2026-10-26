@@ -232,16 +232,11 @@ def height_from_shopper_answer(text: str) -> Optional[str]:
 
 
 def _height_inches_from_answer(raw: str) -> Optional[int]:
-    ft_in = re.search(
-        r"([4-7])\s*(?:'|’|ft|feet)\s*(\d{1,2})?\s*(?:\"|in|inches)?",
-        raw,
-        re.I,
-    )
-    if ft_in:
-        feet = int(ft_in.group(1))
-        inches = int(ft_in.group(2) or 0)
-        if inches <= 11:
-            return feet * 12 + inches
+    from sales_constraints import height_measurements
+
+    heights = height_measurements(raw)
+    if heights:
+        return heights[-1][2]
     spaced = re.search(r"\b([4-7])\s+([0-9]|1[01])\b", raw)
     if spaced:
         return int(spaced.group(1)) * 12 + int(spaced.group(2))
@@ -286,8 +281,10 @@ def budget_bucket(budget_usd: Optional[int]) -> Optional[str]:
 
 
 def goal_bucket(focus_areas: Optional[list[str]], text: str = "") -> Optional[str]:
+    from sales_constraints import without_height_measurements
+
     areas = {a.lower() for a in (focus_areas or [])}
-    raw = (text or "").lower()
+    raw = without_height_measurements(text).lower()
     if "feet" in areas or "foot" in raw or "calf" in raw:
         return "Foot & Calf"
     if "neck" in areas or "shoulder" in raw:
@@ -325,7 +322,9 @@ def intensity_bucket(text: str = "") -> Optional[str]:
 
 
 def foot_bucket(text: str = "", focus_areas: Optional[list[str]] = None) -> Optional[str]:
-    raw = (text or "").lower()
+    from sales_constraints import without_height_measurements
+
+    raw = without_height_measurements(text).lower()
     areas = {a.lower() for a in (focus_areas or [])}
     if re.search(r"\b(no\s+foot|foot\s+not|don'?t\s+care.*foot)\b", raw):
         return "Not Important"
