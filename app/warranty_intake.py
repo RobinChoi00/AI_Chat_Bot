@@ -592,7 +592,8 @@ def is_obvious_delivery_inquiry(text: str) -> bool:
         r"\b(?:check|track|locate|find)\s+(?:my|the)\s+(?:order|package|shipment)\b|"
         r"배송[^.!?\n]{0,35}(?:조회|확인|상태|언제|안\s*왔|오지\s*않|안\s*와|지연|연기|날짜|바꾸)|"
         r"(?:주문|택배|의자)[^.!?\n]{0,25}(?:아직\s*)?(?:안\s*왔|오지\s*않|안\s*와)|"
-        r"\b(?:mi\s+)?(?:pedido|silla|paquete|env[ií]o)\s+(?:no\s+ha\s+llegado|est[aá]\s+(?:retrasad[oa]|tarde))\b|"
+        r"\b(?:mi\s+)?(?:pedido|silla|paquete|env[ií]o)\s+(?:(?:todav[ií]a|a[uú]n)\s+)?(?:no\s+ha\s+llegado|est[aá]\s+(?:retrasad[oa]|tarde))\b|"
+        r"\bd[oó]nde\s+est[aá]\s+mi\s+(?:pedido|silla|paquete|env[ií]o)\b|"
         r"\b(?:rastrear|consultar|comprobar|localizar)\s+(?:mi|el)\s+(?:pedido|paquete|env[ií]o)\b",
         raw, re.I,
     ))

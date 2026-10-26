@@ -373,6 +373,10 @@ def detect_topic(text: str) -> Optional[str]:
     raw = (text or "").strip().replace("’", "'")
     if not raw or is_post_purchase(raw):
         return None
+    from sales_language import is_medical_scope_question
+
+    if is_medical_scope_question(raw):
+        return TOPIC_LIMITS
     # A location in a showroom question is not a shipping destination.
     if re.search(
         r"\b(?:showroom|local\s+dealer|nearby\s+dealer|nearest\s+dealer|"
@@ -621,6 +625,10 @@ def _international_answer(domain: str) -> str:
 
 def _limits_kind(message: str) -> str:
     raw = message or ""
+    from sales_language import is_medical_scope_question
+
+    if is_medical_scope_question(raw):
+        return "medical"
     if re.search(
         r"gift\s*wrap|gift\s+receipt|gift\s+card|hide\s+(?:the\s+)?price", raw, re.I
     ):
@@ -723,8 +731,10 @@ def _limits_answer(_domain: str, message: str = "") -> str:
         )
     if kind == "language":
         return (
-            "This shopping chat is in **English**. I won't guess in another language.\n\n"
-            "A specialist can help — share your **email**."
+            "I can help with basic chair shopping in **Spanish**. Some policy and "
+            "technical source text remains in **English**, and I won't guess at "
+            "a translation that hasn't been reviewed.\n\n"
+            "A specialist can help with those questions; sharing contact details is optional."
         )
     if kind == "affiliate":
         return (

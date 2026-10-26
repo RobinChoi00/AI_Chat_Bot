@@ -24,7 +24,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Optional
 
-from sales_constraints import extract_constraints, product_constraint_issues, constraint_verification_notes
+from sales_constraints import extract_constraints, product_constraint_issues, constraint_verification_notes, doorway_width_from_text
 
 from sales_catalog import (
     ProductSpecs,
@@ -1087,8 +1087,13 @@ def _doorway_fit_reply(
     domain: str = "osakiusa.com",
 ) -> SalesReply:
     inches = _parse_doorway_inches_message(message or "")
-    product = _guess_model_from_text(message)
+    product = _resolve_focus_product(message, prefs)
     rec = dict((prefs or {}).get("recommend_prefs") or {})
+    exact = extract_constraints(message)
+    if exact.get('doorway_fit'):
+        rec['doorway_fit'] = exact['doorway_fit']
+    if inches is None:
+        inches = _doorway_limit_in(rec)
     if inches is not None:
         rec["doorway_in"] = _fmt_inches(inches)
         if "space" not in rec:
@@ -1113,7 +1118,9 @@ def _doorway_fit_reply(
                     lines.append(
                         f"- Disassembled is listed at **{fit.door_dis_in:g} in**."
                     )
-                    if doorway_ok(
+                    if rec.get('doorway_fit') == 'assembled':
+                        lines.append('You excluded disassembly, so the disassembled figure does not satisfy your requirement.')
+                    elif doorway_ok(
                         product.display_name, limit_in=inches, mode="disassembled"
                     ):
                         lines.append(
@@ -1345,12 +1352,6 @@ _DOORWAY_FIT_REPLIES = (
 
 _COMPACT_SPACES = frozenset({"Narrow Doorway", "Small Room"})
 
-_DOORWAY_MSG_RE = re.compile(
-    r"(\d{2}(?:\.\d)?)\s*(?:\"|''|in(?:ch(?:es)?)?)\b",
-    re.I,
-)
-
-
 def _why_pick(product: ProductSpecs, request: RecommendationRequest) -> str:
     """One short reason so recommendations don't feel like a random list."""
     bits: list[str] = []
@@ -1376,16 +1377,7 @@ def _why_pick(product: ProductSpecs, request: RecommendationRequest) -> str:
 
 def _parse_doorway_inches_message(text: str) -> Optional[float]:
     """Pull a doorway width like 30\" / 32 in from free text."""
-    match = _DOORWAY_MSG_RE.search(text or "")
-    if not match:
-        return None
-    try:
-        inches = float(match.group(1))
-    except ValueError:
-        return None
-    if 20 <= inches <= 48:
-        return inches
-    return None
+    return doorway_width_from_text(text)
 
 
 def _needs_doorway_inches(prefs: dict[str, str]) -> bool:
@@ -3616,6 +3608,8 @@ def _capture_pick_lead(email: str, prefs: Optional[dict], *, domain: str) -> Sal
         prefs_patch={
             "awaiting_email_for_pick": False,
             "pending_pick_summary": summary,
+            "followup_request_saved": True,
+            "sales_followup_save_failed": False,
         },
         lead_capture={
             "email": email,
@@ -3714,6 +3708,7 @@ def _showroom_book_windows_reply() -> SalesReply:
         prefs_patch={
             "awaiting_showroom_window": False,
             "awaiting_showroom_email": False,
+            "showroom_request_pending": True,
         },
     )
 
@@ -3732,7 +3727,7 @@ def _showroom_type_time_reply() -> SalesReply:
         ],
         tools_used=["cta.showroom_book"],
         flow_stage="lead",
-        prefs_patch={"awaiting_showroom_window": True, "awaiting_showroom_email": False},
+        prefs_patch={"awaiting_showroom_window": True, "awaiting_showroom_email": False, "showroom_request_pending": True},
     )
 
 
@@ -3757,6 +3752,7 @@ def _showroom_ask_email_reply(prefs: Optional[dict], *, window: str) -> SalesRep
             "awaiting_showroom_window": False,
             "awaiting_showroom_email": True,
             "pending_showroom_window": window,
+            "showroom_request_pending": True,
         },
     )
 
@@ -3781,7 +3777,7 @@ def _capture_showroom_visit(
         summary_lines.append(f"Product URL: {url}")
     summary = "\n".join(summary_lines)
     lines = [
-        f"Sent a **visit request** for **{window}** at the Carrollton showroom.",
+        f"Saved a **visit request** for **{window}** at the Carrollton showroom.",
         f"I saved **{email}** so sales can confirm — this is **not** a locked appointment.",
     ]
     if is_sales_after_hours():
@@ -3800,6 +3796,9 @@ def _capture_showroom_visit(
         prefs_patch={
             "awaiting_showroom_email": False,
             "awaiting_showroom_window": False,
+            "showroom_request_pending": False,
+            "followup_request_saved": True,
+            "sales_followup_save_failed": False,
         },
         lead_capture={
             "email": email,
@@ -4377,6 +4376,15 @@ def _respond_turn(
     ``before_handoff`` replays a stored question so we can answer it fully
     without treating "talk to a human" as the question.
     """
+    # Order support and delivery evidence must not be mistaken for a form
+    # answer, a recommendation, or a technical fault inferred from ownership.
+    if not payload and not before_handoff:
+        from sales_order_support import maybe_sales_support_reply
+
+        support = maybe_sales_support_reply(message, prefs, domain=domain)
+        if support is not None:
+            return _finalize_flow_stage(support)
+
     # Awaiting email after "Email me this pick" — capture before other intents.
     if (prefs or {}).get("awaiting_email_for_pick"):
         email = extract_email(message or "")
@@ -4515,6 +4523,12 @@ def _respond_turn(
             reply.prefs_patch['last_shopper_question'] = (message or '').strip()[:500]
         return _finalize_flow_stage(reply)
 
+    if not payload and intent.label == INTENT_DISCOUNT:
+        from sales_context import relative_price_followup
+        relative = relative_price_followup(message, prefs, domain=domain)
+        if relative is not None:
+            return _remember_question(_finalize_flow_stage(relative), message, payload)
+
     if _wants_cheaper_from_picks(message or "", prefs):
         cheaper = _pending_tier_follow_reply(
             "the first one", INTENT_RECOMMEND, prefs, domain=domain
@@ -4539,6 +4553,12 @@ def _respond_turn(
 
     if intent.label in HANDOFF_INTENTS:
         return _finalize_flow_stage(_handoff_reply(intent))
+
+    if not payload:
+        from sales_context import reply_for_context
+        contextual = reply_for_context(message, prefs, domain=domain)
+        if contextual is not None:
+            return _remember_question(_finalize_flow_stage(contextual), message, payload)
 
     waiting = _in_recommend_wait(prefs)
 
@@ -4771,7 +4791,8 @@ def _retain_shopper_constraints(message: str, data: dict, intent: Optional[Sales
     if not exact and not body_answer:
         return {}
     measured = any(key in exact for key in ('height_in', 'weight_lb', 'doorway_in'))
-    if not (previous or label in {INTENT_RECOMMEND, INTENT_INTENSITY} or (shopper and measured)):
+    buyer_budget = bool(re.search(r'\b(?:my|our)\s+(?:budget|maximum|max|spending\s+limit|price\s+limit)\b', message, re.I))
+    if not (previous or label in {INTENT_RECOMMEND, INTENT_INTENSITY} or (shopper and measured) or buyer_budget):
         return {}
     # A product's advertised capacity or price is not a new limit for its buyer.
     if label in {INTENT_SPECS, INTENT_PRICE, INTENT_STOCK, INTENT_COMPARE} and not shopper:
@@ -4801,12 +4822,22 @@ def respond(message: str, *, payload: Optional[str] = None,
             domain: str = 'osakiusa.com', prefs: Optional[dict] = None,
             before_handoff: bool = False) -> SalesReply:
     """Resolve task interruptions before collecting pending form answers."""
+    from sales_language import currency_scope_message, localize_reply, medical_scope_message, prepare_message
+
     data = dict(prefs or {})
-    raw = (message or '').strip()
+    original = (message or '').strip()
+    from sales_safety import interrupt_sales_for_safety
+
+    safety = interrupt_sales_for_safety(original, data)
+    if safety is not None:
+        return safety
+    raw, language = prepare_message(original, data)
+    data['conversation_language'] = language
     reset = {}
     intent = classify(raw) if raw and not payload else None
     menu = (payload or '').lower() in {'menu', 'root', 'start', 'start_over'} or (not payload and bool(re.fullmatch(r'(?:back to )?menu|start over|cancel(?: that)?|never mind|nevermind', raw, re.I)))
-    captured = _retain_shopper_constraints(raw, data, intent) if raw and not payload and not menu else {}
+    currency_caution = currency_scope_message(original, language) if original and not payload else None
+    captured = _retain_shopper_constraints(raw, data, intent) if raw and not payload and not menu and not currency_caution else {}
     waiting_form = any(data.get(key) for key in _TRANSIENT_FLOW_KEYS if key != 'awaiting_pre_human_question')
     # A showroom request must look like a day/time. A technical question,
     # cancellation or request for a person is never an appointment window.
@@ -4816,6 +4847,9 @@ def respond(message: str, *, payload: Optional[str] = None,
         reset = {key: False for key in _TRANSIENT_FLOW_KEYS}
         reset['pending_showroom_window'] = ''
         data.update(reset)
+    clinical_caution = medical_scope_message(original, language) if original and not payload else None
+    if clinical_caution:
+        data['medical_scope_pending'] = True
     if menu:
         reset.update({'awaiting_recommend': False, **_clear_compare_state()})
         data.update(reset)
@@ -4825,12 +4859,33 @@ def respond(message: str, *, payload: Optional[str] = None,
             reset['visitor_resume_declined'] = True
             data.update(reset)
             result = _finalize_flow_stage(_greeting_reply(data))
+    elif clinical_caution and (intent is None or intent.label not in HANDOFF_INTENTS):
+        result = _finalize_flow_stage(SalesReply(
+            reply=clinical_caution, intent=INTENT_PREPURCHASE_POLICY,
+            tools_used=['policy.medical_scope'],
+            quick_replies=[QuickReply(label='Recommend a chair', payload='recommend'), QuickReply(label='Talk to a human', payload='human')],
+            prefs_patch={'medical_scope_pending': True, 'awaiting_recommend': False},
+        ))
+    elif currency_caution and (intent is None or intent.label not in HANDOFF_INTENTS):
+        result = _finalize_flow_stage(SalesReply(
+            reply=currency_caution, intent=INTENT_PREPURCHASE_POLICY,
+            tools_used=['policy.currency_scope'],
+            quick_replies=[QuickReply(label='Talk to a human', payload='human')],
+        ))
     elif not before_handoff and re.search(r'\b(?:just answer|already (?:asked|told)|stop (?:asking|repeating)|not what i asked|you (?:are not|aren.t) listening)\b', raw, re.I):
         result = SalesReply(reply="I haven't resolved your question clearly. A sales specialist can help with the exact model or requirement; please use **Talk to a human** below.", intent=INTENT_HUMAN, handoff=True, handoff_reason='answer_unresolved', quick_replies=[QuickReply(label='Talk to a human', payload='human:confirm')], flow_stage='handoff')
         result = _finalize_flow_stage(result)
     else:
-        result = _respond_turn(message, payload=payload, domain=domain, prefs=data, before_handoff=before_handoff)
+        result = _respond_turn(raw, payload=payload, domain=domain, prefs=data, before_handoff=before_handoff)
     patch = {**captured, **reset, **(result.prefs_patch or {})}
+    if data.get('sales_support_topic') and result.intent not in {'order_status', 'cancel_refund', 'order_change', INTENT_UNCLEAR}:
+        # A later shopping/form task owns its own follow-ups. An earlier order
+        # question must not consume the new task's contact email.
+        patch['sales_support_topic'] = ''
+    if clinical_caution:
+        patch['medical_scope_pending'] = True
+        if result.handoff and result.intent == INTENT_HUMAN:
+            result.reply += '\n\n' + clinical_caution
     if captured and isinstance(patch.get('recommend_prefs'), dict):
         patch['recommend_prefs'] = {**captured['recommend_prefs'], **patch['recommend_prefs']}
     if result.intent == INTENT_RECOMMEND and result.products:
@@ -4842,12 +4897,19 @@ def respond(message: str, *, payload: Optional[str] = None,
             result = _finalize_flow_stage(_no_fit_recommend_reply(retained))
             patch.update(result.prefs_patch or {})
     if raw and not payload and not before_handoff:
-        digest = hashlib.sha256(re.sub(r'\W+', '', raw.lower()).encode()).hexdigest()
+        digest = hashlib.sha256(re.sub(r'\W+', '', original.lower()).encode()).hexdigest()
         count = min(3, int(data.get('quality_repeat_count') or 0) + 1) if data.get('quality_last_question_hash') == digest else 1
         unresolved = result.intent == INTENT_UNCLEAR or result.flow_stage.startswith('ask_')
         if count >= 2 and unresolved:
             result = _finalize_flow_stage(SalesReply(reply="I keep asking without resolving your question. A sales specialist should help with this requirement. Please use **Talk to a human** below.", intent=INTENT_HUMAN, handoff=True, handoff_reason='repeated_unresolved', quick_replies=[QuickReply(label='Talk to a human', payload='human:confirm')], flow_stage='handoff'))
             patch.update({'awaiting_recommend': False})
         patch.update({'quality_last_question_hash': digest, 'quality_repeat_count': count})
+    patch['conversation_language'] = language
+    if not before_handoff and _should_remember_question(raw, payload):
+        patch['last_shopper_question'] = original[:500]
+    elif original != raw and patch.get('last_shopper_question') == raw[:500]:
+        # A translated bare handoff or contact answer is not a new buying
+        # question. The router still stores the customer's original message.
+        patch.pop('last_shopper_question', None)
     result.prefs_patch = patch or None
-    return result
+    return localize_reply(result, language, data)

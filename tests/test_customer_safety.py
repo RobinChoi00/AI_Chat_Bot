@@ -16,6 +16,8 @@ from customer_safety import detect_customer_language, reported_safety_hazard, sa
     "The chair electrocuted me.", "Touching the frame gives me a mild shock.", "The chair shocked my hand.",
     "I got zapped when I touched the chair.", "There is a burnt plastic smell from the base.",
     "It smells like melting plastic.", "No smoke, but there are sparks.", "No smoke, flames are coming out of the chair.",
+    "No smoke, sparks are coming from the chair.", "No smoke, sparks, but there are flames.",
+    "No smoke, sparks, or pain, but my chair is burning.",
     "There is no fire or smoke, but the chair hurts.", 'My chair is "smoking" right now.',
     'My wife said "the chair is on fire".', 'The manual says "stop if smoke appears", but I see flames now.',
     "My chair is 'smoking' as described in the manual.",
@@ -44,6 +46,8 @@ def test_reported_hazards_stop_troubleshooting(text):
 
 @pytest.mark.parametrize("text", [
     "No smoke or sparks.", "There is no fire or smoke.", "The chair isn't smoking.", "The chair is not on fire.",
+    "My chair has no smoke, sparks, or pain.", "No smoke, sparks, pain, or discomfort.",
+    'The manual says "stop if smoke appears." My chair has no smoke, sparks, or pain; the remote display is blank.',
     "Smoke is not present.", "Smoke isn't visible.", "No pain, no discomfort, no overheating.",
     "There is no evidence of smoke.", "I don't feel any pain.", "It doesn't cause any physical discomfort.",
     "I don't smell any smoke.", "We never saw any sparks.",

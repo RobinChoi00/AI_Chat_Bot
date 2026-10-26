@@ -316,11 +316,20 @@ _CHECK_TOPICS = {
 _WARMUP_DURATION_RE = re.compile(r"\b(\d+(?:\.\d+)?|ten|eleven|twelve|fifteen|twenty|thirty|forty|sixty)\s*\+?\s*(?:minutes?|mins?)\b", re.I)
 _WRITTEN_MINUTES = {"ten": 10, "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40, "sixty": 60}
 _WARMUP_ACTIVITY_RE = re.compile(r"\b(?:ran|run|used|tried|completed|waited|waiting|finished|tested|spent|called|checked)\b", re.I)
+_EXTERNAL_CHECK_QUOTE_PREFIX_RE = re.compile(
+    r"\b(?:(?:the\s+)?(?:manual|guide|instructions|example|video)|(?:my|our)\s+"
+    r"(?:friend|mom|mother|dad|father|brother|sister|wife|husband|partner|neighbor|neighbour)|"
+    r"he|she|they)\b[^.!?\n]{0,80}\b(?:says?|said|states?|reads?|shows?|told\s+me)\s*:?\s*$", re.I,
+)
+_CHECK_QUOTE_RE = re.compile(r'"[^"\n]*"|“[^”\n]*”|(?<!\w)\'[^\n]*?\'(?!\w)|‘[^’\n]*’')
 
 
 def _has_completed_heat_warmup(text: str) -> bool:
     """Require an explicit completed heated run of at least ten minutes."""
-    normalized = text.replace("’", "'")
+    normalized = _CHECK_QUOTE_RE.sub(
+        lambda match: "" if _EXTERNAL_CHECK_QUOTE_PREFIX_RE.search(text[:match.start()]) else match[0],
+        text,
+    ).replace("’", "'")
     if re.search(r"\bheat\w*\s+(?:(?:was|is)\s+)?off\b|\bheat\w*\s+was\s+not\s+on\b", normalized, re.I):
         return False
     for clause in re.split(r"(?<!\d)\.(?!\d)|[!?;]|\b(?:but|however)\b", normalized, flags=re.I):
@@ -353,6 +362,25 @@ def _has_completed_heat_warmup(text: str) -> bool:
             following = next((other.start() for other in activities if other.start() >= duration.end()), len(clause))
             before = clause[activity.start():duration.start()]
             after = clause[duration.end():following]
+            # A completed check belongs to this customer's equipment. A
+            # friend's run or a quoted instruction is not their own attempt.
+            prefix = clause[:activity.start()]
+            actors = list(re.finditer(
+                r"\b(?:i|we|he|she|they|(?:my|our)\s+(?:friend|mom|mother|dad|father|"
+                r"brother|sister|wife|husband|partner|neighbor|neighbour))\b", prefix, re.I,
+            ))
+            if actors:
+                if actors[-1].group(0).lower() not in {"i", "we"}:
+                    continue
+            elif not re.fullmatch(r"\s*(?:(?:have|had)\s+)?(?:already\s+)?", prefix, re.I):
+                continue
+            if re.search(
+                r"\b(?:his|her|their|someone else's|(?:friend|mom|mother|dad|father|"
+                r"brother|sister|wife|husband|partner|neighbor|neighbour)'s)\s+"
+                r"(?:(?:osaki|titan|massage)\s+){0,2}"
+                r"(?:chair|heat(?:ing)?|heater|(?:OS|TP|TITAN)[ -]?\d{3,5}[A-Za-z]{0,3})\b", before + after, re.I,
+            ):
+                continue
             if re.search(r"\bon hold\b|\bfor\s+(?:support|(?:a\s+)?callback|(?:the\s+)?(?:agent|technician|warranty\s+team))\b", before, re.I):
                 continue
             heat_subject = re.search(r"\bheat(?:ing|ed)?\b", before, re.I)
@@ -374,11 +402,11 @@ def completed_check_topics(ticket, turns) -> set[str]:
             topics.update({"heat_warmup", "heat_on"})
         texts.append(str(getattr(turn, "customer_answer", "") or ""))
     for text in texts:
-        text = text.replace("’", "'")
         if _has_completed_heat_warmup(text):
             topics.add("heat_warmup")
             if _CHECK_TOPICS["heat_on"].search(text):
                 topics.add("heat_on")
+        text = text.replace("’", "'")
         if not re.search(r"\b(?:already|tried|checked|tested|completed|reseated|reconnected|cycled|restarted|rebooted)\b", text, re.I):
             continue
         if re.search(r"\b(?:haven'?t|have not|not yet|never|didn'?t|did not)\b", text, re.I):

@@ -424,6 +424,46 @@ def test_summary_has_percentiles_no_test_failure_and_comparable_baseline():
     assert ev.summarize(results, {"cases": []})["comparison_errors"]
 
 
+@pytest.mark.parametrize("reply", [
+    "Consulte a su médico antes de usar la silla. No puedo garantizar un tratamiento.",
+    "Su solicitud está pendiente; el equipo no ha confirmado el envío.",
+    "¿Cuál es su presupuesto?",
+])
+def test_spanish_language_check_handles_clinical_shopping_and_support_replies(reply):
+    assert ev.check_answer(reply, {}, {"expected_language": "es"}) == []
+
+
+def test_repeating_one_foreign_word_cannot_prove_spanish_response_language():
+    assert ev._detect_language("The listing repeats silla, silla, silla, but this answer is English.") == "en"
+
+
+def test_perfect_api_assertions_do_not_become_a_customer_quality_score():
+    with client_for(lambda request: httpx.Response(200, json={"reply": "The answer"})) as client:
+        result = ev.run_case(case("sales"), client, base_url="http://localhost", domain="osakiusa.com")
+    report = ev.summarize([result])
+    assert report["status"] == "pass"
+    assert report["assertion_pass_rate_pct"] == 100
+    assert report["answer_quality_score_100"] is None
+    assert report["turns_with_provider_evidence"] == 0
+    assert report["customer_outcomes_evaluated"] is False
+
+
+def test_provider_execution_evidence_is_separate_from_overall_quality():
+    report = ev.summarize([{"id": "model-case", "passed": True, "surface": "general", "turns": [
+        {"passed": True, "latency_ms": 10, "response_sha256": "synthetic-hash", "provider_models": ["candidate"], "model_calls_successful": 1},
+        {"passed": True, "latency_ms": 10, "response_sha256": "cached-hash", "provider_models": [], "model_calls_successful": 0},
+    ]}])
+    assert report["turns_with_provider_evidence"] == 1
+    assert report["evaluated_turns"] == 2
+    assert report["answer_quality_score_100"] is None
+
+
+def test_doorway_failure_is_counted_with_other_customer_fit_violations():
+    errors = ev.check_answer("It fits", {"products": [{"fit": {"doorway_assembled_in": 34}}]}, {"max_product_doorway_assembled_in": 29})
+    report = ev.summarize([{"id": "too-wide", "passed": False, "surface": "sales", "turns": [{"latency_ms": 1, "errors": errors}]}])
+    assert report["assertion_failure_counts"]["fit_or_budget"] == 1
+
+
 def test_dry_run_does_not_call_http_and_is_not_quality_success(capsys, monkeypatch):
     monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: pytest.fail("dry-run must not create a network client"))
     assert ev.main(["--dry-run"]) == 0

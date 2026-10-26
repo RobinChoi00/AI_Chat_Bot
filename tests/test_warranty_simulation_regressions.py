@@ -45,6 +45,30 @@ def test_non_heating_durations_cannot_establish_completed_warmup(text):
     assert not _has_completed_heat_warmup(text)
 
 
+@pytest.mark.parametrize("text", [
+    "My friend already ran her heat for twenty minutes with heat ON. I only tried my heat for five minutes and it stayed cold.",
+    "My mom already ran her chair for twenty minutes with heat ON, and I only tried mine for five minutes.",
+    "I already ran my mom's chair heat for twenty minutes with heat ON. My own chair only ran for five minutes.",
+    "The manual says to run heat for twenty minutes with heat ON. I only ran my heat for five minutes.",
+    'My friend said "I already ran heat for twenty minutes with heat ON". I only ran mine for five minutes.',
+    'The manual says "I already ran heat for twenty minutes with heat ON". I only ran mine for five minutes.',
+    "My mom said ‘I already ran heat for twenty minutes with heat ON.’ I only ran mine for five minutes.",
+    "I already ran my friend's OS-4000XT for twenty minutes with heat ON. I only tried my chair for five minutes.",
+])
+def test_other_peoples_checks_and_instructions_are_not_customer_attempts(text):
+    from warranty_intake_context import _has_completed_heat_warmup
+
+    assert not _has_completed_heat_warmup(text)
+
+
+def test_customer_attempt_is_retained_after_another_person_is_mentioned():
+    from warranty_intake_context import _has_completed_heat_warmup
+
+    assert _has_completed_heat_warmup("My friend suggested it, and I already ran my heat for twenty minutes with heat ON.")
+    assert _has_completed_heat_warmup("We already ran our heat for twenty minutes with heat ON.")
+    assert _has_completed_heat_warmup('I told the agent "I already ran heat for twenty minutes with heat ON".')
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("WARRANTY_REQUIRE_CHAT_PRIVACY", "1")
@@ -57,8 +81,9 @@ def client(monkeypatch):
     monkeypatch.setattr(models, "_engine", engine)
     monkeypatch.setattr(models, "_SessionFactory", factory)
     monkeypatch.setattr(workflow, "_SessionFactory", factory)
-    from warranty_router import router
+    from warranty_router import limiter, router
 
+    limiter.reset()
     app = FastAPI()
     app.include_router(router)
     with TestClient(app) as api:
@@ -133,6 +158,14 @@ def test_inferred_model_cannot_replace_registered_model_but_explicit_correction_
     "I already ran heat for twenty minutes and the remote was turned ON.",
     "I already ran heat for five minutes with heat ON and waited twenty minutes on hold.",
     "I waited twenty minutes for support, then tried heat for five minutes with heat ON.",
+    "My friend already ran her heat for twenty minutes with heat ON. I only tried my heat for five minutes and it stayed cold.",
+    "My mom already ran her chair for twenty minutes with heat ON, and I only tried mine for five minutes.",
+    "I already ran my mom's chair heat for twenty minutes with heat ON. My own chair only ran for five minutes.",
+    "The manual says to run heat for twenty minutes with heat ON. I only ran my heat for five minutes.",
+    'My friend said "I already ran heat for twenty minutes with heat ON". I only ran mine for five minutes.',
+    'The manual says "I already ran heat for twenty minutes with heat ON". I only ran mine for five minutes.',
+    "My mom said ‘I already ran heat for twenty minutes with heat ON.’ I only ran mine for five minutes.",
+    "I already ran my friend's OS-4000XT for twenty minutes with heat ON. I only tried my chair for five minutes.",
 ])
 def test_incomplete_or_future_warmup_does_not_skip_confirmation(client, report):
     session, ticket = setup(client)
@@ -171,6 +204,8 @@ def test_real_spec_side_questions_do_not_increment_confusion(client, monkeypatch
     "배송이 아직 안 왔어요. 주문 상태를 확인해 주세요.",
     "배송을 다음 금요일로 연기할 수 있을까요?",
     "Mi pedido no ha llegado. ¿Puede comprobar mi pedido?",
+    "¿Dónde está mi pedido? Mi silla todavía no ha llegado.",
+    "Mi paquete aún no ha llegado.",
 ])
 def test_obvious_delivery_language_opens_lookup_without_chair_model(client, action, message):
     session, _ = setup(client, model=None)
@@ -181,3 +216,31 @@ def test_obvious_delivery_language_opens_lookup_without_chair_model(client, acti
     assert payload["delivery_lookup_required"] is True
     assert "order number" in payload["assistant_message"]
     assert "setup" not in payload["assistant_message"].lower()
+
+
+def test_manual_quote_and_denied_hazard_list_do_not_escalate_but_real_smoke_does(client):
+    session, ticket = setup(client)
+    client.post(f"/api/v1/warranty/session/{session}/quick-start", json={"issue_type": "defect"})
+    payload = answer(client, ticket, 'The manual says "stop if smoke appears." My chair has no smoke, sparks, or pain; the remote display is blank.')
+    assert (payload.get("handoff") or {}).get("reason") != "safety_hazard"
+    payload = answer(client, ticket, "Now I see smoke coming from the bottom of my chair.")
+    assert payload["handoff"]["reason"] == "safety_hazard"
+    assert "Stop using the chair" in payload["handoff"]["message"]
+    payload = answer(client, ticket, "It stopped. Can I use it again?")
+    assert payload["handoff"]["reason"] == "safety_hazard"
+    assert "Do not run another test" in payload["handoff"]["message"]
+
+
+@pytest.mark.parametrize("message", [
+    "Before I buy, can you deliver to Hawaii, and is delivery free?",
+    "What is the delivery cost to Alaska? I have not placed an order yet.",
+    "¿Cuándo llegará una silla si la compro hoy?",
+    "Antes de comprar, ¿envían a Hawaii?",
+])
+def test_pre_purchase_questions_are_not_obvious_order_lookup_requests(client, message):
+    assert not intake.is_obvious_delivery_inquiry(message)
+    session, _ = setup(client, model=None)
+    response = client.post(f"/api/v1/warranty/session/{session}/natural-start", json={"message": message})
+    payload = response.json()
+    assert payload.get("delivery_lookup_required") is not True
+    assert (payload.get("ticket") or {}).get("issue_type") != "delivery"

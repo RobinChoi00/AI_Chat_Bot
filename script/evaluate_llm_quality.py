@@ -188,7 +188,17 @@ def _lookup(payload: Any, path: str, default: Any = None) -> Any:
 def _detect_language(text: str) -> str:
     if len(re.findall(r"[\uac00-\ud7af]", text)) > 3:
         return "ko"
-    if len(re.findall(r"\b(hola|gracias|silla|precio|pedido|garant[ií]a|cu[aá]nto|nuestro|equipo|por\s+favor)\b", text, re.I)) > 2:
+    # Include clinical, shopping and support wording. Counting distinct cues
+    # avoids requiring the same handful of greeting words in every reply.
+    spanish = set(re.findall(
+        r"\b(?:hola|gracias|silla|sill[oó]n|precio|pedido|garant[ií]a|cu[aá]nto|nuestro|equipo|"
+        r"por\s+favor|consulte|m[eé]dic[oa]s?|cirujan[oa]|profesional|pued[eo]|podemos|"
+        r"garantizar|tratamiento|seguridad|presupuesto|altura|peso|puerta|ancho|masaje|"
+        r"solicitud|soporte|env[ií]o|enviad[oa]|confirmad[oa]|pendiente|recomendar|"
+        r"preferencias|opciones|m[aá]ximo|montaje|disponibilidad|disponible|ayudarle|"
+        r"necesita|necesito|cancelaci[oó]n|devoluci[oó]n)\b", text.casefold(), re.I,
+    ))
+    if len(spanish) >= 2 or (spanish and re.search(r"[¿¡]", text)):
         return "es"
     return "en"
 
@@ -495,12 +505,21 @@ def summarize(results: list[dict[str, Any]], baseline: dict[str, Any] | None = N
     failure_counts = {
         "route_or_handoff": sum(error in {"unexpected intent", "unexpected handoff"} for error in all_errors),
         "source_evidence": sum("source/model evidence" in error or "required tool" in error or "tool sequence" in error for error in all_errors),
-        "fit_or_budget": sum(any(word in error for word in ("capacity", "mechanism", "budget", "product price")) for error in all_errors),
+        "fit_or_budget": sum(any(word in error for word in ("capacity", "mechanism", "budget", "product price", "doorway")) for error in all_errors),
         "request_or_availability": sum("request/evidence failed" in error or "application error fallback" in error for error in all_errors) + sum(bool(case.get("error")) for case in results),
         "dialogue_goal_or_loop": sum(len(case.get("dialogue_errors", [])) for case in results),
     }
     observed = sum("response_sha256" in turn for case in results for turn in case["turns"])
-    return {"status": "pass" if success else "fail", "mode": "live_api", "quality_evaluated": observed > 0, "evaluated_turns": observed, "total_cases": len(results), "passed": passed, "failed": len(results) - passed, "unrun_turns": sum(case.get("unrun_turns", 0) for case in results), "pass_rate_pct": round(100 * passed / len(results), 1) if results else 0, "assertion_failure_counts": failure_counts, "latency_ms": {"p50": percentile(latencies, 0.5), "p95": p95, "samples": len(latencies), "budget_failed": latency_failed}, "surfaces": surfaces, "regressions": regressions, "comparison_errors": comparison_errors, "cases": results}
+    assertion_rate = round(100 * passed / len(results), 1) if results else 0
+    provider_turns = sum(
+        bool(turn.get("provider_models")) and turn.get("model_calls_successful", 0) > 0
+        for case in results for turn in case["turns"]
+    )
+    return {"status": "pass" if success else "fail", "mode": "live_api", "quality_evaluated": observed > 0, "evaluated_turns": observed, "total_cases": len(results), "passed": passed, "failed": len(results) - passed, "unrun_turns": sum(case.get("unrun_turns", 0) for case in results), "pass_rate_pct": assertion_rate,
+            "assertion_pass_rate_pct": assertion_rate, "answer_quality_score_100": None,
+            "turns_with_provider_evidence": provider_turns, "customer_outcomes_evaluated": False,
+            "measurement_scope": "API response assertions; a passing regression suite is not a 100-point customer answer-quality score.",
+            "assertion_failure_counts": failure_counts, "latency_ms": {"p50": percentile(latencies, 0.5), "p95": p95, "samples": len(latencies), "budget_failed": latency_failed}, "surfaces": surfaces, "regressions": regressions, "comparison_errors": comparison_errors, "cases": results}
 
 
 def main(argv: list[str] | None = None) -> int:

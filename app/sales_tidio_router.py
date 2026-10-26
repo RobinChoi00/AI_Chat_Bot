@@ -230,6 +230,10 @@ def _run_sales_turn(
 
     hydrate_visitor_memory(session_id, contact_id)
     prefs = get_session_collected(session_id)
+    from sales_order_support import is_email_status_question, latest_followup_status, persist_prepared_followup
+
+    if is_email_status_question(message, prefs):
+        prefs['_sales_followup_delivery_status'] = latest_followup_status(session_id, domain, prefs)
     last_buttons = normalize_stored_buttons(prefs.get("last_quick_replies"))
 
     resolved_from_button = False
@@ -249,6 +253,10 @@ def _run_sales_turn(
         domain=domain,
         prefs=prefs,
     )
+    result = persist_prepared_followup(
+        result, prefs=prefs, session_id=session_id, domain=domain,
+        background_tasks=background_tasks, capture=capture_lead, schedule=schedule_lead_delivery,
+    )
     if result.prefs_patch:
         merge_session_collected(session_id, result.prefs_patch)
 
@@ -259,26 +267,6 @@ def _run_sales_turn(
             intent=result.feedback.get("intent"),
             domain=domain,
         )
-
-    if result.lead_capture and result.lead_capture.get("email"):
-        email = str(result.lead_capture.get("email") or "").strip()
-        interest = str(result.lead_capture.get("interest_summary") or "").strip() or None
-        reason = str(result.lead_capture.get("reason") or "save_pick").strip() or "save_pick"
-        lead_id = capture_lead(
-            session_id=session_id,
-            domain=domain,
-            email=email,
-            interest_summary=interest,
-            reason=reason,
-        )
-        if lead_id is not None:
-            schedule_lead_delivery(
-                background_tasks,
-                lead_id=lead_id,
-                domain=domain,
-                email=email,
-                interest_summary=interest,
-            )
 
     buttons = prioritize_quick_replies(result.quick_replies)
     flat = flatten_buttons_for_flow(buttons)

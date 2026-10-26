@@ -100,7 +100,7 @@ _TRAILING_FLUFF_RE = re.compile(
 )
 
 _LEADING_FLUFF_RE = re.compile(
-    r"^(?:please\s+|compare\s+|comparison\s+|비교(?:해(?:줘|요|주세요)?)?\s*|"
+    r"^(?:please\s+|(?:i\s+mean|i\s+meant|actually[,]?)\s+|compare\s+|comparison\s+|비교(?:해(?:줘|요|주세요)?)?\s*|"
     r"the\s+|which\s+is\s+better[,]?\s*)+",
     re.IGNORECASE,
 )
@@ -264,6 +264,10 @@ def product_by_handle(handle: str) -> Optional[ProductSpecs]:
 
 def clean_compare_term(text: str) -> str:
     raw = (text or "").strip(" ?,.")
+    raw = re.split(r"[.!?;]\s+(?=(?:my|our|i\b|we\b|budget\b|maximum\b))", raw, maxsplit=1, flags=re.I)[0]
+    # A correction describes the named variants; the rejected mechanism is
+    # neither a third model nor a requirement to apply to both chairs.
+    raw = re.sub(r",\s*(?:not|rather\s+than|instead\s+of)\s+[2345]\s*D\s*$", "", raw, flags=re.I)
     raw = _TRAILING_FLUFF_RE.sub("", raw)
     raw = _LEADING_FLUFF_RE.sub("", raw)
     return raw.strip(" ?,.")
@@ -303,6 +307,19 @@ def split_compare_terms(message: str) -> Optional[tuple[str, str]]:
     if not raw:
         return None
     protected = _protect_big_and_tall(raw)
+
+    if re.match(r'^(?:please\s+)?compar(?:e|ison)\b', message or '', re.I):
+        with_parts = re.split(r'\s+(?:with|to)\s+', protected, maxsplit=1, flags=re.I)
+        if len(with_parts) == 2:
+            return _pair(*with_parts)
+
+    side_by_side = re.fullmatch(
+        r"(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:put|show|place)\s+"
+        r"(.+?)\s+(?:next\s+to|alongside|beside|side\s+by\s+side\s+with)\s+(.+)",
+        protected, re.I,
+    )
+    if side_by_side:
+        return _pair(side_by_side.group(1), side_by_side.group(2))
 
     vs_parts = _VS_RE.split(protected, maxsplit=1)
     if len(vs_parts) == 2:
@@ -375,10 +392,43 @@ def lookup_shop_models(text: str) -> ModelLookup:
         extra = len(have - wanted)
         scored.append((extra, card.product))
     if not scored:
-        return ModelLookup(query=query, matches=(), vague=False)
+        # Correct one missing/replaced/transposed letter only when each word
+        # has a unique catalog spelling. Keep family ambiguity (Maestro vs LE)
+        # and explicit mechanisms intact instead of choosing a nearby model.
+        vocabulary = {token for card in cards for token in card.tokens}
+        corrected = []
+        for token in tokens:
+            if token in vocabulary:
+                corrected.append(token)
+                continue
+            alternatives = [word for word in vocabulary if len(token) >= 5 and _one_typo(token, word)]
+            if len(alternatives) != 1:
+                return ModelLookup(query=query, matches=(), vague=False)
+            corrected.append(alternatives[0])
+        if corrected == list(tokens):
+            return ModelLookup(query=query, matches=(), vague=False)
+        wanted = set(corrected)
+        scored = [(len(set(card.tokens) - wanted), card.product) for card in cards if wanted <= set(card.tokens)]
+        if not scored:
+            return ModelLookup(query=query, matches=(), vague=False)
     best_extra = min(item[0] for item in scored)
     top = tuple(item[1] for item in scored if item[0] == best_extra)
     return ModelLookup(query=query, matches=top, vague=False)
+
+
+def _one_typo(left: str, right: str) -> bool:
+    """One edit or adjacent transposition, never a fuzzy mechanism match."""
+    if abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        differences = [i for i, (a, b) in enumerate(zip(left, right)) if a != b]
+        return len(differences) == 1 or (
+            len(differences) == 2 and differences[1] == differences[0] + 1
+            and left[differences[0]] == right[differences[1]]
+            and left[differences[1]] == right[differences[0]]
+        )
+    shorter, longer = sorted((left, right), key=len)
+    return any(shorter == longer[:i] + longer[i + 1:] for i in range(len(longer)))
 
 
 def short_model_label(product: ProductSpecs, *, limit: int = 28) -> str:

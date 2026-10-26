@@ -216,6 +216,12 @@ async def sales_chat(
 
     hydrate_visitor_memory(body.session_id, body.tidio_visitor_id)
     prefs = get_session_collected(body.session_id)
+    from sales_order_support import is_email_status_question, latest_followup_status
+
+    if is_email_status_question(message, prefs):
+        # This per-turn evidence comes from persisted records, never from the
+        # customer's claim or visitor-memory text. It is not saved in prefs.
+        prefs['_sales_followup_delivery_status'] = latest_followup_status(body.session_id, domain, prefs)
     from sales_tidio_buttons import (
         normalize_stored_buttons,
         prioritize_quick_replies,
@@ -239,6 +245,12 @@ async def sales_chat(
         domain=domain,
         prefs=prefs,
     )
+    from sales_order_support import persist_prepared_followup
+
+    reply = persist_prepared_followup(
+        reply, prefs=prefs, session_id=body.session_id, domain=domain,
+        background_tasks=background_tasks, capture=capture_lead, schedule=schedule_lead_delivery,
+    )
     if reply.prefs_patch:
         merge_session_collected(body.session_id, reply.prefs_patch)
     merge_session_collected(
@@ -253,26 +265,6 @@ async def sales_chat(
             intent=reply.feedback.get("intent"),
             domain=domain,
         )
-
-    if reply.lead_capture and reply.lead_capture.get("email"):
-        email = str(reply.lead_capture.get("email") or "").strip()
-        interest = str(reply.lead_capture.get("interest_summary") or "").strip() or None
-        reason = str(reply.lead_capture.get("reason") or "save_pick").strip() or "save_pick"
-        lead_id = capture_lead(
-            session_id=body.session_id,
-            domain=domain,
-            email=email,
-            interest_summary=interest,
-            reason=reason,
-        )
-        if lead_id is not None:
-            schedule_lead_delivery(
-                background_tasks,
-                lead_id=lead_id,
-                domain=domain,
-                email=email,
-                interest_summary=interest,
-            )
 
     if message:
         record_message(body.session_id, role="user", content=message, intent=reply.intent)

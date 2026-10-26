@@ -432,23 +432,12 @@ def merge_prefs_from_hints(
     sb = space_bucket(free_text)
     if sb:
         out["space"] = sb
-    # Doorway inches from free text ("30 inch door", '32"').
-    dm = re.search(
-        r"(\d{2}(?:\.\d)?)\s*(?:\"|''|in(?:ch(?:es)?)?)\s*(?:door|doorway)?",
-        free_text or "",
-        re.I,
-    )
-    if dm:
-        try:
-            inches = float(dm.group(1))
-        except ValueError:
-            inches = None
-        if inches is not None and 20 <= inches <= 48:
-            out["doorway_in"] = (
-                str(int(inches)) if inches == int(inches) else str(inches)
-            )
-            if "space" not in out:
-                out["space"] = "Narrow Doorway"
+    from sales_constraints import doorway_width_from_text
+    inches = doorway_width_from_text(free_text)
+    if inches is not None:
+        out["doorway_in"] = f'{inches:g}'
+        if "space" not in out:
+            out["space"] = "Narrow Doorway"
     return out
 
 

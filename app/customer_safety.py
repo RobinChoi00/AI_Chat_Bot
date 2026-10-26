@@ -10,40 +10,49 @@ from __future__ import annotations
 import re
 
 _LATIN_ACCENTS = str.maketrans("áéíóúüñ", "aeiouun")
-_EN = (
+_EN_PHYSICAL = (
     r"(?:too hot|overheat\w*|smok(?:e|es|ed|ing|y)|"
     r"(?:burn(?:ing|t)|scorch(?:ing|ed))\s+(?:plastic\s+)?(?:smell|odou?r)|"
     r"smells?\s+(?:like\s+)?(?:burning|burnt|smoke|melting plastic)|sparks?|arcing|"
     r"electric(?:al)?\s+shocks?|electrocut\w*|"
     r"(?:got|getting|gave|gives|felt|feel)\s+(?:me\s+)?(?:(?:an?|mild|small|electric|electrical)\s+)*shocks?|"
     r"shock(?:ed|ing)\s+(?:me|my|our|his|her)|zapped\s+me|got zapped|short[- ]circuit\w*|has a short|"
-    r"(?:caught|catching|on) fire|fire|flames?|burning|burn(?:ed|t)\s+(?:my|our|me|his|her|skin)|pain(?:ful)?|hurts?|discomfort)"
+    r"(?:caught|catching|on) fire|fire|flames?|burning|burn(?:ed|t)\s+(?:my|our|me|his|her|skin))"
 )
-_ES = (
+_EN = rf"(?:{_EN_PHYSICAL}|pain(?:ful)?|hurts?|discomfort)"
+_ES_PHYSICAL = (
     r"(?:humo|hume(?:a|an|ando|o)|incendio|fuego|ard(?:e|en|iendo|io)|llamas|(?:una|la) llama|"
     r"olor(?:es)?\s+(?:a|de)\s+(?:quemad[oa]|plastico quemado)|huele a quemado|"
     r"chispas?|chispe(?:a|an|ando)|descargas? electricas?|"
     r"(?:dio|da|dando)\s+(?:una\s+)?(?:descarga|corriente|calambre)|"
-    r"electrocut\w*|cortocircuito|sobrecalent\w*|demasiado caliente|muy caliente|"
-    r"dolor|duele\w*|molestias?)"
+    r"electrocut\w*|cortocircuito|sobrecalent\w*|demasiado caliente|muy caliente)"
 )
+_ES = rf"(?:{_ES_PHYSICAL}|dolor|duele\w*|molestias?)"
 _KO_ROOT = (
     r"(?:연기|불꽃|화재|스파크|감전|전기\s*충격|누전|합선|과열|통증|찌릿|"
     r"타는\s*냄새|탄\s*냄새|불|(?:너무\s*|지나치게\s*)?뜨겁|"
     r"(?:너무\s*|지나치게\s*)?뜨거|아프|아파)"
 )
-_KO = (
-    r"(?:연기|불꽃|화재|스파크|감전|전기\s*충격|누전|합선|과열|통증|찌릿|"
+_KO_PHYSICAL = (
+    r"(?:연기|불꽃|화재|스파크|감전|전기\s*충격|누전|합선|과열|찌릿|"
     r"타는\s*냄새|탄\s*냄새|불(?:이|은|도)?\s*(?:나|났|난|납|붙|타)|"
-    r"(?:너무|지나치게)\s*(?:뜨겁|뜨거)|뜨거워(?:서|졌|요)|아프|아파)"
+    r"(?:너무|지나치게)\s*(?:뜨겁|뜨거)|뜨거워(?:서|졌|요))"
 )
+_KO = rf"(?:{_KO_PHYSICAL}|통증|아프|아파)"
 _HAZARD = re.compile(rf"\b(?:{_EN}|{_ES})\b|{_KO}", re.I)
+_PHYSICAL_HAZARD = re.compile(rf"\b(?:{_EN_PHYSICAL}|{_ES_PHYSICAL})\b|{_KO_PHYSICAL}", re.I)
+_CHAIR_CAUSED_INJURY = re.compile(
+    r"\b(?:chair|seat|roller|footrest|armrest|frame)\s+(?:has\s+)?(?:hurt|hurts|burned)\s+(?:me|my|our|his|her)\b|"
+    r"\bsilla\s+(?:me|nos)\s+(?:ha\s+)?(?:causado|causo|provocado|provoco)\s+dolor\b|"
+    r"(?:의자|안마기)\s*때문에[^.!?\n]{0,20}(?:통증|아프|아파)", re.I,
+)
 _EN_NEGATIVE = re.compile(
     rf"\b(?:no|not|without|never|isn't|aren't|wasn't|weren't|hasn't|haven't|doesn't|don't|didn't)\s+"
     rf"(?:(?:any|signs? of|evidence of|experiencing|feel(?:ing)?|caus(?:e|es|ed|ing)|have|had|"
     rf"been|in|a|an|physical|smell(?:ing)?|see|seeing|saw|get|getting|got|"
     rf"emit(?:ting)?|produc(?:e|es|ed|ing)|show(?:ing)?)\s+)*{_EN}"
-    rf"(?:\s*,?\s*(?:or|and)\s+(?:any\s+)?{_EN})*\b|"
+    rf"(?:\s*,?\s*(?:or|and)\s+(?:any\s+)?{_EN}|"
+    rf"\s*,\s*(?:any\s+)?{_EN}(?=\s*(?:,|(?:or|and)\b|[.!?;]|$)))*\b|"
     rf"\b{_EN}\s+(?:is|are|was|were)\s+(?:not\s+(?:present|visible|seen|detected)|absent)\b|"
     rf"\b{_EN}\s+(?:isn't|aren't|wasn't|weren't)\s+(?:present|visible|seen|detected)\b", re.I,
 )
@@ -106,8 +115,12 @@ def _normalized(text: str) -> str:
     return (text or "").lower().replace("’", "'").translate(_LATIN_ACCENTS)
 
 
-def _reports_hazard(text: str) -> bool:
+def _reports_hazard(text: str, *, physical_only: bool = False) -> bool:
     value = _normalized(text)
+    if physical_only:
+        # Contact local-parts and document URLs are metadata, not incident
+        # reports. Keep any real report outside those spans visible.
+        value = re.sub(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}|https?://[^\s<>]+", "[contact]", value, flags=re.I)
     value = _KO_POSTPONE_VERB.sub(lambda match: match["context"], value)
     value = _KO_POSTPONE_REQUEST.sub("", value)
     value = _KO_POSTPONE_NOUN.sub(lambda match: match["context"], value)
@@ -135,18 +148,24 @@ def _reports_hazard(text: str) -> bool:
             continue
         for negative in (_EN_NEGATIVE, _ES_NEGATIVE, _KO_NEGATIVE, _KO_PREFIX_NEGATIVE, _KO_DENIED_MODIFIER):
             clause = negative.sub("", clause)
-        if _HAZARD.search(clause):
+        # Keep the original negation/reference processing for both modes. A
+        # denied physical marker in one clause must not combine with ordinary
+        # shopping pain in another clause to manufacture a physical incident.
+        physical_clause = re.sub(r"\bburning\s+(?:(?:back|neck|leg|foot|feet)\s+)?(?:pain|sensations?)\b", "[pain symptom]", clause) if physical_only else clause
+        physical = _PHYSICAL_HAZARD.search(physical_clause) or (_CHAIR_CAUSED_INJURY.search(clause) and _HAZARD.search(clause))
+        hazard = physical if physical_only else _HAZARD.search(clause)
+        if hazard:
             return True
     return False
 
 
-def reported_safety_hazard(ticket=None, turns=(), text: str = "") -> bool:
-    """Keep a reported incident sticky across subsequent acknowledgement turns."""
+def reported_safety_hazard(ticket=None, turns=(), text: str = "", *, physical_only: bool = False) -> bool:
+    """Keep reported incidents; physical-only mode excludes general pain needs."""
     collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
     values = [text, str(collected.get("safety_report") or ""), str(collected.get("human_support_safety_report") or ""),
               str(collected.get("intake_summary") or ""), str(collected.get("intake_raw_message") or "")]
     values.extend(str(getattr(turn, "customer_answer", "") or "") for turn in turns or ())
-    return any(_reports_hazard(value) for value in values if value)
+    return any(_reports_hazard(value, physical_only=physical_only) for value in values if value)
 
 
 def detect_customer_language(text: str, default: str = "en") -> str:

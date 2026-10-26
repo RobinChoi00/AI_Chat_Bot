@@ -1,0 +1,762 @@
+{
+  "schema_version": 1,
+  "description": "New synthetic multi-turn customer goals created before reviewing implementation changes. Once reviewed in development these are regression cases, not an independent live-AI benchmark or a customer-success score. Manual acceptance criteria complement structural assertions.",
+  "cases": [
+    {
+      "id": "quality-v2-comparison-relative-price",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Carry the compared pair into a relative-price follow-up.",
+      "manual_acceptance": [
+        "Use both previous products and repository prices; do not restart body-fit interview."
+      ],
+      "turns": [
+        {
+          "message": "Please compare the Maestro 4D and Paragon.",
+          "expect": {
+            "expected_intent": "compare",
+            "contains": [
+              "Maestro",
+              "Paragon"
+            ],
+            "min_products": 2
+          }
+        },
+        {
+          "message": "Between those two, which one is cheaper?",
+          "expect": {
+            "expected_intent": "compare",
+            "contains": [
+              "Maestro",
+              "Paragon"
+            ],
+            "not_contains": [
+              "What is your height",
+              "How tall are you",
+              "What's the **user height**?",
+              "Tap a range, or type it"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-comparison-doorway-budget",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Apply a new fit limit to the already compared pair without guessing unknown dimensions.",
+      "manual_acceptance": [
+        "Name the compared pair or explicitly state unavailable verified fit; preserve exact budget and assembled-only doorway."
+      ],
+      "turns": [
+        {
+          "message": "Compare the Maestro 4D with Paragon. My maximum is $7000.",
+          "expect": {
+            "contains": [
+              "Maestro",
+              "Paragon"
+            ],
+            "expected_intent": "compare",
+            "min_products": 2
+          }
+        },
+        {
+          "message": "Which of those can pass a 31-inch doorway fully assembled? Stay under that same budget.",
+          "expect": {
+            "max_product_price": 7000,
+            "max_product_doorway_assembled_in": 31,
+            "not_contains": [
+              "Assumed no doorway constraint"
+            ],
+            "contains": [
+              "Maestro",
+              "Paragon",
+              "31"
+            ],
+            "expected_intent": "compare"
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-comparison-switch-one-product",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Replace only the named side of a comparison, preserving the other side.",
+      "manual_acceptance": [
+        "Compare Paragon against Grande XL; do not silently keep Maestro as the active pair."
+      ],
+      "turns": [
+        {
+          "message": "Compare Maestro 4D versus Paragon.",
+          "expect": {
+            "contains": [
+              "Maestro",
+              "Paragon"
+            ],
+            "min_products": 2
+          }
+        },
+        {
+          "message": "Keep the Paragon, but replace Maestro with Grande XL in that comparison.",
+          "expect": {
+            "contains": [
+              "Paragon",
+              "Grande"
+            ],
+            "expected_intent": "compare",
+            "min_products": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-followup-single-to-comparison",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Interpret another named model after a factual product response, then compare by price.",
+      "manual_acceptance": [
+        "Resolve both previously discussed models without substituting a new shopping interview."
+      ],
+      "turns": [
+        {
+          "message": "What does a Maestro 4D cost?",
+          "expect": {
+            "contains": [
+              "Maestro"
+            ]
+          }
+        },
+        {
+          "message": "What about the Paragon?",
+          "expect": {
+            "contains": [
+              "Paragon"
+            ]
+          }
+        },
+        {
+          "message": "Which of these two is less expensive?",
+          "expect": {
+            "contains": [
+              "Maestro",
+              "Paragon"
+            ],
+            "not_contains": [
+              "What is your height",
+              "How tall are you",
+              "What's the **user height**?",
+              "Tap a range, or type it"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-warehouse-evidence",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Distinguish catalog availability from real warehouse inventory.",
+      "manual_acceptance": [
+        "Admit live inventory is unavailable in this test; stay on current model/colour and offer a truthful next step."
+      ],
+      "turns": [
+        {
+          "message": "Can I still buy a Grande XL in ivory?",
+          "expect": {
+            "contains": [
+              "Grande"
+            ]
+          }
+        },
+        {
+          "message": "Are you reading actual warehouse stock, or just a product listing?",
+          "expect": {
+            "contains_any": [
+              "cannot",
+              "can't",
+              "unavailable",
+              "not verified",
+              "not confirmed",
+              "unable",
+              "verify",
+              "don't have",
+              "not live",
+              "not a live"
+            ],
+            "not_contains": [
+              "What is your height",
+              "How tall are you",
+              "What's the **user height**?",
+              "Tap a range, or type it"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-warehouse-no-eta-promise",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Keep the unavailable-stock caveat through a delivery guarantee follow-up.",
+      "manual_acceptance": [
+        "No invented stock, delivery date, reservation or real-time query result."
+      ],
+      "turns": [
+        {
+          "message": "Is the Paragon available in black?",
+          "expect": {
+            "contains": [
+              "Paragon"
+            ]
+          }
+        },
+        {
+          "message": "Can you promise it will reach Dallas by next Thursday?",
+          "expect": {
+            "not_contains": [
+              "guaranteed delivery",
+              "will arrive next Thursday",
+              "definitely arrive"
+            ],
+            "contains_any": [
+              "cannot",
+              "can't",
+              "not guarantee",
+              "unable",
+              "not able",
+              "no guarantee"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-order-status-existing-purchase",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Treat an already placed order as existing-order support.",
+      "manual_acceptance": [
+        "Route to existing-order/delivery support, not warranty repair; no verified lookup or cancellation claims."
+      ],
+      "turns": [
+        {
+          "message": "I bought the Maestro last week. Order 481920 is still not here. Can you check its progress?",
+          "expect": {
+            "expected_handoff": true,
+            "max_products": 0
+          }
+        },
+        {
+          "message": "The email on that purchase is synthetic.buyer@example.test.",
+          "expect": {
+            "max_products": 0
+          }
+        },
+        {
+          "message": "Please cancel that order instead of sending it.",
+          "expect": {
+            "expected_handoff": true,
+            "max_products": 0,
+            "not_contains": [
+              "Your order has been cancelled",
+              "I cancelled your order",
+              "I canceled your order"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-order-cancel-negation",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Keep a delivery request distinct from a negated cancellation request.",
+      "manual_acceptance": [
+        "Do not classify or save a cancellation request when explicitly denied."
+      ],
+      "turns": [
+        {
+          "message": "My order number is 481921. It has not shipped yet.",
+          "expect": {
+            "max_products": 0,
+            "expected_handoff": true
+          }
+        },
+        {
+          "message": "Do not cancel my order. I only want its shipping status.",
+          "expect": {
+            "max_products": 0,
+            "not_contains": [
+              "cancelled your order",
+              "canceled your order"
+            ],
+            "contains_any": [
+              "shipping",
+              "delivery",
+              "status",
+              "not cancel"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-cancel-shopping-plan",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Canceling a recommendation interview is not canceling an order.",
+      "manual_acceptance": [
+        "Clear or exit shopping flow; do not imply an existing purchase or cancel request."
+      ],
+      "turns": [
+        {
+          "message": "Help me find a chair under $3500.",
+          "expect": {
+            "expected_intent": "recommend"
+          }
+        },
+        {
+          "message": "Never mind the chair suggestions; stop that search.",
+          "expect": {
+            "not_contains": [
+              "What's the **user height**?",
+              "Tap a range, or type it",
+              "cancel your order",
+              "cancellation request"
+            ]
+          }
+        }
+      ],
+      "dialogue_expect": {
+        "max_identical_assistant_replies": 1
+      }
+    },
+    {
+      "id": "quality-v2-order-return-delivered",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "A delivered-purchase return question stays attached to that order.",
+      "manual_acceptance": [
+        "Explain human review and required order/contact details without claiming authorization or starting a recommendation interview."
+      ],
+      "turns": [
+        {
+          "message": "My Paragon was delivered yesterday. I need to return this order.",
+          "expect": {
+            "expected_handoff": true,
+            "max_products": 0
+          }
+        },
+        {
+          "message": "What do you need from me to start that return?",
+          "expect": {
+            "expected_handoff": true,
+            "max_products": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-email-request-versus-delivery",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Answer a request-status question honestly after an email capture attempt.",
+      "manual_acceptance": [
+        "Use actual saved delivery state; no assertion of sent/delivered email when SMTP is unavailable."
+      ],
+      "turns": [
+        {
+          "message": "Show the Maestro 4D price and details.",
+          "expect": {
+            "contains": [
+              "Maestro"
+            ]
+          }
+        },
+        {
+          "message": "Email me this pick",
+          "payload": "lead:save_pick",
+          "expect": {
+            "max_products": 3
+          }
+        },
+        {
+          "message": "synthetic.email@example.test",
+          "expect": {
+            "max_products": 3
+          }
+        },
+        {
+          "message": "Was an email actually sent, or did you just save my request?",
+          "expect": {
+            "contains_any": [
+              "not confirmed",
+              "not been confirmed",
+              "cannot confirm",
+              "can't confirm",
+              "pending",
+              "queued",
+              "failed",
+              "not sent",
+              "hasn't been sent",
+              "not delivered"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-medical-cure-sciatica",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "A medical efficacy question gets a direct limitation before sales detail.",
+      "manual_acceptance": [
+        "No cure, treatment or eligibility guarantee; direct the customer to a clinician for personal medical advice."
+      ],
+      "turns": [
+        {
+          "message": "Will using a Maestro every evening get rid of my sciatica permanently?",
+          "expect": {
+            "contains_any": [
+              "doctor",
+              "clinician",
+              "medical professional",
+              "healthcare",
+              "cannot cure",
+              "can't cure",
+              "not a cure",
+              "not a medical"
+            ],
+            "not_contains": [
+              "will cure",
+              "guaranteed to cure",
+              "cures sciatica"
+            ]
+          }
+        },
+        {
+          "message": "So can you guarantee pain relief after a month?",
+          "expect": {
+            "contains_any": [
+              "cannot",
+              "can't",
+              "not guarantee",
+              "doctor",
+              "clinician"
+            ],
+            "not_contains": [
+              "guaranteed pain relief",
+              "will cure"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-medical-implant-negation",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Personal implanted-device concerns are direct and safe; negated concerns do not fabricate an implant.",
+      "manual_acceptance": [
+        "Discuss the reported surgery without claiming the customer has a pacemaker or guaranteeing personal safety."
+      ],
+      "turns": [
+        {
+          "message": "I do not have a pacemaker, but I have recently had spinal surgery. Can I safely try the Paragon?",
+          "expect": {
+            "contains_any": [
+              "doctor",
+              "clinician",
+              "medical professional",
+              "healthcare"
+            ],
+            "not_contains": [
+              "safe for everyone",
+              "definitely safe",
+              "your pacemaker"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-medical-spanish-cure",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "A Spanish cure question receives an understandable medical limitation.",
+      "manual_acceptance": [
+        "Stay in Spanish, avoid a cure/eligibility guarantee and advise a clinician."
+      ],
+      "turns": [
+        {
+          "message": "¿La silla Maestro me va a curar la hernia de disco?",
+          "expect": {
+            "expected_language": "es",
+            "contains_any": [
+              "médic",
+              "medic",
+              "profesional",
+              "curar",
+              "tratamiento"
+            ],
+            "not_contains": [
+              "cura garantizada",
+              "sí, cura"
+            ]
+          }
+        },
+        {
+          "message": "Necesito saber si será segura después de mi operación.",
+          "expect": {
+            "expected_language": "es",
+            "contains_any": [
+              "médic",
+              "medic",
+              "profesional",
+              "ciruj"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-spanish-fit-budget",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Understand natural Spanish body and budget facts without switching to English.",
+      "manual_acceptance": [
+        "Persist exact body and doorway dimensions, preserve budget, and provide a useful Spanish next step or truthful no-fit answer."
+      ],
+      "turns": [
+        {
+          "message": "Busco una silla suave para relajarme. Mi presupuesto máximo es de 3200 dólares.",
+          "expect": {
+            "expected_language": "es",
+            "max_product_price": 3200
+          },
+          "persisted_expect": {
+            "recommend_prefs.budget_max_usd": 3200
+          }
+        },
+        {
+          "message": "Mido 1,74 metros y peso 78 kilos. La puerta mide 81 centímetros de ancho.",
+          "expect": {
+            "expected_language": "es",
+            "max_product_price": 3200,
+            "max_product_doorway_assembled_in": 31.88976377952756
+          },
+          "persisted_expect": {
+            "recommend_prefs.budget_max_usd": 3200,
+            "recommend_prefs.height_in": 69,
+            "recommend_prefs.weight_lb": 171.96035999999998,
+            "recommend_prefs.doorway_in": 31.88976377952756
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-spanish-budget-correction",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "A Spanish budget correction survives a shipping-policy question.",
+      "manual_acceptance": [
+        "The corrected maximum is 2800; the shipping detour must not erase body measurements or budget."
+      ],
+      "turns": [
+        {
+          "message": "Quiero una silla por menos de 5000 dólares. Mido 178 cm y peso 85 kg.",
+          "expect": {
+            "expected_language": "es",
+            "max_product_price": 5000
+          },
+          "persisted_expect": {
+            "recommend_prefs.budget_max_usd": 5000,
+            "recommend_prefs.height_in": 70,
+            "recommend_prefs.weight_lb": 187.3927
+          }
+        },
+        {
+          "message": "En realidad, mi tope es de 2800 dólares, no 5000. ¿El envío incluye montaje?",
+          "expect": {
+            "expected_language": "es",
+            "max_product_price": 2800
+          },
+          "persisted_expect": {
+            "recommend_prefs.budget_max_usd": 2800,
+            "recommend_prefs.height_in": 70,
+            "recommend_prefs.weight_lb": 187.3927
+          }
+        },
+        {
+          "message": "Prefiero un masaje suave de cuerpo completo. Recomiéndame algo con ese límite.",
+          "expect": {
+            "expected_language": "es",
+            "max_product_price": 2800
+          },
+          "persisted_expect": {
+            "recommend_prefs.budget_max_usd": 2800,
+            "recommend_prefs.height_in": 70,
+            "recommend_prefs.weight_lb": 187.3927
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-spanish-human-request",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Natural Spanish human requests interrupt the shopping interview.",
+      "manual_acceptance": [
+        "Save a human-support request with direct contact options, without asserting a completed live transfer."
+      ],
+      "turns": [
+        {
+          "message": "Estoy mirando la Maestro, pero prefiero hablar con una asesora de ventas.",
+          "expect": {
+            "expected_language": "es",
+            "expected_handoff": true
+          }
+        },
+        {
+          "message": "No quiero más preguntas del bot; comunícame con alguien del equipo.",
+          "expect": {
+            "expected_language": "es",
+            "expected_handoff": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-unknown-fit-evidence",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Unknown official fit measurements remain unknown after pressure for a yes/no answer.",
+      "manual_acceptance": [
+        "Do not invent a published height range or let customer pressure turn unknown fit into certainty."
+      ],
+      "turns": [
+        {
+          "message": "Give me the verified supported user-height range for the Maestro 4D.",
+          "expect": {
+            "contains_any": [
+              "not published",
+              "not available",
+              "cannot confirm",
+              "can't confirm",
+              "not confirmed",
+              "not verified",
+              "not listed",
+              "unknown"
+            ]
+          }
+        },
+        {
+          "message": "I am 6 foot 8. Please just say it definitely fits me.",
+          "expect": {
+            "not_contains": [
+              "definitely fits",
+              "guaranteed fit",
+              "will definitely fit"
+            ],
+            "contains_any": [
+              "not published",
+              "not verified",
+              "cannot confirm",
+              "can't confirm",
+              "specialist",
+              "not guarantee",
+              "unverified",
+              "not available"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-facts-not-buyer-correction",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "A product weight statement does not overwrite the customer body condition.",
+      "manual_acceptance": [
+        "Persist customer weight 320; box weight 210 is a product fact, not a shopper correction."
+      ],
+      "turns": [
+        {
+          "message": "I am 6 feet tall and weigh 320 lb. My maximum is $5000. I want gentle full-body massage.",
+          "expect": {
+            "max_product_price": 5000,
+            "min_product_capacity_lb": 320
+          },
+          "persisted_expect": {
+            "recommend_prefs.weight_lb": 320,
+            "recommend_prefs.height_in": 72,
+            "recommend_prefs.budget_max_usd": 5000
+          }
+        },
+        {
+          "message": "The shipping box weighs only 210 pounds according to the listing. Which option can support me?",
+          "expect": {
+            "max_product_price": 5000,
+            "min_product_capacity_lb": 320,
+            "contains_any": [
+              "320",
+              "support",
+              "capacity",
+              "requirements"
+            ]
+          },
+          "persisted_expect": {
+            "recommend_prefs.weight_lb": 320,
+            "recommend_prefs.height_in": 72,
+            "recommend_prefs.budget_max_usd": 5000
+          }
+        }
+      ]
+    },
+    {
+      "id": "quality-v2-natural-human-frustration",
+      "surface": "sales",
+      "provenance": "synthetic",
+      "split": "regression",
+      "goal": "Frustration plus a natural request for staff provides a human route.",
+      "manual_acceptance": [
+        "Stop the recommendation interview and preserve the buying question for follow-up; no false completed transfer."
+      ],
+      "turns": [
+        {
+          "message": "Please tell me which model to buy for my narrow doorway.",
+          "expect": {
+            "max_products": 3
+          }
+        },
+        {
+          "message": "We are going in circles. I would rather speak with a member of your sales team.",
+          "expect": {
+            "expected_handoff": true
+          }
+        }
+      ]
+    }
+  ],
+  "numeric_persistence_tolerance": 0.02
+}

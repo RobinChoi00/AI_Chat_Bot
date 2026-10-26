@@ -99,6 +99,19 @@ def _is_person_weight(text: str, start: int, end: int) -> bool:
     return object_subject < 0 or person > object_subject
 
 
+def _is_customer_doorway(text: str, start: int, end: int) -> bool:
+    """A model's published doorway requirement is not a home measurement."""
+    prefix = re.split(r'[;!?]|\.(?=\s|$)', text[:start])[-1][-160:]
+    scope = prefix + text[start:end]
+    customer = _latest_subject_position(r'\b(?:my|our|your)\s+(?:(?:own|home|house)\s+)?(?:door(?:way)?|opening|entrance)\b', scope)
+    product = _latest_subject_position(
+        r"\b(?:published|listed|catalog|specifications?|specs?|required|requires|minimum|assembled|disassembled)\b|"
+        r"\b(?:chair|model|product|unit)(?:['’]s|\s+(?:has|needs|requires|lists))\b|\b(?!(?:my|our|your)\b)[a-z][\w-]*['’]s\b", scope,
+    )
+    access_request = _latest_subject_position(r'\b(?:fit|fits|pass|passes|go|goes)\s+through\b|\b(?:must|needs?\s+to|has\s+to)\s+fit\b', scope)
+    return product < 0 or customer > product or access_request > product
+
+
 def extract_constraints(text: str, previous: Mapping[str, str] | None = None) -> dict[str, str]:
     out = dict(previous or {})
     raw = text or ""
@@ -118,10 +131,10 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
         out['weight_lb'] = f'{max(weights)[1]:g}'
     doors = [match for match in re.finditer(
         r'\b(\d{2}(?:\.\d+)?)\s*-?\s*(?:"|inch(?:es)?|in\b)\s*(?:wide\s+)?(?:door(?:way)?|opening|entrance)\b|'
-        r'\b(?:door(?:way)?|entrance)\b(?:\s+(?:opening|width|clearance|is|measures|at|only|just|about|exactly)|\s*[:=]){0,6}\s*'
+        r'\b(?:door(?:way)?|entrance)\b(?:\s+(?:opening|width|clearance|is|measures|at|only|just|about|exactly|still|now)|\s*[:=]){0,6}\s*'
         r'(\d{2}(?:\.\d+)?)\s*-?\s*(?:"|inch(?:es)?|in\b)|'
         r'\b(?:door(?:way)?|entrance)\b[^.;!?]{0,60}?\b(\d{2}(?:\.\d+)?)\s*-?\s*(?:"|inch(?:es)?|in\b)\s+wide\b', raw, re.I)
-        if not _negated_measurement(raw, match.start())]
+        if not _negated_measurement(raw, match.start()) and _is_customer_doorway(raw, match.start(), match.end())]
     if doors:
         value = float(next(group for group in doors[-1].groups() if group is not None))
         if 20 <= value <= 48:
@@ -130,7 +143,7 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
                 out['space'] = 'Narrow Doorway'
     if re.search(r"\b(?:assembled[ -]only|fully assembled|no disassembly|without\s+(?:any\s+)?disassembl\w*|without\s+(?:taking|pulling)\s+(?:it|the chair|anything)\s+apart|(?:can(?:not|'t)|do not|don't)\s+(?:be\s+)?disassembl\w*)\b", raw, re.I):
         out['doorway_fit'] = 'assembled'
-    elif re.search(r"\b(?:(?:ok(?:ay)?|able)\s+to\s+disassembl\w*|allow\s+disassembly|disassembly\s+(?:is\s+)?(?:ok(?:ay)?|fine|allowed)|can\s+(?:be\s+disassembled|take\s+(?:it|the chair)\s+apart))\b", raw, re.I):
+    elif re.search(r"\b(?:ok(?:ay)?\s+to\s+disassembl\w*|allow\s+disassembly|disassembly\s+(?:is\s+)?(?:ok(?:ay)?|fine|allowed)|(?:i|we)\s+can\s+take\s+(?:it|the chair)\s+apart|(?:i|we)(?:'m|\s+am|\s+are)?\s+(?:ok(?:ay)?|fine)\s+with\s+disassembl\w*)\b", raw, re.I):
         out['doorway_fit'] = 'disassembled'
     if re.search(r'\b(?:no\s+(?:doorway|door)\s+(?:limit|constraint)|doorway\s+(?:is\s+)?(?:not|no longer)\s+a\s+constraint)\b', raw, re.I):
         out['doorway_in'] = 'skip'
@@ -161,6 +174,21 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
     elif re.search(r"\b(?:deep[ -]?tissue|strong|firm)\b", raw, re.I):
         out['intensity'] = 'Strong'
     return out
+
+
+def doorway_width_from_text(text: str) -> float | None:
+    """A grounded home width, bare width answer, or explicit access question."""
+    exact = extract_constraints(text).get('doorway_in')
+    if exact and exact != 'skip':
+        return float(exact)
+    match = re.fullmatch(r'\s*(\d{2}(?:\.\d+)?)\s*(?:"|in(?:ch(?:es)?)?)\s*(?:wide)?[.!?\s]*', text or '', re.I)
+    if match is None:
+        match = re.search(r'\b(?:fit|pass|go)\s+through\s+(?:a\s+|my\s+)?(\d{2}(?:\.\d+)?)\s*(?:"|in(?:ch(?:es)?)?)\b', text or '', re.I)
+    if match:
+        width = float(match.group(1))
+        if 20 <= width <= 48:
+            return width
+    return None
 
 
 def product_constraint_issues(product, constraints: Mapping[str, str], *, price_usd=None) -> list[str]:
