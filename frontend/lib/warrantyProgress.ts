@@ -1,8 +1,11 @@
 import type { WarrantyPrivacyState, WarrantyTicketState, WarrantyTroubleshootingResponse } from "./types";
 
-/** Only a server-selected mode can remove the email prerequisite. */
+/** A current server session must confirm consent and the saved contact email. */
 export function canAccessWarrantyHelp(consentAccepted: boolean, emailProvided: boolean, privacy?: WarrantyPrivacyState | null): boolean {
-  return consentAccepted && (privacy?.consent_recorded ?? true) && (privacy?.email_required_before_help === false || emailProvided);
+  if (!consentAccepted || !privacy?.consent_recorded) return false;
+  return privacy.email_required_before_help === false || (
+    emailProvided && privacy.email_gate_status === "provided" && privacy.contact_email_available
+  );
 }
 
 export function canSaveWarrantyProgress(ticket: WarrantyTicketState | null): boolean {

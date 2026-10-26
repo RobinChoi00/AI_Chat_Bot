@@ -9,7 +9,7 @@ interface Props {
 
 const EMAIL_RE = /^[\w.+-]+@[\w.-]+\.\w+$/;
 
-/** Compatibility gate shown only when the server requires email before help. */
+/** Save the customer's contact email before opening the conversation. */
 export default function ChatEmailGate({ disabled, onContinue }: Props) {
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
@@ -38,10 +38,10 @@ export default function ChatEmailGate({ disabled, onContinue }: Props) {
   return (
     <div className="mx-3 mb-4 rounded-xl border border-sky-200 bg-sky-50/90 px-4 py-4 sm:mx-4">
       <p className="text-sm font-semibold text-sky-950">
-        Where should we email follow-up?
+        Before we start
       </p>
       <p className="mt-1 text-sm text-sky-900">
-        Enter an email address for replies about this case.
+        Enter your email to start chatting. We&apos;ll use it for support replies and follow-up.
       </p>
       <p className="mt-2 rounded-lg border border-sky-100 bg-white/70 px-3 py-2 text-xs leading-snug text-sky-800">
         Your email is used for case support, including helpdesk and email delivery.
@@ -57,6 +57,8 @@ export default function ChatEmailGate({ disabled, onContinue }: Props) {
           required
           autoComplete="email"
           inputMode="email"
+          aria-invalid={Boolean(error)}
+          aria-describedby={error ? "chat-email-error" : undefined}
           value={email}
           disabled={busy || disabled}
           onChange={(e) => {
@@ -66,13 +68,13 @@ export default function ChatEmailGate({ disabled, onContinue }: Props) {
           placeholder="you@example.com"
           className="w-full rounded-lg border border-sky-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none ring-sky-300 placeholder:text-gray-400 focus:ring-2 disabled:opacity-60"
         />
-        {error ? <p className="text-xs text-red-600">{error}</p> : null}
+        {error ? <p id="chat-email-error" role="alert" className="text-xs text-red-600">{error}</p> : null}
         <button
           type="submit"
           disabled={busy || disabled || !valid}
           className="w-full rounded-full bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-800 disabled:opacity-50"
         >
-          {busy ? "Saving…" : "Continue"}
+          {busy ? "Saving…" : "Start chat"}
         </button>
       </form>
     </div>
