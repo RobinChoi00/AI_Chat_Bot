@@ -14,7 +14,7 @@ _EN_PHYSICAL = (
     r"(?:too hot|overheat\w*|smok(?:e|es|ed|ing|y)|"
     r"(?:burn(?:ing|t)|scorch(?:ing|ed))\s+(?:plastic\s+)?(?:smell|odou?r)|"
     r"smells?\s+(?:like\s+)?(?:burning|burnt|smoke|melting plastic)|sparks?|arcing|"
-    r"electric(?:al)?\s+shocks?|electrocut\w*|"
+    r"electric(?:al)?\s+(?:shocks?|jolts?)|electrocut\w*|"
     r"(?:got|getting|gave|gives|felt|feel)\s+(?:me\s+)?(?:(?:an?|mild|small|electric|electrical)\s+)*shocks?|"
     r"shock(?:ed|ing)\s+(?:me|my|our|his|her)|zapped\s+me|got zapped|short[- ]circuit\w*|has a short|"
     r"(?:caught|catching|on) fire|fire|flames?|burning|burn(?:ed|t)\s+(?:my|our|me|his|her|skin))"
@@ -22,9 +22,9 @@ _EN_PHYSICAL = (
 _EN = rf"(?:{_EN_PHYSICAL}|pain(?:ful)?|hurts?|discomfort)"
 _ES_PHYSICAL = (
     r"(?:humo|hume(?:a|an|ando|o)|incendio|fuego|ard(?:e|en|iendo|io)|llamas|(?:una|la) llama|"
-    r"olor(?:es)?\s+(?:a|de)\s+(?:quemad[oa]|plastico quemado)|huele a quemado|"
+    r"olor(?:es)?\s+(?:a|de)\s+(?:quemad[oa]|plastico quemado)|huele a (?:plastico )?quemad[oa]|"
     r"chispas?|chispe(?:a|an|ando)|descargas? electricas?|"
-    r"(?:dio|da|dando)\s+(?:una\s+)?(?:descarga|corriente|calambre)|"
+    r"(?:dio|da|dando)\s+(?:(?:un|una)\s+)?(?:descarga|corriente|calambre|toque electrico)|"
     r"electrocut\w*|cortocircuito|sobrecalent\w*|demasiado caliente|muy caliente)"
 )
 _ES = rf"(?:{_ES_PHYSICAL}|dolor|duele\w*|molestias?)"
@@ -50,7 +50,7 @@ _EN_NEGATIVE = re.compile(
     rf"\b(?:no|not|without|never|isn't|aren't|wasn't|weren't|hasn't|haven't|doesn't|don't|didn't)\s+"
     rf"(?:(?:any|signs? of|evidence of|experiencing|feel(?:ing)?|caus(?:e|es|ed|ing)|have|had|"
     rf"been|in|a|an|physical|smell(?:ing)?|see|seeing|saw|get|getting|got|"
-    rf"emit(?:ting)?|produc(?:e|es|ed|ing)|show(?:ing)?)\s+)*{_EN}"
+    rf"emit(?:ting)?|produc(?:e|es|ed|ing)|show(?:ing)?|seen|observed|noticed)\s+)*{_EN}"
     rf"(?:\s*,?\s*(?:or|and)\s+(?:any\s+)?{_EN}|"
     rf"\s*,\s*(?:any\s+)?{_EN}(?=\s*(?:,|(?:or|and)\b|[.!?;]|$)))*\b|"
     rf"\b{_EN}\s+(?:is|are|was|were)\s+(?:not\s+(?:present|visible|seen|detected)|absent)\b|"
@@ -68,7 +68,7 @@ _KO_NEGATIVE = re.compile(
     rf"{_KO_ROOT}(?:\s*(?:와|과|나|및|또는)\s*{_KO_ROOT})*(?:은|는|이|가|도|을|를)?\s*(?:전혀\s*)?"
     r"(?:(?:난|붙은|발생한|된|당한|겪은)\s*(?:적(?:이|은|도)?|일(?:이|은|도)?)\s*)?"
     r"(?:없(?:습니다|어요|었어요|었고|었지만|음|다|고|지만|는데|는)?|아니(?:에요|었어요|고|지만|라|다)?|"
-    r"(?:나지|나오지|피어오르지|발생하지|보이지|느껴지지|(?:되|하)?지)\s*않(?:습니다|아요|았어요|고|지만|는데|음|다)?|"
+    r"(?:나지|나오지|피어오르지|발생하지|보이지|느껴지지|(?:되|하)?지)(?:는|도)?\s*않(?:습니다|아요|았어요|고|지만|는데|음|다)?|"
     r"안\s*(?:나요|납니다|났어요|났습니다|붙었어요|붙었습니다|나|보여요|보입니다|보여|느껴져요|뜨거워요|뜨겁습니다|아파요|아픕니다))"
 )
 _KO_PREFIX_NEGATIVE = re.compile(r"안\s*(?:뜨거워\w*|뜨겁\w*|아파\w*|아프\w*)")
@@ -89,7 +89,7 @@ _SPANISH_CALL = re.compile(
     r"\b(?:(?:me|te|se|nos|os|le|les)\s+llamas?|llama\s+(?:a|al)\b|llamame|llamanos)\b", re.I,
 )
 _SPANISH_NAME = re.compile(r"\bse llama\s+(?:\"[^\"\n]+\"|'[^'\n]+'|[a-z0-9_-]+\b)", re.I)
-_REFERENCE_START = re.compile(r"^(?:(?:the|a|in the|el|la|en el|en la)\s+)?"
+_REFERENCE_START = re.compile(r"^(?:(?:why|what)\s+(?:does|do)\s+)?(?:(?:the|a|in the|el|la|en el|en la)\s+)?"
     r"(?:manual|guide|instructions|example|sample|translation|definition|warning label|ejemplo|instrucciones|guia|traduccion)\b|"
     r"^(?:설명서|매뉴얼|예시|예문|문구|번역|안내문)", re.I)
 _QUOTED = re.compile(r'"[^"\n]*"|“[^”\n]*”|(?<!\w)\'[^\'\n]+\'(?!\w)|‘[^’\n]*’')
@@ -99,20 +99,58 @@ _META_QUOTE_SUFFIX = re.compile(r"^\s*(?:(?:is|was|es|means)\s+)?(?:(?:an?|the|u
 _DEFINITION_PREFIX = re.compile(r"(?:what does|meaning of|translate|que significa|como se traduce)\s*$", re.I)
 _REFERENCE_REPORT_TAIL = re.compile(
     r"\b(?:and|but|y|pero)\s+(?P<latin>(?:(?:now|ahora)\s+)?"
-    r"(?:my|our|the|this|mi|nuestra|la|esta)\s+(?:chair|seat|unit|silla)\b.*)|"
+    r"(?:my|our|the|this|mi|nuestra|la|esta|el)\s+(?:chair|seat|unit|silla|(?:power )?(?:cable|cord)|plug|adapter|enchufe)\b.*)|"
     r"(?:있고|고|지만)\s*(?P<korean>(?:(?:지금|실제로|제|우리)\s*)?"
-    r"(?:의자|안마기|제품|기기)(?:에서|가|는|를|에).*)", re.I,
+    r"(?:의자|안마기|제품|기기|전선|케이블|플러그|콘센트)(?:에서|가|는|를|에).*)", re.I,
 )
-_CLAUSE = re.compile(r"[.;\n]+|\b(?:but|however|pero|aunque|sin embargo)\b", re.I)
+_CLAUSE = re.compile(r"[.;?\n]+|\b(?:but|however|pero|aunque|sin embargo)\b", re.I)
 _HYPOTHETICAL = re.compile(r"\b(?:what|how|should|could|can)\b[^.!?]*\bif\b|"
                           r"\b(?:que|como|debo|deberia)\b[^.!?]*\bsi\b|"
                           r"(?:나면|발생하면|감전되면)[^.!?]*(?:어떻게|해야|하나요|할까요|대처)", re.I)
 _ACTUAL = re.compile(r"\b(?:right now|currently|yesterday|i see|i saw|i smell|i felt|i got|ahora|ayer|veo|siento|me dio)\b|"
                     r"지금|어제|현재|실제로", re.I)
+_TERM_DEFINITION = re.compile(
+    r"^\s*what does\s+(?:the (?:word|term)\s+)?"
+    r"(?:smoke|overheating|sparks?|fire|burning smell)\s+mean\s*\??\s*$", re.I)
+
+# Melting insulation or an abnormally hot plug is already an electrical
+# incident, even before smoke appears. Require a component in the same clause
+# so ordinary shopping metaphors ("my stress melted away") remain usable.
+_EN_COMPONENT = re.compile(r"\b(?:cables?|cords?|plugs?|adapters?|wires?|wiring|outlets?|sockets?|insulation)\b", re.I)
+_ES_COMPONENT = re.compile(r"\b(?:cables?|enchufes?|adaptadores?|alambres?|aislamiento|tomacorrientes?)\b", re.I)
+_KO_COMPONENT = re.compile(r"전선|케이블|코드|플러그|콘센트|어댑터|피복")
+_EN_THERMAL = r"(?:melt(?:ing|ed)|scalding(?: hot)?|(?:(?:getting|becoming)\s+)?(?:very|extremely|unusually|dangerously)\s+hot|hot to (?:the )?touch)"
+_ES_THERMAL = r"(?:derriti(?:endo|o)|derretid[oa]|quema al tocar(?:lo|la))"
+_KO_THERMAL = r"녹(?:고|았|아|는|은|음|습)\w*"
+_THERMAL_NEGATIVES = (
+    re.compile(rf"\b(?:no|not|never|isn't|hasn't|wasn't|doesn't)\s+"
+               rf"(?:(?:been|getting|becoming|feel(?:ing)?|look(?:ing)?|appear(?:ing)?|seem(?:ing)?|actually)\s+)*{_EN_THERMAL}\b", re.I),
+    re.compile(rf"\b(?:no|nunca)\s+(?:se\s+)?(?:(?:esta|estan|ha|han)\s+)?{_ES_THERMAL}\b", re.I),
+    re.compile(r"안\s*녹(?:고|았|아|는|음|습)\w*|"
+               r"녹(?:지(?:는|도)?\s*않\w*|은\s*(?:것|건|상태|증상)(?:은|는|이|가)?\s*아니\w*|"
+               r"은\s*(?:적|일)(?:이|은|도)?\s*없\w*)"),
+)
+_COMPONENT_DAMAGE = (
+    (_EN_COMPONENT, re.compile(rf"\b{_EN_THERMAL}\b", re.I)),
+    (_ES_COMPONENT, re.compile(rf"\b{_ES_THERMAL}\b", re.I)),
+    (_KO_COMPONENT, re.compile(_KO_THERMAL)),
+)
 
 
 def _normalized(text: str) -> str:
     return (text or "").lower().replace("’", "'").translate(_LATIN_ACCENTS)
+
+
+def _reports_component_damage(clause: str) -> bool:
+    value = clause
+    for negative in _THERMAL_NEGATIVES:
+        value = negative.sub("", value)
+    for component, damage in _COMPONENT_DAMAGE:
+        components = list(component.finditer(value))
+        if any(abs(part.start() - symptom.start()) <= 80
+               for part in components for symptom in damage.finditer(value)):
+            return True
+    return False
 
 
 def _reports_hazard(text: str, *, physical_only: bool = False) -> bool:
@@ -131,6 +169,8 @@ def _reports_hazard(text: str, *, physical_only: bool = False) -> bool:
     # chair is 'smoking'") do not erase it. Actual reports in another clause
     # are evaluated independently from references and hypothetical questions.
     for clause in _CLAUSE.split(value):
+        if _TERM_DEFINITION.fullmatch(clause):
+            continue
         def reference_quote(match):
             before, after = clause[:match.start()], clause[match.end():]
             explicit_reference = (_REFERENCE_START.search(before.strip()) or
@@ -152,8 +192,9 @@ def _reports_hazard(text: str, *, physical_only: bool = False) -> bool:
         # denied physical marker in one clause must not combine with ordinary
         # shopping pain in another clause to manufacture a physical incident.
         physical_clause = re.sub(r"\bburning\s+(?:(?:back|neck|leg|foot|feet)\s+)?(?:pain|sensations?)\b", "[pain symptom]", clause) if physical_only else clause
-        physical = _PHYSICAL_HAZARD.search(physical_clause) or (_CHAIR_CAUSED_INJURY.search(clause) and _HAZARD.search(clause))
-        hazard = physical if physical_only else _HAZARD.search(clause)
+        component_damage = _reports_component_damage(clause)
+        physical = component_damage or _PHYSICAL_HAZARD.search(physical_clause) or (_CHAIR_CAUSED_INJURY.search(clause) and _HAZARD.search(clause))
+        hazard = physical if physical_only else component_damage or _HAZARD.search(clause)
         if hazard:
             return True
     return False
@@ -168,12 +209,43 @@ def reported_safety_hazard(ticket=None, turns=(), text: str = "", *, physical_on
     return any(_reports_hazard(value, physical_only=physical_only) for value in values if value)
 
 
+def requested_customer_language(text: str) -> str | None:
+    """Return an explicit supported language request, rather than its wording's language."""
+    value = _normalized(text)
+    requests = []
+    names = {"english": "en", "ingles": "en", "영어": "en",
+             "korean": "ko", "coreano": "ko", "한국어": "ko",
+             "spanish": "es", "espanol": "es", "스페인어": "es"}
+    # A statement about what the customer can speak is not an instruction to
+    # switch the assistant. Keep it separate from "Can you speak English?".
+    capability = re.compile(
+        r"\b(?:i|we|he|she|they)\s+"
+        r"(?:(?:can|could|cannot|can't|couldn't|am able to|are able to|know how to|do not|don't|only|also)\s+)*"
+        r"(?:speak|read|understand|communicate|write|converse)\s+"
+        r"(?:(?:in|only|and|english|korean|spanish|ingles|coreano|espanol)\b\s*)+", re.I)
+    capability_spans = [(match.start(), match.end()) for match in capability.finditer(value)]
+    pattern = re.compile(
+        r"\b(?:(?:in|en|speak|reply|answer|respond|use|responde(?:me)?|contesta(?:me)?|habla(?:me)?)\s+)"
+        r"(?:(?:to me|in|en)\s+)?(?P<latin>english|korean|spanish|ingles|coreano|espanol)\b|"
+        r"(?P<korean>영어|한국어|스페인어)로(?:만|는)?", re.I)
+    for match in pattern.finditer(value):
+        if any(start <= match.start() < end for start, end in capability_spans):
+            continue
+        before, after = value[:match.start()], value[match.end():]
+        if re.search(r"(?:\b(?:not|don't|do not|no|without|except)\s+)(?:(?:reply|answer|respond|speak|in|en)\s+){0,3}$", before):
+            continue
+        if match["korean"] and re.match(r"\s*(?:하지\s*마|하지\s*않|말고|아니라)", after):
+            continue
+        requests.append(names[match["latin"] or match["korean"]])
+    return requests[-1] if requests else None
+
+
 def detect_customer_language(text: str, default: str = "en") -> str:
     """Short hazard reports such as 'Sale humo' also carry Spanish evidence."""
     value = _normalized(text)
-    explicit = re.search(r"(?:in|speak|reply|answer)\s+(english|korean|spanish)\b", value)
+    explicit = requested_customer_language(text)
     if explicit:
-        return {"english": "en", "korean": "ko", "spanish": "es"}[explicit[1]]
+        return explicit
     if re.search(r"[가-힣]", value):
         return "ko"
     if re.search(r"\b(?:hola|gracias|silla|pedido|garantia|necesito|quiero|puedes|por favor|humo|humea|"

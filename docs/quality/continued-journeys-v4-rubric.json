@@ -1,0 +1,19 @@
+{
+  "version": "continued-customer-journeys-v4",
+  "method": "Goal-driven role-play through local actual APIs, continuing after wrong answers to measure recovery instead of stopping at the first failed assertion.",
+  "areas": ["warranty", "sales_product", "sales_service"],
+  "dimensions": ["understanding", "accuracy", "context", "recovery"],
+  "outcomes": ["goal_met", "partially_met", "not_met", "blocked"],
+  "rules": [
+    "Eight distinct customer goals per area, with 6–10 actual customer turns per journey where possible.",
+    "Customer role-play may rephrase, correct details or choose an offered button; bot replies must come from the actual isolated API.",
+    "A semantic failure is recorded and does not stop subsequent customer turns or recovery attempts.",
+    "Do not force hidden application state to reach a desired branch.",
+    "Record checks independently from the final outcome: a customer may eventually obtain help after earlier mistakes.",
+    "A correct proposed confirmation or truthful human-support next step can satisfy a goal; no real purchase, diagnosis, claim approval or notification delivery is implied.",
+    "Record first misunderstanding and unsuccessful recovery attempts, not just final successful replies.",
+    "Actual model calls, remote server performance and live external integrations remain unmeasured.",
+    "Keep application code unchanged and preserve all turns; do not weaken the customer goal to obtain a passing result.",
+    "No universal 100-point score is inferred from this selected set of synthetic journeys."
+  ]
+}

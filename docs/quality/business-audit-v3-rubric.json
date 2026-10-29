@@ -1,0 +1,23 @@
+{
+  "version": "everyday-customer-journeys-v3",
+  "purpose": "Simulate ordinary broken-chair warranty conversations and diverse real shopping/service inquiries, as clarified by the user.",
+  "categories": [
+    "warranty_intake", "warranty_followup",
+    "sales_product_questions", "sales_fit_comparison",
+    "sales_purchase_policy", "sales_existing_orders"
+  ],
+  "rules": [
+    "Keep application code unchanged and preserve previous audit results.",
+    "Use real isolated public HTTP APIs and record customer requests, actual reply payloads, and saved state.",
+    "Honor documented confirmation-before-advance rules: suggesting the right branch and asking confirmation is valid.",
+    "A useful clarification or correct handoff is valid when facts or authorization are genuinely missing; do not require fabricated answers.",
+    "Judge customer-visible answers, retained facts, correct department and relevant next steps; HTTP200 alone is insufficient.",
+    "Do not treat ordinary malfunction intake as automatic warranty approval.",
+    "Distinguish symptom reports from pre-purchase feature questions and delivery-policy questions from installation problems.",
+    "Preserve failed full transcripts and expected customer goals; no application fixes or weakened expectations to improve the result.",
+    "Treat missing-model and provider-unavailable conditions as tested fallback capabilities, not measurements of a live LLM.",
+    "No real external calls, notifications or production customer data.",
+    "Report category pass counts rather than inventing customer-frequency weights or a new universal score.",
+    "Real model accuracy, naturalness, live store data and real customer resolution remain unmeasured."
+  ]
+}

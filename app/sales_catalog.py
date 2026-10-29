@@ -508,7 +508,7 @@ def _parse_budget_usd(raw: str) -> Optional[int]:
     k_match = _BUDGET_K_RE.search(raw)
     if k_match:
         num = int(k_match.group(1)) * 1000
-        if 500 <= num <= 50000:
+        if 0 <= num <= 50000:
             return num
 
     candidates: list[int] = []
@@ -518,11 +518,11 @@ def _parse_budget_usd(raw: str) -> Optional[int]:
             continue
         num = int(token.replace(",", ""))
         start, end = match.span()
-        tail = raw[end : end + 10].lower()
+        tail = raw[end : end + 32].lower()
         # "220 lb" / "95 kg" must never become a budget.
-        if re.match(r"\s*(?:lb|lbs|pounds?|kg)\b", tail):
+        if re.match(r"\s*(?:lbs?|pounds?|kgs?|kilograms?|cm|centimet(?:er|re)s?|inches|inch|feet|ft)\b", tail):
             continue
-        if 500 <= num <= 50000:
+        if 0 <= num <= 50000:
             candidates.append(num)
     if not candidates:
         return None

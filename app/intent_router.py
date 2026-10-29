@@ -91,9 +91,6 @@ def infer_forced_tool(user_query: str) -> Optional[str]:
     has_order_id = bool(_ORDER_ID_PATTERN.search(q))
     has_email = bool(_EMAIL_PATTERN.search(q))
 
-    if any(p.search(q) for p in _SHOWROOM_INTENT_PATTERNS):
-        return "get_showroom_info"
-
     if any(p.search(q) for p in _WARRANTY_CLAIM_PATTERNS):
         return "start_warranty_workflow"
 
@@ -102,6 +99,12 @@ def infer_forced_tool(user_query: str) -> Optional[str]:
 
     if any(p.search(q) for p in _TRACKING_INTENT_PATTERNS) and (has_order_id or has_email):
         return "lookup_order_status"
+
+    # A showroom/address reference must not override the customer's explicit
+    # repair, warranty or identified order-tracking request.
+    if any(p.search(q) for p in _SHOWROOM_INTENT_PATTERNS):
+        return "get_showroom_info"
+
     if has_order_id and has_email:
         return "lookup_order_status"
 

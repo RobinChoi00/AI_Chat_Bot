@@ -316,5 +316,7 @@ def test_tracking_api_uses_exact_current_lookup_answer_not_model_invention(main_
         response=client.post('/api/v1/chat',json={'user_query':'Track order 1234 with synthetic@example.invalid','session_id':'quality-tracking'})
     assert 'INVENTED' not in response.text and 'tomorrow' not in response.text
     assert 'Your verified order is being prepared' in response.text
+    assert 'For sales inquiries' in response.text
+    assert 'contact our warranty team' not in response.text
     assert 'ORDER_LOOKUP_RESULT_JSON' not in response.text
     assert traces[-1]['turns'][0]['source_evidence']==[{'source_type':'verified_order_lookup','available':True}]

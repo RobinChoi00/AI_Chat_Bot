@@ -53,6 +53,20 @@ CI runs these gates, builds both container images, and blocks remediable high/cr
 
 ## AI quality workflow
 
+Run `.venv/bin/python script/simulate_chatbot_quality.py` for the fixed 40-case
+offline behavioral simulation. The [simulation report (Korean)](docs/quality/README.ko.md)
+records the same-rubric comparison from 53.125 to 100/100, including case evidence.
+This score covers synthetic regression contracts; live model quality remains unmeasured.
+The [broader independent audit (Korean)](docs/quality/BROAD_AUDIT_V2.ko.md) tests
+377 new scenarios across 80 behavior families on the same application source;
+it records 78.99/100 with 85 failures, including safety and context gaps.
+The [everyday customer-journey audit (Korean)](docs/quality/CUSTOMER_BUSINESS_AUDIT_V3.ko.md)
+focuses on ordinary malfunction reports and varied Sales tasks: 144 isolated HTTP
+scenarios, with full transcripts and a prioritized business improvement plan.
+The [continued-conversation simulation (Korean)](docs/quality/CONTINUED_JOURNEYS_V4.ko.md)
+follows 24 customers through 202 turns, preserving mistakes and testing whether
+rephrasing or offered buttons recover the original goal.
+
 Use `/admin/history` (**All conversations** in the admin navigation) to browse
 the complete stored Warranty, Sales, and general-chat history. The default has
 no date cutoff, with source/store filters and pagination for both conversations

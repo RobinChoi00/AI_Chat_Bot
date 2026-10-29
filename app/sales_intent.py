@@ -323,6 +323,7 @@ _RECOMMEND_RE = re.compile(
     r"recommend|suggestion|which\s+(?:chair|model|product)|what\s+(?:chair|model).*should|"
     r"which\s+(?:product|one)\s+is\s+right|right\s+(?:chair|product|one)\s+for\s+me|"
     r"help\s+me\s+(?:pick|choose|decide|find|select)|"
+    r"(?:i|we)\s+(?:(?:do\s+not|don't)\s+)?(?:want|need|prefer|require)\s+(?:(?:a|an|the)\s+)?[2345]\s*d|"
     r"first[\s-]?time\s+buyer|best[\s-]?sellers?|most\s+popular|"
     r"looking\s+for\s+a(?:n)?\s+(?:chair|massage)|"
     r"best\s+chair(?:\s+for)?|good\s+chair\s+for|fit\s+for\s+me|good\s+for\s+(?:tall|short|back|neck)|"

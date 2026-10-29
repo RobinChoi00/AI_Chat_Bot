@@ -201,6 +201,11 @@ def _rule_classify(user_query: str, chat_history: Sequence[Any] | None) -> Optio
     if not q:
         return True
 
+    # A previous shopping conversation (or a number that looks like a budget)
+    # must not turn an explicitly unrelated new request into chair support.
+    if _matches_out_of_scope(q) and not _has_in_scope_keywords(q):
+        return False
+
     if infer_forced_tool(q):
         return True
 

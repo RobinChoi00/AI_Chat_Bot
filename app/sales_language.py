@@ -59,7 +59,7 @@ def prepare_message(message: str, prefs: dict) -> tuple[str, str]:
                       lambda m: 'budget under $'+_money_amount(m[1]), text, flags=re.I)
         text = re.sub(r'\b(?:menos\s+de|hasta)\s*\$\s*(\d[\d.,]*)', lambda m: 'budget under $'+_money_amount(m[1]), text, flags=re.I)
         text = re.sub(r'\b(?:presupuesto|tope|l[ií]mite)\s*(?:m[aá]ximo\s*)?(?:(?:es|de|ahora)\s*)*\$?\s*(\d[\d.,]*)', lambda m: 'budget $'+_money_amount(m[1]), text, flags=re.I)
-    text = re.sub(r'\b(?:la\s+|mi\s+)?puerta\s*(?:mide|es\s+de|tiene)?\s*(\d{2}(?:[.,]\d+)?)\s*(cm|cent[ií]metros?|pulgadas?)\b',
+    text = re.sub(r'\b(?:la\s+|mi\s+)?puerta\s*(?:mide|es\s+de|tiene)?\s*(\d{2,3}(?:[.,]\d+)?)\s*(cm|cent[ií]metros?|pulgadas?)\b',
                   lambda m: 'my doorway is '+(f'{float(m[1].replace(",", "."))/2.54:.8f}' if m[2].lower().startswith(('cm', 'cent')) else m[1].replace(',', '.'))+' inches', text, flags=re.I)
     replacements = [
         (r'\b(?:sin\s+desmontar|no\s+se\s+puede\s+desmontar|solo\s+montad[oa])\b', 'assembled only'),

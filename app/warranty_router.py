@@ -1295,7 +1295,7 @@ def _request_human_handoff(engine, session_id: str, message: str, domain: str, *
     """Persist a visible support request without claiming a live transfer/email."""
     from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
     from warranty_notification_jobs import initialize_notification_storage, enqueue_notification
-    from customer_safety import detect_customer_language, reported_safety_hazard
+    from customer_safety import detect_customer_language, reported_safety_hazard, requested_customer_language
     from sqlalchemy import text as sql_text
 
     initialize_notification_storage()
@@ -1325,7 +1325,7 @@ def _request_human_handoff(engine, session_id: str, message: str, domain: str, *
             reason = "safety_hazard"
             # A short English acknowledgement must not replace instructions
             # the customer has already received in their original language.
-            if not current_hazard and not re.search(r"\b(?:speak|reply|answer)\b.{0,20}\b(?:english|korean|spanish)\b|영어로|한국어로|스페인어로|en ingl[eé]s|en espa[nñ]ol", message, re.I):
+            if not current_hazard and not requested_customer_language(message):
                 language = prior_language
         from warranty_scope import is_delivery_inquiry  # noqa: WPS433
 

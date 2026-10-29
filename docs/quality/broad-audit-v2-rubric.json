@@ -1,0 +1,28 @@
+{
+  "version": "broad-offline-audit-v2",
+  "intent": "Independent broader re-evaluation of the previous improved code; no application fixes during this audit.",
+  "categories": {
+    "sales_limits": 10,
+    "sales_dialogue": 10,
+    "safety_detection": 10,
+    "safety_support": 10,
+    "grounding_facts": 10,
+    "routing_scope": 10,
+    "language_preferences": 10,
+    "language_localization": 10,
+    "privacy_isolation": 10,
+    "api_robustness": 10
+  },
+  "scoring": "Within each category, compute the mean pass fraction across behavior families, then multiply by its 10-point weight. Repeated paraphrases or numeric variants do not add weight to that family. Report raw case pass counts separately.",
+  "rules": [
+    "Freeze application sources before constructing or executing the new cases.",
+    "Use customer requirements and documented behavior as the oracle; do not update expectations to agree with implementation.",
+    "A failed assertion is a product failure; unexpected runtime errors remain separate and reduce the score.",
+    "If a case has an invalid fixture, correct setup only, document the correction, and rerun the complete final suite.",
+    "Do not weaken assertions, remove failing cases, or patch application code to obtain a perfect score.",
+    "Each category must have at least 20 cases spanning at least 5 behavior families.",
+    "Block real external API calls and notifications; report any attempted outbound delivery.",
+    "Distinguish pure function checks, agent simulations, and actual isolated HTTP API conversations.",
+    "Live model quality, production reliability, and real customer success are unmeasured, not passing."
+  ]
+}

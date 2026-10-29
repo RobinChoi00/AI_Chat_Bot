@@ -2405,13 +2405,15 @@ async def chat_endpoint(
                     any(name in tools_called for name in ("start_warranty_workflow", "answer_warranty_question", "warranty_start", "warranty_answer"))
                     or "get_repair_help" in tools_called
                     or "escalate_to_human" in tools_called
-                    or "lookup_order_status" in tools_called
-                    or repair_like
-                    or tracking_like
                 ):
                     contact_routing = "QA"
+                elif "lookup_order_status" in tools_called or tracking_like:
+                    # Delivery/order status belongs to Sales, even if the
+                    # verified tracking copy also says "contact support".
+                    contact_routing = "PRODUCTS"
                 elif (
-                    "get_warranty_or_policy" in tools_called
+                    repair_like
+                    or "get_warranty_or_policy" in tools_called
                     or any(kw in response_lower for kw in ("warranty", "service@osakititan"))
                 ):
                     contact_routing = "QA"

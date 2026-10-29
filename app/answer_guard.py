@@ -12,8 +12,17 @@ import re
 import json
 from typing import Iterable, Sequence
 
+try:
+    from app.customer_safety import requested_customer_language
+except ImportError:
+    from customer_safety import requested_customer_language
+
+_MONEY_NUMBER = r"\d[\d,]*(?:\.\d+)?"
 _PRICE_RE = re.compile(
-    r"\$\s?\d[\d,]*(?:\.\d{2})?"
+    r"(?:(?:(?<![a-z])(?:(?:US|CA|C|AU|A)\s*\$|(?:USD|EUR|CAD|AUD|GBP|KRW|JPY)\b)|[$€£₩¥])\s*"
+    + _MONEY_NUMBER + r"|" + _MONEY_NUMBER
+    + r"\s*(?:USD\b|EUR\b|CAD\b|AUD\b|GBP\b|KRW\b|JPY\b|(?:US\s+)?dollars?\b|달러))",
+    re.I,
 )
 _DISCOUNT_NARRATIVE_RE = re.compile(
     r"(?:originally|was|regular(?:ly)?|compare\s*at|list\s*price|msrp)[^.\n]{0,80}\$\s?\d[\d,]*",
@@ -71,6 +80,9 @@ _SPANISH_HINTS = re.compile(
 
 
 def _language(text: str) -> str:
+    requested = requested_customer_language(text)
+    if requested:
+        return requested
     if re.search(r"[가-힣]", text or ""):
         return "ko"
     if _SPANISH_HINTS.search(text or ""):
@@ -85,9 +97,9 @@ def conversation_language(text: str, history: Sequence | None = None) -> str:
     must not switch a customer's conversation away from their chosen language.
     """
     current = (text or "").strip()
-    explicit = re.search(r"(?:in|speak|reply|answer)\s+(English|Korean|Spanish)\b", current, re.I)
+    explicit = requested_customer_language(current)
     if explicit:
-        return {"english": "en", "korean": "ko", "spanish": "es"}[explicit.group(1).lower()]
+        return explicit
     if re.search(r"[가-힣]", current):
         return "ko"
     if _SPANISH_HINTS.search(current) or current.lower() in {"sí", "si", "no sé", "de acuerdo"}:
@@ -101,9 +113,9 @@ def conversation_language(text: str, history: Sequence | None = None) -> str:
         content = message.get("content", "") if isinstance(message, dict) else getattr(message, "content", "")
         if role != "user":
             continue
-        explicit = re.search(r"(?:in|speak|reply|answer)\s+(English|Korean|Spanish)\b", str(content), re.I)
+        explicit = requested_customer_language(str(content))
         if explicit:
-            return {"english": "en", "korean": "ko", "spanish": "es"}[explicit.group(1).lower()]
+            return explicit
         if re.search(r"[가-힣]", str(content)):
             return "ko"
         if _SPANISH_HINTS.search(str(content)) or str(content).strip().lower() in {"sí", "si"}:
@@ -238,16 +250,33 @@ def _warranty_locked_message(blob: str) -> str:
     return ""
 
 
+def _price_value(token: str) -> tuple[str, float]:
+    """Normalize monetary spelling without treating currencies as equivalent."""
+    number = re.search(_MONEY_NUMBER, token)
+    if number is None:
+        raise ValueError("Price has no amount")
+    currency = next((code for code in ("EUR", "CAD", "AUD", "GBP", "KRW", "JPY")
+                     if re.search(r"\b" + code + r"\b", token, re.I)), "USD")
+    if re.match(r"(?:CA|C)\s*\$", token, re.I):
+        currency = "CAD"
+    elif re.match(r"(?:AU|A)\s*\$", token, re.I):
+        currency = "AUD"
+    for symbol, code in (("€", "EUR"), ("£", "GBP"), ("₩", "KRW"), ("¥", "JPY")):
+        if symbol in token:
+            currency = code
+    return currency, float(number.group().replace(",", ""))
+
+
 def _prices_in_text(text: str) -> set[str]:
     out: set[str] = set()
     for m in _PRICE_RE.finditer(text or ""):
-        token = m.group(0).replace(" ", "")
-        out.add(token)
-        num = token.lstrip("$").replace(",", "")
         try:
-            val = float(num)
-            out.add(f"${val:,.2f}")
-            out.add(f"${int(val):,}" if val == int(val) else f"${val:,.2f}")
+            currency, val = _price_value(m.group())
+            if currency == "USD":
+                out.add(f"${val:,.2f}")
+                out.add(f"${int(val):,}" if val == int(val) else f"${val:,.2f}")
+            else:
+                out.add(f"{currency}:{val:.2f}")
         except ValueError:
             pass
     return out
@@ -258,8 +287,7 @@ def _strip_ungrounded_prices(response: str, allowed_prices: set[str]) -> str:
         return _PRICE_RE.sub("[check current price on our website]", response)
 
     def repl(match: re.Match[str]) -> str:
-        token = match.group(0).replace(" ", "")
-        if token in allowed_prices:
+        if _prices_in_text(match.group()) & allowed_prices:
             return match.group(0)
         return "[check current price on our website]"
 
@@ -409,7 +437,7 @@ def _model_facts(blob: str) -> list[dict]:
                 facts.append(current)
             price = _PRICE_RE.search(line)
             if price:
-                current.setdefault("price_usd", float(price.group().replace("$", "").replace(",", "")))
+                current.setdefault("price_usd", _price_value(price.group())[1])
                 current.setdefault("currency", "USD")
         elif "AUTHORITATIVE SPEC VALUES" in line:
             in_authoritative = True
@@ -506,13 +534,13 @@ def _fact_mentions(text: str, facts: list[dict]) -> list[tuple[int, int, dict]]:
 
 
 def _bound_claim_conflicts(text: str, fact: dict, query: str = "", default_unit: str | None = None) -> bool:
-    if re.search(r"€\s*\d|\b(?:EUR|CAD|GBP)\s*\d|\d[\d,.]*\s*(?:EUR|CAD|GBP)\b", text, re.I) and fact.get("currency") == "USD":
-        return True
     prices = _PRICE_RE.findall(text)
     expected_price = fact.get("price_usd")
     for price in prices:
         try:
-            if expected_price is None or abs(float(price.replace("$", "").replace(",", "").strip()) - float(expected_price)) > .011:
+            currency, amount = _price_value(price)
+            if (currency != str(fact.get("currency") or "USD").upper() or expected_price is None
+                    or abs(amount - float(expected_price)) > .011):
                 return True
         except (TypeError, ValueError):
             return True

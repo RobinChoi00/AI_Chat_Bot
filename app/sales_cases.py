@@ -307,17 +307,14 @@ def goal_bucket(focus_areas: Optional[list[str]], text: str = "") -> Optional[st
 
 
 def intensity_bucket(text: str = "") -> Optional[str]:
+    from sales_constraints import intensity_preference
+
+    preference = intensity_preference(text)
+    if preference:
+        return preference
     raw = (text or "").lower()
-    if re.search(r"\b(?:not\s+(?:too\s+)?(?:strong|firm)|no\s+deep[ -]?tissue)\b", raw):
+    if re.search(r"\b(elderly|senior)\b", raw):
         return "Gentle"
-    if re.search(r"\b(gentle|soft|light|elderly|senior)\b", raw):
-        return "Gentle"
-    if re.search(r"\b(strong|deep|firm|intense|hard)\b", raw):
-        return "Strong"
-    if re.search(r"\b(adjustable|customi[sz]e|variable)\b", raw):
-        return "Highly Adjustable"
-    if re.search(r"\b(balanced|medium|moderate)\b", raw):
-        return "Balanced"
     return None
 
 

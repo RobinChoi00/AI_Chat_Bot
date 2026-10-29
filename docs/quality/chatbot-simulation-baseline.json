@@ -1,0 +1,801 @@
+{
+  "rubric_version": "offline-customer-contracts-v1",
+  "rubric_sha256": "22ed861927bd7d74a4c334c61033521fca7c99aa640993179ab2ef74351a93b0",
+  "mode": "offline_synthetic_regression_simulation",
+  "app_source_sha256": "b934e08a9d36a74218c82f3e8c4eacd9392936a1d01650b71d470a714cd38c1b",
+  "live_model_score": null,
+  "scope": "40 synthetic behavioral contracts: real deterministic functions and isolated public APIs; no live model, stock, email or production checks",
+  "limitations": [
+    "100/100 means all fixed scenarios pass, not universal chatbot quality.",
+    "Reviewed scenarios are regression cases, not an independent held-out benchmark.",
+    "Live LLM fluency, model accuracy, production availability and actual customer resolution remain unmeasured."
+  ],
+  "score_out_of_100": 53.125,
+  "passed": 23,
+  "failed": 17,
+  "executed": 40,
+  "categories": {
+    "safety": {
+      "passed": 2,
+      "total": 8,
+      "weight": 25,
+      "score": 6.25
+    },
+    "grounding": {
+      "passed": 5,
+      "total": 8,
+      "weight": 25,
+      "score": 15.625
+    },
+    "routing_context": {
+      "passed": 2,
+      "total": 8,
+      "weight": 20,
+      "score": 5.0
+    },
+    "multilingual": {
+      "passed": 6,
+      "total": 8,
+      "weight": 15,
+      "score": 11.25
+    },
+    "privacy_journey": {
+      "passed": 8,
+      "total": 8,
+      "weight": 15,
+      "score": 15.0
+    }
+  },
+  "cases": [
+    {
+      "id": "safety-en-smoke",
+      "category": "safety",
+      "goal": "Distinguish an actual physical incident from a denial/reference",
+      "passed": true,
+      "evidence": {
+        "message": "Smoke is pouring out of my chair's base.",
+        "physical_hazard": true
+      }
+    },
+    {
+      "id": "safety-en-melt",
+      "category": "safety",
+      "goal": "Distinguish an actual physical incident from a denial/reference",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "physical hazard expected True, got False: The power cable is melting."
+    },
+    {
+      "id": "safety-en-hot-cord",
+      "category": "safety",
+      "goal": "Distinguish an actual physical incident from a denial/reference",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "physical hazard expected True, got False: The power cord is getting very hot."
+    },
+    {
+      "id": "safety-es-plastic",
+      "category": "safety",
+      "goal": "Distinguish an actual physical incident from a denial/reference",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "physical hazard expected True, got False: La silla huele a plástico quemado."
+    },
+    {
+      "id": "safety-ko-melt",
+      "category": "safety",
+      "goal": "Distinguish an actual physical incident from a denial/reference",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "physical hazard expected True, got False: 전원 코드가 녹고 있어요."
+    },
+    {
+      "id": "safety-en-negation",
+      "category": "safety",
+      "goal": "Distinguish an actual physical incident from a denial/reference",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "physical hazard expected False, got True: I have not seen sparks."
+    },
+    {
+      "id": "safety-ko-negation",
+      "category": "safety",
+      "goal": "Distinguish an actual physical incident from a denial/reference",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "physical hazard expected False, got True: 불꽃이 보이지는 않아요."
+    },
+    {
+      "id": "safety-manual-reference",
+      "category": "safety",
+      "goal": "Distinguish an actual physical incident from a denial/reference",
+      "passed": true,
+      "evidence": {
+        "message": "The manual says \"stop if smoke appears\". The remote is blank.",
+        "physical_hazard": false
+      }
+    },
+    {
+      "id": "ground-usd-no-source",
+      "category": "grounding",
+      "goal": "Do not quote currency-code prices without a lookup",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "Expected rejection of 'Fixture Alpha costs USD 99.'; got 'Fixture Alpha costs USD 99.'"
+    },
+    {
+      "id": "ground-eur-no-source",
+      "category": "grounding",
+      "goal": "Do not invent a euro quote",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "Expected rejection of 'Fixture Alpha costs €99.'; got 'Fixture Alpha costs €99.'"
+    },
+    {
+      "id": "ground-usd-conflict",
+      "category": "grounding",
+      "goal": "A successful tool call must not authorize the wrong amount",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "Expected rejection of 'Fixture Alpha costs USD 99.'; got 'Fixture Alpha costs USD 99.'"
+    },
+    {
+      "id": "ground-usd-valid",
+      "category": "grounding",
+      "goal": "Preserve a correctly sourced currency-code amount",
+      "passed": true,
+      "evidence": {
+        "query": "How much is Fixture Alpha?",
+        "candidate": "Fixture Alpha costs USD 1,999.",
+        "response": "Fixture Alpha costs USD 1,999."
+      }
+    },
+    {
+      "id": "ground-currency-conflict",
+      "category": "grounding",
+      "goal": "A USD catalog amount is not a verified EUR price",
+      "passed": true,
+      "evidence": {
+        "query": "What is Fixture Alpha's price?",
+        "candidate": "Fixture Alpha costs €1,999.",
+        "response": "I want to give you accurate information, so I need to look that up in our official catalog first. Could you share the exact model name from your chair's serial-number sticker? You can also reach our support team at +1-888-848-2630 — business hours Mon-Fri, 9:30 AM - 6:30 PM / Sat, 10:00 AM - 4:00 PM CST."
+      }
+    },
+    {
+      "id": "ground-doorway-conflict",
+      "category": "grounding",
+      "goal": "Reject an invented doorway dimension despite other valid facts",
+      "passed": true,
+      "evidence": {
+        "query": "What doorway width does Fixture Alpha need?",
+        "candidate": "Fixture Alpha needs a 29-inch doorway.",
+        "response": "I want to give you accurate information, so I need to look that up in our official catalog first. Could you share the exact model name from your chair's serial-number sticker? You can also reach our support team at +1-888-848-2630 — business hours Mon-Fri, 9:30 AM - 6:30 PM / Sat, 10:00 AM - 4:00 PM CST."
+      }
+    },
+    {
+      "id": "ground-valid-measurement",
+      "category": "grounding",
+      "goal": "Keep a model-bound verified dimension",
+      "passed": true,
+      "evidence": {
+        "query": "What doorway width does Fixture Alpha need?",
+        "candidate": "Fixture Alpha needs a minimum doorway of 35 inches assembled.",
+        "response": "Fixture Alpha needs a minimum doorway of 35 inches assembled."
+      }
+    },
+    {
+      "id": "ground-unapproved-warranty",
+      "category": "grounding",
+      "goal": "Do not turn a support request into an approved warranty claim",
+      "passed": true,
+      "evidence": {
+        "query": "Can I get warranty help?",
+        "candidate": "Your warranty claim is approved. We will ship a replacement tomorrow.",
+        "response": "Our team needs to confirm that request. I cannot approve warranty coverage, guarantee a delivery date, or promise a medical result here. I can help connect you with the appropriate team."
+      }
+    },
+    {
+      "id": "language-neutral-korean",
+      "category": "multilingual",
+      "goal": "Numbers retain the customer's language",
+      "passed": true,
+      "evidence": {
+        "message": "3500",
+        "language": "ko"
+      }
+    },
+    {
+      "id": "language-ignore-assistant",
+      "category": "multilingual",
+      "goal": "An accidental English assistant reply cannot change Korean preference",
+      "passed": true,
+      "evidence": {
+        "message": "OS-4000T",
+        "language": "ko"
+      }
+    },
+    {
+      "id": "language-ko-request-english",
+      "category": "multilingual",
+      "goal": "Honor an English request expressed in Korean",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "language expected en, got ko"
+    },
+    {
+      "id": "language-request-spanish",
+      "category": "multilingual",
+      "goal": "Honor an explicit Spanish preference",
+      "passed": true,
+      "evidence": {
+        "message": "Please respond in Spanish",
+        "language": "es"
+      }
+    },
+    {
+      "id": "language-es-request-english",
+      "category": "multilingual",
+      "goal": "Honor the requested rather than source language",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "language expected en, got es"
+    },
+    {
+      "id": "language-short-emergency",
+      "category": "multilingual",
+      "goal": "Short Spanish incidents still carry language evidence",
+      "passed": true,
+      "evidence": {
+        "message": "Sale humo.",
+        "language": "es"
+      }
+    },
+    {
+      "id": "language-korean-safe-action",
+      "category": "multilingual",
+      "goal": "Safety instructions and pending notifications remain truthful in Korean",
+      "passed": true,
+      "evidence": {
+        "language": "ko",
+        "response": "의자 사용을 즉시 중단하세요. 안전하게 할 수 있을 때만 전원을 끄고 플러그를 뽑으세요. 다시 시험하거나 사용을 재개하지 말고, 패널을 열거나 직접 분해하지 마세요. 불이 나고 있거나 즉각적인 위험이 있으면 안전한 곳으로 이동하고 현지 긴급 구조 기관에 연락하세요. 신고하신 안전 문제와 상담 내용을 지원팀이 검토할 수 있도록 이 접수에 저장했습니다. 지원팀 알림이 발송 대기 중입니다. 전달 완료는 아직 확인되지 않았으며, 콜백도 예약되지 않았습니다. 직접 지원을 받으려면 **+1-888-848-2630 ext. 3**로 전화해 주세요."
+      }
+    },
+    {
+      "id": "language-spanish-safe-action",
+      "category": "multilingual",
+      "goal": "Safety instructions and pending notifications remain truthful in Spanish",
+      "passed": true,
+      "evidence": {
+        "language": "es",
+        "response": "Deje de usar la silla. Apáguela y desenchúfela solo si puede hacerlo de forma segura. No haga otra prueba, no vuelva a usarla ni abra paneles. Si hay fuego activo o peligro inmediato, aléjese y contacte con los servicios de emergencia locales. He guardado el problema de seguridad y el contexto de esta conversación en su caso para que el equipo los revise. La notificación a soporte está en cola; su entrega aún no está confirmada. Todavía no se ha reservado una llamada de seguimiento. Para recibir ayuda directa, llame al **+1-888-848-2630 ext. 3**."
+      }
+    },
+    {
+      "id": "context-small-budget",
+      "category": "routing_context",
+      "goal": "A small hard budget is retained and never relaxed",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "budget_max_usd expected 300; saved None"
+    },
+    {
+      "id": "context-kilogram-weight",
+      "category": "routing_context",
+      "goal": "Metric body weight is converted and respected",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "weight_lb expected 330.6934; saved None"
+    },
+    {
+      "id": "context-negated-intensity",
+      "category": "routing_context",
+      "goal": "Negation cannot request the exact intensity the customer rejected",
+      "passed": true,
+      "evidence": {
+        "message": "I do not want deep tissue; I want gentle massage",
+        "saved": {
+          "intensity": "Gentle"
+        },
+        "response": {
+          "reply": "What's the **user height**? Tap a range, or type it (like *5'10*). Then I'll ask the main focus and look for models within your requirements.",
+          "intent": "recommend",
+          "handoff": false,
+          "handoff_reason": null,
+          "handoff_state": null,
+          "analytics_token": "eyJleHAiOjE3OTMzNzc0MzIsInNpZCI6InNpbS1nZW50bGUiLCJzdG9yZSI6Im9zYWtpdXNhLmNvbSJ9.fbbf4f3db005e2e349f5bfdc3504b710b2991456133429cbfc95984f5bbb810a",
+          "quick_replies": [
+            {
+              "label": "Under 5'4\"",
+              "payload": "recommend:height:petite"
+            },
+            {
+              "label": "5'4\"–5'11\"",
+              "payload": "recommend:height:average"
+            },
+            {
+              "label": "6'0\"–6'2\"",
+              "payload": "recommend:height:tall"
+            },
+            {
+              "label": "6'3\"+",
+              "payload": "recommend:height:extra_tall"
+            },
+            {
+              "label": "Talk to a human",
+              "payload": "human"
+            }
+          ],
+          "products": [],
+          "tools_used": [
+            "cases.clarify",
+            "stage:ask_height"
+          ],
+          "session_id": "sim-gentle"
+        }
+      }
+    },
+    {
+      "id": "context-mechanism-correction",
+      "category": "routing_context",
+      "goal": "Choose the positive mechanism rather than a negated one",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "mechanism expected '3D'; saved None"
+    },
+    {
+      "id": "context-unrelated-after-chair",
+      "category": "routing_context",
+      "goal": "Recent chair context cannot authorize unrelated tasks",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "Unrelated task entered chair chat: ScopeDecision(in_scope=True, reason='rule_in_scope', used_llm=False)"
+    },
+    {
+      "id": "context-price-not-chair",
+      "category": "routing_context",
+      "goal": "A price mentioned in an unrelated request is not a chair recommendation",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "Unrelated task entered chair chat: ScopeDecision(in_scope=True, reason='rule_in_scope', used_llm=False)"
+    },
+    {
+      "id": "context-tracking-primary-goal",
+      "category": "routing_context",
+      "goal": "A showroom reference cannot override an explicit authenticated order-status request",
+      "passed": false,
+      "error_type": "AssertionError",
+      "error": "Expected order lookup, got get_showroom_info"
+    },
+    {
+      "id": "context-comparison-followup",
+      "category": "routing_context",
+      "goal": "Retain the compared model pair for a relative price followup",
+      "passed": true,
+      "evidence": {
+        "turns": [
+          {
+            "reply": "**Osaki OS-Pro Maestro 4D** — $8,999\n**Osaki Pro OS-4D Paragon** — $2,999\n\n- **Mechanism**: 4D vs 4D\n- **Track**: SL-Track vs L-Track\n- **Zero gravity**: 2 Stages of Zero Gravity vs 2 Stages of Zero Gravity\n- **Foot roller**: 1 spinning reflexology massage roller vs Yes\n- **Price gap**: the second is about $6,000 less.\n\n**Biggest differences:** track, foot roller.",
+            "intent": "compare",
+            "handoff": false,
+            "handoff_reason": null,
+            "handoff_state": null,
+            "analytics_token": "eyJleHAiOjE3OTMzNzc0MzIsInNpZCI6InNpbS1jb21wYXJpc29uIiwic3RvcmUiOiJvc2FraXVzYS5jb20ifQ.ae2b35f7267dc5af63efc449a93cad8cceb0589240810eb2dc4617d392abdcb7",
+            "quick_replies": [
+              {
+                "label": "Shop OS-Pro Maestro 4D",
+                "payload": "open:https://osakiusa.com/products/osaki-os-pro-maestro-4d"
+              },
+              {
+                "label": "Shop Pro OS-4D Paragon",
+                "payload": "open:https://osakiusa.com/products/osaki-pro-os-4d-paragon"
+              },
+              {
+                "label": "Recommend which one",
+                "payload": "compare:recommend"
+              },
+              {
+                "label": "That helped",
+                "payload": "feedback:up"
+              },
+              {
+                "label": "Not what I needed",
+                "payload": "feedback:down"
+              },
+              {
+                "label": "Talk to a human",
+                "payload": "human"
+              }
+            ],
+            "products": [
+              {
+                "model": "Osaki OS-Pro Maestro 4D",
+                "vendor": "Titan",
+                "price_usd": 8999.0,
+                "in_catalog": true,
+                "specs": {
+                  "massage_mechanism": "4D",
+                  "track_type": "SL-Track",
+                  "zero_gravity": "2 Stages of Zero Gravity",
+                  "heating": "-",
+                  "airbag": "32",
+                  "foot_roller": "1 spinning reflexology massage roller",
+                  "auto_programs": "8",
+                  "massage_styles": "4"
+                },
+                "colors": [
+                  "Black & Silver",
+                  "Brown",
+                  "Beige"
+                ],
+                "fit": {
+                  "maximum_user_weight_lb": 260.0,
+                  "doorway_assembled_in": 31.9,
+                  "doorway_disassembled_in": 28.0,
+                  "wall_clearance_in": 5.0,
+                  "minimum_user_height_in": null,
+                  "maximum_user_height_in": null
+                }
+              },
+              {
+                "model": "Osaki Pro OS-4D Paragon",
+                "vendor": "Osaki",
+                "price_usd": 2999.0,
+                "in_catalog": true,
+                "specs": {
+                  "massage_mechanism": "4D",
+                  "track_type": "L-Track",
+                  "zero_gravity": "2 Stages of Zero Gravity",
+                  "heating": "-",
+                  "airbag": "54",
+                  "foot_roller": "yes, but dont know how many",
+                  "auto_programs": "13",
+                  "massage_styles": "5"
+                },
+                "colors": [
+                  "Black",
+                  "Dark Brown",
+                  "Beige"
+                ],
+                "fit": {
+                  "maximum_user_weight_lb": 260.0,
+                  "doorway_assembled_in": 33.0,
+                  "doorway_disassembled_in": 27.0,
+                  "wall_clearance_in": 4.0,
+                  "minimum_user_height_in": null,
+                  "maximum_user_height_in": null
+                }
+              }
+            ],
+            "tools_used": [
+              "catalog.compare",
+              "stage:menu"
+            ],
+            "session_id": "sim-comparison"
+          },
+          {
+            "reply": "For the two models we are comparing:\n\n**Osaki OS-Pro Maestro 4D** — $8,999\n- Published mechanism / track: 4D / SL-Track.\n- Maximum user weight: 260 lb.\n- Assembled doorway: 31.9 in.\n- Disassembled doorway: 28 in.\n\n**Osaki Pro OS-4D Paragon** — $2,999\n- Published mechanism / track: 4D / L-Track.\n- Maximum user weight: 260 lb.\n- Assembled doorway: 33 in.\n- Disassembled doorway: 27 in.\n\nAmong these models that pass the saved verified limits, **Osaki Pro OS-4D Paragon** has the lower published price at **$2,999**.\nPublished doorway width is only a width check; turns, packaging, access and any disassembly still need confirmation before delivery.",
+            "intent": "compare",
+            "handoff": false,
+            "handoff_reason": null,
+            "handoff_state": null,
+            "analytics_token": "eyJleHAiOjE3OTMzNzc0MzIsInNpZCI6InNpbS1jb21wYXJpc29uIiwic3RvcmUiOiJvc2FraXVzYS5jb20ifQ.ae2b35f7267dc5af63efc449a93cad8cceb0589240810eb2dc4617d392abdcb7",
+            "quick_replies": [
+              {
+                "label": "That helped",
+                "payload": "feedback:up"
+              },
+              {
+                "label": "Not what I needed",
+                "payload": "feedback:down"
+              },
+              {
+                "label": "Talk to a human",
+                "payload": "human"
+              }
+            ],
+            "products": [
+              {
+                "model": "Osaki OS-Pro Maestro 4D",
+                "vendor": "Titan",
+                "price_usd": 8999.0,
+                "in_catalog": true,
+                "specs": {
+                  "massage_mechanism": "4D",
+                  "track_type": "SL-Track",
+                  "zero_gravity": "2 Stages of Zero Gravity",
+                  "heating": "-",
+                  "airbag": "32",
+                  "foot_roller": "1 spinning reflexology massage roller",
+                  "auto_programs": "8",
+                  "massage_styles": "4"
+                },
+                "colors": [
+                  "Black & Silver",
+                  "Brown",
+                  "Beige"
+                ],
+                "fit": {
+                  "maximum_user_weight_lb": 260.0,
+                  "doorway_assembled_in": 31.9,
+                  "doorway_disassembled_in": 28.0,
+                  "wall_clearance_in": 5.0,
+                  "minimum_user_height_in": null,
+                  "maximum_user_height_in": null
+                }
+              },
+              {
+                "model": "Osaki Pro OS-4D Paragon",
+                "vendor": "Osaki",
+                "price_usd": 2999.0,
+                "in_catalog": true,
+                "specs": {
+                  "massage_mechanism": "4D",
+                  "track_type": "L-Track",
+                  "zero_gravity": "2 Stages of Zero Gravity",
+                  "heating": "-",
+                  "airbag": "54",
+                  "foot_roller": "yes, but dont know how many",
+                  "auto_programs": "13",
+                  "massage_styles": "5"
+                },
+                "colors": [
+                  "Black",
+                  "Dark Brown",
+                  "Beige"
+                ],
+                "fit": {
+                  "maximum_user_weight_lb": 260.0,
+                  "doorway_assembled_in": 33.0,
+                  "doorway_disassembled_in": 27.0,
+                  "wall_clearance_in": 4.0,
+                  "minimum_user_height_in": null,
+                  "maximum_user_height_in": null
+                }
+              }
+            ],
+            "tools_used": [
+              "catalog.compare",
+              "cases.fit_gates",
+              "stage:menu"
+            ],
+            "session_id": "sim-comparison"
+          }
+        ]
+      }
+    },
+    {
+      "id": "privacy-new-session",
+      "category": "privacy_journey",
+      "goal": "A new session exposes consent status without inventing a ticket",
+      "passed": true,
+      "evidence": {
+        "path": "/api/v1/warranty/session/sim-new",
+        "status": 200,
+        "response": {
+          "session_id": "sim-new",
+          "ticket": null,
+          "privacy": {
+            "consent_required": true,
+            "email_required_before_help": true,
+            "consent_recorded": false,
+            "email_gate_status": "pending",
+            "contact_email_available": false
+          }
+        }
+      }
+    },
+    {
+      "id": "privacy-sales-gated",
+      "category": "privacy_journey",
+      "goal": "Sales chat is blocked before recording consent",
+      "passed": true,
+      "evidence": {
+        "path": "/api/v1/sales/chat",
+        "status": 403,
+        "response": {
+          "detail": "Please agree to the privacy notice before continuing."
+        }
+      }
+    },
+    {
+      "id": "privacy-contact-gated",
+      "category": "privacy_journey",
+      "goal": "Contact collection requires prior consent",
+      "passed": true,
+      "evidence": {
+        "path": "/api/v1/warranty/session/sim-no-email-consent/contact-email",
+        "status": 403,
+        "response": {
+          "detail": "Please agree to the privacy notice before providing your email."
+        }
+      }
+    },
+    {
+      "id": "privacy-consent-enables-help",
+      "category": "privacy_journey",
+      "goal": "A consented feature question reaches real catalog facts",
+      "passed": true,
+      "evidence": {
+        "reply": "**Titan TP-Epic 4D** — $3,999\n\n- **Foot/calf roller**: 3 spinning reflexology massage rollers\n\nFull quick specs:\n- **Mechanism**: 4D\n- **Track**: SL-Track\n- **Zero gravity**: 2 Stage of Zero Gravity\n- **Heating**: lumbar\n- **Airbag**: 36\n- **Foot roller**: 3 spinning reflexology massage rollers\n- **Auto programs**: 12\n- **Massage styles**: 6\n- **Maximum user weight**: 264 lb\n- **Doorway (assembled)**: 29.5 in\n- **Wall clearance**: 6 in\n\n4D · SL-Track · 264 lb max · 29.5\" doorway.\nShop: https://osakiusa.com/products/titan-tp-epic-4d\nWant this emailed to you? Tap **Email me this pick**.",
+        "intent": "specs",
+        "handoff": false,
+        "handoff_reason": null,
+        "handoff_state": null,
+        "analytics_token": "eyJleHAiOjE3OTMzNzc0MzIsInNpZCI6InNpbS1hZ3JlZWQiLCJzdG9yZSI6Im9zYWtpdXNhLmNvbSJ9.7ec49b9bcef5c3ca8c615bf6e5d5b8be8456cc0632a7420e04a7848545b7cc79",
+        "quick_replies": [
+          {
+            "label": "Shop this chair",
+            "payload": "open:https://osakiusa.com/products/titan-tp-epic-4d"
+          },
+          {
+            "label": "Email me this pick",
+            "payload": "lead:save_pick"
+          },
+          {
+            "label": "Check the price",
+            "payload": "price:titan-tp-epic-4d"
+          },
+          {
+            "label": "Compare with another model",
+            "payload": "compare"
+          },
+          {
+            "label": "That helped",
+            "payload": "feedback:up"
+          },
+          {
+            "label": "Not what I needed",
+            "payload": "feedback:down"
+          },
+          {
+            "label": "Talk to a human",
+            "payload": "human"
+          }
+        ],
+        "products": [
+          {
+            "model": "Titan TP-Epic 4D",
+            "vendor": "Titan",
+            "price_usd": 3999.0,
+            "in_catalog": true,
+            "specs": {
+              "massage_mechanism": "4D",
+              "track_type": "SL-Track",
+              "zero_gravity": "2 Stage of Zero Gravity",
+              "heating": "lumbar",
+              "airbag": "36",
+              "foot_roller": "3 spinning reflexology massage rollers",
+              "auto_programs": "12",
+              "massage_styles": "6"
+            },
+            "colors": [
+              "Black",
+              "Brown",
+              "Taupe"
+            ],
+            "fit": {
+              "maximum_user_weight_lb": 264.0,
+              "doorway_assembled_in": 29.5,
+              "doorway_disassembled_in": null,
+              "wall_clearance_in": 6.0,
+              "minimum_user_height_in": null,
+              "maximum_user_height_in": null
+            },
+            "fit_specs": {
+              "max_user_lb": 264.0,
+              "doorway_assembled_in": 29.5,
+              "doorway_disassembled_in": null,
+              "wall_clearance_in": 6.0
+            }
+          }
+        ],
+        "tools_used": [
+          "catalog.resolve_product",
+          "stage:menu"
+        ],
+        "session_id": "sim-agreed"
+      }
+    },
+    {
+      "id": "journey-model-required",
+      "category": "privacy_journey",
+      "goal": "Warranty intake cannot guess the model",
+      "passed": true,
+      "evidence": {
+        "path": "/api/v1/warranty/session/sim-no-model/quick-start",
+        "status": 422,
+        "response": {
+          "detail": "Please tell us your chair model first (for example OS-4000T or Solo Flex), then choose the type of issue."
+        }
+      }
+    },
+    {
+      "id": "journey-model-retained",
+      "category": "privacy_journey",
+      "goal": "Explicit model registration proceeds without repeated intake",
+      "passed": true,
+      "evidence": {
+        "session_id": "sim-model",
+        "privacy": {
+          "consent_required": true,
+          "email_required_before_help": true,
+          "consent_recorded": true,
+          "email_gate_status": "provided",
+          "contact_email_available": true
+        },
+        "ticket": {
+          "ticket_id": "ef144c64-0b40-4062-b199-5754b4fbfa65",
+          "domain": "osakiusa.com",
+          "case_reference": "WR-20261029-EF144C",
+          "status": "in_progress",
+          "issue_type": "",
+          "model_name": "OS-4000T",
+          "model_confirmed": true,
+          "needs_model_confirmation": false,
+          "ready_for_issue_type": true,
+          "needs_customer_reply": false,
+          "can_go_back": true,
+          "customer_message": null,
+          "admin_decision": null,
+          "troubleshooting_outcome": null,
+          "review_requested": false,
+          "contact_submitted": false,
+          "notification_sent": null,
+          "receipt_email_sent": false,
+          "followup_token": null,
+          "current_node": {
+            "node_id": "issue_type",
+            "node_type": "question",
+            "prompt": "Which area do you need help with: setup, delivery, or a chair malfunction?",
+            "options": [
+              {
+                "answer_key": "installation",
+                "label": "Installation Issue"
+              },
+              {
+                "answer_key": "delivery",
+                "label": "Delivery Issue"
+              },
+              {
+                "answer_key": "defect",
+                "label": "Defect / Malfunction"
+              }
+            ],
+            "is_terminal": false,
+            "evidence_required": [],
+            "evidence_email": null
+          }
+        },
+        "model_registered": true,
+        "resolved_model": "OS-4000T",
+        "purchase_verification_scheduled": true
+      }
+    },
+    {
+      "id": "privacy-admin-protected",
+      "category": "privacy_journey",
+      "goal": "Conversation administration requires authentication",
+      "passed": true,
+      "evidence": {
+        "path": "/admin/sales/sessions",
+        "status": 503,
+        "response": {
+          "detail": "Admin API is not configured. Set ADMIN_API_KEY."
+        }
+      }
+    },
+    {
+      "id": "privacy-invalid-contact",
+      "category": "privacy_journey",
+      "goal": "Invalid contact information is rejected without pretending followup is possible",
+      "passed": true,
+      "evidence": {
+        "path": "/api/v1/warranty/session/sim-invalid-email/contact-email",
+        "status": 422,
+        "response": {
+          "detail": "Please enter a valid email address."
+        }
+      }
+    }
+  ]
+}

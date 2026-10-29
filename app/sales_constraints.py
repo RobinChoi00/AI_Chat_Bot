@@ -27,6 +27,40 @@ def _negated_measurement(text: str, start: int) -> bool:
     return bool(re.search(r'\b(?:not|instead of|rather than|used to be|previously|formerly)\s*$', text[max(0, start - 32):start], re.I))
 
 
+def _negated_preference(text: str, start: int) -> bool:
+    prefix = text[max(0, start - 70):start].replace('’', "'")
+    # A single rejection governs a coordinated list ("not 4D or 5D"),
+    # but ends before a new affirmative clause ("but I want 3D").
+    modifier = r'(?:(?:a|an|the|any|too|very)\s+)*'
+    option = r'(?:[2345]\s*d|deep[ -]?tissue|strong|firm|deep|intense|hard|gentle|soft|light(?:\s+pressure)?|balanced|medium|moderate|adjustable|customi[sz]e|variable)'
+    previous_options = r'(?:' + modifier + option + r'(?:\s+(?:massage|pressure|chair|model|one))?\s*(?:,?\s*(?:or|and)\s+|,\s*))*'
+    return bool(re.search(
+        r"\b(?:not|no|avoid|don't\s+(?:want|need)|do\s+not\s+(?:want|need)|instead of|rather than)\s*"
+        + previous_options + modifier + r'$', prefix, re.I,
+    ))
+
+
+def intensity_preference(text: str) -> str | None:
+    """Use affirmative corrections, never the intensity a shopper rejected."""
+    positive = []
+    rejected_strong = False
+    for match in re.finditer(
+        r'\b(?:deep[ -]?tissue|strong|firm|deep|intense|hard|gentle|soft|light(?:\s+pressure)?|balanced|medium|moderate|adjustable|customi[sz]e|variable)\b',
+        text or '', re.I,
+    ):
+        word = match.group().lower()
+        value = ('Strong' if re.match(r'deep|strong|firm|intense|hard', word) else
+                 'Gentle' if re.match(r'gentle|soft|light', word) else
+                 'Balanced' if word in {'balanced', 'medium', 'moderate'} else 'Highly Adjustable')
+        if _negated_preference(text, match.start()):
+            rejected_strong |= value == 'Strong'
+        else:
+            positive.append(value)
+    if positive:
+        return positive[-1]
+    return 'Gentle' if rejected_strong else None
+
+
 def _latest_subject_position(pattern: str, prefix: str) -> int:
     return max((match.end() for match in re.finditer(pattern, prefix, re.I)), default=-1)
 
@@ -62,9 +96,10 @@ def height_measurements(text: str, *, include_negated: bool = False, include_dim
             continue
         if inch < 12:
             values.append((match.start(), match.end(), ft * 12 + inch))
-    for match in re.finditer(r'(?<!\d)(1\d{2}|2[0-2]\d)\s*cm(?![a-z])', text or '', re.I):
-        if (include_negated or not _negated_measurement(text, match.start())) and (include_dimensions or _is_person_height(text, match.start(), match.end())):
-            values.append((match.start(), match.end(), round(int(match.group(1)) / 2.54)))
+    for match in re.finditer(r'(?<![\w.])(\d{1,3}(?:\.\d+)?)\s*(cm|centimet(?:er|re)s?|m|met(?:er|re)s?)(?![a-z])', text or '', re.I):
+        centimeters = float(match.group(1)) * (100 if match.group(2).lower() in {'m', 'meter', 'meters', 'metre', 'metres'} else 1)
+        if 100 <= centimeters <= 229 and (include_negated or not _negated_measurement(text, match.start())) and (include_dimensions or _is_person_height(text, match.start(), match.end())):
+            values.append((match.start(), match.end(), round(centimeters / 2.54)))
     return sorted(values)
 
 
@@ -119,12 +154,12 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
     if heights:
         out['height_in'] = str(heights[-1][2])
     weights = []
-    for match in re.finditer(r"(?<!\d)(\d{2,4}(?:\.\d+)?)\s*(lbs?|pounds?|kg)(?![a-z])", raw, re.I):
+    for match in re.finditer(r"(?<!\d)(\d{2,4}(?:\.\d+)?)\s*(lbs?|pounds?|kgs?|kilograms?)(?![a-z])", raw, re.I):
         if _negated_measurement(raw, match.start()):
             continue
         if not _is_person_weight(raw, match.start(), match.end()):
             continue
-        value = float(match.group(1)) * (2.20462 if match.group(2).lower() == 'kg' else 1)
+        value = float(match.group(1)) * (2.20462 if match.group(2).lower().startswith(('kg', 'kilogram')) else 1)
         if 40 <= value <= 2200:
             weights.append((match.start(), value))
     if weights:
@@ -135,9 +170,22 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
         r'(\d{2}(?:\.\d+)?)\s*-?\s*(?:"|inch(?:es)?|in\b)|'
         r'\b(?:door(?:way)?|entrance)\b[^.;!?]{0,60}?\b(\d{2}(?:\.\d+)?)\s*-?\s*(?:"|inch(?:es)?|in\b)\s+wide\b', raw, re.I)
         if not _negated_measurement(raw, match.start()) and _is_customer_doorway(raw, match.start(), match.end())]
-    if doors:
-        value = float(next(group for group in doors[-1].groups() if group is not None))
-        if 20 <= value <= 48:
+    door_values = [(match.start(), float(next(group for group in match.groups() if group is not None))) for match in doors]
+    metric_unit = r'(cm|centimet(?:er|re)s?|m|met(?:er|re)s?)\b'
+    for pattern in (
+        r'\b(\d{1,3}(?:\.\d+)?)\s*' + metric_unit + r'\s*(?:wide\s+)?(?:door(?:way)?|opening|entrance)\b',
+        r'\b(?:door(?:way)?|entrance|opening)\b(?:\s+(?:opening|width|clearance|is|measures|at|only|just|about|exactly|still|now)|\s*[:=]){0,6}\s*(\d{1,3}(?:\.\d+)?)\s*' + metric_unit,
+    ):
+        for match in re.finditer(pattern, raw, re.I):
+            if _negated_measurement(raw, match.start()) or not _is_customer_doorway(raw, match.start(), match.end()):
+                continue
+            if re.match(r'\s*(?:tall|high)\b', raw[match.end():], re.I):
+                continue
+            value = float(match.group(1)) * (100 if match.group(2).lower() in {'m', 'meter', 'meters', 'metre', 'metres'} else 1) / 2.54
+            door_values.append((match.start(), value))
+    if door_values:
+        value = max(door_values)[1]
+        if 0 < value <= 1000:
             out['doorway_in'] = f'{value:g}'
             if out.get('space') != 'Small Room':
                 out['space'] = 'Narrow Doorway'
@@ -154,10 +202,12 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
     for match in re.finditer(r"\$\s*(\d[\d,]*(?:\.\d+)?)\s*(k\b)?|(?<![\w.])(\d+(?:\.\d+)?)\s*k\b|\b(?:budget|under|up to|maximum|max|no more than)\s*(?:is\s*|of\s*|now\s*)?\$?\s*(\d[\d,]*(?:\.\d+)?)\s*(k\b)?", raw, re.I):
         if _negated_measurement(raw, match.start()):
             continue
+        if re.match(r'\s*(?:lbs?|pounds?|kgs?|kilograms?|cm|centimet(?:er|re)s?|inches|inch|feet|ft|[2345]?d)\b', raw[match.end():], re.I):
+            continue
         value = float((match.group(1) or match.group(3) or match.group(4)).replace(',', ''))
         if match.group(2) or match.group(3) or match.group(5):
             value *= 1000
-        if 500 <= value <= 50000:
+        if 0 <= value <= 50000:
             budgets.append((match.start(), value))
             if match.group(4):
                 contextual_budgets.append((match.start(), value))
@@ -165,14 +215,21 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
         out['budget_max_usd'] = f'{max(contextual_budgets or budgets)[1]:g}'
     if re.search(r"\b(?:no budget (?:limit|cap)|unlimited budget|budget (?:is )?unlimited)\b", raw, re.I):
         out['budget_max_usd'] = ''
-    mechanisms = list(re.finditer(r"\b([2345])\s*D\b", raw, re.I))
-    positive = [m for m in mechanisms if not re.search(r"\b(?:not|no|avoid|don't want|don't need|instead of|rather than)\s*$", raw[max(0, m.start()-20):m.start()], re.I)]
-    if positive:
-        out['mechanism'] = positive[-1].group(1) + 'D'
-    if re.search(r"\b(?:not\s+(?:too\s+)?(?:strong|firm)|gentle|soft|light pressure)\b", raw, re.I):
-        out['intensity'] = 'Gentle'
-    elif re.search(r"\b(?:deep[ -]?tissue|strong|firm)\b", raw, re.I):
-        out['intensity'] = 'Strong'
+    excluded = set(filter(None, out.get('excluded_mechanisms', '').split(',')))
+    for match in re.finditer(r"\b([2345])\s*D\b", raw, re.I):
+        mechanism = match.group(1) + 'D'
+        if _negated_preference(raw, match.start()):
+            excluded.add(mechanism)
+            if out.get('mechanism') == mechanism:
+                out.pop('mechanism')
+        else:
+            out['mechanism'] = mechanism
+            excluded.discard(mechanism)
+    if excluded or 'excluded_mechanisms' in out:
+        out['excluded_mechanisms'] = ','.join(sorted(excluded))
+    intensity = intensity_preference(raw)
+    if intensity:
+        out['intensity'] = intensity
     return out
 
 
@@ -205,6 +262,9 @@ def product_constraint_issues(product, constraints: Mapping[str, str], *, price_
     mechanism = constraints.get('mechanism')
     if mechanism and mechanism.lower() not in str(getattr(product, 'massage_mechanism', '')).lower():
         issues.append('mechanism')
+    excluded = set(filter(None, constraints.get('excluded_mechanisms', '').lower().split(',')))
+    if any(value in str(getattr(product, 'massage_mechanism', '')).lower() for value in excluded):
+        issues.append('excluded_mechanism')
     weight = constraints.get('weight_lb')
     if weight:
         fit = lookup_fit_spec(getattr(product, 'display_name', '') or getattr(product, 'title', ''))
