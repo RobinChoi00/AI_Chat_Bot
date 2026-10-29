@@ -10,9 +10,15 @@ from __future__ import annotations
 import csv
 import logging
 import re
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
+
+try:
+    from app.catalog_identity import sentence_product
+except ImportError:
+    from catalog_identity import sentence_product
 
 logger = logging.getLogger(__name__)
 
@@ -180,19 +186,18 @@ def resolve_catalog_price(title_or_text: str) -> Optional[float]:
         return prices[norm]
 
     resolved = resolve_model_name(text)
-    if resolved:
-        key = _normalize_key(resolved)
-        if key in prices:
-            return prices[key]
-
-    best_price: Optional[float] = None
-    best_len = 0
-    for key, price in prices.items():
-        if len(key) >= 5 and (key in norm or norm in key):
-            if len(key) > best_len:
-                best_len = len(key)
-                best_price = price
-    return best_price
+    if not resolved:
+        return None
+    key = _normalize_key(resolved)
+    if key in prices:
+        return prices[key]
+    # Promotional warranty text can be stripped from the displayed name. Bind
+    # its price to that exact identity, never to a different generation that
+    # happens to occur earlier in the original customer sentence.
+    matching = [(raw_key, title) for raw_key, title in load_catalog_titles()
+                if _normalize_key(format_model_display_name(title)) == key and raw_key in prices]
+    matching.sort(key=lambda item: (_is_kakaotalk_bundle(item[1]), len(item[0])))
+    return prices[matching[0][0]] if matching else None
 
 
 def _is_kakaotalk_bundle(title: str) -> bool:
@@ -248,6 +253,12 @@ def _pick_best_catalog_title(
     return format_model_display_name(title)
 
 
+@dataclass(frozen=True)
+class _CatalogIdentity:
+    handle: str
+    display_name: str
+
+
 def resolve_model_name(raw: str) -> Optional[str]:
     """
     Map free-text model input to the closest catalog Title, or None.
@@ -269,6 +280,17 @@ def resolve_model_name(raw: str) -> Optional[str]:
     for key, title in catalog:
         if norm == key:
             return format_model_display_name(title)
+
+    # Reuse the Sales identity rules without depending on the Sales loader.
+    # Marketing bundles with the same clean display name are one identity.
+    identities = {_normalize_key(format_model_display_name(title)): format_model_display_name(title)
+                  for _key, title in catalog}
+    candidates = tuple(_CatalogIdentity(handle=key, display_name=title) for key, title in identities.items())
+    named, has_named_identity = sentence_product(text, candidates)
+    if has_named_identity:
+        return named.display_name if named else None
+    if re.search(r"\b(?:le\s*|v(?:ersion)?\s*)\d+(?:\.\d+)?\b", text, re.I):
+        return None
 
     partial_matches = [
         (key, title)

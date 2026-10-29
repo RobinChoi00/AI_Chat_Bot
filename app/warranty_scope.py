@@ -381,13 +381,37 @@ def filter_warranty_menu_options(node: dict) -> list[dict]:
 
 def human_support_reason(text: str) -> Optional[str]:
     """Detect explicit support/callback requests before any workflow mapping."""
-    raw = (text or "").strip()
+    raw = (text or "").strip().replace("’", "'")
+    # A request not to call or transfer must not itself cause that action.
+    raw = re.sub(
+        r"\b(?:don't|do not|never|no need to)\s+(?:call\s+me(?:\s+back)?|phone\s+me|"
+        r"(?:connect|transfer)\s+me\s+(?:to|with)\s+(?:a\s+)?(?:human|person|agent))\b|"
+        r"\b(?:don't|do not)\s+(?:need|want)\s+(?:a\s+)?(?:human|person|agent|callback)\b", "", raw, flags=re.I,
+    )
     if re.search(r"\b(?:call\s+me|call\s+(?:me\s+)?back|callback|phone\s+me)\b|전화\s*(?:해|주세요|부탁)|ll[aá]m(?:e|ame)", raw, re.I):
         return "callback_request"
     if re.search(
         r"\b(?:human|real\s+person|live\s+(?:agent|person)|representative|customer\s+service)\b|"
         r"\b(?:speak|talk|connect)\s+(?:me\s+)?(?:to|with)\s+(?:a\s+)?(?:person|someone|agent|support)\b|"
-        r"상담원|직원\s*(?:연결|상담)|hablar\s+con\s+(?:una?\s+)?(?:persona|agente)", raw, re.I
+        r"\b(?:have|get|ask)\s+(?:a\s+)?(?:person|someone|agent|specialist)\s+(?:to\s+)?(?:review|help|assist|contact)\b|"
+        r"\b(?:need|want|would like)\s+(?:a\s+)?(?:person|someone|agent|specialist)\s+(?:to\s+)?(?:help|review|assist|contact)\b|"
+        r"\b(?:someone|a person)\s+(?:to\s+)?(?:review|help|assist)\s+(?:me|with|this|my)\b|"
+        r"상담원|(?:직원|담당자)(?:와|하고|에게|랑)?\s*(?:직접\s*)?(?:연결|상담|도움)|"
+        r"hablar\s+con\s+(?:una?\s+)?(?:persona|agente)|"
+        r"(?:necesito|quiero)\s+(?:que\s+)?(?:una?\s+)?(?:persona|agente|alguien)\b", raw, re.I
+    ):
+        return "customer_request"
+    # Do not repeat a disassembly instruction once the customer says that
+    # they cannot safely attempt it. The current diagnosis stays available for
+    # staff review rather than being interpreted as a yes/no workflow answer.
+    if re.search(
+        r"\b(?:cannot|can't|unable to|not able to)\s+(?:safely\s+)?"
+        r"(?:remove|open|disconnect|disassemble|lift|reach|move|perform|complete|try|do)\b[^.!?\n]{0,90}"
+        r"\b(?:panel|hose|wire|cable|chair|step|check|test|that|this|it)\b|"
+        r"\b(?:cannot|can't|unable to)\s+safely\s+(?:do|try|continue|proceed)\b|"
+        r"\b(?:don't|do not)\s+feel\s+safe\s+(?:opening|removing|disconnecting|lifting|doing|trying)\b|"
+        r"(?:안전하게\s*)?(?:분해|패널|호스|점검)[^.!?\n]{0,30}(?:못\s*하|할\s*수\s*없)|"
+        r"(?:no puedo|no me siento segur[oa])\s+(?:(?:hacer|quitar|abrir|desconectar|realizar)\b|.*\bcon seguridad\b)", raw, re.I,
     ):
         return "customer_request"
     return None

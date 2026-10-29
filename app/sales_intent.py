@@ -111,6 +111,30 @@ _WARRANTY_DEFECT_VERBS = (
     r"stopped\s+\w+|failing|fails|failed|dead|died|"
     r"loose|noisy|smell(?:s|ing)?)"
 )
+_REPORTED_PART_FAULT_RE = re.compile(
+    r"\b(?:remote(?:\s+(?:control|screen))?|screen|buttons?|foot\s+rollers?|"
+    r"calf\s+rollers?|rollers?|air\s*bags?|footrest|armrest|upholstery|chair|heater|heat)\b"
+    r"[^.!?;]{0,65}?\b(?:"
+    r"(?:do|does|did)\s+not\s+(?:respond|work|start|turn|inflate|heat)|"
+    r"(?:doesn'?t|don'?t|won'?t)\s+(?:respond|work|start|turn|inflate|heat)|"
+    r"(?:has\s+|have\s+)?stopped\s+(?:working|responding|moving|inflating|heating)|"
+    r"(?:is|are)\s+(?:(?:still|now|completely)\s+)?(?:blank|black|dead|unresponsive|cracked|torn|ripped)|"
+    r"(?:arrived|came)\s+(?:with\s+)?(?:a\s+)?(?:cracked|torn|broken|ripped)|"
+    r"(?:is|are)\s+not\s+(?:working|responding|moving|inflating|heating|warming\s+up))\b",
+    re.I,
+)
+
+
+def reports_product_fault(text: str) -> bool:
+    """Recognize a reported part failure before color and feature matching."""
+    raw = (text or "").replace("’", "'")
+    for match in _REPORTED_PART_FAULT_RE.finditer(raw):
+        # A hypothetical failure is a feature/coverage question, not a report
+        # that this customer's chair has stopped working.
+        if re.search(r"\b(?:what\s+if|if|in\s+case)\s+(?:(?:the|my|a)\s+)?$", raw[:match.start()], re.I):
+            continue
+        return True
+    return False
 _WARRANTY_REDIRECT_RE = re.compile(
     r"\b("
     r"warranty|defect|malfunction|broken|not\s+working|won'?t\s+(?:turn|power|start|inflate)|"
@@ -162,7 +186,10 @@ _CANCEL_REFUND_RE = re.compile(
     r"cancel\s+(?:my\s+)?(?:order|purchase)|order\s+cancel|"
     r"refund(?:\s+my\s+(?:order|purchase|money|payment))?|"
     r"(?:want|need|please)\s+(?:a\s+)?refund|"
-    r"return\s+(?:my\s+)?(?:order|chair|purchase|item)|"
+    r"return\s+(?:(?:my|the|this|that)\s+)?(?:(?:delivered|ordered)\s+)?(?:order|chair|purchase|item)|"
+    r"return\s+(?:it|this|that|the\s+chair)|"
+    r"send\s+(?:(?:my|the|this|that)\s+)?(?:chair|it)\s+back|"
+    r"send\s+back\s+(?:(?:my|the|this|that)\s+)?(?:chair|it)|"
     r"undo\s+(?:my\s+)?(?:order|purchase)|"
     r"(?:switch|change|modify)\s+my\s+order"
     r")\b)|(?:취소|환불|반품)",
@@ -281,17 +308,22 @@ _POSITIVE_PURCHASE_RE = re.compile(
 )
 
 _EXISTING_ORDER_CHANGE_RE = re.compile(
-    r"forgot\s+(?:to\s+)?(?:add|choose|select)|"
+    r"\border\s+change\b|forgot\s+(?:to\s+)?(?:add|choose|select)|"
     r"(?:add|upgrade|change|modify).{0,55}(?:white[\s-]*glove|delivery\s+(?:method|service)|"
     r"shipping\s+(?:address|method)|delivery\s+address)|"
-    r"(?:white[\s-]*glove|delivery\s+address).{0,45}(?:add|change|upgrade|too\s+late)",
+    r"(?:white[\s-]*glove|delivery\s+address).{0,45}(?:add|change|upgrade|too\s+late)|"
+    r"(?:change|switch|correct|update).{0,45}(?:colou?r|model|billing|invoice)|"
+    r"(?:switch|change)\s+(?:it|the\s+chair)\s+to\s+(?:black|brown|beige|taupe|white|gray|grey)|"
+    r"(?:change|switch|modify)\s+(?:(?:the|my)\s+)?(?:ordered|purchased)\s+chair|"
+    r"(?:proof\s+of\s+purchase)",
     re.I,
 )
 
 _DIRECT_SPEC_QUESTION_RE = re.compile(
     r"\b(?:does|do|has|have|can|what|how|is|are)\b.{0,160}"
     r"\b(?:rollers?|heat(?:ing)?|airbags?|recline|capacity|dimensions?|weight|height|"
-    r"wide|heavy|track|bluetooth|wifi|wi-fi|body\s+scan|upholstery|leather)\b|"
+    r"wide|heavy|track|bluetooth|wifi|wi-fi|body\s+scann?(?:ing)?|colou?rs?|upholstery|leather|"
+    r"app|voice\s+(?:control|commands?)|scann?(?:ing)?\s+(?:(?:my|your|the)\s+)?body)\b|"
     r"\b(?:foot|calf)\s+rollers?\s+(?:on|for)\b",
     re.I,
 )
@@ -323,6 +355,7 @@ _RECOMMEND_RE = re.compile(
     r"recommend|suggestion|which\s+(?:chair|model|product)|what\s+(?:chair|model).*should|"
     r"which\s+(?:product|one)\s+is\s+right|right\s+(?:chair|product|one)\s+for\s+me|"
     r"help\s+me\s+(?:pick|choose|decide|find|select)|"
+    r"(?:pick|choose|recommend|find)\s+(?:(?:a|the|my)\s+)?(?:new|second|different|another)\s+chair|"
     r"(?:i|we)\s+(?:(?:do\s+not|don't)\s+)?(?:want|need|prefer|require)\s+(?:(?:a|an|the)\s+)?[2345]\s*d|"
     r"first[\s-]?time\s+buyer|best[\s-]?sellers?|most\s+popular|"
     r"looking\s+for\s+a(?:n)?\s+(?:chair|massage)|"
@@ -359,7 +392,9 @@ _SPECS_RE = re.compile(
     r"how\s+much.{0,48}\bweigh|"
     r"recline|width|height\s+range|track\s+type|s-?track|l-?track|sl-?track|zero\s+gravity|"
     r"3d|4d|airbags?|heat(?:ing|er)?|foot\s+rollers?|calf\s+rollers?|bluetooth|"
-    r"app\s+control|wi[\s-]?fi|body\s+scan|leather|upholstery"
+    r"app\s+control|\bapp\b|voice\s+(?:control|commands?)|"
+    r"scann?(?:ing)?\s+(?:(?:my|your|the)\s+)?body|"
+    r"wi[\s-]?fi|body\s+scann?(?:ing)?|colou?rs?|leather|upholstery"
     r")\b",
     re.IGNORECASE,
 )
@@ -491,6 +526,11 @@ def _requested_matches(pattern: re.Pattern, text: str) -> tuple[str, ...]:
         match.group(0).strip().lower()
         for match in pattern.finditer(text)
         if not _NEGATED_REQUEST_PREFIX.search(text[max(0, match.start() - 70):match.start()])
+        and not re.search(
+            r"\b(?:not|no)\s+(?:(?:a|an|the)\s+)?(?:repair|warranty|defect)"
+            r"(?:\s+(?:claim|issue|problem))?\s+(?:or|and)\s+(?:(?:a|an|the)\s+)?$",
+            text[max(0, match.start() - 85):match.start()], re.I,
+        )
     )
 
 
@@ -553,6 +593,9 @@ def classify(text: str) -> SalesIntent:
         not re.fullmatch(r"(?:switch|change|modify)\s+my\s+order", term, re.I)
         for term in cancellation_hits
     )
+    if is_post_purchase(raw) and re.search(r"\b(?:invoice|receipt)\b", raw, re.I):
+        return SalesIntent(label=INTENT_ORDER_STATUS, confidence="high", handoff=True,
+                           matched_terms=("order_document",))
     if (
         is_post_purchase(raw)
         and _requested_matches(_EXISTING_ORDER_CHANGE_RE, raw)
@@ -564,6 +607,10 @@ def classify(text: str) -> SalesIntent:
             handoff=True,
             matched_terms=("existing_order_change",),
         )
+
+    if not cancellation_hits and reports_product_fault(raw):
+        return SalesIntent(label=INTENT_WARRANTY_REDIRECT, confidence="high",
+                           handoff=True, matched_terms=("reported_part_failure",))
 
     # 0) Pre-purchase policy questions ("what's your return policy?", "how long
     #    is the warranty?", "how much is shipping?"). These have published
@@ -614,7 +661,7 @@ def classify(text: str) -> SalesIntent:
         )
 
     # 3) Warranty / defect / already-purchased problems → warranty chat.
-    hits = _matched(_WARRANTY_REDIRECT_RE, raw)
+    hits = _requested_matches(_WARRANTY_REDIRECT_RE, raw)
     if hits:
         return SalesIntent(
             label=INTENT_WARRANTY_REDIRECT,
@@ -701,6 +748,8 @@ def classify(text: str) -> SalesIntent:
         return SalesIntent(label=INTENT_COMPARE, confidence="high", matched_terms=compare_hits)
     if specs_hits and not recommend_hits and _DIRECT_SPEC_QUESTION_RE.search(raw):
         return SalesIntent(label=INTENT_SPECS, confidence="high", matched_terms=specs_hits)
+    if intensity_hits and not recommend_hits and re.search(r"\?|\b(?:can|does|how|what|adjust|settings?)\b", raw, re.I):
+        return SalesIntent(label=INTENT_INTENSITY, confidence="high", matched_terms=intensity_hits)
     # Body-fit cues (height/weight/body-part) win over intensity — a customer
     # who shares physical details wants a recommendation, not a lecture on
     # massage strength.
@@ -763,24 +812,13 @@ def _sales_phone() -> str:
 
 
 _WARRANTY_SERVICE_CONTACT = (
-    "Hi there\n"
-    "\n"
-    "Thank you for reaching out to us.\n"
-    "\n"
-    "Please forward your email to our Warranty Department to create a "
-    "service ticket promptly.\n"
-    "\n"
-    "Warranty Service Email: service@osakititan.com\n"
-    "\n"
+    "Our **Warranty Department** handles chair faults, technical support, and replacement parts. "
+    "Please email **service@osakititan.com** with your chair model, a description of the issue, "
+    "and your order number or proof of purchase if available.\n\n"
     f"{_phone_directory()}\n"
-    "\n"
-    "You can also submit ticket directly using below link:\n"
-    "\n"
-    "https://titanchair.freshdesk.com/support/home\n"
-    "\n"
-    "They are all in charge of technical supports and replacement parts.\n"
-    "\n"
-    "Thank you."
+    "\nYou can also submit a service request at "
+    "https://titanchair.freshdesk.com/support/home. "
+    "The team will review the issue and any applicable coverage; this chat has not approved a repair or replacement."
 )
 
 _SALES_DELIVERY_CONTACT = (
@@ -798,8 +836,9 @@ _AGENT_CONNECT = (
 )
 
 _AGENT_CONNECT_CANCEL = (
-    "I'll connect you with an agent for cancel / refund help. "
-    "Please share your **email** (and order number if you have it).\n\n"
+    "A **Sales agent** must review cancellation, return, and refund requests. "
+    "Please provide your **order number** and **checkout email**. "
+    "No order has been canceled and no return or refund has been approved by this chat.\n\n"
     f"{_phone_directory()}"
 )
 
@@ -815,6 +854,10 @@ def handoff_message(intent: SalesIntent) -> Optional[str]:
       - Discount / explicit human request → sales agent (email capture).
     """
     label = intent.label
+    if label == INTENT_ORDER_STATUS and 'order_document' in intent.matched_terms:
+        return ("Sales can help locate an invoice or receipt for your existing order. "
+                "Please provide your **order number** and **checkout email**. "
+                "This chat has not retrieved or issued an invoice.\n\n" + _phone_directory())
     if label in (INTENT_ETA_SHIPPING, INTENT_ORDER_STATUS):
         return _SALES_DELIVERY_CONTACT
     if label in (

@@ -108,7 +108,18 @@ _OUT_OF_SCOPE_PATTERNS = [
     ),
     re.compile(r"\b(capital\s+of|population\s+of|who\s+is\s+the\s+president)\b", re.IGNORECASE),
     re.compile(r"\b(movie|netflix|anime|k-pop|celebrity)\b", re.IGNORECASE),
+    re.compile(r"(?:파이썬|자바스크립트|프로그래밍|코드\s*작성|날씨|일기\s*예보|요리\s*레시피)"),
+    re.compile(r"\b(?:poema|receta|cocinar|pron[oó]stico|qu[eé]\s+tiempo\s+har[aá])\b", re.I),
 ]
+
+# A brand name inside an unrelated task does not turn it into customer support.
+_UNRELATED_TASK_RE = re.compile(
+    r"\b(?:write|create|generate|compose)\b.{0,90}\b(?:poem|song|essay|story|script|program|code|weather forecast)\b|"
+    r"\b(?:recipe|ingredients|homework|math problem|traversal algorithm)\b|"
+    r"(?:파이썬|자바스크립트).{0,20}(?:코드|작성)|"
+    r"\b(?:escribe|crea|dame)\b.{0,55}\b(?:poema|receta)\b",
+    re.I | re.S,
+)
 
 
 @dataclass(frozen=True)
@@ -170,7 +181,8 @@ def _normalize(text: str) -> str:
 
 def _has_in_scope_keywords(text: str) -> bool:
     lower = _normalize(text)
-    return any(kw in lower for kw in _IN_SCOPE_KEYWORDS)
+    return any(re.search(r"(?<![a-z])" + re.escape(kw) + r"(?![a-z])", lower)
+               if re.search(r"[a-z]", kw) else kw in lower for kw in _IN_SCOPE_KEYWORDS)
 
 
 def _recent_chair_context(chat_history: Sequence[Any] | None) -> bool:
@@ -203,7 +215,8 @@ def _rule_classify(user_query: str, chat_history: Sequence[Any] | None) -> Optio
 
     # A previous shopping conversation (or a number that looks like a budget)
     # must not turn an explicitly unrelated new request into chair support.
-    if _matches_out_of_scope(q) and not _has_in_scope_keywords(q):
+    task_text = re.sub(r"\berror\s+codes?\b", "fault identifier", q, flags=re.I)
+    if _UNRELATED_TASK_RE.search(task_text) or (_matches_out_of_scope(q) and not _has_in_scope_keywords(q)):
         return False
 
     if infer_forced_tool(q):

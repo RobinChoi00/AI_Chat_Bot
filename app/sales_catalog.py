@@ -22,12 +22,15 @@ not personalize beyond what the CSV supports.
 from __future__ import annotations
 
 import csv
+import html
 import logging
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
+
+from catalog_identity import generation_normalized as _generation_normalized, sentence_product as _sentence_product
 
 from product_catalog import (
     _normalize_key,
@@ -67,10 +70,14 @@ class ProductSpecs:
     auto_programs: str
     massage_styles: str
     colors: tuple[str, ...] = ()
+    bluetooth_speakers: str = ""
+    body_scanning: str = ""
+    feature_sources: tuple[tuple[str, str], ...] = ()
 
     def as_public_dict(self) -> dict:
         public = {
             "model": self.display_name,
+            "catalog_handle": self.handle,
             "vendor": self.vendor,
             "price_usd": self.price_usd,
             "in_catalog": self.status.lower() == "active",
@@ -83,8 +90,12 @@ class ProductSpecs:
                 "foot_roller": self.foot_roller,
                 "auto_programs": self.auto_programs,
                 "massage_styles": self.massage_styles,
+                "bluetooth_speakers": self.bluetooth_speakers,
+                "body_scanning": self.body_scanning,
             },
         }
+        if self.feature_sources:
+            public["feature_sources"] = dict(self.feature_sources)
         if self.colors:
             public["colors"] = list(self.colors)
         from sales_spec_index import lookup_fit_spec
@@ -261,6 +272,66 @@ def _row_colors(row: dict) -> tuple[str, ...]:
     return tuple(found)
 
 
+def _feature_from_description(description: str, pattern: str) -> str:
+    """Read explicit feature statements; missing text never establishes 'No'."""
+    text = re.sub(r"<(?:script|style)\b[^>]*>.*?</(?:script|style)>", "", description or "", flags=re.I | re.S)
+    text = re.sub(r"</?(?:li|p|h[1-6]|div|br)\b[^>]*>", "\n", text, flags=re.I)
+    text = html.unescape(re.sub(r"<[^>]+>", " ", text))
+    observed: set[str] = set()
+    for line in text.splitlines():
+        line = re.sub(r"\s+", " ", line).strip()
+        for match in re.finditer(pattern, line, re.I):
+            before = line[max(0, match.start() - 50):match.start()]
+            after = line[match.end():match.end() + 45]
+            if line.endswith("?") or re.search(r"\b(?:optional|external|separate)\s*$", before, re.I):
+                continue
+            negative = bool(re.search(r"\b(?:no|without|does not (?:have|include)|doesn't (?:have|include)|not equipped with)\s*(?:(?:any|built[ -]?in)\s*)?$", before, re.I)
+                            or re.match(r"\s+(?:is |are )?(?:not (?:included|available|supported)|unavailable)\b", after, re.I))
+            observed.add("No" if negative else "Yes")
+    return next(iter(observed)) if len(observed) == 1 else ""
+
+
+def _published_features(row: dict) -> tuple[str, str, tuple[tuple[str, str], ...]]:
+    raw_bluetooth = str(row.get("Bluetooth Speaker (product.metafields.custom.bluetooth_speaker)") or "").strip()
+    bluetooth = {"yes": "Yes", "true": "Yes", "1": "Yes", "no": "No", "false": "No", "0": "No"}.get(raw_bluetooth.lower(), "")
+    source = "Shopify export: Bluetooth Speaker metafield"
+    described_bluetooth = _feature_from_description(row.get("Body (HTML)", ""), r"\bbluetooth\s+(?:(?:sound|audio)\s+)?speakers?\b")
+    if bluetooth and described_bluetooth and bluetooth != described_bluetooth:
+        bluetooth = ""
+    elif not bluetooth:
+        bluetooth = described_bluetooth
+        source = "Shopify export: product description"
+    body_scan = _feature_from_description(row.get("Body (HTML)", ""), r"\bbody[\s-]+scan(?:ning|ner)?\b")
+    sources = []
+    if bluetooth:
+        sources.append(("bluetooth_speakers", source))
+    if body_scan:
+        sources.append(("body_scanning", "Shopify export: product description"))
+    return bluetooth, body_scan, tuple(sources)
+
+
+def product_feature_answer(product: ProductSpecs, query: str) -> str | None:
+    """Answer requested published features without turning missing data into a fact."""
+    lines = []
+    if re.search(r"\bcolou?rs?\b", query or "", re.I):
+        if product.colors:
+            lines.append(f"- **Listed colors**: {', '.join(product.colors)}. Checkout confirms current availability.")
+        else:
+            lines.append("- **Colors**: not verified in this catalog. Sales can confirm the options for this exact model.")
+    for pattern, label, value in (
+        (r"\bbluetooth\b|\bspeakers?\b", "Bluetooth speakers", product.bluetooth_speakers),
+        (r"\bbody[\s-]+scan(?:ning|ner)?\b|\bscan(?:s|ning)?\b.{0,30}\bbody\b|\bbody\b.{0,24}\bscanned\b", "Body scanning", product.body_scanning),
+        (r"\b(?:mobile\s+)?app(?:lication)?\b|\b(?:smartphone|phone)\b.{0,24}\b(?:control|remote)\b", "App control", ""),
+        (r"\bvoice[\s-]+(?:control|commands?|assistant)\b", "Voice control", ""),
+    ):
+        if re.search(pattern, query or "", re.I):
+            if value:
+                lines.append(f"- **{label}**: {value}, according to the published catalog.")
+            else:
+                lines.append(f"- **{label}**: not verified in this catalog. Sales can confirm this feature for the exact model.")
+    return f"**{product.display_name}**\n" + "\n".join(lines) if lines else None
+
+
 def is_public_browse_pick(product: ProductSpecs) -> bool:
     """True for storefront chairs we may show as anonymous price examples."""
     if product.status.lower() != "active" or product.price_usd is None:
@@ -325,6 +396,7 @@ def load_product_index() -> tuple[ProductSpecs, ...]:
         display = format_model_display_name(title)
         norm = _normalize_key(title)
         price = prices.get(norm)
+        bluetooth, body_scanning, feature_sources = _published_features(row)
         specs = ProductSpecs(
             handle=handle,
             title=title,
@@ -357,6 +429,9 @@ def load_product_index() -> tuple[ProductSpecs, ...]:
                 or ""
             ).strip(),
             colors=tuple(colors_by_handle.get(handle) or ()),
+            bluetooth_speakers=bluetooth,
+            body_scanning=body_scanning,
+            feature_sources=feature_sources,
         )
         entries.append(specs)
 
@@ -370,7 +445,7 @@ def load_product_index() -> tuple[ProductSpecs, ...]:
 
 
 def resolve_product(text: str) -> Optional[ProductSpecs]:
-    """Find the single best ProductSpecs record for a free-text model input."""
+    """Find a single product identity without substituting another generation."""
     raw = _strip_lookup_noise(text or "")
     if len(raw) < 2:
         return None
@@ -380,6 +455,20 @@ def resolve_product(text: str) -> Optional[ProductSpecs]:
     if alias:
         raw = alias
 
+    products = load_product_index()
+    raw_keys = {_normalize_key(raw), _normalize_key(text or "")}
+    exact = [record for record in products if raw_keys & {
+        _normalize_key(record.display_name), _normalize_key(record.title), _normalize_key(record.handle),
+    }]
+    if len(exact) == 1:
+        return exact[0]
+    named, has_named_identity = _sentence_product(rewrite_shopper_typos(alias or text), products)
+    if has_named_identity:
+        return named
+    # A version explicitly supplied by the customer is a hard identity limit.
+    if re.search(r"\b(?:le\s*|v(?:ersion)?\s*)\d+(?:\.\d+)?\b", text or "", re.I):
+        return None
+
     resolved_title = resolve_model_name(raw)
     if not resolved_title:
         resolved_title = raw
@@ -387,7 +476,6 @@ def resolve_product(text: str) -> Optional[ProductSpecs]:
     if not resolved_key:
         return None
 
-    products = load_product_index()
     for record in products:
         if _normalize_key(record.display_name) == resolved_key:
             return record
@@ -449,6 +537,7 @@ def resolve_product(text: str) -> Optional[ProductSpecs]:
 
 # Case workbook / sales shorthand → Shopify-facing name hints.
 _CASE_MODEL_ALIASES: dict[str, str] = {
+    _normalize_key("LE 2.0"): "Osaki 4D Maestro LE 2.0",
     _normalize_key("Osaki aI 4D Yoga Flex"): "Osaki 4D Yoga Flex",
     _normalize_key("Grande XL-Big and Tall"): "Titan Grande XL",
     _normalize_key("Grande XL"): "Titan Grande XL",

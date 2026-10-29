@@ -53,6 +53,11 @@ CI runs these gates, builds both container images, and blocks remediable high/cr
 
 ## AI quality workflow
 
+The [customer chat improvement report (English)](docs/quality/CUSTOMER_CHAT_IMPROVEMENTS.en.md)
+describes the follow-up Warranty, product identity, Sales context, fit and safety
+changes, with a comparison using the original evaluation criteria. The reports
+below preserve the earlier results before this follow-up update.
+
 Run `.venv/bin/python script/simulate_chatbot_quality.py` for the fixed 40-case
 offline behavioral simulation. The [simulation report (Korean)](docs/quality/README.ko.md)
 records the same-rubric comparison from 53.125 to 100/100, including case evidence.

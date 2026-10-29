@@ -19,9 +19,9 @@ except ImportError:
 
 _MONEY_NUMBER = r"\d[\d,]*(?:\.\d+)?"
 _PRICE_RE = re.compile(
-    r"(?:(?:(?<![a-z])(?:(?:US|CA|C|AU|A)\s*\$|(?:USD|EUR|CAD|AUD|GBP|KRW|JPY)\b)|[$€£₩¥])\s*"
+    r"(?:(?:(?<![a-z])(?:(?:US|CA|C|AU|A|HK|NZ|SG|S)\s*\$|(?:USD|EUR|CAD|AUD|GBP|KRW|JPY|HKD|NZD|SGD)\b)|[$€£₩¥])\s*"
     + _MONEY_NUMBER + r"|" + _MONEY_NUMBER
-    + r"\s*(?:USD\b|EUR\b|CAD\b|AUD\b|GBP\b|KRW\b|JPY\b|(?:US\s+)?dollars?\b|달러))",
+    + r"\s*(?:USD\b|EUR\b|CAD\b|AUD\b|GBP\b|KRW\b|JPY\b|HKD\b|NZD\b|SGD\b|euros?\b|pounds?\s+sterling\b|(?:US\s+|Canadian\s+|Australian\s+|Hong\s+Kong\s+|New\s+Zealand\s+|Singapore\s+)?dollars?\b|달러))",
     re.I,
 )
 _DISCOUNT_NARRATIVE_RE = re.compile(
@@ -106,7 +106,8 @@ def conversation_language(text: str, history: Sequence | None = None) -> str:
         return "es"
     # A substantive English sentence may deliberately switch language; short
     # acknowledgements and product codes carry no reliable language evidence.
-    if len(re.findall(r"\b[a-zA-Z]{2,}\b", current)) >= 4:
+    neutral = bool(re.fullmatch(r"(?:thank you|thanks)(?: so much| very much)?[.!\s]*|(?:yes|no|ok|okay|sure|all right)(?:,? thank you)?[.!\s]*", current, re.I))
+    if not neutral and len(re.findall(r"\b[a-zA-Z]{2,}\b", current)) >= 4:
         return "en"
     for message in reversed(history or []):
         role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
@@ -255,12 +256,17 @@ def _price_value(token: str) -> tuple[str, float]:
     number = re.search(_MONEY_NUMBER, token)
     if number is None:
         raise ValueError("Price has no amount")
-    currency = next((code for code in ("EUR", "CAD", "AUD", "GBP", "KRW", "JPY")
+    currency = next((code for code in ("EUR", "CAD", "AUD", "GBP", "KRW", "JPY", "HKD", "NZD", "SGD")
                      if re.search(r"\b" + code + r"\b", token, re.I)), "USD")
     if re.match(r"(?:CA|C)\s*\$", token, re.I):
         currency = "CAD"
     elif re.match(r"(?:AU|A)\s*\$", token, re.I):
         currency = "AUD"
+    for prefix, code in ((r"HK\s*\$|Hong\s+Kong", "HKD"), (r"NZ\s*\$|New\s+Zealand", "NZD"),
+                         (r"(?<![a-z])(?:SG|S)\s*\$|Singapore", "SGD"), (r"Canadian", "CAD"),
+                         (r"Australian", "AUD"), (r"euros?\b", "EUR"), (r"pounds?\s+sterling", "GBP")):
+        if re.search(prefix, token, re.I):
+            currency = code
     for symbol, code in (("€", "EUR"), ("£", "GBP"), ("₩", "KRW"), ("¥", "JPY")):
         if symbol in token:
             currency = code
@@ -409,6 +415,34 @@ def _measurement_matches(number: str, unit: str, expected: tuple[float, str]) ->
     return abs(claim - converted) <= tolerance
 
 
+def _invalid_catalog_facts(blob: str) -> bool:
+    """Conflicting or malformed structured evidence cannot authorize a claim."""
+    seen: dict[str, dict] = {}
+    for line in blob.splitlines():
+        if not line.startswith("MODEL_FACTS_JSON:"):
+            continue
+        try:
+            fact = json.loads(line.partition(":")[2].strip())
+        except (ValueError, TypeError):
+            return True
+        if not isinstance(fact, dict) or not isinstance(fact.get("model"), str) or not fact["model"].strip() or not isinstance(fact.get("specs"), dict):
+            return True
+        values = {**fact["specs"], **{key: fact[key] for key in ("price_usd", "currency") if key in fact}}
+        previous = seen.setdefault(fact["model"].strip().casefold(), {})
+        for key, value in values.items():
+            if value is None or value == "":
+                continue
+            if key in previous and str(previous[key]).strip().casefold() != str(value).strip().casefold():
+                try:
+                    equal = float(previous[key]) == float(value)
+                except (TypeError, ValueError):
+                    equal = False
+                if not equal:
+                    return True
+            previous[key] = value
+    return False
+
+
 def _model_facts(blob: str) -> list[dict]:
     facts = []
     current = None
@@ -533,6 +567,23 @@ def _fact_mentions(text: str, facts: list[dict]) -> list[tuple[int, int, dict]]:
     return sorted(selected, key=lambda value: value[0])
 
 
+def _feature_polarities(clause: str, feature: str) -> set[bool]:
+    """Read active and passive feature claims without losing their negation."""
+    if re.match(r"\s*(?:does|do|can|could|would|what|which|how)\b", clause, re.I):
+        return set()
+    values: set[bool] = set()
+    for mention in re.finditer(feature, clause, re.I):
+        before, after = clause[:mention.start()], clause[mention.end():]
+        adjectives = r"(?:[\w-]+\s+){0,2}"
+        if re.search(r"\b(?:no|without|lacks?|does not (?:have|include|support|feature)|doesn't (?:have|include|support|feature))\s+" + adjectives + r"$", before, re.I):
+            values.add(False)
+        elif re.match(r"\s+(?:is|are)\s+(?:not|never)\s+(?:included|available|supported|built[ -]in)\b", after, re.I):
+            values.add(False)
+        elif re.search(r"\b(?:has|have|includes?|with|supports?|features?)\s+" + adjectives + r"$", before, re.I) or re.match(r"\s+(?:is|are)\s+(?:included|available|supported|built[ -]in)\b", after, re.I):
+            values.add(True)
+    return values
+
+
 def _bound_claim_conflicts(text: str, fact: dict, query: str = "", default_unit: str | None = None) -> bool:
     prices = _PRICE_RE.findall(text)
     expected_price = fact.get("price_usd")
@@ -551,12 +602,23 @@ def _bound_claim_conflicts(text: str, fact: dict, query: str = "", default_unit:
     source_mechanism = str(specs.get("massage_mechanism") or "").upper()
     if mechanisms and source_mechanism and any(mechanism.upper() not in source_mechanism for mechanism in mechanisms):
         return True
+    clauses = re.split(r"[;,\n]|\b(?:but|however)\b|(?<=[.!?])\s+", text, flags=re.I)
     foot = str(specs.get("foot_roller") or "").strip().lower()
     if foot:
-        claims_yes = bool(re.search(r"(?:has|have|includes?|with)\s+(?:\w+\s+){0,2}foot\s*rollers?", text, re.I))
-        claims_no = bool(re.search(r"(?:no|without|does not have|doesn't have)\s+foot\s*rollers?", text, re.I))
-        if (claims_yes and foot in {"no", "none", "false"}) or (claims_no and foot in {"yes", "true"}):
-            return True
+        for clause in clauses:
+            if any(value != (foot not in {"no", "none", "false"}) for value in _feature_polarities(clause, r"foot\s*rollers?")):
+                return True
+    for pattern, keys in (
+        (r"\bbluetooth(?:\s+(?:speakers?|audio))?\b", ("bluetooth_speakers", "bluetooth", "bluetooth_speaker")),
+        (r"\bbody[ -]?scann?ing\b|\bbody\s+scan\b", ("body_scanning", "body_scan")),
+    ):
+        for clause in clauses:
+            claims = _feature_polarities(clause, pattern)
+            if not claims:
+                continue
+            evidence = next((str(specs[key]).strip().lower() for key in keys if specs.get(key) not in (None, "")), "")
+            if not evidence or any(value != (evidence not in {"no", "none", "false"}) for value in claims):
+                return True
     return False
 
 
@@ -674,13 +736,16 @@ def sanitize_agent_response(
             return _message("tracking_input", user_query, language)
         return _message("source_unavailable", user_query, language)
 
-    if not text:
-        return text
-
-    lower = text.lower()
-
     if "tool_error:" in blob_lower:
         return _message("source_unavailable", user_query, language)
+
+    if called.intersection(_PRICE_BLOCK_TOOLS) and _invalid_catalog_facts(blob):
+        return _message("source_unavailable", user_query, language)
+
+    if not text:
+        return _message("source_unavailable", user_query, language)
+
+    lower = text.lower()
 
     if "recommend_chairs" in called and "no_results:" in blob_lower and not _model_facts(blob):
         return _message("recommendation_unverified", user_query, language)
@@ -689,10 +754,11 @@ def sanitize_agent_response(
 
     claim_text = _unattributed_claim_text(text)
     unsupported_promise = re.search(
-        r"\b(?:your|the)\s+(?:claim|replacement|warranty)\s+(?:is|has been)\s+approved\b|"
+        r"\b(?:your|the)\s+(?:claim|replacement|warranty|refund|return)\s+(?:is|has been|was)\s+approved\b|"
         r"\b(?:we|i)\s+(?:guarantee|have approved|approved your)\b|"
-        r"\b(?:will|guaranteed to)\s+(?:cure|heal)\b|"
-        r"\b(?:guaranteed delivery|will (?:arrive|be delivered))\s+tomorrow\b",
+        r"\b(?:can|will|guaranteed to)\s+(?:cure|heal)\b|"
+        r"\b(?:guaranteed delivery|will (?:arrive|be delivered))\s+(?:tomorrow|next\b|on\b|by\b)|"
+        r"\b(?:your|the)\s+(?:order|replacement|parts?|chair)\s+will\s+(?:arrive|be delivered)\b",
         claim_text, re.I,
     )
     if unsupported_promise or _MULTILINGUAL_PROMISE_RE.search(claim_text):
@@ -730,11 +796,27 @@ def sanitize_agent_response(
     ):
         return _message("tracking_input", user_query, language)
 
+    # Prose instructions require the same verified source as numbered steps.
+    # Keep explicit warnings ("do not bypass the interlock") intact.
+    action_text = re.sub(
+        r"\b(?:do not|don't|never|avoid)\s+(?:(?:ever|try to|attempt to)\s+)?"
+        r"(?:bridge|bypass|disable|open|clean|swap|replace|fit|install|turn|unplug|reconnect|reset|inspect|remove|check)\b"
+        r"(?:(?!\b(?:but|however|instead)\b)[^.!?\n;,])*", "", claim_text, flags=re.I,
+    )
+    unsafe_actions = bool(re.search(
+        r"\b(?:bridge|bypass|disable)\b.{0,40}\b(?:interlock|safety|fuse)\b|"
+        r"\b(?:swap|replace|fit|install)\b.{0,45}\bfuse\b.{0,40}\b(?:larger|higher|oversiz)|"
+        r"\bclean\b.{0,35}\b(?:socket|electrical|power plug)\b.{0,55}\b(?:liquid|solvent)|"
+        r"\bopen\b.{0,30}\b(?:electrical housing|control board|power supply)\b|"
+        r"전원을\s*켠\s*상태.{0,35}(?:기판|배선).{0,20}(?:만져|접촉)", action_text, re.I,
+    ))
+    if unsafe_actions:
+        return _message("repair_unverified", user_query, language)
     repair_actions = bool(re.search(
-        r"\b(?:turn\s+(?:off|on)|unplug|reconnect|reset|inspect|remove\s+the\s+(?:back|panel)|check\s+the\s+fuse|retire|cambie|desconecte|enchufe)\b|패널.*제거|퓨즈.*교체", lower,
+        r"\b(?:turn\s+(?:off|on)|unplug|reconnect|reset\s+(?:(?:the|your|this)\s+)?(?:chair|remote|controller|unit|it)|inspect|remove\s+the\s+(?:back|panel)|check\s+the\s+fuse|retire|cambie|desconecte|enchufe)\b|패널.*제거|퓨즈.*교체", action_text, re.I,
     ))
     numbered_steps = bool(_NUMBERED_STEPS_RE.search(text)) and (not called.intersection(_PRICE_BLOCK_TOOLS) or repair_actions)
-    repair_like = numbered_steps or any(s in lower for s in _REPAIR_SIGNALS)
+    repair_like = numbered_steps or repair_actions or any(s in lower for s in _REPAIR_SIGNALS)
     verified_repair = "get_repair_help" in called and "VERIFIED_REPAIR_GUIDANCE:" in blob
     if repair_like and not verified_repair and "escalate_to_human" not in called:
         return _message("repair_unverified", user_query, language)
@@ -747,23 +829,14 @@ def sanitize_agent_response(
             return _message("price_model", user_query, language)
 
     if response_prices and called.intersection(_PRICE_BLOCK_TOOLS):
-        allowed = _prices_in_text(blob)
+        allowed: set[str] = set()
         for fact in _model_facts(blob):
             if fact.get("currency") == "USD" and isinstance(fact.get("price_usd"), (int, float)):
                 price = float(fact["price_usd"])
                 allowed.update({f"${price:,.2f}", f"${price:,.0f}"})
-        for m in re.finditer(
-            r"(?:price|variant price|base price)[^\n$]*\$?([\d,]+(?:\.\d{2})?)",
-            blob_lower,
-        ):
-            raw = m.group(1).replace(",", "")
-            allowed.add(f"${raw}")
-            try:
-                val = float(raw)
-                allowed.add(f"${val:,.2f}")
-                allowed.add(f"${int(val):,}")
-            except ValueError:
-                pass
+        for line in blob.splitlines():
+            if re.match(r"\s*(?:[-*]\s*)?(?:price|variant price|base price)(?:\s*\(USD\))?\s*[:=]", line, re.I):
+                allowed.update(_prices_in_text(line))
         text = _strip_ungrounded_prices(text, allowed)
 
     if "search_chair_specs" in called:

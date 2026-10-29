@@ -42,6 +42,7 @@ _RECOMMEND_INTENT_PATTERNS = [
 _REPAIR_INTENT_PATTERNS = [
     re.compile(r"\b(install(ation|ing)?|assembl(e|y|ing)|set\s*up|setup)\b", re.IGNORECASE),
     re.compile(r"\b(repair|troubleshoot|fix|broken|not\s+working|wo[nN]?'?t\s+(turn|power|start)|stopped\s+working)\b", re.IGNORECASE),
+    re.compile(r"\b(?:no\s+power|(?:will\s+not|does\s+not|doesn't)\s+(?:power|turn\s+on|start))\b", re.I),
     re.compile(r"\b(error\s+code|err\s*\d+|e\d{1,3})\b", re.IGNORECASE),
     re.compile(r"\b(not\s+inflating|leaking|noise|squeak|grind|stuck|jammed)\b", re.IGNORECASE),
     re.compile(r"\b(replace(ment)?|swap)\s+(the\s+)?(controller|remote|mech|roller|airbag|cable|cord|adapter)\b", re.IGNORECASE),
@@ -50,12 +51,12 @@ _REPAIR_INTENT_PATTERNS = [
 ]
 
 _TRACKING_INTENT_PATTERNS = [
-    re.compile(r"\b(track|tracking|where\s+is\s+my|order\s+(status|update|tracking)|delivery\s+(status|update))\b", re.IGNORECASE),
+    re.compile(r"\b(track|tracking|where\s+is\s+(?:my\s+)?order|order\s+(status|update|tracking)|delivery\s+(status|update))\b", re.IGNORECASE),
     re.compile(r"(배송\s*(조회|상태)|주문\s*(조회|상태)|어디쯤)"),
     re.compile(r"\b(rastrear|seguimiento|estado\s+de\s+(mi\s+)?pedido|d[oó]nde\s+est[aá]\s+mi\s+pedido)\b", re.IGNORECASE),
 ]
 
-_ORDER_ID_PATTERN = re.compile(r"\b(OSKMC|OSKUS|TIDM|OSK|TI)\d{3,7}\b", re.IGNORECASE)
+_ORDER_ID_PATTERN = re.compile(r"\b(?:OSKMC|OSKUS|TIDM|OSK|TI)\d{3,7}\b|(?<!\w)#\d{3,10}\b", re.IGNORECASE)
 _EMAIL_PATTERN = re.compile(r"[\w\.\-+]+@[\w\.\-]+\.\w+")
 
 _WARRANTY_CLAIM_PATTERNS = [
@@ -82,6 +83,17 @@ _SHOWROOM_INTENT_PATTERNS = [
 ]
 
 
+def _active_matches(patterns: list[re.Pattern], text: str) -> bool:
+    """A denied action is not the customer's requested workflow."""
+    for pattern in patterns:
+        for match in pattern.finditer(text):
+            before = text[max(0, match.start() - 80):match.start()]
+            if re.search(r"\b(?:do not|don't|no|not|without)\s+(?:(?:want|need|start|file|submit|a|any|to|the|my)\s+){0,5}$", before, re.I):
+                continue
+            return True
+    return False
+
+
 def infer_forced_tool(user_query: str) -> Optional[str]:
     """Return the tool name to force on the first agent turn, or None."""
     q = (user_query or "").strip()
@@ -91,13 +103,23 @@ def infer_forced_tool(user_query: str) -> Optional[str]:
     has_order_id = bool(_ORDER_ID_PATTERN.search(q))
     has_email = bool(_EMAIL_PATTERN.search(q))
 
-    if any(p.search(q) for p in _WARRANTY_CLAIM_PATTERNS):
+    # A past fault cited while shopping is context, not a current repair request.
+    current = q
+    if _active_matches(_RECOMMEND_INTENT_PATTERNS, q):
+        current = re.sub(r"\b(?:my|the|our)\s+(?:old|previous|former)\s+(?:chair|unit)\b[^.!?;\n]*(?:[.!?;]|$)", " ", q, flags=re.I)
+
+    if re.search(r"\b(?:price|cost|fee|charge)\b.{0,35}\b(?:install(?:ation)?|assembly)\b|\b(?:install(?:ation)?|assembly)\b.{0,35}\b(?:price|cost|fee|charge)\b", current, re.I) and not re.search(r"\b(?:broken|defective|not working|stuck|no power|(?:will not|does not|doesn't|won't)\s+(?:power|turn|start))\b", current, re.I):
+        return "get_warranty_or_policy"
+
+    if _active_matches(_WARRANTY_CLAIM_PATTERNS, current):
         return "start_warranty_workflow"
 
-    if any(p.search(q) for p in _REPAIR_INTENT_PATTERNS):
+    if _active_matches(_REPAIR_INTENT_PATTERNS, current):
         return "get_repair_help"
 
-    if any(p.search(q) for p in _TRACKING_INTENT_PATTERNS) and (has_order_id or has_email):
+    active_tracking = _active_matches(_TRACKING_INTENT_PATTERNS, current)
+    tracking_denied = any(p.search(current) for p in _TRACKING_INTENT_PATTERNS) and not active_tracking
+    if active_tracking and (has_order_id or has_email):
         return "lookup_order_status"
 
     # A showroom/address reference must not override the customer's explicit
@@ -105,7 +127,7 @@ def infer_forced_tool(user_query: str) -> Optional[str]:
     if any(p.search(q) for p in _SHOWROOM_INTENT_PATTERNS):
         return "get_showroom_info"
 
-    if has_order_id and has_email:
+    if has_order_id and has_email and not tracking_denied:
         return "lookup_order_status"
 
     if any(p.search(q) for p in _RECOMMEND_INTENT_PATTERNS):

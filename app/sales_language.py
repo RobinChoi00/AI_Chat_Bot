@@ -29,15 +29,25 @@ def _money_amount(raw: str) -> str:
 
 
 def customer_language(message: str, previous: str = 'en') -> str:
+    from customer_safety import requested_customer_language
+
+    requested = requested_customer_language(message)
+    if requested:
+        return requested
     value = _fold(message)
-    if re.search(r'\b(?:in|speak|reply|answer)\s+english\b|en ingles|영어로', value):
-        return 'en'
-    if re.search(r'\b(?:in|speak|reply|answer)\s+spanish\b|\bespanol\b|스페인어로', value):
-        return 'es'
-    if re.search(r'\b(?:in|speak|reply|answer)\s+korean\b|한국어로', value) or re.search('[가-힣]', message):
+    if re.search('[가-힣]', message):
         return 'ko'
     if re.search(r'\b(?:hola|busco|quiero|necesito|recomienda\w*|recomendar\w*|sillon|silla|masaje|mido|peso|pesa|paquete|presupuesto|tope|puerta|hablar|persona|asesora?|ciatica|marcapasos|operacion)\b|[¿¡]', value):
         return 'es'
+    # A substantive new English question can change language naturally. Bare
+    # model names, measurements and acknowledgments preserve the saved choice.
+    if len(re.findall(r'\b[a-z]+\b', value)) >= 4 and re.search(
+        r"\b(?:i\s+(?:am|would|want|need|weigh|have)|i'm|my\s+(?:chair|door|doorway|budget|order|father|mother|weight|height)|"
+        r"(?:what|how|where|when|which|can|could|would|does|do|is|are)\b.*\b(?:chair|delivery|assembly|model|price|refund|order|return|massage|warranty|support|please)|"
+        r"please\s+(?:recommend|explain|compare|show|connect)|tell\s+me\s+about)\b",
+        value,
+    ):
+        return 'en'
     return previous if previous in {'en', 'ko', 'es'} else 'en'
 
 
@@ -96,12 +106,13 @@ def prepare_message(message: str, prefs: dict) -> tuple[str, str]:
 def is_medical_scope_question(message: str) -> bool:
     """Recognize requested clinical clearance or treatment, not ordinary fit."""
     value = _fold(message)
-    eligibility = re.search(r'\b(?:pacemaker|pregnan\w*|marcapasos|embaraz\w*)\b|심박\s*조율기|임신|수술\s*후', value)
-    surgery = re.search(r'\b(?:surgery|operacion|cirugia)\b', value) and re.search(r'\b(?:safe\w*|use|try|after|recent\w*|segur\w*|usar|probar|despues|reciente)\b', value)
+    eligibility = re.search(r'\b(?:pacemaker|pregnan\w*|(?:first|second|third)\s+trimester|implanted\s+defibrillator|implantable\s+(?:cardioverter\s+)?defibrillator|marcapasos|embaraz\w*|desfibrilador)\b|심박\s*조율기|임신|수술\s*후', value)
+    icd = re.search(r'\bicd\b', value) and re.search(r'\b(?:implant\w*|heart|cardiac|defibrillator|safe|use)\b', value)
+    surgery = re.search(r'\b(?:surgery|operacion|cirugia|operaron|operado|operada|postoperative|post[ -]op)\b', value) and re.search(r'\b(?:safe\w*|use|try|after|recent\w*|segur\w*|usar|probar|despues|reciente|sin\s+riesgo|hace\s+una\s+semana)\b', value)
     condition = r'(?:sciatica|scoliosis|arthritis|neuropathy|herniated\s+disc|back\s+pain|chronic\s+pain|disease|condition|ciatica|artritis|neuropatia|dolor|enfermedad|hernia(?:\s+de\s+disco)?)'
     treatment = r'(?:cur\w*|treat\w*|heal\w*|revers\w*|eliminat\w*|fix|sanar|trat\w*|get\s+rid\s+of)'
     guaranteed_relief = re.search(r'\b(?:guarantee\w*|promise\w*)\b[^.!?]{0,50}\b(?:pain\s+relief|relie\w*\s+pain)\b|\bgarant\w*\b[^.!?]{0,50}\bdolor\b|통증.{0,20}보장', value)
-    return bool(eligibility or surgery or guaranteed_relief or re.search(rf'\b{treatment}\b[^.!?]{{0,70}}\b{condition}\b|\b{condition}\b[^.!?]{{0,70}}\b{treatment}\b', value)
+    return bool(eligibility or icd or surgery or guaranteed_relief or re.search(rf'\b{treatment}\b[^.!?]{{0,70}}\b{condition}\b|\b{condition}\b[^.!?]{{0,70}}\b{treatment}\b', value)
                 or re.search(r'(?:의자|안마|마사지).{0,40}(?:완치|치료|고칠|낫게)|(?:좌골|디스크|관절염|척추|허리\s*통증).{0,30}(?:완치|치료|고칠|낫게)', value))
 
 
@@ -109,7 +120,7 @@ def medical_scope_message(message: str, language: str = 'en') -> str | None:
     if not is_medical_scope_question(message):
         return None
     return {
-        'en': "I can't promise a cure or treatment from a massage chair, or guarantee relief from pain or safe use for your individual health situation. Please ask your clinician before use, especially with a pacemaker, pregnancy, or recent surgery. A sales specialist can explain product features, but cannot give medical clearance.",
+        'en': "I can't promise that a massage chair will treat a medical condition, relieve pain, or be safe for your individual health situation. Please ask your clinician before using it, especially during pregnancy, after surgery, or with a pacemaker or implanted defibrillator. A sales specialist can explain product features but cannot provide medical clearance.",
         'es': 'No puedo prometer que un sillón de masaje cure o trate la ciática u otra enfermedad, ni confirmar que sea seguro para su situación médica. Consulte con su profesional de salud antes de usarlo, especialmente si tiene marcapasos, está embarazada o tuvo una cirugía reciente. Un asesor de ventas puede explicar funciones del producto, pero no autorizar su uso médico.',
         'ko': '마사지 의자가 좌골신경통 등 질환을 치료하거나 완치한다고 약속할 수 없으며, 개인의 건강 상태에서 안전한지도 판단할 수 없습니다. 심박 조율기 사용, 임신 또는 최근 수술을 포함한 의학적 사용 가능 여부는 사용 전에 담당 의료진에게 확인해 주세요. 판매 상담원은 제품 기능을 설명할 수 있지만 의학적 사용 허가를 할 수는 없습니다.',
     }.get(language, '') or medical_scope_message(message, 'en')

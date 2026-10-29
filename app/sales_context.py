@@ -33,7 +33,8 @@ _OBJECTIVE = re.compile(
     r"\b(?:less\s+money|cheaper|cheap(?:est)?|(?:less|more|least|most)\s+expensive|"
     r"costs?|prices?|budget|door(?:way)?|opening|width|wide|clearance|"
     r"capacity|weigh(?:t|s)?|heavy|heavier|mass|mechanism|[2345]d|track|(?:foot|calf)\s+rollers?|features?|specs?|"
-    r"airbags?|heat(?:ing)?|zero\s+gravity|auto\s+programs?|massage\s+styles?)\b", re.I,
+    r"airbags?|heat(?:ing)?|zero\s+gravity|auto\s+programs?|massage\s+styles?|"
+    r"bluetooth|body\s+scann?(?:ing)?|colou?rs?)\b", re.I,
 )
 _FIT_QUESTION = re.compile(
     r"\b(?:will|would|can|does|could)\b.{0,40}\b(?:fit|go\s+through|pass\s+through)\b|"

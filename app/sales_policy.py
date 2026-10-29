@@ -131,6 +131,7 @@ _POST_PURCHASE_RE = re.compile(
     r"\bunder\s+warranty\b|"
     r"\bclaim\b|"
     r"\bi\s+own\b|"
+    r"\bexisting\s+order\b|\b(?:ordered|purchased|delivered)\s+chair\b|"
     r"구매했|주문했|받았"
     r")",
     re.IGNORECASE,
@@ -139,7 +140,15 @@ _POST_PURCHASE_RE = re.compile(
 
 def is_post_purchase(text: str) -> bool:
     """True when the message is about a chair or order the customer has."""
-    return bool(_POST_PURCHASE_RE.search(text or ""))
+    raw = text or ""
+    for match in _POST_PURCHASE_RE.finditer(raw):
+        if match.group().lower() == 'claim' and re.search(
+            r"\b(?:not|no)\s+(?:(?:a|an|the)\s+)?(?:(?:repair|warranty)(?:\s+or\s+(?:repair|warranty))?\s+)?$",
+            raw[max(0, match.start() - 65):match.start()], re.I,
+        ):
+            continue
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +179,8 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             r"("
             r"return\s+polic|refund\s+polic|"
-            r"(?:can|could)\s+i\s+return|"
+            r"(?:can|could)\s+i\s+return|return\s+(?:shipping|freight|costs?)|"
+            r"(?:shipping|freight)\s+(?:both\s+ways|back)|"
             r"(?:if|what\s+if)\s+i\s+(?:don'?t|do\s+not)\s+like|"
             r"change\s+my\s+mind|"
             r"restocking(?:\s+fee)?|"
@@ -188,6 +198,8 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             r"("
             r"how\s+long\s+is\s+the\s+warranty|"
+            r"\bwarranty\b[^.!?;]{0,75}\bcover(?:s|ed)?\b|"
+            r"\blabor\s+coverage\b|\byears?\s+(?:cover|include)\s+labor\b|"
             r"warranty\s+(?:length|period|term|coverage|cover|included|come)|"
             r"(?:what|which)\s+warranty|"
             r"(?:is|does)\s+(?:there|it)\s+(?:a\s+)?(?:come\s+with\s+a\s+)?warranty|"
@@ -281,7 +293,8 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"voltage|special\s+outlet|what\s+outlet|110\s*v|220\s*v|"
             r"paypal|apple\s+pay|google\s+pay|\bvenmo\b|"
             r"(?:amex|american\s+express|visa|mastercard|discover|credit\s+card|debit\s+card|\bcard\b)\s+"
-            r"(?:is\s+)?(?:not\s+going\s+through|declin(?:ed|ing)|won'?t\s+go\s+through|rejected|fail(?:ed|ing))|"
+            r"(?:(?:is|was|has\s+been|keeps?\s+getting|is\s+being)\s+)?(?:not\s+going\s+through|declin(?:ed|ing)|won'?t\s+go\s+through|rejected|fail(?:ed|ing))|"
+            r"\bcheckout\s+(?:problem|issue|help)\b|"
             r"(?:payment|checkout)\s+(?:won'?t|will\s+not|not)\s+(?:go\s+through|work|process)|"
             r"card\s+declin|"
             r"look\s+up.{0,48}friend|friend.{0,48}look\s+up|(?:my|a)\s+friend\s+has|"
@@ -425,9 +438,30 @@ def detect_topic(text: str) -> Optional[str]:
             continue
         if specific_spec and topic == TOPIC_MECHANISM:
             continue
+        if topic == TOPIC_WHITE_GLOVE and specific_spec and not re.search(
+            r"\b(?:white[\s-]*glove|delivery|deliver|crew|assembly\s+(?:service|fee|cost)|installation\s+(?:service|fee|cost))\b", raw, re.I,
+        ):
+            # Assembled/disassembled dimensions describe fit, not a request
+            # for an installation or delivery service.
+            continue
         if pattern.search(raw):
             return topic
     return None
+
+
+def followup_topic(text: str, previous: Optional[str]) -> Optional[str]:
+    """Carry a published-policy question across a short topical follow-up."""
+    raw = (text or "").strip()
+    if not previous or is_post_purchase(raw):
+        return None
+    patterns = {
+        TOPIC_RETURNS: r"\bboth\s+ways\b|\b(?:deduct\w*|restocking|packaging|rma|authorization)\b|\breturn\s+(?:shipping|freight|costs?)\b|\btrip\s+(?:here|back)\b",
+        TOPIC_WARRANTY_TERMS: r"\b(?:labor|parts|coverage)\b|\b(?:all|three|3)\s+years\b",
+        TOPIC_REMOTE_SHIPPING: r"\b(?:freight|there|that\s+(?:location|address))\b.{0,40}\b(?:free|pay|quote|cost|included)\b|\b(?:free|pay|quote|cost)\b.{0,40}\b(?:there|freight)\b",
+        TOPIC_SHOWROOM: r"\b(?:open|closed|hours|sunday|saturday|appointment|visit|confirmed)\b|\b(?:there|floor)\b.{0,35}\b(?:try|today|available)\b|\bbe\s+there\b",
+    }
+    pattern = patterns.get(previous)
+    return previous if pattern and re.search(pattern, raw, re.I) else None
 
 
 # ---------------------------------------------------------------------------
@@ -584,11 +618,10 @@ def _showroom_answer(domain: str, message: str = "") -> str:
         f"- **Hours:** {showroom_hours()}\n"
         f"{phone_line}"
         f"- **Map:** {showroom_maps_url()}\n\n"
-        "Tap **Request a visit** and I'll email sales your preferred window. "
-        "They confirm the time — I won't lock a calendar slot from this chat."
-        f"{extra_block}\n\n"
-        "If you'd rather narrow it down first, tell me your **height** and what "
-        "you want the chair to help with."
+        "Tap **Request a visit** to share your preferred time. "
+        "Sales must confirm the appointment and model availability before you travel. "
+        "I can't lock a calendar slot from this chat."
+        f"{extra_block}"
     )
 
 
@@ -692,7 +725,8 @@ def _limits_kind(message: str) -> str:
     if re.search(
         r"paypal|apple\s+pay|google\s+pay|\bvenmo\b|"
         r"(?:amex|american\s+express|visa|mastercard|discover|credit\s+card|debit\s+card|\bcard\b)\s+"
-        r"(?:is\s+)?(?:not\s+going\s+through|declin(?:ed|ing)|won'?t\s+go\s+through|rejected|fail(?:ed|ing))|"
+        r"(?:(?:is|was|has\s+been|keeps?\s+getting|is\s+being)\s+)?(?:not\s+going\s+through|declin(?:ed|ing)|won'?t\s+go\s+through|rejected|fail(?:ed|ing))|"
+        r"\bcheckout\s+(?:problem|issue|help)\b|"
         r"(?:payment|checkout)\s+(?:won'?t|will\s+not|not)\s+(?:go\s+through|work|process)|"
         r"card\s+declin",
         raw,
@@ -700,7 +734,7 @@ def _limits_kind(message: str) -> str:
     ):
         if re.search(
             r"not\s+going\s+through|declin|won'?t\s+go\s+through|rejected|fail|"
-            r"not\s+(?:go\s+through|work|process)",
+            r"not\s+(?:go\s+through|work|process)|checkout\s+(?:problem|issue|help)",
             raw,
             re.I,
         ):
@@ -775,7 +809,7 @@ def _limits_answer(_domain: str, message: str = "") -> str:
         return (
             "I can't see the checkout page from this chat, so I won't guess why "
             "a card didn't go through, and I won't list processors from memory.\n\n"
-            "A specialist can look at the payment page with you — share your "
+            "A Sales specialist can look at the payment page with you — share your "
             "**email**."
         )
     if kind == "rental":

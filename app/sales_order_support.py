@@ -13,8 +13,8 @@ import re
 logger = logging.getLogger(__name__)
 
 _NEGATED = re.compile(r"\b(?:don't|do not|didn't|did not|never|not)\s+(?:(?:want|need|wish)\s+(?:to\s+)?)?$|\bno\s+(?:(?:quiero|necesito|deseo)\s+)?$", re.I)
-_CANCEL = re.compile(r"\b(?:cancel(?:ling|led|lation)?|refund|return)\b|취소|환불|반품|\b(?:cancelar|cancele|cancelaci[oó]n|reembolso|devolver)\b", re.I)
-_ORDER = re.compile(r"\b(?:my|our|the|this|that|an|existing)\s+(?:order|purchase)|\border\s*(?:#|number\s*)?\d+\b|\b(?:already|previously)\s+(?:ordered|purchased|bought)\b|주문|\b(?:mi|el|este|ese)\s+pedido\b", re.I)
+_CANCEL = re.compile(r"\b(?:cancel(?:ling|led|lation)?|refund|return)\b|취소|환불|반품|\b(?:cancelar|cancele|cancelaci[oó]n|reembolso|devolver(?:la|lo)?)\b", re.I)
+_ORDER = re.compile(r"\b(?:my|our|the|this|that|an|existing)\s+(?:order|purchase|(?:delivered|ordered)\s+chair)|\border\s*(?:#|number\s*)?\d+\b|\b(?:already|previously)\s+(?:ordered|purchased|bought)\b|주문|\b(?:mi|el|la|este|ese)\s+(?:pedido|silla|sill[oó]n|chair)\b", re.I)
 _STATUS = re.compile(r"\b(?:where|tracking|track|status|update|progress|late|delayed|hasn't arrived|has not arrived|not arrived|not delivered|not\s+(?:yet\s+)?(?:here|shipped)|when|shipping|shipment|in transit)\b|어디|조회|배송|도착|\b(?:d[oó]nde|seguimiento|estado|tarde|retrasado|llegado|llega)\b", re.I)
 _SHORT_FOLLOWUP = re.compile(r"^(?:(?:my\s+)?(?:order\s+)?(?:email|e-mail|number)\s*(?:is|:)\s*)?[^\s@]+@[^\s@]+\.[^\s@]+[.!?]?\s*$|^\d{4,20}[.!?]?\s*$|^(?:where is it|what about it|any update|what happens next)[.!?]?\s*$", re.I)
 _CHECKOUT_CONTACT = re.compile(r'\b(?:checkout|purchase|order)\b|주문|결제|\b(?:pedido|compra)\b', re.I)
@@ -141,7 +141,8 @@ def persist_prepared_followup(reply, *, prefs: dict, session_id: str, domain: st
 
 def maybe_sales_support_reply(message: str, prefs: dict | None, *, domain: str):
     from sales_agent import QuickReply, SalesReply
-    from sales_intent import INTENT_PARTS_TECHNICIAN, classify
+    from sales_intent import (INTENT_PARTS_TECHNICIAN, INTENT_WARRANTY_REDIRECT, classify,
+                              _EXISTING_ORDER_CHANGE_RE, _requested_matches)
     from customer_safety import reported_safety_hazard
     from sales_cta import extract_email
 
@@ -152,10 +153,29 @@ def maybe_sales_support_reply(message: str, prefs: dict | None, *, domain: str):
     language = _language(data)
     # A new reported hazard or a concrete technical fault keeps its service
     # route even when an earlier turn concerned delivery or cancellation.
-    if reported_safety_hazard(text=route_text) or classify(route_text).label == INTENT_PARTS_TECHNICIAN:
+    current_intent = classify(route_text)
+    technical_report = current_intent.label == INTENT_WARRANTY_REDIRECT and (not current_intent.matched_terms or any(
+        not re.fullmatch(r"already\s+(?:bought|ordered|purchased|own(?:ed)?)|my\s+chair\s+(?:is|has|won'?t|does\s+not|isn'?t|doesn'?t)", term, re.I)
+        for term in current_intent.matched_terms
+    ))
+    # Owning or ordering a chair does not itself establish a technical fault.
+    # Concrete failures still interrupt order support through their own terms.
+    if reported_safety_hazard(text=route_text) or current_intent.label == INTENT_PARTS_TECHNICIAN or technical_report:
         return None
-    if re.search(r"\b(?:broken|not working|repair|defect|stuck|malfunction|error code)\b|고장|수리|불량|\b(?:averiada|roto|reparaci[oó]n)\b", route_text, re.I):
-        return None
+    technical_review = bool(re.search(r"\b(?:is|was|has)\b.{0,65}\b(?:approved|free|covered)\b", route_text, re.I))
+    technical_schedule = bool(re.search(
+        r"\b(?:has|have|is|was|when)\b.{0,65}\b(?:scheduled|booked|technician|appointment|come\s+out|confirmed)\b", route_text, re.I,
+    ))
+    if data.get('technical_support_topic') and (technical_review or technical_schedule):
+        lead = ("I cannot confirm a technician visit or appointment from this chat. " if technical_schedule else
+                "I cannot confirm that a replacement or repair has been approved or is free. ")
+        return SalesReply(
+            reply=lead + "Our Warranty team must review the service request and applicable coverage before arranging service. Please contact **service@osakititan.com** or **+1-888-848-2630 ext. 3** with your case or order number.",
+            intent='parts_technician', handoff=True, handoff_reason='parts_technician',
+            tools_used=['support.technical_followup'], flow_stage='warranty',
+            quick_replies=[QuickReply(label='Back to menu', payload='menu')],
+            prefs_patch={'technical_support_topic': 'parts_technician', 'awaiting_recommend': False},
+        )
 
     stop_search = re.search(r'\b(?:never mind|forget|stop|cancel|drop|end)\b.{0,55}\b(?:suggestions?|search|recommendations?|questionnaire|interview)\b|(?:추천|상품\s*검색).{0,15}(?:그만|중단)|\b(?:detener|cancelar)\b.{0,30}\b(?:b[uú]squeda|recomendaciones)\b', route_text, re.I)
     if stop_search and not _ORDER.search(route_text) and not _negated_request(route_text, stop_search):
@@ -195,6 +215,19 @@ def maybe_sales_support_reply(message: str, prefs: dict | None, *, domain: str):
     topic = data.get('sales_support_topic')
     contact_form = data.get('awaiting_email_for_pick') or data.get('awaiting_showroom_email')
     known_order_context = topic in {'order_status', 'cancel_refund', 'order_change'} and not contact_form
+    # Keep the actual order task when the customer uses a pronoun or asks
+    # what to prepare. Such turns are not a new chair recommendation.
+    refund_followup = bool(topic == 'cancel_refund' and not contact_form and re.search(
+        r"\b(?:how\s+(?:soon|long)|when)\b.{0,65}\b(?:money|back|refund|process|receive|credit|card)\b|"
+        r"\b(?:money|refund|credit)\b.{0,45}\b(?:back|arriv\w*|process\w*|receiv\w*|take|show)\b|"
+        r"\bwhat\b.{0,35}\b(?:provide|prepare|send|share|need|required|documents?|paperwork)\b|"
+        r"\b(?:has|is|was)\b.{0,30}\b(?:approved|issued|processed|completed|cancell?ed)\b|"
+        r"\b(?:return|refund)\s+(?:request|review|shipping|costs?)\b", route_text, re.I))
+    explicit_order_change = bool(not contact_form and (known_order_context or _ORDER.search(route_text))
+                                 and _requested_matches(_EXISTING_ORDER_CHANGE_RE, route_text))
+    order_change_followup = bool(explicit_order_change or topic == 'order_change' and not contact_form and re.search(
+        r"\b(?:invoice|receipt|colou?r|address|upgrade)\b|"
+        r"\b(?:has|is|was|have|what)\b.{0,40}\b(?:added|changed|updated|confirmed|need|provide)\b", route_text, re.I))
     without_contact = route_text
     if contact_form and supplied_email and not (
         _ORDER.search(without_contact) and (_STATUS.search(without_contact) or _CANCEL.search(without_contact))
@@ -214,11 +247,15 @@ def maybe_sales_support_reply(message: str, prefs: dict | None, *, domain: str):
         or re.fullmatch(r'(?:please\s+)?(?:cancel|refund|return)[.!?\s]*', text, re.I)
         or re.search(r'그\s*주문|그걸|그것|\b(?:cancelar|devolver)\s*(?:lo|ese|esto)\b', text, re.I)
     ))
-    is_cancel = bool(cancellation and not negated_cancel and (bool(_ORDER.search(route_text)) or contextual_cancel))
+    is_cancel = bool(refund_followup or cancellation and not negated_cancel and (bool(_ORDER.search(route_text)) or contextual_cancel))
     is_status = bool(_ORDER.search(route_text) and _STATUS.search(route_text) or known_order_context and _SHORT_FOLLOWUP.fullmatch(text) or checkout_contact)
-    if not is_cancel and not is_status:
+    if not is_cancel and not is_status and not order_change_followup:
         return None
-    intent = 'cancel_refund' if is_cancel or checkout_contact and topic == 'cancel_refund' else 'order_status'
+    invoice_request = bool(known_order_context and re.search(r'\b(?:invoice|receipt)\b', route_text, re.I))
+    intent = ('cancel_refund' if is_cancel or checkout_contact and topic == 'cancel_refund'
+              else 'order_status' if invoice_request
+              else 'order_change' if order_change_followup or checkout_contact and topic == 'order_change'
+              else 'order_status')
     copies = {
         'en': {
             'cancel_refund': "A sales agent must review this cancellation, return or refund request. I have not cancelled your order, approved a return or refund, or changed a payment. Please contact **sales at +1-888-848-2630 ext. 2** with your order number and checkout email. You do not need to repeat those details if you already shared them here.",
@@ -233,6 +270,20 @@ def maybe_sales_support_reply(message: str, prefs: dict | None, *, domain: str):
             'order_status': "La consulta sobre un pedido existente corresponde a **ventas al +1-888-848-2630 ext. 2**, no a soporte técnico. No he consultado el seguimiento en vivo ni confirmado una fecha de entrega. Ventas debe verificar el número de pedido y el correo usado al comprar; el correo por sí solo no verifica el pedido.",
         },
     }
+    copies['en']['order_change'] = ("Sales must review changes to an existing order and requests for an invoice or receipt. "
+        "Please contact **sales at +1-888-848-2630 ext. 2** with your order number and checkout email. "
+        "This chat has not changed the order, added a delivery upgrade, or issued an invoice.")
+    copies['ko']['order_change'] = "기존 주문 변경과 청구서·영수증은 영업팀 검토가 필요합니다. 주문번호와 주문 당시 이메일로 **+1-888-848-2630 ext. 2**에 문의해 주세요. 이 채팅에서 주문 변경이나 배송 업그레이드, 청구서 발행을 완료하지 않았습니다."
+    copies['es']['order_change'] = "Ventas debe revisar los cambios de un pedido y las solicitudes de factura o recibo. Llame al **+1-888-848-2630 ext. 2** con el número de pedido y el correo usado al comprar. Este chat no ha cambiado el pedido, agregado servicios ni emitido una factura."
+    if invoice_request:
+        copies['en']['order_status'] = "Sales can help locate an invoice or receipt for your existing order. Please contact **sales at +1-888-848-2630 ext. 2** with your order number and checkout email. This chat has not retrieved or issued an invoice."
+    if refund_followup and re.search(r"\b(?:how\s+(?:soon|long)|when|processing|money|credit)\b", route_text, re.I):
+        timing = {
+            'en': "I cannot verify the refund processing time or payment status from this chat. Sales must first review the return and confirm any approved refund and timing with the payment provider. ",
+            'ko': "이 채팅에서는 환불 처리 기간이나 결제 상태를 확인할 수 없습니다. 영업팀이 반품을 검토하고 승인 여부와 결제 수단별 환불 기간을 확인해야 합니다. ",
+            'es': "No puedo verificar aquí el plazo ni el estado del reembolso. Ventas debe revisar la devolución y confirmar la aprobación y el plazo con el proveedor de pago. ",
+        }
+        copies[language]['cancel_refund'] = timing[language] + copies[language]['cancel_refund']
     acknowledgement = {
         'en': "Thanks for the checkout email. It does not by itself verify the order. ",
         'ko': "주문 당시 이메일을 알려주셔서 감사합니다. 이메일만으로 주문이 인증되는 것은 아닙니다. ",

@@ -63,6 +63,11 @@ _FOOTREST_WORDS = (
 _EXTEND_WORDS = ("extend", "extension", "telescop", "won't extend", "wont extend")
 _ROLLER_WORDS = ("roller", "rollers", "knead")
 _POWER_WORDS = (
+    "will not turn on",
+    "does not turn on",
+    "stopped working",
+    "shuts off",
+    "shut off",
     "won't turn on",
     "wont turn on",
     "no power",
@@ -73,10 +78,10 @@ _POWER_WORDS = (
 )
 _REMOTE_WORDS = ("remote", "controller", "tablet", "screen blank")
 _RECLINE_WORDS = ("recline", "zero g", "zero-g", "zerog", "lay flat")
-_ROLLING_WORDS = ("massage head", "rollers stuck", "rolling", "kneading", "mechanism")
-_HEAT_WORDS = ("heat", "heating", "won't heat", "wont heat", "too hot", "not warm")
+_ROLLING_WORDS = ("massage head", "rollers stuck", "rollers", "rolling", "kneading", "mechanism")
+_HEAT_WORDS = ("heat", "heater", "heating", "won't heat", "wont heat", "too hot", "not warm")
 _VOICE_WORDS = ("voice", "alexa", "hey osaki", "microphone", "ghost voice")
-_COSMETIC_WORDS = ("scratch", "tear", "ripped", "cosmetic", "leather damage", "seam")
+_COSMETIC_WORDS = ("scratch", "tear", "torn", "ripped", "cosmetic", "leather damage", "seam")
 _DELIVERY_WORDS = (
     "delivery",
     "shipping",
@@ -671,6 +676,21 @@ def _keyword_workflow_prefill(text: str) -> Optional[dict[str, Any]]:
     norm = _norm_intake(text)
     if not norm:
         return None
+    from warranty_nlp import _option_contradicts_customer
+
+    # Classify the requested task before incidental part names. Installing a
+    # footrest is not a report that its motor or airbags have failed.
+    if re.search(r"\b(?:how\s+(?:do|can)\s+i\s+(?:assemble|install|attach)|help\s+(?:with\s+)?installing|need\s+(?:help\s+)?(?:assembling|installing))\b", norm):
+        return {"answer_keys": ["warranty", "installation"],
+                "model_name": _extract_model_from_intake(text), "confidence": "high",
+                "summary": "Setup / installation help.", "source": "keyword"}
+
+    # Explicit surface damage outranks a rejected diagnosis such as "not an
+    # airbag problem". No repair or coverage decision is inferred here.
+    if _has_any(norm, _COSMETIC_WORDS) and not _option_contradicts_customer("cosmetic", norm):
+        return {"answer_keys": ["warranty", "defect", "cosmetic"],
+                "model_name": _extract_model_from_intake(text), "confidence": "high",
+                "summary": "Cosmetic damage.", "source": "keyword"}
 
     # An explicit heating failure outranks an incidental mention of the
     # remote setting or an already completed check of the controller.
@@ -679,7 +699,7 @@ def _keyword_workflow_prefill(text: str) -> Optional[dict[str, Any]]:
                 "model_name": _extract_model_from_intake(text), "confidence": "high",
                 "summary": "Heating stays cold.", "source": "keyword"}
 
-    has_air = _has_any(norm, _AIR_WORDS)
+    has_air = _has_any(norm, _AIR_WORDS) and not _option_contradicts_customer("air", norm)
     has_foot = _has_any(norm, _FOOTREST_WORDS)
     has_extend = _has_any(norm, _EXTEND_WORDS)
     has_roller = _has_any(norm, _ROLLER_WORDS)
@@ -740,7 +760,7 @@ def _keyword_workflow_prefill(text: str) -> Optional[dict[str, Any]]:
         (_COSMETIC_WORDS, "cosmetic", "Cosmetic damage."),
     ]
     for words, key, summary in defect_checks:
-        if _has_any(norm, words):
+        if _has_any(norm, words) and not _option_contradicts_customer(key, norm):
             return {
                 "answer_keys": ["warranty", "defect", key],
                 "model_name": _extract_model_from_intake(text),
@@ -781,6 +801,15 @@ def _keyword_workflow_prefill(text: str) -> Optional[dict[str, Any]]:
             "summary": "Setup / installation help.",
             "source": "keyword",
         }
+
+    # Clear everyday symptoms may establish the issue type without identifying
+    # a failed part. Keep the normal customer confirmation and diagnostic gates.
+    from warranty_nlp import _keyword_issue_type
+
+    if _keyword_issue_type(norm) == "defect":
+        return {"answer_keys": ["warranty", "defect"],
+                "model_name": _extract_model_from_intake(text), "confidence": "high",
+                "summary": "Chair malfunction reported.", "source": "keyword"}
 
     return None
 

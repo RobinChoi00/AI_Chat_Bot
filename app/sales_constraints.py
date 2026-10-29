@@ -5,6 +5,8 @@ limit. Missing published fit information is not evidence of a safe fit.
 """
 from __future__ import annotations
 
+import json
+import math
 import re
 from typing import Mapping
 
@@ -24,7 +26,12 @@ _HEIGHT_MEASUREMENT = re.compile(
 
 
 def _negated_measurement(text: str, start: int) -> bool:
-    return bool(re.search(r'\b(?:not|instead of|rather than|used to be|previously|formerly)\s*$', text[max(0, start - 32):start], re.I))
+    prefix = text[max(0, start - 60):start].replace('’', "'")
+    return bool(re.search(
+        r"\b(?:not|instead of|rather than|used to be|previously|formerly|"
+        r"(?:do\s+not|don't|never)\s+(?:use|save|assume|set|count))\s*(?:a\s+)?$",
+        prefix, re.I,
+    ))
 
 
 def _negated_preference(text: str, start: int) -> bool:
@@ -35,7 +42,7 @@ def _negated_preference(text: str, start: int) -> bool:
     option = r'(?:[2345]\s*d|deep[ -]?tissue|strong|firm|deep|intense|hard|gentle|soft|light(?:\s+pressure)?|balanced|medium|moderate|adjustable|customi[sz]e|variable)'
     previous_options = r'(?:' + modifier + option + r'(?:\s+(?:massage|pressure|chair|model|one))?\s*(?:,?\s*(?:or|and)\s+|,\s*))*'
     return bool(re.search(
-        r"\b(?:not|no|avoid|don't\s+(?:want|need)|do\s+not\s+(?:want|need)|instead of|rather than)\s*"
+        r"\b(?:not|no|avoid|don't\s+(?:want|need|recommend)|do\s+not\s+(?:want|need|recommend)|instead of|rather than)\s*"
         + previous_options + modifier + r'$', prefix, re.I,
     ))
 
@@ -75,7 +82,7 @@ def _is_person_height(text: str, start: int, end: int) -> bool:
     if re.match(r'\s*(?:(?:tall|high)\s+(?:and\s+)?)?(?:of\s+)?(?:clearance|space|room|wide|deep|long|behind|door(?:way)?|opening|ceiling)\b', suffix, re.I):
         return False
     person = _latest_subject_position(r"\b(?:i\s+am|i'm|my\s+(?:body\s+)?height(?:\s+is)?|(?:buyer|user|person|husband|wife|father|mother|dad|mom|spouse)(?:\s+(?:is|who\s+is))?)\b", prefix)
-    dimension = _latest_subject_position(r'\b(?:door(?:way)?|opening|entrance|ceiling|hall(?:way)?|chair|room|clearance|space|height\s+(?:range|limit)|supported\s+height)\b', prefix)
+    dimension = _latest_subject_position(r'\b(?:door(?:way)?|opening|entrance|ceiling|hall(?:way)?|chair|package|product|shipment|box|unit|device|room|clearance|space|height\s+(?:range|limit)|supported\s+height)\b', prefix)
     return dimension < 0 or person > dimension
 
 
@@ -100,6 +107,13 @@ def height_measurements(text: str, *, include_negated: bool = False, include_dim
         centimeters = float(match.group(1)) * (100 if match.group(2).lower() in {'m', 'meter', 'meters', 'metre', 'metres'} else 1)
         if 100 <= centimeters <= 229 and (include_negated or not _negated_measurement(text, match.start())) and (include_dimensions or _is_person_height(text, match.start(), match.end())):
             values.append((match.start(), match.end(), round(centimeters / 2.54)))
+    for match in re.finditer(r'(?<![\w.])(\d{2}(?:\.\d+)?)\s*(?:inches\b|inch\b|in\b|["″])', text or '', re.I):
+        if any(start <= match.start() < end for start, end, _ in values):
+            continue
+        if (include_negated or not _negated_measurement(text, match.start())) and (include_dimensions or _is_person_height(text, match.start(), match.end())):
+            inches = float(match.group(1))
+            if 38 <= inches <= 90:
+                values.append((match.start(), match.end(), round(inches)))
     return sorted(values)
 
 
@@ -119,19 +133,139 @@ def _is_person_weight(text: str, start: int, end: int) -> bool:
     requirement = re.search(
         r'\b(?:recommend(?:\s+(?:me|us))?|need|require|want|looking\s+for|shopping\s+for)\s+'
         r'(?:(?:a|an|the)\s+)?(?:massage\s+)?(?:chair|model|seat)\s+'
-        r'(?:for\s+(?:a\s+)?|(?:that\s+can|to)\s+(?:support|handle|hold)\s+)'
+        r'(?:for\s+(?:a\s+)?|(?:that\s+can|to)\s+(?:support|handle|hold)\s+|'
+        r'(?:with|that\s+has)\s+(?:a\s+)?(?:(?:published|verified|maximum)\s+)*)'
         r'(?:(?:up\s+to|at\s+least)\s*)?$', prefix, re.I,
     )
     if requirement and not re.search(r"\b(?:don't|do\s+not|not)\s*$", prefix[:requirement.start()], re.I):
         return True
+    if re.match(r'\s*(?:capacity|(?:maximum\s+)?(?:user\s+)?weight\s+(?:capacity|limit|rating)|(?:user\s+)?(?:capacity|limit|rating))\b', suffix, re.I):
+        return False
     person = _latest_subject_position(r"\b(?:i\s+(?:am|weigh)|i'm|my\s+(?:body\s+)?weight(?:\s+is)?|(?:buyer|user|person|husband|wife|father|mother|dad|mom|spouse)(?:\s+(?:is|weighs?|who\s+weighs?))?)\b", prefix)
-    product = _latest_subject_position(r"\b(?:capacity|rated(?:\s+for)?|rating|limits?|max(?:imum)?|supports?|holds?|can\s+handle|(?:chair|product|shipping)(?:'s)?\s+weight|weighs|costs?)\b", prefix)
+    product = _latest_subject_position(r"\b(?:capacity|rated(?:\s+for)?|rating|limits?|max(?:imum)?|supports?|holds?|can\s+handle|(?:chair|product|shipping)(?:'s)?\s+weight|costs?)\b", prefix)
     if product > person:
         return False
     if re.match(r'\s*(?:user|person|buyer|man|woman)\b', suffix, re.I):
         return True
     object_subject = _latest_subject_position(r'\b(?:chair|package|product|shipment|box|unit|device)\b', prefix)
     return object_subject < 0 or person > object_subject
+
+
+def _person_label(text: str, start: int) -> str:
+    """Keep named household users separate without storing customer names."""
+    # A household user is often introduced in the preceding sentence:
+    # "My mother will also use it. She weighs 150 pounds."
+    prefix = text[:start][-220:]
+    labels = list(re.finditer(
+        r"\b(?:father|dad|mother|mom|husband|wife|spouse|partner|son|daughter|"
+        r"first\s+user|second\s+user|heavier\s+user|lighter\s+user|buyer|user|person|"
+        r"i|i'm|me|myself|my\s+(?:body\s+)?(?:height|weight))\b",
+        prefix, re.I,
+    ))
+    label = labels[-1].group().lower() if labels else 'user'
+    return {'dad': 'father', 'mom': 'mother', "i'm": 'self', 'i': 'self', 'me': 'self', 'myself': 'self',
+            'my weight': 'self', 'my body weight': 'self', 'my height': 'self',
+            'my body height': 'self'}.get(label, label.replace(' ', '_'))
+
+
+def _read_person_measurements(value: str | None) -> dict[str, float]:
+    try:
+        parsed = json.loads(value or '{}')
+        if not isinstance(parsed, dict):
+            return {}
+        return {key: float(amount) for key, amount in parsed.items()
+                if isinstance(key, str) and isinstance(amount, (int, float))
+                and not isinstance(amount, bool) and math.isfinite(amount) and amount > 0}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _retain_person_measurements(text: str, measurements: list[tuple[int, float]], previous: str | None) -> dict[str, float]:
+    current = {}
+    corrected = bool(re.search(r'\b(?:actually|correction|correcting|instead|now|not)\b', text, re.I))
+    for start, value in measurements:
+        label = _person_label(text, start)
+        if label in {'user', 'buyer', 'person'} and not corrected:
+            # Unnamed users still have separate requirements. Do not let the
+            # final lighter measurement silently replace the first one.
+            if label in current:
+                current[label + '_1'] = current.pop(label)
+            if label + '_1' in current:
+                index = 2
+                while label + '_' + str(index) in current:
+                    index += 1
+                label += '_' + str(index)
+        current[label] = value
+    saved = _read_person_measurements(previous)
+    # A single-user correction replaces the prior value. Once two actual users
+    # are known, updating one must not discard the other person's requirements.
+    if len(saved) > 1:
+        for label, value in current.items():
+            if label in {'heavier_user', 'lighter_user'}:
+                target = (max if label == 'heavier_user' else min)(saved, key=saved.get)
+                saved[target] = value
+            elif label in {'user', 'buyer', 'person'}:
+                # An unnamed requirement can raise a shared minimum; it cannot
+                # silently erase an identified user's larger body measurement.
+                if value > max(saved.values()):
+                    saved['user'] = value
+            else:
+                saved[label] = value
+        return saved
+    if len(current) > 1:
+        return current
+    label = next(iter(current), 'user')
+    sharing = re.search(r'\b(?:also|too|both|together|share|sharing|second\s+user)\b', text, re.I)
+    named = {'father', 'mother', 'husband', 'wife', 'spouse', 'partner', 'son', 'daughter', 'self'}
+    if sharing and saved and label in named and label not in saved:
+        return {**saved, **current}
+    return current
+
+
+def _doorway_measurements(text: str) -> list[tuple[int, float]]:
+    values = []
+    unit_pattern = r'(?:inches\b|inch\b|in\b|["″]|mm\b|millimet(?:er|re)s?\b|cm\b|centimet(?:er|re)s?\b|m\b|met(?:er|re)s?\b)'
+    for match in re.finditer(r'(?<![\w.])(\d{1,4}(?:\.\d+)?)\s*-?\s*(' + unit_pattern + ')', text, re.I):
+        if _negated_measurement(text, match.start()) or not _is_customer_doorway(text, match.start(), match.end()):
+            continue
+        prefix = re.split(r'[;!?]|\.(?=\s|$)', text[:match.start()])[-1][-140:]
+        suffix = text[match.end():]
+        before = re.search(r'\b(?:door(?:way)?|entrance|opening)\b', prefix, re.I)
+        after = re.match(r'\s*(?:wide\s+)?(?:door(?:way)?|entrance|opening)\b', suffix, re.I)
+        if not (before or after) or re.match(r'\s*(?:tall|high)\b', suffix, re.I):
+            continue
+        # A later body measurement is not another width of the earlier door.
+        if before and not after and _latest_subject_position(r"\b(?:i\s+am|i'm|my\s+height|(?:father|mother|husband|wife)\s+is)\b", prefix) > _latest_subject_position(r'\b(?:door(?:way)?|entrance|opening)\b', prefix):
+            continue
+        value = float(match.group(1))
+        unit = match.group(2).lower()
+        if unit.startswith(('mm', 'millimet')):
+            value /= 25.4
+        elif unit.startswith(('cm', 'centimet')):
+            value /= 2.54
+        elif unit in {'m', 'meter', 'meters', 'metre', 'metres'}:
+            value *= 100 / 2.54
+        if 0 < value <= 1000:
+            values.append((match.start(), value))
+    return values
+
+
+_SPOKEN_NUMBERS = {**_NUMBER_WORDS, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18,
+                   'nineteen': 19, 'twenty': 20, 'thirty': 30, 'forty': 40,
+                   'fifty': 50, 'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90}
+
+
+def _spoken_amount(text: str) -> int:
+    total = current = 0
+    for token in re.split(r'[\s-]+', text.lower().strip()):
+        if token == 'hundred':
+            current = (current or 1) * 100
+        elif token == 'thousand':
+            total += (current or 1) * 1000
+            current = 0
+        elif token != 'and':
+            current += _SPOKEN_NUMBERS.get(token, 0)
+    return total + current
 
 
 def _is_customer_doorway(text: str, start: int, end: int) -> bool:
@@ -152,44 +286,34 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
     raw = text or ""
     heights = height_measurements(raw)
     if heights:
-        out['height_in'] = str(heights[-1][2])
+        users = _retain_person_measurements(raw, [(start, value) for start, _, value in heights], out.get('user_heights_in'))
+        out['user_heights_in'] = json.dumps(users, sort_keys=True, separators=(',', ':'))
+        out['height_in'] = f'{max(users.values()):g}'
     weights = []
-    for match in re.finditer(r"(?<!\d)(\d{2,4}(?:\.\d+)?)\s*(lbs?|pounds?|kgs?|kilograms?)(?![a-z])", raw, re.I):
+    for match in re.finditer(r"(?<!\d)(\d{1,4}(?:\.\d+)?)\s*(lbs?|pounds?|kgs?|kilograms?|stone|st)(?![a-z])", raw, re.I):
         if _negated_measurement(raw, match.start()):
             continue
         if not _is_person_weight(raw, match.start(), match.end()):
             continue
-        value = float(match.group(1)) * (2.20462 if match.group(2).lower().startswith(('kg', 'kilogram')) else 1)
+        unit = match.group(2).lower()
+        value = float(match.group(1)) * (2.20462 if unit.startswith(('kg', 'kilogram')) else 14 if unit in {'stone', 'st'} else 1)
         if 40 <= value <= 2200:
             weights.append((match.start(), value))
     if weights:
-        out['weight_lb'] = f'{max(weights)[1]:g}'
-    doors = [match for match in re.finditer(
-        r'\b(\d{2}(?:\.\d+)?)\s*-?\s*(?:"|inch(?:es)?|in\b)\s*(?:wide\s+)?(?:door(?:way)?|opening|entrance)\b|'
-        r'\b(?:door(?:way)?|entrance)\b(?:\s+(?:opening|width|clearance|is|measures|at|only|just|about|exactly|still|now)|\s*[:=]){0,6}\s*'
-        r'(\d{2}(?:\.\d+)?)\s*-?\s*(?:"|inch(?:es)?|in\b)|'
-        r'\b(?:door(?:way)?|entrance)\b[^.;!?]{0,60}?\b(\d{2}(?:\.\d+)?)\s*-?\s*(?:"|inch(?:es)?|in\b)\s+wide\b', raw, re.I)
-        if not _negated_measurement(raw, match.start()) and _is_customer_doorway(raw, match.start(), match.end())]
-    door_values = [(match.start(), float(next(group for group in match.groups() if group is not None))) for match in doors]
-    metric_unit = r'(cm|centimet(?:er|re)s?|m|met(?:er|re)s?)\b'
-    for pattern in (
-        r'\b(\d{1,3}(?:\.\d+)?)\s*' + metric_unit + r'\s*(?:wide\s+)?(?:door(?:way)?|opening|entrance)\b',
-        r'\b(?:door(?:way)?|entrance|opening)\b(?:\s+(?:opening|width|clearance|is|measures|at|only|just|about|exactly|still|now)|\s*[:=]){0,6}\s*(\d{1,3}(?:\.\d+)?)\s*' + metric_unit,
-    ):
-        for match in re.finditer(pattern, raw, re.I):
-            if _negated_measurement(raw, match.start()) or not _is_customer_doorway(raw, match.start(), match.end()):
-                continue
-            if re.match(r'\s*(?:tall|high)\b', raw[match.end():], re.I):
-                continue
-            value = float(match.group(1)) * (100 if match.group(2).lower() in {'m', 'meter', 'meters', 'metre', 'metres'} else 1) / 2.54
-            door_values.append((match.start(), value))
+        users = _retain_person_measurements(raw, weights, out.get('user_weights_lb'))
+        out['user_weights_lb'] = json.dumps(users, sort_keys=True, separators=(',', ':'))
+        out['weight_lb'] = f'{max(users.values()):g}'
+    door_values = _doorway_measurements(raw)
     if door_values:
-        value = max(door_values)[1]
+        # Different doors along one delivery route must all be cleared. An
+        # explicit correction supersedes the older measurement in this turn.
+        correction = bool(re.search(r'\b(?:actually|correction|correcting|remeasured|instead|not|now)\b', raw, re.I))
+        value = max(door_values)[1] if correction else min(width for _, width in door_values)
         if 0 < value <= 1000:
             out['doorway_in'] = f'{value:g}'
             if out.get('space') != 'Small Room':
                 out['space'] = 'Narrow Doorway'
-    if re.search(r"\b(?:assembled[ -]only|fully assembled|no disassembly|without\s+(?:any\s+)?disassembl\w*|without\s+(?:taking|pulling)\s+(?:it|the chair|anything)\s+apart|(?:can(?:not|'t)|do not|don't)\s+(?:be\s+)?disassembl\w*)\b", raw, re.I):
+    if re.search(r"\b(?:assembled[ -]only|fully assembled|no disassembly|without\s+(?:any\s+)?disassembl\w*|without\s+(?:taking|pulling)\s+(?:it|the chair|anything)\s+apart|(?:can(?:not|'t)|do not|don't)\s+(?:(?:safely|be)\s+)?(?:disassembl\w*|remove\s+(?:the\s+|my\s+)?(?:chair['’]s\s+)?side\s+panels?))\b", raw, re.I):
         out['doorway_fit'] = 'assembled'
     elif re.search(r"\b(?:ok(?:ay)?\s+to\s+disassembl\w*|allow\s+disassembly|disassembly\s+(?:is\s+)?(?:ok(?:ay)?|fine|allowed)|(?:i|we)\s+can\s+take\s+(?:it|the chair)\s+apart|(?:i|we)(?:'m|\s+am|\s+are)?\s+(?:ok(?:ay)?|fine)\s+with\s+disassembl\w*)\b", raw, re.I):
         out['doorway_fit'] = 'disassembled'
@@ -199,23 +323,35 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
             out['space'] = 'No Space Constraint'
     budgets = []
     contextual_budgets = []
-    for match in re.finditer(r"\$\s*(\d[\d,]*(?:\.\d+)?)\s*(k\b)?|(?<![\w.])(\d+(?:\.\d+)?)\s*k\b|\b(?:budget|under|up to|maximum|max|no more than)\s*(?:is\s*|of\s*|now\s*)?\$?\s*(\d[\d,]*(?:\.\d+)?)\s*(k\b)?", raw, re.I):
+    for match in re.finditer(r"\$\s*(\d[\d,]*(?:\.\d+)?)\s*(k\b)?|(?<![\w.])(\d+(?:\.\d+)?)\s*k\b|\b(?:budget|under|up to|maximum|max|no more than)\s*(?:(?:is|of|now|USD)\s*)*\$?\s*(\d[\d,]*(?:\.\d+)?)\s*(k\b)?|\bUSD\s+(\d[\d,]*(?:\.\d+)?)|(?<![\w.])(\d[\d,]*(?:\.\d+)?)\s*(?:USD|dollars?)\b", raw, re.I):
         if _negated_measurement(raw, match.start()):
             continue
-        if re.match(r'\s*(?:lbs?|pounds?|kgs?|kilograms?|cm|centimet(?:er|re)s?|inches|inch|feet|ft|[2345]?d)\b', raw[match.end():], re.I):
+        if re.match(r'\s*(?:lbs?|pounds?|kgs?|kilograms?|stone|cm|centimet(?:er|re)s?|mm|millimet(?:er|re)s?|inches|inch|feet|ft|[2345]?d)\b', raw[match.end():], re.I):
             continue
-        value = float((match.group(1) or match.group(3) or match.group(4)).replace(',', ''))
+        prefix = raw[max(0, match.start()-5):match.start()]
+        if re.search(r'\b(?:CAD|AUD|CA|AU)\s*$', prefix, re.I) or re.search(r'\b(?:C|A)$', prefix) or re.match(r'\s*(?:CAD|AUD|EUR|GBP|KRW|JPY)\b', raw[match.end():], re.I):
+            continue
+        value = float((match.group(1) or match.group(3) or match.group(4) or match.group(6) or match.group(7)).replace(',', ''))
         if match.group(2) or match.group(3) or match.group(5):
             value *= 1000
-        if 0 <= value <= 50000:
+        if math.isfinite(value) and 0 <= value:
             budgets.append((match.start(), value))
             if match.group(4):
                 contextual_budgets.append((match.start(), value))
+    number_words = '|'.join((*_SPOKEN_NUMBERS, 'hundred', 'thousand', 'and'))
+    for match in re.finditer(r'\b(?:budget|under|up to|maximum|max|no more than)\s*(?:(?:is|of|now|USD)\s+)*(?P<amount>(?:' + number_words + r')\b(?:[\s-]+(?:' + number_words + r')\b){0,13})(?:(?:US\s+)?dollars?\b|USD\b)?', raw, re.I):
+        words = match.group('amount').strip().rstrip('-')
+        if words and not _negated_measurement(raw, match.start()) and any(word in _SPOKEN_NUMBERS for word in re.split(r'[\s-]+', words.lower())):
+            value = _spoken_amount(words)
+            budgets.append((match.start(), value))
+            contextual_budgets.append((match.start(), value))
     if budgets:
         out['budget_max_usd'] = f'{max(contextual_budgets or budgets)[1]:g}'
-    if re.search(r"\b(?:no budget (?:limit|cap)|unlimited budget|budget (?:is )?unlimited)\b", raw, re.I):
+    if re.search(r"\b(?:no budget (?:limit|cap)|unlimited budget|budget (?:is )?unlimited|budget\s+(?:is\s+)?(?:no longer\s+(?:a\s+)?|not\s+a\s+)(?:restriction|constraint|limit|concern|issue))\b", raw, re.I):
         out['budget_max_usd'] = ''
+        out['budget'] = ''
     excluded = set(filter(None, out.get('excluded_mechanisms', '').split(',')))
+    positive_mechanisms = []
     for match in re.finditer(r"\b([2345])\s*D\b", raw, re.I):
         mechanism = match.group(1) + 'D'
         if _negated_preference(raw, match.start()):
@@ -224,7 +360,16 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
                 out.pop('mechanism')
         else:
             out['mechanism'] = mechanism
+            positive_mechanisms.append(mechanism)
             excluded.discard(mechanism)
+    alternatives = re.search(r'\b([2345])\s*d\s+or\s+([2345])\s*d\b', raw, re.I)
+    if alternatives and not _negated_preference(raw, alternatives.start()):
+        allowed = {alternatives.group(1) + 'D', alternatives.group(2) + 'D'}
+        out['allowed_mechanisms'] = ','.join(sorted(allowed))
+        out['mechanism'] = ''
+        excluded.difference_update(allowed)
+    elif positive_mechanisms:
+        out['allowed_mechanisms'] = ''
     if excluded or 'excluded_mechanisms' in out:
         out['excluded_mechanisms'] = ','.join(sorted(excluded))
     intensity = intensity_preference(raw)
@@ -259,8 +404,11 @@ def product_constraint_issues(product, constraints: Mapping[str, str], *, price_
     price = price_usd if price_usd is not None else getattr(product, 'price_usd', None)
     if cap and (price is None or float(price) > float(cap)):
         issues.append('budget')
-    mechanism = constraints.get('mechanism')
+    allowed = set(filter(None, constraints.get('allowed_mechanisms', '').lower().split(',')))
+    mechanism = constraints.get('mechanism') if not allowed else None
     if mechanism and mechanism.lower() not in str(getattr(product, 'massage_mechanism', '')).lower():
+        issues.append('mechanism')
+    if allowed and not any(value in str(getattr(product, 'massage_mechanism', '')).lower() for value in allowed):
         issues.append('mechanism')
     excluded = set(filter(None, constraints.get('excluded_mechanisms', '').lower().split(',')))
     if any(value in str(getattr(product, 'massage_mechanism', '')).lower() for value in excluded):

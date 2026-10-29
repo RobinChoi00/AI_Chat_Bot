@@ -18,6 +18,7 @@ from typing import Optional
 from sales_catalog import (
     ProductSpecs,
     RecommendationRequest,
+    _generation_normalized,
     _score,
     list_active_products,
     parse_recommendation_hints,
@@ -183,7 +184,7 @@ def _compact(text: str) -> str:
 
 
 def _tokens(text: str) -> tuple[str, ...]:
-    raw = (text or "").lower().replace("2.0", "20")
+    raw = re.sub(r"\b(\d+)\.(\d+)\b", r"\1\2", (text or "").lower())
     out: list[str] = []
     for token in re.findall(r"[a-z0-9]+", raw):
         if token in _BRAND_TOKENS:
@@ -264,6 +265,11 @@ def product_by_handle(handle: str) -> Optional[ProductSpecs]:
 
 def clean_compare_term(text: str) -> str:
     raw = (text or "").strip(" ?,.")
+    # Conversational framing and the recipient are context, not model names.
+    raw = re.sub(r"^(?:i|we)\s+(?:want|need|would\s+like)\s+to\s+(?=compare\b)", "", raw, flags=re.I)
+    raw = re.sub(r"^(?:the\s+)?(?:two\s+)?(?:exact\s+)?models?\s+are\s+", "", raw, flags=re.I)
+    raw = re.sub(r"\s*[.;!?]\s*(?:please\s+)?compare\s+only\s+(?:those|these|them|the\s+same\s+two)\b.*$", "", raw, flags=re.I)
+    raw = re.sub(r"\s+for\s+(?:my|our)\s+(?:father|mother|dad|mom|parents?|wife|husband|partner|spouse|family)\b.*$", "", raw, flags=re.I)
     raw = re.split(r"[.!?;]\s+(?=(?:my|our|i\b|we\b|budget\b|maximum\b))", raw, maxsplit=1, flags=re.I)[0]
     # A correction describes the named variants; the rejected mechanism is
     # neither a third model nor a requirement to apply to both chairs.
@@ -369,8 +375,9 @@ def lookup_shop_models(text: str) -> ModelLookup:
     Several matches: ask which family member.
     """
     query = clean_compare_term(text)
-    compact = _compact(query)
-    tokens = _tokens(query)
+    identity_query = _generation_normalized(query)
+    compact = _compact(identity_query)
+    tokens = _tokens(identity_query)
     if len(query) < 2:
         return ModelLookup(query=query, matches=(), vague=True)
     if compact in _VAGUE_COMPACT or (tokens and set(tokens) <= _MECH_TOKENS):

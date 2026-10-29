@@ -114,6 +114,7 @@ from sales_policy import (
     TOPIC_WHITE_GLOVE,
     detect_topic as detect_policy_topic,
     policy_answer,
+    followup_topic as policy_followup_topic,
 )
 
 logger = logging.getLogger(__name__)
@@ -426,6 +427,13 @@ def _guess_model_from_text(text: str) -> Optional[ProductSpecs]:
         ))
     if consistent(product):
         return product
+    if re.search(r"\b\d+\.\d+\b", text or ""):
+        # Do not discard a requested generation when a nickname fallback
+        # recognizes only the older family name.
+        return None
+    pair = split_compare_terms(text or "")
+    if pair and all(resolve_product(part) is not None for part in pair):
+        return None
     # `resolve_product` matches names, not sentences, so "tell me about the
     # Maestro" slips past it. The fallback index knows which catalog token was
     # in the message, so retry with just that name.
@@ -479,7 +487,7 @@ def _resolve_focus_product(
             return named
         # A misspelled explicit mechanism/model must not silently become a
         # different chair through the saved-focus fallback.
-        if re.search(r"\b[2345]D\b", message or "", re.I) and named_model_in_text(message or ""):
+        if re.search(r"\b(?:[2345]D|\d+\.\d+)\b", message or "", re.I) and named_model_in_text(message or ""):
             return None
     idx = _pending_tier_index(message or "", prefs)
     if idx is not None:
@@ -722,6 +730,10 @@ def _handoff_reply(intent: SalesIntent) -> SalesReply:
         intent=intent.label,
         handoff=True,
         handoff_reason=intent.label,
+        prefs_patch=({'sales_support_topic': intent.label, 'awaiting_recommend': False}
+                     if intent.label in {'order_status', 'cancel_refund', 'order_change'} else
+                     {'technical_support_topic': intent.label, 'awaiting_recommend': False}
+                     if intent.label in {'warranty_redirect', 'parts_technician'} else None),
         quick_replies=[
             QuickReply(label="Share my email", payload="lead:email"),
             QuickReply(label="Back to menu", payload="menu"),
@@ -1171,6 +1183,8 @@ def _doorway_fit_reply(
 
 
 _SPEC_QUESTION_PATTERNS: tuple[tuple[re.Pattern[str], str, str], ...] = (
+    (re.compile(r"\bbluetooth\b", re.I), "bluetooth_speakers", "Bluetooth speakers"),
+    (re.compile(r"\bbody[\s-]*scann?(?:ing)?\b", re.I), "body_scanning", "Body scanning"),
     (re.compile(r"\bzero[\s-]?grav", re.I), "zero_gravity", "Zero gravity"),
     (re.compile(r"\bheat(?:ing|er)?\b", re.I), "heating", "Heating"),
     (re.compile(r"\bairbags?\b", re.I), "airbag", "Airbags"),
@@ -1204,6 +1218,10 @@ def _specs_reply(
 ) -> SalesReply:
     product = _resolve_focus_product(message, prefs)
     if product is None:
+        education = _feature_education_reply(message)
+        if education is not None:
+            return education
+    if product is None:
         return SalesReply(
             reply=(
                 "Which model would you like specs for? Type the model name or "
@@ -1217,6 +1235,15 @@ def _specs_reply(
             ],
             tools_used=["catalog.resolve_product"],
         )
+
+    from sales_catalog import product_feature_answer
+    specific_answer = product_feature_answer(product, message)
+    if specific_answer is not None:
+        extra, close_quick, close_patch = _product_closeout(product, domain=domain)
+        return SalesReply(reply=specific_answer + extra, intent=INTENT_SPECS,
+                          quick_replies=[*close_quick, QuickReply(label="Talk to a human", payload="human")],
+                          tools_used=["catalog.resolve_product", "catalog.features"],
+                          products=[product.as_public_dict()], prefs_patch=close_patch)
 
     public = product.as_public_dict()
     specs = public["specs"]
@@ -3202,8 +3229,25 @@ def _compare_recommend_reply(
     )
 
 
-def _intensity_reply(message: str) -> SalesReply:
-    product = _guess_model_from_text(message)
+def _feature_education_reply(message: str) -> Optional[SalesReply]:
+    """Explain general feature terminology without a body-fit interview."""
+    if not re.search(r"\b(?:mean|meaning|explain|what\s+(?:is|are)|how\s+does)\b", message, re.I):
+        return None
+    if re.search(r"\bzero[\s-]*gravity\b", message, re.I):
+        copy = ("**Zero gravity** is a reclined position that raises your legs and changes how your weight is supported. "
+                "The available positions and controls vary by model. Tell me a model name if you would like its published settings.")
+    elif re.search(r"\bbody[\s-]*scann?(?:ing)?\b", message, re.I):
+        copy = ("**Body scanning** uses the chair's sensors to estimate body landmarks so its massage program can position the rollers. "
+                "The scanning method and adjustment range vary by model; it is not a medical examination.")
+    else:
+        return None
+    return SalesReply(reply=copy, intent=INTENT_SPECS, tools_used=["catalog.feature_definition"],
+                      quick_replies=[QuickReply(label="See all models", payload="list"),
+                                     QuickReply(label="Talk to a human", payload="human")])
+
+
+def _intensity_reply(message: str, prefs: Optional[dict] = None) -> SalesReply:
+    product = _resolve_focus_product(message, prefs)
     if product is not None:
         mech = product.massage_mechanism or "adjustable"
         return SalesReply(
@@ -3221,6 +3265,7 @@ def _intensity_reply(message: str) -> SalesReply:
             ],
             tools_used=["catalog.resolve_product"],
             products=[product.as_public_dict()],
+            prefs_patch={"pending_primary": product.display_name},
         )
     return SalesReply(
         reply=(
@@ -3466,12 +3511,18 @@ def _feedback_reply(direction: str, prefs: Optional[dict]) -> Optional[SalesRepl
     )
 
 
-def _prepurchase_policy_reply(message: str, *, domain: str) -> SalesReply:
+def _prepurchase_policy_reply(message: str, *, domain: str, topic: Optional[str] = None) -> SalesReply:
     """Answer a published policy question instead of handing it to a human."""
-    topic = detect_policy_topic(message)
+    topic = topic or detect_policy_topic(message)
     answer = policy_answer(topic, domain, message=message) if topic else None
     if answer is None:
         return _unclear_reply()
+    patch = {"last_policy_topic": topic}
+    named = _guess_model_from_text(message)
+    if topic == TOPIC_SHOWROOM and named is not None:
+        answer = (f"I cannot confirm whether **{named.display_name}** is on the showroom floor today. "
+                  "Please ask Sales to confirm that exact model before you travel.\n\n" + answer)
+        patch.update(_product_closeout(named, domain=domain)[2])
 
     followups = [QuickReply(label="Recommend a chair", payload="recommend")]
     if topic in (TOPIC_SHIPPING, TOPIC_WHITE_GLOVE, TOPIC_REMOTE_SHIPPING):
@@ -3491,6 +3542,7 @@ def _prepurchase_policy_reply(message: str, *, domain: str) -> SalesReply:
         intent=INTENT_PREPURCHASE_POLICY,
         quick_replies=followups,
         tools_used=[f"policy.{topic}"],
+        prefs_patch=patch,
     )
 
 
@@ -4385,6 +4437,12 @@ def _respond_turn(
         if support is not None:
             return _finalize_flow_stage(support)
 
+        previous_policy = policy_followup_topic(message, (prefs or {}).get("last_policy_topic"))
+        early_intent = classify(message or "")
+        if previous_policy and early_intent.label not in HANDOFF_INTENTS - {'eta_shipping'}:
+            return _remember_question(_finalize_flow_stage(
+                _prepurchase_policy_reply(message, domain=domain, topic=previous_policy)), message, payload)
+
     # Awaiting email after "Email me this pick" — capture before other intents.
     if (prefs or {}).get("awaiting_email_for_pick"):
         email = extract_email(message or "")
@@ -4554,6 +4612,17 @@ def _respond_turn(
     if intent.label in HANDOFF_INTENTS:
         return _finalize_flow_stage(_handoff_reply(intent))
 
+    if not payload and (prefs or {}).get('recommend_prefs') and not _guess_model_from_text(message) and re.search(
+        r"\b(?:use|apply|keep)\b.{0,45}\b(?:dimensions|measurements|limits|requirements)\b.{0,35}\b(?:gave|shared|supplied|already|told)\b|"
+        r"\b(?:try|find|show)\b.{0,20}\banother\s+option\b.{0,60}\b(?:fit|match|verified)\b", message or '', re.I,
+    ):
+        return _remember_question(_finalize_flow_stage(_recommend_reply(message, domain=domain, prefs=prefs)), message, payload)
+
+    topical_policy = policy_followup_topic(message, (prefs or {}).get("last_policy_topic")) if not payload else None
+    if topical_policy:
+        return _remember_question(_finalize_flow_stage(
+            _prepurchase_policy_reply(message, domain=domain, topic=topical_policy)), message, payload)
+
     if not payload:
         from sales_context import reply_for_context
         contextual = reply_for_context(message, prefs, domain=domain)
@@ -4561,6 +4630,9 @@ def _respond_turn(
             return _remember_question(_finalize_flow_stage(contextual), message, payload)
 
     waiting = _in_recommend_wait(prefs)
+
+    if intent.label == INTENT_INTENSITY and re.search(r"\?|\b(?:can|does|how|what|which|adjust|settings?)\b", message or '', re.I):
+        return _remember_question(_finalize_flow_stage(_intensity_reply(message, prefs)), message, payload)
 
     constraints = extract_constraints(message or '')
     if constraints and ((prefs or {}).get('recommend_prefs') or waiting) and (
@@ -4761,7 +4833,7 @@ def _respond_turn(
         )
     if intent.label == INTENT_INTENSITY:
         return _remember_question(
-            _finalize_flow_stage(_intensity_reply(message)),
+            _finalize_flow_stage(_intensity_reply(message, prefs)),
             message,
             payload,
         )
@@ -4779,8 +4851,10 @@ _TRANSIENT_FLOW_KEYS = (
 
 def _retain_shopper_constraints(message: str, data: dict, intent: Optional[SalesIntent]) -> dict:
     """Keep explicit fit answers even when the turn routes to policy or a person."""
-    exact = extract_constraints(message)
     previous = dict(data.get('recommend_prefs') or {})
+    explicit = extract_constraints(message)
+    combined = extract_constraints(message, previous)
+    exact = {key: combined[key] for key in explicit if key in combined}
     label = intent.label if intent is not None else INTENT_UNCLEAR
     shopper = bool(re.search(r"\b(?:i(?:'m| am| weigh| have)|my|our|we|buyer|user|person|husband|wife|father|mother|dad|mom)\b", message, re.I))
     hints = parse_recommendation_hints(message)
@@ -4801,7 +4875,7 @@ def _retain_shopper_constraints(message: str, data: dict, intent: Optional[Sales
     if not budget_answer:
         exact.pop('budget_max_usd', None)
     mechanism_answer = re.search(r'\b(?:require|need|want|prefer|must have|must be|only)\b.{0,35}\b[2345]\s*D\b', message, re.I) or re.fullmatch(r'\s*[2345]\s*D\s*', message, re.I)
-    if not mechanism_answer:
+    if not mechanism_answer and 'allowed_mechanisms' not in exact:
         exact.pop('mechanism', None)
     if not exact and not body_answer:
         return {}
@@ -4834,6 +4908,14 @@ def respond(message: str, *, payload: Optional[str] = None,
     raw, language = prepare_message(original, data)
     data['conversation_language'] = language
     reset = {}
+    task_switch = re.search(
+        r"\b(?:return|refund|order|support)\b[^.!?;]{0,45}\b(?:finished|done|over|closed|resolved)\b"
+        r"[^.!?;]{0,15}[.!?;]?\s*(?:and\s+)?(?:now|next|instead)\s+(.+)", raw, re.I,
+    )
+    if task_switch and re.search(r"\b(?:pick|choose|recommend|find|buy|shop)\b.{0,45}\b(?:chair|model)\b", task_switch.group(1), re.I):
+        raw = task_switch.group(1)
+        reset.update({'sales_support_topic': '', 'last_policy_topic': '', 'technical_support_topic': ''})
+        data.update(reset)
     intent = classify(raw) if raw and not payload else None
     menu = (payload or '').lower() in {'menu', 'root', 'start', 'start_over'} or (not payload and bool(re.fullmatch(r'(?:back to )?menu|start over|cancel(?: that)?|never mind|nevermind', raw, re.I)))
     currency_caution = currency_scope_message(original, language) if original and not payload else None
@@ -4878,6 +4960,10 @@ def respond(message: str, *, payload: Optional[str] = None,
     else:
         result = _respond_turn(raw, payload=payload, domain=domain, prefs=data, before_handoff=before_handoff)
     patch = {**captured, **reset, **(result.prefs_patch or {})}
+    if data.get('last_policy_topic') and result.intent not in {INTENT_PREPURCHASE_POLICY, INTENT_UNCLEAR}:
+        patch['last_policy_topic'] = ''
+    if data.get('technical_support_topic') and result.intent not in {'warranty_redirect', 'parts_technician', INTENT_UNCLEAR}:
+        patch['technical_support_topic'] = ''
     if data.get('sales_support_topic') and result.intent not in {'order_status', 'cancel_refund', 'order_change', INTENT_UNCLEAR}:
         # A later shopping/form task owns its own follow-ups. An earlier order
         # question must not consume the new task's contact email.

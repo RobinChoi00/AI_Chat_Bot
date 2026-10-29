@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from customer_safety import detect_customer_language, reported_safety_hazard
+from customer_safety import detect_customer_language, reported_safety_hazard, requested_customer_language
 
 
 # Sales shoppers commonly discuss back pain or ask about treatment. The shared
@@ -24,7 +24,7 @@ def interrupt_sales_for_safety(message: str, prefs: dict):
     from warranty_scope import support_contact
 
     original = str(prefs.get('sales_safety_report') or '') or message[:2000]
-    language = str(prefs.get('sales_safety_language') or detect_customer_language(original))
+    language = requested_customer_language(message) or str(prefs.get('sales_safety_language') or detect_customer_language(original))
     if language not in {'en', 'ko', 'es'}:
         language = 'en'
     business_text = re.sub(r'[\w.+-]+@[\w.-]+\.[a-z]{2,}|https?://[^\s<>]+', '', message, flags=re.I)

@@ -1118,6 +1118,41 @@ def _quick_start_ticket(
     return payload
 
 
+def _require_single_model_name(model: str) -> None:
+    """Keep a customer's alternative model guesses unconfirmed."""
+    if re.search(r"\b(?:or|either|versus|vs)\b|또는|아니면", model, re.I):
+        raise HTTPException(status_code=422, detail=(
+            "Please enter one chair model from its product label. "
+            "If you are unsure which model you have, ask for help identifying it before confirming."
+        ))
+
+
+def _model_identification_help_payload(engine, session_id: str, message: str) -> Optional[Dict[str, Any]]:
+    """Answer a label-location question without storing it as a model name."""
+    raw = message.replace("’", "'")
+    model_label = r"(?:model\s+(?:number|name|label)|serial(?:[ -]number)?\s+(?:label|sticker|number)|serial\s+number|(?:model|serial)[ -]number\s+sticker)"
+    if not re.search(
+        rf"\b(?:where|how)\b[^.!?\n]{{0,40}}\b(?:find|locate|look|read)\b[^.!?\n]{{0,45}}\b{model_label}\b|"
+        rf"\bwhere(?:'s|\s+is|\s+are)\s+(?:the\s+|my\s+)?{model_label}\b|"
+        rf"\b(?:can't|cannot|couldn't|could not)\s+find\s+(?:the\s+|my\s+)?{model_label}\b",
+        raw, re.I,
+    ):
+        return None
+    ticket = engine.get_active_session_ticket(session_id)
+    ticket_id = str(ticket.ticket_id) if ticket is not None else ""
+    node = engine.get_current_node(ticket_id) if ticket_id else None
+    payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    payload["assistant_message"] = (
+        "Look for the model name on the serial-number sticker on the chair base, "
+        "but check it only if it is visible and easy to reach. "
+        "You can use **Snap a photo of the serial sticker** to help read a visible label. "
+        "Do not lift, tip, or open the chair to find it. "
+        "If the label is inaccessible or unreadable, ask for a person to help identify your chair."
+    )
+    payload["model_help"] = True
+    return payload
+
+
 def _register_model_ticket(
     engine,
     session_id: str,
@@ -1133,6 +1168,9 @@ def _register_model_ticket(
     human_reason = _support_interrupt_reason(raw)
     if human_reason:
         return _request_human_handoff(engine, session_id, raw, domain, reason=human_reason)
+    model_help = _model_identification_help_payload(engine, session_id, raw)
+    if model_help is not None:
+        return model_help
 
     if is_order_cancel_request(raw):
         return _escalate_order_cancel_to_warranty_team(
@@ -1145,6 +1183,7 @@ def _register_model_ticket(
     from warranty_intake_context import is_valid_model_input, normalize_model_input  # noqa: WPS433
 
     raw = normalize_model_input(raw)
+    _require_single_model_name(raw)
     if not is_valid_model_input(raw):
         raise HTTPException(
             status_code=422,
@@ -1811,6 +1850,57 @@ def _submit_answer_with_nlp(
         return None, False, build_clarifying_workflow_message_safe(node, answer), None
 
 
+def _recover_explicit_component_correction(engine, ticket_id: str, answer: str) -> bool:
+    """Replay a confirmed repair path when the customer clearly corrects its part.
+
+    Only the existing component menu is eligible; ambiguous corrections and
+    terminal/review cases never change a diagnostic branch automatically.
+    The full conversation remains in its separate message log.
+    """
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None or str(ticket.status) != "in_progress" or str(ticket.issue_type) != "defect":
+        return False
+    node = engine.get_current_node(ticket_id) or {}
+    if str(node.get("node_id") or "") == "defect_problem_type" or node.get("type") == "terminal" or node.get("is_terminal"):
+        return False
+    if not re.search(r"^\s*no\b|\b(?:actually|instead|wrong|not\s+(?:an?\s+)?(?:airbag|inflation|power|remote|heating|recline|footrest|cosmetic)\s+(?:problem|issue))\b", answer, re.I):
+        return False
+
+    from warranty_nlp import _heuristic_option_match
+    from warranty_workflow import _NODES
+
+    choices = list((_NODES.get("defect_problem_type") or {}).get("options") or [])
+    corrected = _heuristic_option_match(choices, answer)
+    previous = str(ticket.defect_type or "")
+    if not corrected or corrected == previous:
+        return False
+    turns = engine.get_turns(ticket_id)
+    if not any(str(turn.node_id) == "defect_problem_type" for turn in turns):
+        return False
+    collected = ticket.get_collected()
+    corrections = list(collected.get("workflow_corrections") or [])
+    corrections.append({"previous_component": previous, "corrected_component": corrected,
+                        "customer_text": answer[:1000], "created_at": _now_cst_iso(),
+                        "previous_checks": [{"node_id": str(turn.node_id),
+                                             "customer_answer": str(turn.customer_answer or "")[:1000]}
+                                            for turn in turns if str(turn.node_id).startswith("defect_")][-20:]})
+    for _ in turns:
+        current = engine.get_current_node(ticket_id) or {}
+        if str(current.get("node_id") or "") == "defect_problem_type":
+            break
+        if not engine.can_go_back(ticket_id):
+            return False
+        engine.go_back(ticket_id)
+    current_ticket = engine.get_ticket(ticket_id)
+    if current_ticket is not None:
+        for key, value in collected.items():
+            if key.startswith(("customer_", "privacy_", "intake_")):
+                current_ticket.set_collected(key, value)
+        current_ticket.set_collected("workflow_corrections", corrections[-10:])
+        _persist_ticket_row(ticket_id, current_ticket)
+    return str((engine.get_current_node(ticket_id) or {}).get("node_id") or "") == "defect_problem_type"
+
+
 def build_clarifying_workflow_message_safe(node: dict, answer: str) -> str:
     from warranty_nlp import build_clarifying_workflow_message  # noqa: WPS433
 
@@ -2429,7 +2519,7 @@ async def register_warranty_model(
     resolved_model = str(payload.get("resolved_model") or body.model)
     from warranty_intake_context import is_valid_model_input  # noqa: WPS433
 
-    if ticket_id and not payload.get("handoff") and not payload.get("order_cancel_escalated") and is_valid_model_input(resolved_model):
+    if ticket_id and not payload.get("handoff") and not payload.get("order_cancel_escalated") and not payload.get("model_help") and is_valid_model_input(resolved_model):
         from warranty_order_verification import verify_ticket_purchase  # noqa: WPS433
 
         background_tasks.add_task(
@@ -2470,6 +2560,7 @@ async def confirm_warranty_model(
     from warranty_intake_context import is_valid_model_input, normalize_model_input  # noqa: WPS433
 
     corrected = normalize_model_input(str(body.model or ""))
+    _require_single_model_name(corrected or str(ticket.model_name or ""))
     if corrected:
         if not is_valid_model_input(corrected):
             raise HTTPException(status_code=422, detail="Please enter only your chair model, such as OS-4000T.")
@@ -2575,6 +2666,9 @@ async def natural_start_warranty(
     human_reason = _support_interrupt_reason(message)
     if human_reason:
         return _request_human_handoff(_lazy_engine(), session_id, message, body.domain, reason=human_reason)
+    model_help = _model_identification_help_payload(_lazy_engine(), session_id, message)
+    if model_help is not None:
+        return model_help
     if (is_delivery_inquiry(message) or is_obvious_delivery_inquiry(message)) and not is_pre_purchase_shipping_policy(message):
         return _quick_start_ticket(_lazy_engine(), session_id, "delivery", body.domain)
 
@@ -2721,6 +2815,9 @@ async def smart_start_warranty(
     human_reason = _support_interrupt_reason(message)
     if human_reason:
         return _request_human_handoff(_lazy_engine(), session_id, message, body.domain, reason=human_reason)
+    model_help = _model_identification_help_payload(_lazy_engine(), session_id, message)
+    if model_help is not None:
+        return model_help
     if (is_delivery_inquiry(message) or is_obvious_delivery_inquiry(message)) and not is_pre_purchase_shipping_policy(message):
         return _quick_start_ticket(_lazy_engine(), session_id, "delivery", body.domain)
 
@@ -2913,6 +3010,7 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
             domain,
         )
 
+    _recover_explicit_component_correction(engine, ticket_id, answer)
     node = engine.get_current_node(ticket_id)
     if node and node.get("options") and _is_workflow_confusion(answer):
         from warranty_nlp import build_clarifying_workflow_message

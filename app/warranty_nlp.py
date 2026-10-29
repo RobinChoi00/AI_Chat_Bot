@@ -209,6 +209,8 @@ _WEAK_WORDS = frozenset(
 # and only when exactly one current option hits.
 _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
     "power": (
+        "will not turn on",
+        "does not turn on",
         "won't turn on",
         "wont turn on",
         "doesn't turn on",
@@ -240,6 +242,10 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "keeps deflating",
     ),
     "cosmetic": (
+        "torn",
+        "ripped",
+        "torn leather",
+        "torn upholstery",
         "scratch",
         "scratched",
         "crack",
@@ -424,6 +430,7 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
     "bad_connection": (
         "loose cable",
         "connection loose",
+        "connection is loose",
         "bad connection",
         "loose connection",
         "cable is loose",
@@ -496,7 +503,7 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
     ),
     "no_air": ("no air coming", "nothing coming out", "no air at all", "no air"),
     "yes_hissing": ("hissing", "i hear air", "hear hissing", "hear air"),
-    "no_hissing": ("no sound", "silent", "no hiss", "no sound at all"),
+    "no_hissing": ("no sound", "silent", "no hiss", "no sound at all", "don't hear hissing", "do not hear hissing"),
     "hose_issue": ("kinked", "disconnected hose", "hose disconnected", "pinched"),
     "hoses_ok": ("hoses look fine", "hose is fine", "hoses are fine"),
     "yes_white_glove": ("white glove", "white-glove"),
@@ -749,6 +756,8 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "outlet has no power",
         "wall outlet dead",
         "outlet not working",
+        "outlet is not working",
+        "outlet does not work",
         "no power at the outlet",
         "outlet doesn't work",
     ),
@@ -826,12 +835,95 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
 
 
 def _normalize(text: str) -> str:
-    return " ".join(text.strip().lower().split())
+    return " ".join(text.replace("’", "'").strip().lower().split())
+
+
+def _option_contradicts_customer(key: str, text: str) -> bool:
+    """Exclude a rejected diagnosis from both mapping and did-you-mean copy.
+
+    Negating a failed function ("not inflating") still reports a malfunction.
+    Rejecting the diagnosis ("not an airbag problem") does not.
+    """
+    norm = _normalize(text)
+    topics = {
+        "air": r"(?:airbags?|air bags?|air|inflation)",
+        "cosmetic": r"(?:cosmetic|appearance|upholstery)",
+        "remote": r"(?:remote|controller)",
+        "power": r"(?:power|electrical)",
+        "heat": r"(?:heat|heating|temperature)",
+        "rolling": r"(?:rollers?|rolling|massage mechanism)",
+        "recline": r"(?:recline|reclining)",
+        "footrest": r"(?:footrest|foot rest|legrest)",
+        "voice": r"(?:voice|voice control)",
+    }
+    topic = topics.get(key)
+    if topic and re.search(
+        rf"\b(?:not|isn't|is not|wasn't|was not)\s+(?:an?\s+)?{topic}\s+(?:problem|issue|failure|damage)\b|"
+        rf"\bno\s+(?:problem|issue|damage)\s+(?:with|to)\s+(?:the\s+)?{topic}\b|"
+        rf"\b{topic}\s+(?:(?:is|are|seems?|looks?)\s+)?(?:working\s+(?:fine|normally)|fine|normal|okay|ok)\b",
+        norm,
+    ):
+        return True
+    if key in {"fuse_broken", "fuse_blown"}:
+        if re.search(r"\bfuse\b[^.;!?]{0,20}\b(?:not|isn't|is not)\s+(?:intact|fine|good|okay|ok|normal)\b", norm):
+            return False
+        return bool(re.search(
+            r"\bfuse\b[^.;!?]{0,24}\b(?:intact|fine|good|okay|ok|normal|not\s+(?:blown|broken)|isn't\s+(?:blown|broken))\b|"
+            r"\b(?:not\s+(?:a\s+)?blown|not\s+broken|good|intact)\s+fuse\b", norm,
+        ))
+    if key in {"clicking_sound", "back_switch_sound"}:
+        return bool(re.search(r"\bno\s+(?:click(?:ing)?|sound)|\b(?:didn't|did not|don't|do not|cannot|can't)\s+hear\s+(?:any\s+|a\s+)?click|\b(?:silent|silence)\b", norm))
+    if key in {"yes_hissing", "pump_running"}:
+        return bool(re.search(r"\bno\s+(?:hiss(?:ing)?|sound)|\b(?:don't|do not|can't|cannot)\s+hear\b", norm))
+    if key in {"powercord_issue", "bad_connection"}:
+        if re.search(r"\b(?:cord|cable|plug|connection)\b[^.;!?]{0,20}\b(?:not|isn't|is not)\s+(?:secure|firm|connected|fine|okay|ok|good)\b", norm):
+            return False
+        return bool(re.search(r"\b(?:cord|cable|plug|connection)(?:\s+(?:is|are|looks?|seems?|appears?|feels?|still|now|already|properly)){0,4}\s+(?:secure(?:ly)?|firm(?:ly)?|fine|okay|ok|good|not\s+loose)\b", norm))
+    if key == "outlet_no_power":
+        if re.search(r"\boutlet\b[^.;!?]{0,20}\b(?:no|not|doesn't|does not|isn't)\b", norm):
+            return False
+        return bool(re.search(r"\boutlet\b[^.;!?]{0,20}\b(?:works?|working|has\s+power|fine|okay|ok|good)\b", norm))
+    if key == "blank_screen_commands_ok":
+        return bool(re.search(r"\b(?:buttons?|commands?)\b[^.;!?]{0,18}\b(?:not|don't|do not|doesn't|does not|unresponsive|fail)", norm))
+    return False
+
+
+def _compatible_options(options: list[dict], text: str) -> list[dict]:
+    return [option for option in options if not _option_contradicts_customer(str(option.get("answer_key") or ""), text)]
+
+
+def _explicit_check_result(options: list[dict], norm: str) -> Optional[str]:
+    """Use stated results together; never infer a failed fuse from its mention."""
+    valid = {str(option.get("answer_key") or "") for option in options}
+    if "no_clicking" in valid and re.search(r"\bno\s+click(?:ing)?\b|\b(?:didn't|did not|don't|do not|cannot|can't)\s+hear\s+(?:any\s+|a\s+)?click", norm):
+        return "no_clicking"
+    if "all_checked_ok" in valid and _option_contradicts_customer("fuse_broken", norm) and _option_contradicts_customer("bad_connection", norm) and not re.search(r"\b(?:loose|disconnected)\b", norm):
+        return "all_checked_ok"
+    if "still_no_heat" in valid and re.search(r"\bstill\s+(?:cold|not\s+warm|no\s+heat|no\s+warmth)\b", norm) and re.search(r"\b(?:heat|heating|run|ran|minutes?|warm.?up)\b", norm):
+        return "still_no_heat"
+    if "no_power" in valid and re.search(r"\b(?:remote|screen|display|controller)\b[^.;!?]{0,25}\b(?:black|blank|dead|off)\b", norm) and not re.search(r"\b(?:buttons?|commands?)\s+(?:still\s+)?(?:work|respond)", norm):
+        return "no_power"
+    return None
 
 
 def _keyword_issue_type(text: str) -> Optional[str]:
     """Cheap keyword vote before calling the LLM."""
     norm = _normalize(text)
+    if re.search(r"\b(?:how\s+(?:do|can)\s+i\s+(?:assemble|install|attach)|help\s+(?:with\s+)?installing|need\s+(?:help\s+)?(?:assembling|installing))\b", norm):
+        return "installation"
+    if re.search(
+        r"\bbluetooth\b[^.!?\n]{0,45}\b(?:will\s+not|won't|does\s+not|doesn't|cannot|can't)\s+(?:pair|connect)\b|"
+        r"\b(?:i\s+need\s+help\s+with|my\s+chair\s+has)\b[^.!?\n]{0,25}\bbluetooth\s+(?:connection\s+)?(?:fault|problem|failure)\b",
+        norm,
+    ):
+        return "defect"
+    if re.search(
+        r"\b(?:will\s+not|does\s+not|won't|doesn't)\s+(?:turn\s+on|start|work|respond|recline)|"
+        r"\b(?:stopped\s+working|shuts?\s+off|torn|ripped|not\s+getting\s+warm|clicking\s+noise)\b|"
+        r"의자[^.!?]{0,15}작동하지|리모컨[^.!?]{0,15}안\s*켜|"
+        r"\b(?:silla\s+no\s+enciende|airbags?\s+no\s+se\s+inflan)\b", norm,
+    ):
+        return "defect"
     if re.search(r"\bbox\b", norm) and re.search(
         r"\b(broken|crushed|damaged|dented)\b", norm
     ):
@@ -862,6 +954,7 @@ def _phrase_in_norm(phrase: str, norm: str) -> bool:
 
 def _synonym_option_match(options: list[dict], norm: str) -> Optional[str]:
     """Unique synonym hit among the current node's answer_keys."""
+    options = _compatible_options(options, norm)
     valid = {
         str(opt.get("answer_key") or "")
         for opt in options
@@ -874,6 +967,10 @@ def _synonym_option_match(options: list[dict], norm: str) -> Optional[str]:
         if any(_phrase_in_norm(phrase, norm) for phrase in phrases):
             hits.append(key)
     uniq = list(dict.fromkeys(hits))
+    # An explicit negative result is more specific than the positive word it
+    # contains ("no clicking" also contains "clicking").
+    if "no_clicking" in uniq:
+        return "no_clicking"
     if len(uniq) == 1:
         return uniq[0]
     # Foot/calf rollers are a footrest path, not the rolling mechanism.
@@ -922,6 +1019,10 @@ def _heuristic_option_match(options: list[dict], text: str) -> Optional[str]:
     norm = _normalize(text)
     if not norm:
         return None
+    options = _compatible_options(options, norm)
+    explicit = _explicit_check_result(options, norm)
+    if explicit:
+        return explicit
 
     for opt in options:
         label = _normalize(str(opt.get("label", "")))
@@ -1072,6 +1173,10 @@ def suggest_closest_option(options: list[dict], text: str) -> Optional[dict]:
     norm = _normalize(text)
     if not norm or not options:
         return None
+    options = _compatible_options(options, norm)
+    mapped = _heuristic_option_match(options, text)
+    if mapped:
+        return next((option for option in options if option.get("answer_key") == mapped), None)
 
     best: Optional[dict] = None
     best_score = 0
@@ -1331,7 +1436,7 @@ def interpret_warranty_answer(node: dict, user_text: str) -> Optional[str]:
     if node_type == "question_text":
         return text
 
-    options = node.get("options") or []
+    options = _compatible_options(list(node.get("options") or []), text)
     if not options:
         return None
 
