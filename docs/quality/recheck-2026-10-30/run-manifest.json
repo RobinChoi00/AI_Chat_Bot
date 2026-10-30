@@ -1,0 +1,74 @@
+{
+  "client_recheck_date": "2026-10-30",
+  "client_timezone": "America/Chicago",
+  "generated_at_utc": "2026-10-30T15:52:49.030398+00:00",
+  "application_commit": "b43d3e7c0ce361002e235f1d3077c2ce85eaac93",
+  "app_source_sha256": "098f011ef2b14aeec1e21e12d240ffe4ccd169f80a3d45e1db2c195d2e37378e",
+  "application_or_evaluator_edits": false,
+  "case_and_journey_result_rows": 585,
+  "continued_customer_actions": 190,
+  "continued_text_replies": 185,
+  "continued_status_only_responses": 5,
+  "continued_checkpoint_rows": 515,
+  "live_model_score": null,
+  "suites": {
+    "fixed-v1": {
+      "exit_code": 0,
+      "same_result_statuses_as_previous_improved_run": true,
+      "source_matches_current_application": true,
+      "evaluator_fingerprint": "22ed861927bd7d74a4c334c61033521fca7c99aa640993179ab2ef74351a93b0"
+    },
+    "broad-v2": {
+      "exit_code": 1,
+      "same_result_statuses_as_previous_improved_run": true,
+      "source_matches_current_application": true,
+      "evaluator_fingerprint": "e3ae7cbdb06de591659fd3921b91f0befd1e12938d8a93a4fdb3e4cd78e3ed78"
+    },
+    "everyday-v3": {
+      "exit_code": 0,
+      "same_result_statuses_as_previous_improved_run": true,
+      "source_matches_current_application": true,
+      "evaluator_fingerprint": "e79d16fffc21a3939c5ae5be20cd336fd6d5b9ca65c5719a912ee55f6f214eb0"
+    },
+    "continued-v4": {
+      "exit_code": 1,
+      "same_result_statuses_as_previous_improved_run": true,
+      "source_matches_current_application": true,
+      "evaluator_fingerprint": "6f33ec884d81d1b6943f7a5094b25f40db64cd304fdf4fb54f74816d00dc0ae2"
+    }
+  },
+  "files": {
+    "CONVERSATIONS.md": {
+      "bytes": 103279,
+      "sha256": "3444a249877974ed3952f76f508b720e0b31e0e2afde3a8885933506e49df515"
+    },
+    "REPORT.md": {
+      "bytes": 11609,
+      "sha256": "39f91691963c296aaaa2ec335893804c0cacdf863714f5dbbcfcd4fdd38825f4"
+    },
+    "broad-v2.json": {
+      "bytes": 1020322,
+      "sha256": "38d9f8f08010f7be1f35e466b20b8fdb0f71bedd642922483d66f14bc6ed7ac5"
+    },
+    "continued-checkpoints.csv": {
+      "bytes": 439203,
+      "sha256": "02e6f71d023d80d7fb9ad80cf56ee116d1cc12b745213a41fb2c5d058fb629d2"
+    },
+    "continued-v4.json": {
+      "bytes": 1865883,
+      "sha256": "2077a6ea466c7bdbc46b35d24aec6403377349b74254e791abf35c962470be68"
+    },
+    "everyday-v3.json": {
+      "bytes": 1854196,
+      "sha256": "f3d41a39ecbb4e4f615111ea7bcd00f26bf873e56030499522af31ffa6d19ed5"
+    },
+    "fixed-v1.json": {
+      "bytes": 41836,
+      "sha256": "f37bafc7122a83de06e6ba63034771536f05cb3c8abe9d03783b6ac2f745ad53"
+    },
+    "results.csv": {
+      "bytes": 217723,
+      "sha256": "7c7fa7a0235e23605efec2de2f8db77928fcb70ad3d3b09021fa500c812adeb0"
+    }
+  }
+}

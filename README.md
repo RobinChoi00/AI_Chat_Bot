@@ -53,6 +53,10 @@ CI runs these gates, builds both container images, and blocks remediable high/cr
 
 ## AI quality workflow
 
+The [2026-10-30 simulation recheck (English)](docs/quality/recheck-2026-10-30/REPORT.md)
+lists fresh results for all four suites, with a CSV of every case/journey,
+checkpoint evidence, and continued-conversation transcripts.
+
 The [customer chat improvement report (English)](docs/quality/CUSTOMER_CHAT_IMPROVEMENTS.en.md)
 describes the follow-up Warranty, product identity, Sales context, fit and safety
 changes, with a comparison using the original evaluation criteria. The reports
