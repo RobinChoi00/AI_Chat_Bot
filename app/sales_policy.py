@@ -444,6 +444,10 @@ def detect_topic(text: str) -> Optional[str]:
             # Assembled/disassembled dimensions describe fit, not a request
             # for an installation or delivery service.
             continue
+        if topic == TOPIC_WHITE_GLOVE and re.search(r"(?<!dis)assembled\b", raw, re.I) and re.search(
+            r"\b(?:doors?|doorway|opening|entrance|narrower|wider|width|\d{2}(?:\.\d+)?\s*(?:\"|in\b|inch(?:es)?|cm))", raw, re.I,
+        ) and not re.search(r"\b(?:white[\s-]*glove|assembly|install\w*|set\s*it\s*up|put\s+it\s+together)\b", raw, re.I):
+            continue
         if pattern.search(raw):
             return topic
     return None
@@ -599,6 +603,17 @@ def _showroom_answer(domain: str, message: str = "") -> str:
         extra.append(
             "Sunday isn't listed in the published hours, so I won't promise "
             "we're open that day."
+        )
+    window = re.search(
+        r"\b(monday|tuesday|wednesday|thursday|friday|saturday)s?\b(?:\s+(morning|afternoon|evening|midday|noon))?",
+        raw, re.I,
+    )
+    if window and re.search(r"\b(?:prefer\w*|works?|best|would\s+like|want|plan\w*|visit|come|window|available)\b", raw, re.I):
+        day = window.group(1).capitalize()
+        when = f"{day} {window.group(2).lower()}" if window.group(2) else day
+        extra.append(
+            f"Noted: your preferred visit window is **{when}**. Compare it with the published hours above, "
+            "and share it with **Request a visit** so Sales can confirm a time; it is not booked yet."
         )
     if re.search(r"pick\s*up|\bpickup\b", raw, re.I):
         extra.append(

@@ -169,6 +169,9 @@ def format_defaults_note(applied: list[str], prefs: dict[str, str]) -> Optional[
         bits.append(f"foot {prefs['foot'].lower()}")
     if not bits:
         return None
+    if "intensity" in applied and prefs.get("intensity") == "Strong":
+        return (f"_Assumed {', '.join(bits)} — strong pressure is only a starting guess for back focus. "
+                "Type *gentle* or *medium* if you prefer lighter pressure, or say if anything else should change._")
     return f"_Assumed {', '.join(bits)} — say if that should change._"
 
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from functools import lru_cache
 from typing import Mapping
 
 
@@ -32,6 +33,65 @@ def _negated_measurement(text: str, start: int) -> bool:
         r"(?:do\s+not|don't|never)\s+(?:use|save|assume|set|count))\s*(?:a\s+)?$",
         prefix, re.I,
     ))
+
+
+_MECHANISM_TOKEN = re.compile(r"\b[2345]\s*D\b", re.I)
+_MECHANISM_GROUP = re.compile(r"\b([2345]D)\s*\+\s*([2345]D)\b", re.I)
+_GENERIC_NAME_WORDS = frozenset({
+    '', '+', '-', 'a', 'an', 'the', 'and', 'or', 'osaki', 'titan', 'amamedic', 'ador', 'kanji',
+    'platinum', 'pro', 'os', 'op', 'tp', 'ai', 'series', 'massage', 'chair', 'chairs', 'model',
+    'made', 'in', 'japan', 'my', 'your', 'this', 'that', 'is', 'it', 'with',
+})
+
+
+def _name_tokens(text: str) -> list[str]:
+    return _MECHANISM_GROUP.sub(r'\1+\2', text or '').split()
+
+
+def _edge_word(token: str, *, last: bool) -> str:
+    parts = [part for part in re.split(r'-', token.lower().strip(".,;:!?()[]\"'")) if part]
+    return (parts[-1] if last else parts[0]) if parts else ''
+
+
+@lru_cache(maxsize=1)
+def _model_name_neighbors() -> frozenset[str]:
+    """Words next to a mechanism inside published model names (Epic, Maestro, XL)."""
+    try:
+        from sales_catalog import list_active_products
+        names = [product.display_name for product in list_active_products()]
+    except Exception:
+        return frozenset()
+    words = set()
+    for name in names:
+        tokens = _name_tokens(name)
+        for index, token in enumerate(tokens):
+            if not _MECHANISM_TOKEN.search(token):
+                continue
+            if index:
+                words.add(_edge_word(tokens[index - 1], last=True))
+            if index + 1 < len(tokens):
+                words.add(_edge_word(tokens[index + 1], last=False))
+    return frozenset(words - _GENERIC_NAME_WORDS - {'2d', '3d', '4d', '5d'})
+
+
+def _model_name_mechanism_spans(text: str) -> list[tuple[int, int]]:
+    """Character spans of 2D–5D tokens that belong to a model name, not a preference."""
+    neighbors = _model_name_neighbors()
+    spans = []
+    tokens = list(re.finditer(r'\S+', text or ''))
+    for index, match in enumerate(tokens):
+        token = match.group()
+        if not _MECHANISM_TOKEN.search(token):
+            continue
+        attached = bool(re.search(r'[a-z]-[2345]d', token, re.I))
+        prev_word = _edge_word(tokens[index - 1].group(), last=True) if index else ''
+        next_word = _edge_word(tokens[index + 1].group(), last=False) if index + 1 < len(tokens) else ''
+        joined = next_word in {'+'} and index + 2 < len(tokens) and _MECHANISM_TOKEN.search(tokens[index + 2].group())
+        if joined:
+            next_word = _edge_word(tokens[index + 3].group(), last=False) if index + 3 < len(tokens) else ''
+        if attached or prev_word in neighbors or next_word in neighbors:
+            spans.append((match.start(), match.end()))
+    return spans
 
 
 def _negated_preference(text: str, start: int) -> bool:
@@ -162,6 +222,9 @@ def _person_label(text: str, start: int) -> str:
         r"i|i'm|me|myself|my\s+(?:body\s+)?(?:height|weight))\b",
         prefix, re.I,
     ))
+    # "for my father, not for myself" — a negated person is not the user.
+    labels = [match for match in labels
+              if not re.search(r"\bnot\s+(?:for\s+|to\s+|by\s+)?$", prefix[:match.start()], re.I)]
     label = labels[-1].group().lower() if labels else 'user'
     return {'dad': 'father', 'mom': 'mother', "i'm": 'self', 'i': 'self', 'me': 'self', 'myself': 'self',
             'my weight': 'self', 'my body weight': 'self', 'my height': 'self',
@@ -315,6 +378,13 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
                 out['space'] = 'Narrow Doorway'
     if re.search(r"\b(?:assembled[ -]only|fully assembled|no disassembly|without\s+(?:any\s+)?disassembl\w*|without\s+(?:taking|pulling)\s+(?:it|the chair|anything)\s+apart|(?:can(?:not|'t)|do not|don't)\s+(?:(?:safely|be)\s+)?(?:disassembl\w*|remove\s+(?:the\s+|my\s+)?(?:chair['’]s\s+)?side\s+panels?))\b", raw, re.I):
         out['doorway_fit'] = 'assembled'
+    elif not re.search(r'disassembl|apart\b', raw, re.I) and out.get('doorway_in') and re.search(
+        r"\b(?:has|have|needs?|must)\s+to\s+(?:go|come|fit)\s+(?:in|through)\s+assembled\b|"
+        r"\b(?:go|goes|fit|fits)\s+(?:in|through)\s+(?:fully\s+)?assembled\b|"
+        r"\b\d{2}(?:\.\d+)?\s*(?:\"|in\b|inch(?:es)?\b)\s*,?\s*(?:wide\s*,?\s*)?assembled\b|"
+        r"\b(?:door(?:way)?|opening|entrance)\b.{0,30}\b\d{2}(?:\.\d+)?\s*(?:\"|in\b|inch(?:es)?\b).{0,20}\bassembled\b", raw, re.I,
+    ):
+        out['doorway_fit'] = 'assembled'
     elif re.search(r"\b(?:ok(?:ay)?\s+to\s+disassembl\w*|allow\s+disassembly|disassembly\s+(?:is\s+)?(?:ok(?:ay)?|fine|allowed)|(?:i|we)\s+can\s+take\s+(?:it|the chair)\s+apart|(?:i|we)(?:'m|\s+am|\s+are)?\s+(?:ok(?:ay)?|fine)\s+with\s+disassembl\w*)\b", raw, re.I):
         out['doorway_fit'] = 'disassembled'
     if re.search(r'\b(?:no\s+(?:doorway|door)\s+(?:limit|constraint)|doorway\s+(?:is\s+)?(?:not|no longer)\s+a\s+constraint)\b', raw, re.I):
@@ -352,7 +422,10 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
         out['budget'] = ''
     excluded = set(filter(None, out.get('excluded_mechanisms', '').split(',')))
     positive_mechanisms = []
+    name_spans = _model_name_mechanism_spans(raw)
     for match in re.finditer(r"\b([2345])\s*D\b", raw, re.I):
+        if any(start <= match.start() < end for start, end in name_spans):
+            continue
         mechanism = match.group(1) + 'D'
         if _negated_preference(raw, match.start()):
             excluded.add(mechanism)
@@ -363,6 +436,8 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
             positive_mechanisms.append(mechanism)
             excluded.discard(mechanism)
     alternatives = re.search(r'\b([2345])\s*d\s+or\s+([2345])\s*d\b', raw, re.I)
+    if alternatives and any(start <= alternatives.start() < end or start <= alternatives.end() - 1 < end for start, end in name_spans):
+        alternatives = None
     if alternatives and not _negated_preference(raw, alternatives.start()):
         allowed = {alternatives.group(1) + 'D', alternatives.group(2) + 'D'}
         out['allowed_mechanisms'] = ','.join(sorted(allowed))

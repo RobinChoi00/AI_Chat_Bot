@@ -751,6 +751,11 @@ def _fit_request(req: RecommendationRequest) -> RecommendationRequest:
     )
 
 
+def fit_score(product: ProductSpecs, req: RecommendationRequest) -> float:
+    """Body/goal fit used to rank chairs that already passed every hard limit."""
+    return _score(product, _fit_request(req))
+
+
 def _recommend_across_tiers(req: RecommendationRequest) -> list[ProductSpecs]:
     """Pick the best active chair in each Value / Mid / Premium price shelf."""
     fit_req = _fit_request(req)

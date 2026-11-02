@@ -95,7 +95,9 @@ def _is_greeting(text: str) -> bool:
         return False
     if _GREETING_EN_RE.match(raw):
         return True
-    if _GREETING_KO_RE.search(raw):
+    if _GREETING_KO_RE.search(raw) and not re.search(
+        r"의자|추천|가격|얼마|재고|배송|마사지|안마|상담원|담당자|연결|비교|[A-Za-z]{4,}", raw,
+    ):
         return True
     # Tidio Flow sometimes posts the unsubstituted `{{visitor_question}}` chip.
     if _TIDIO_TEMPLATE_RE.fullmatch(raw):

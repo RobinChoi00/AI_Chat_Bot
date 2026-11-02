@@ -30,7 +30,9 @@ from sales_catalog import (
     ProductSpecs,
     RecommendationRequest,
     color_is_listed,
+    _PRICE_TIERS as PRICE_TIERS,
     compare_products,
+    fit_score,
     is_public_browse_pick,
     list_active_products,
     looks_like_color_question,
@@ -1479,7 +1481,26 @@ def _clarify_doorway_fit(prefs: dict[str, str]) -> SalesReply:
 
 
 
+def _hard_limits_rule_out_catalog(prefs: dict[str, str]) -> bool:
+    """True when the customer's explicit limits alone exclude every active chair."""
+    explicit = {key: prefs[key] for key in ("budget_max_usd", "weight_lb", "mechanism", "excluded_mechanisms",
+                                            "allowed_mechanisms", "doorway_in", "doorway_fit") if prefs.get(key)}
+    if explicit.get("doorway_in") == "skip":
+        explicit.pop("doorway_in")
+    if not any(key in explicit for key in ("budget_max_usd", "weight_lb", "mechanism", "doorway_in")):
+        return False
+    modes = [explicit] if explicit.get("doorway_fit") or "doorway_in" not in explicit else [
+        {**explicit, "doorway_fit": mode} for mode in ("assembled", "disassembled")
+    ]
+    return not any(
+        product.price_usd is not None and not _product_gate_misses(product, limits)
+        for product in list_active_products() for limits in modes
+    )
+
+
 def _clarify_recommend(missing: str, prefs: dict[str, str]) -> SalesReply:
+    if missing != "doorway_in" and _hard_limits_rule_out_catalog(prefs):
+        return _no_fit_recommend_reply(prefs)
     patch = {"recommend_prefs": prefs, "awaiting_recommend": True}
     stage = f"ask_{missing}" if missing in {
         "height", "weight", "goal", "intensity", "foot", "space", "doorway_in",
@@ -1770,6 +1791,120 @@ def _choose_tier_pick(
     return best[3], best[4], best[5], best[6], best[7]
 
 
+def _product_gate_misses(product: ProductSpecs, prefs: dict[str, str]) -> list[str]:
+    """Every hard limit a chair misses, using the same gates as the tier picks."""
+    misses = list(dict.fromkeys(product_constraint_issues(product, prefs)))
+    name = product.display_name
+    if not weight_ok(name, prefs.get("weight") or "") and "weight_capacity" not in misses:
+        misses.append("weight_capacity")
+    if not wall_ok(name, prefs.get("space") or ""):
+        misses.append("space")
+    limit = _doorway_limit_in(prefs)
+    if not doorway_ok(name, limit_in=limit, mode=_doorway_fit_mode(prefs)) and "doorway" not in misses:
+        misses.append("doorway")
+    return misses
+
+
+def _verified_catalog_picks(
+    prefs: dict[str, str],
+    *,
+    request: RecommendationRequest,
+    domain: str,
+) -> list[tuple[ProductSpecs, Optional[LiveStockSnapshot]]]:
+    """Best active chair per price shelf that clears every saved limit (whole catalog)."""
+    passing = [
+        product for product in list_active_products()
+        if product.price_usd is not None and not _product_gate_misses(product, prefs)
+    ]
+    if not passing:
+        return []
+    lookups = [(p.handle, p.title or p.display_name) for p in passing]
+    snapshots: dict = {}
+    for start in range(0, len(lookups), 32):
+        snapshots.update(fetch_stock_many(lookups[start:start + 32], domain=domain, fetcher=fetch_live_stock))
+    shelves: dict[str, list[tuple]] = {}
+    for product in passing:
+        snap = snapshots.get(product.handle)
+        live_price = getattr(snap, "price_usd", None) if snap else None
+        if product_constraint_issues(product, prefs, price_usd=live_price):
+            continue
+        price = live_price if live_price is not None else product.price_usd
+        tier = price_tier_label(price) or ""
+        shelves.setdefault(tier, []).append(
+            (_stock_rank(snap), -fit_score(product, request), price, product.display_name, product, snap)
+        )
+    picks = []
+    for label, _, _ in PRICE_TIERS:
+        rows = sorted(shelves.get(label, []), key=lambda row: row[:4])
+        if rows:
+            picks.append((rows[0][4], rows[0][5]))
+    return picks
+
+
+def _published_doorway(product: ProductSpecs, mode: str) -> Optional[float]:
+    fit = lookup_fit_spec(product.display_name)
+    return fit.doorway_for_mode(mode) if fit else None
+
+
+def _miss_phrase(product: ProductSpecs, miss: str, prefs: dict[str, str]) -> str:
+    if miss == "budget":
+        cap = float(prefs.get("budget_max_usd") or 0)
+        return f"{_fmt_price(product.price_usd)} is above your ${cap:,.0f} budget"
+    if miss == "weight_capacity":
+        fit = lookup_fit_spec(product.display_name)
+        cap = getattr(fit, "max_user_lb", None) if fit else None
+        need = prefs.get("weight_lb") or prefs.get("weight") or "your saved weight"
+        if cap:
+            return f"lists a {cap:g} lb maximum user weight (you need {need} lb)"
+        return "has no published maximum user weight"
+    if miss == "doorway":
+        mode = _doorway_fit_mode(prefs)
+        width = _published_doorway(product, mode)
+        door = prefs.get("doorway_in") or ""
+        label = "with disassembly" if mode == "disassembled" else "assembled"
+        if width is not None:
+            return f'needs a {width:g}" doorway {label} (yours is {door}")'
+        return f"has no published {label} doorway width"
+    if miss == "mechanism":
+        listed = product.massage_mechanism or "an unlisted mechanism"
+        wanted = prefs.get("mechanism") or prefs.get("allowed_mechanisms") or "mechanism"
+        return f"is {listed}, not the {wanted} you asked for"
+    if miss == "excluded_mechanism":
+        return f"is {product.massage_mechanism}, which you ruled out"
+    if miss == "space":
+        return "does not have a verified small-room wall clearance"
+    return "misses one saved limit"
+
+
+def _closest_catalog_misses(prefs: dict[str, str], *, limit: int = 3) -> list[tuple[ProductSpecs, str]]:
+    """Active chairs that miss exactly one saved limit, closest gap first."""
+    rows = []
+    for product in list_active_products():
+        if product.price_usd is None:
+            continue
+        misses = _product_gate_misses(product, prefs)
+        if len(misses) != 1:
+            continue
+        miss = misses[0]
+        gap = 1.0
+        if miss == "budget" and prefs.get("budget_max_usd"):
+            cap = float(prefs["budget_max_usd"])
+            gap = (product.price_usd - cap) / cap if cap else 1.0
+        elif miss == "doorway" and _doorway_limit_in(prefs):
+            width = _published_doorway(product, _doorway_fit_mode(prefs))
+            if width is not None:
+                gap = (width - _doorway_limit_in(prefs)) / _doorway_limit_in(prefs)
+        elif miss == "weight_capacity" and prefs.get("weight_lb"):
+            fit = lookup_fit_spec(product.display_name)
+            cap = getattr(fit, "max_user_lb", None) if fit else None
+            need = float(prefs["weight_lb"])
+            if cap:
+                gap = (need - cap) / need
+        rows.append((gap, product.price_usd, product.display_name, product, miss))
+    rows.sort(key=lambda row: row[:3])
+    return [(row[3], _miss_phrase(row[3], row[4], prefs)) for row in rows[:limit]]
+
+
 def _no_fit_recommend_reply(
     prefs: dict[str, str],
     *,
@@ -1782,7 +1917,7 @@ def _no_fit_recommend_reply(
     if prefs.get('mechanism'):
         bits.append(f"a **{prefs['mechanism']} mechanism**")
     if prefs.get('weight_lb'):
-        bits.append(f"a verified capacity of at least **{prefs['weight_lb']} lb**")
+        bits.append(f"a published capacity of at least **{prefs['weight_lb']} lb**")
     door = (prefs.get("doorway_in") or "").strip()
     if door and door != "skip":
         mode = _doorway_fit_mode(prefs)
@@ -1800,15 +1935,21 @@ def _no_fit_recommend_reply(
         bits.append("**small-room** wall clearance")
     constraint = ", ".join(bits) if bits else "your fit answers"
     lines = [
-        f"I couldn't find a chair that safely clears **{constraint}** "
-        "in our current Value / Mid / Premium set.",
+        f"I checked every active chair, and none clears all of these published limits: {constraint}.",
         "",
+    ]
+    closest = _closest_catalog_misses(prefs)
+    if closest:
+        lines.append("Closest chairs — each misses only one limit:")
+        lines.extend(f"• **{product.display_name}** — {phrase}" for product, phrase in closest)
+        lines.append("")
+    lines.extend([
         "You can:",
-        "• Widen the doorway estimate or allow **disassembly**",
+        "• Adjust the limit that blocks the closest chair (budget, doorway or disassembly)",
         "• Relax the space constraint",
         "• Talk to a specialist for custom delivery options",
         "",
-    ]
+    ])
     defaults_note = format_defaults_note(defaults_applied or [], prefs)
     if defaults_note:
         lines.append(defaults_note)
@@ -1928,11 +2069,40 @@ def _tiered_case_recommend_reply(
             }
         )
 
+    catalog_scan = False
+    if not picked:
+        for product, snap in _verified_catalog_picks(prefs, request=request, domain=domain):
+            if snap is not None:
+                stock_checked = True
+            url = product_page_url(domain, (snap.handle if snap and snap.handle else None) or product.handle)
+            live_price = getattr(snap, "price_usd", None) if snap is not None else None
+            show_price = live_price if live_price is not None else product.price_usd
+            picked.append(
+                {
+                    "tier": price_tier_label(show_price) or "Price not verified",
+                    "pick_name": product.display_name,
+                    "product": product,
+                    "snap": snap,
+                    "doorway_in": _published_doorway(product, _doorway_fit_mode(prefs)),
+                    "badge": stock_badge(snap) if snap is not None else None,
+                    "url": url,
+                    "display": product.display_name,
+                    "show_price": show_price,
+                    "price": _fmt_live_price(snap, product.price_usd),
+                    "reason": "",
+                }
+            )
+        catalog_scan = bool(picked)
     if not picked:
         return _no_fit_recommend_reply(prefs, defaults_applied=defaults_applied)
 
     count_label = '1 option' if len(picked) == 1 else f'{len(picked)} options'
     header = f"Based on **{fit_label}**, here are {count_label} within the verified constraints:"
+    if catalog_scan:
+        header += (
+            "\n\n_The usual shortlist for this profile missed at least one of your limits, "
+            "so I checked every active chair against them._"
+        )
 
     blurbs = _contrast_tier_blurbs(
         [row["product"] for row in picked],
@@ -2021,6 +2191,8 @@ def _tiered_case_recommend_reply(
     # Keep 1–3 as the tier picks after Tidio button ranking/cap.
 
     tools = ["cases.lookup", "cases.tiered", "catalog.resolve_product", "cta.product_url"]
+    if catalog_scan:
+        tools.append("catalog.verified_scan")
     if stock_checked:
         tools.append("shopify.inventory")
 
@@ -3250,13 +3422,34 @@ def _intensity_reply(message: str, prefs: Optional[dict] = None) -> SalesReply:
     product = _resolve_focus_product(message, prefs)
     if product is not None:
         mech = product.massage_mechanism or "adjustable"
-        return SalesReply(
-            reply=(
+        per_zone = re.search(
+            r"\b(?:different|separate(?:ly)?|independent(?:ly)?|individual(?:ly)?|per[\s-]*(?:zone|area|part)|each\s+(?:zone|area|part))\b"
+            r".{0,60}\b(?:strength|intensity|pressure|setting)s?\b|\b(?:strength|intensity|pressure)\b.{0,40}\bthan\b.{0,25}\bfor\s+my\b|"
+            r"\b(?:strength|intensity|pressure)\b.{0,25}\b(?:separately|independently|individually|differently)\b",
+            message or "", re.I,
+        )
+        adjustable = re.search(r"\b(?:adjust(?:able|ment)?|change|levels?|settings?|control)\b", message or "", re.I)
+        if per_zone:
+            body = (
+                f"Not verified: the published specs for **{product.display_name}** do not say whether you can set a different "
+                "strength for one area (like the calves) than another (like the back). I won't assume per-zone or independent "
+                "intensity control. A specialist can confirm the remote's settings, or you can try it in the showroom."
+            )
+        elif adjustable:
+            body = (
+                f"Adjustable intensity is not listed in the published specs for **{product.display_name}**, so I can't confirm "
+                f"how many levels it has or how it is adjusted. It is listed with a **{mech} mechanism**, but that label alone "
+                "does not describe the strength settings. A specialist can confirm them, or you can try it in the showroom."
+            )
+        else:
+            body = (
                 f"**{product.display_name}** is listed with a **{mech} mechanism**. "
                 "The exact intensity levels and pressure range are not verified in this catalog. "
                 "A mechanism label alone does not establish how strong it will feel. "
                 "A specialist can confirm this model's settings, or you can try it in the showroom."
-            ),
+            )
+        return SalesReply(
+            reply=body,
             intent=INTENT_INTENSITY,
             quick_replies=[
                 QuickReply(label="Check the price", payload=f"price:{product.handle}"),
@@ -3546,7 +3739,38 @@ def _prepurchase_policy_reply(message: str, *, domain: str, topic: Optional[str]
     )
 
 
-def _unclear_reply() -> SalesReply:
+def _unclear_reply(prefs: Optional[dict] = None) -> SalesReply:
+    """Generic menu, or a reminder of what this conversation is already about."""
+    data = prefs or {}
+    from sales_context import _pair_from_prefs
+
+    pair = _pair_from_prefs(data) if data.get("last_rateable_intent") == "compare" else None
+    picks = [product for product in (_product_from_tier_pick(pick) for pick in data.get("pending_tier_picks") or []
+                                     if isinstance(pick, dict)) if product is not None]
+    focus = list(pair) if pair else picks or [p for p in [_focus_product_from_prefs(data)] if p]
+    if focus:
+        rec = dict(data.get("recommend_prefs") or {})
+        limits = []
+        if rec.get("budget_max_usd"):
+            limits.append(f"under ${float(rec['budget_max_usd']):,.0f}")
+        if rec.get("doorway_in") and rec["doorway_in"] != "skip":
+            limits.append(f"{rec['doorway_in']}\" doorway ({rec.get('doorway_fit') or 'assembled'})")
+        if rec.get("weight_lb"):
+            limits.append(f"{rec['weight_lb']} lb user")
+        names = " and ".join(f"**{product.display_name}**" for product in focus[:3])
+        lead = "We're comparing" if pair else "We're looking at"
+        saved = f" with your saved limits ({', '.join(limits)})" if limits else ""
+        return SalesReply(
+            reply=(
+                f"I didn't catch what you'd like next. {lead} {names}{saved}. "
+                "You can ask about price, doorway width, capacity or a feature, ask for a new recommendation, "
+                "or type *start over*."
+            ),
+            intent=INTENT_UNCLEAR,
+            quick_replies=[QuickReply(label=product.display_name, payload=f"specs:{product.handle}") for product in focus[:3]]
+            + [QuickReply(label="Talk to a human", payload="human")],
+            tools_used=["conversation.product_context"],
+        )
     return SalesReply(
         reply=(
             "I can help with a recommendation, a price, specs, stock, or "
@@ -4431,7 +4655,12 @@ def _respond_turn(
     # Order support and delivery evidence must not be mistaken for a form
     # answer, a recommendation, or a technical fault inferred from ownership.
     if not payload and not before_handoff:
+        from sales_followups import dual_task_reply
         from sales_order_support import maybe_sales_support_reply
+
+        dual = dual_task_reply(message, prefs or {})
+        if dual is not None:
+            return _remember_question(_finalize_flow_stage(dual), message, payload)
 
         support = maybe_sales_support_reply(message, prefs, domain=domain)
         if support is not None:
@@ -4609,12 +4838,23 @@ def _respond_turn(
             payload,
         )
 
+    if not payload and intent.label not in HANDOFF_INTENTS:
+        from sales_followups import followup_reply
+        followup = followup_reply(message, prefs, domain=domain)
+        if followup is not None:
+            return _remember_question(_finalize_flow_stage(followup), message, payload)
+
     if intent.label in HANDOFF_INTENTS:
-        return _finalize_flow_stage(_handoff_reply(intent))
+        reply = _handoff_reply(intent)
+        if intent.label == 'warranty_redirect':
+            from sales_followups import owner_case_patch
+            reply.prefs_patch = {**(reply.prefs_patch or {}), **owner_case_patch(message, prefs or {})}
+        return _finalize_flow_stage(reply)
 
     if not payload and (prefs or {}).get('recommend_prefs') and not _guess_model_from_text(message) and re.search(
         r"\b(?:use|apply|keep)\b.{0,45}\b(?:dimensions|measurements|limits|requirements)\b.{0,35}\b(?:gave|shared|supplied|already|told)\b|"
-        r"\b(?:try|find|show)\b.{0,20}\banother\s+option\b.{0,60}\b(?:fit|match|verified)\b", message or '', re.I,
+        r"\b(?:try|find|show)\b.{0,20}\banother\s+option\b.{0,60}\b(?:fit|match|verified)\b|"
+        r"\bwhat\s+else\b.{0,30}\b(?:fits?|matches|works?)\b|\b(?:other|more)\s+(?:options|chairs|models)\b.{0,30}\b(?:fit|match)\b", message or '', re.I,
     ):
         return _remember_question(_finalize_flow_stage(_recommend_reply(message, domain=domain, prefs=prefs)), message, payload)
 
@@ -4839,7 +5079,7 @@ def _respond_turn(
         )
 
     return _remember_question(
-        _finalize_flow_stage(_unclear_reply()), message, payload
+        _finalize_flow_stage(_unclear_reply(prefs)), message, payload
     )
 
 
@@ -4959,6 +5199,12 @@ def respond(message: str, *, payload: Optional[str] = None,
         result = _finalize_flow_stage(result)
     else:
         result = _respond_turn(raw, payload=payload, domain=domain, prefs=data, before_handoff=before_handoff)
+    if raw and not payload and result.intent == INTENT_RECOMMEND and 'conversation.dual_task' not in result.tools_used:
+        from sales_followups import new_purchase_note
+        note = new_purchase_note(raw, data)
+        if note:
+            result.reply = note + "\n\n" + result.reply
+            result.prefs_patch = {**(result.prefs_patch or {}), 'owner_case_acknowledged': True}
     patch = {**captured, **reset, **(result.prefs_patch or {})}
     if data.get('last_policy_topic') and result.intent not in {INTENT_PREPURCHASE_POLICY, INTENT_UNCLEAR}:
         patch['last_policy_topic'] = ''

@@ -204,7 +204,8 @@ def scenarios():
         ("budget-rises", "Actually my maximum budget is now $6000.", {"budget_max_usd": 6000}),
         ("weight-corrects", "Correction: I weigh 290 pounds, not 170 pounds.", {"weight_lb": 290}),
         ("height-corrects", "Actually the buyer is six feet four inches.", {"height_in": 76}),
-        ("door-narrows", "My doorway is actually 28 inches wide.", {"doorway_in": 28}),
+        ("door-narrows", "My doorway is actually 22 inches wide.", {"doorway_in": 22}),
+        ("door-narrows-fit", "My doorway is actually 28 inches wide.", {"doorway_in": 28}),
         ("gentle-to-strong", "I prefer firm massage now, not gentle pressure.", {"intensity": "Strong"}),
         ("strong-to-medium", "I prefer medium pressure, not firm pressure.", {"intensity": "Balanced"}),
     ]:

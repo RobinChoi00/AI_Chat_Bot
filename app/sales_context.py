@@ -27,12 +27,118 @@ _WAREHOUSE = re.compile(
 )
 _PAIR_REF = re.compile(
     r"\b(?:which|either|both|these(?:\s+two)?|those(?:\s+two)?|between\s+(?:them|the\s+two)|"
+    r"their|them|each\s+(?:one|model|chair)|the\s+(?:same\s+)?two(?:\s+(?:models|chairs))?|"
     r"first\s+(?:one|chair|model)|second\s+(?:one|chair|model))\b", re.I,
 )
+_KEEP_PAIR = re.compile(
+    r"\b(?:keep|stay\s+with|stick\s+(?:with|to)|continue\s+with)\b.{0,25}\b(?:the\s+)?(?:same\s+(?:two|2|pair)|(?:these|those)\s+two|both)\b|"
+    r"\bonly\s+(?:compare\s+)?(?:these|those|the)\s+two\b|\b(?:don't|do\s+not)\s+(?:choose|pick|add|suggest)\s+(?:another|a\s+different|other)\b", re.I,
+)
+_SIDE_BY_SIDE = re.compile(r"\b(?:together|side[\s-]by[\s-]side|summar(?:y|i[sz]e)|table|line\s+(?:them\s+)?up|in\s+one\s+place)\b", re.I)
+
+
+def _pair_referenced(raw, data):
+    """Loose pronouns (their/them) only refer to the pair right after a comparison."""
+    refs = [match.group(0).lower() for match in _PAIR_REF.finditer(raw or '')]
+    if any(ref not in {'their', 'them'} for ref in refs):
+        return True
+    return bool(refs) and data.get('last_rateable_intent') == 'compare'
+
+
+def _count_in(value):
+    match = re.search(r'\b(\d+)\b', value or '')
+    if match:
+        return int(match.group(1))
+    words = {'one': 1, 'single': 1, 'two': 2, 'dual': 2, 'three': 3, 'tri': 3, 'four': 4, 'five': 5, 'six': 6}
+    word = re.search(r'\b(one|single|two|dual|three|tri|four|five|six)\b|\b(tri|dual)-', (value or '').lower())
+    return words[word.group(1) or word.group(2)] if word else None
+
+
+def _pair_verdicts(message, pair, rec):
+    """Direct one-line answers for objective "which of the two" questions."""
+    lines = []
+    fits = [lookup_fit_spec(product.display_name) for product in pair]
+    names = [product.display_name for product in pair]
+    if re.search(r'\b(?:more|most|fewer|less)\b.{0,20}\b(?:foot\s*rollers?|rollers?)\b', message, re.I):
+        counts = [_count_in(product.foot_roller) for product in pair]
+        if None in counts:
+            lines.append('A foot-roller count is not published for both models, so I cannot say which has more.')
+        elif counts[0] == counts[1]:
+            lines.append(f'Both list the same number of foot rollers ({counts[0]}).')
+        else:
+            more = 0 if counts[0] > counts[1] else 1
+            fewer = 1 - more
+            lines.append(f"**{names[more]}** has more foot rollers: {counts[more]} vs {counts[fewer]} on {names[fewer]}.")
+    door_ask = re.search(r'\b(?:smaller|narrower|smallest|narrowest|less|least|tighter)\b.{0,30}\b(?:door(?:way)?|opening|width)\b|'
+                         r'\b(?:door(?:way)?|opening)\b.{0,30}\b(?:smaller|narrower|less)\b', message, re.I)
+    if door_ask:
+        mode = 'disassembled' if re.search(r'\bdisassembl', message, re.I) else 'assembled'
+        widths = [fit.doorway_for_mode(mode) if fit else None for fit in fits]
+        if None in widths:
+            lines.append(f'A {mode} doorway width is not published for both models, so I cannot rank them.')
+        elif widths[0] == widths[1]:
+            lines.append(f'Both list the same {mode} doorway width ({widths[0]:g} in).')
+        else:
+            small = 0 if widths[0] < widths[1] else 1
+            lines.append(f"**{names[small]}** needs the smaller {mode} doorway: {widths[small]:g} in vs "
+                         f"{widths[1 - small]:g} in for {names[1 - small]}.")
+    weight_ask = re.search(r'\b(?:support|supports|hold|holds|handle|capacity|rated)\b', message, re.I)
+    weight = None
+    stated = re.search(r'(?<!\d)(\d{2,3})\s*(?:lbs?|pounds?)\b', message, re.I)
+    if weight_ask and stated:
+        weight = float(stated.group(1))
+    elif weight_ask and rec.get('weight_lb'):
+        weight = float(rec['weight_lb'])
+    if weight is not None:
+        caps = [fit.max_user_lb if fit else None for fit in fits]
+        ok = [name for name, cap in zip(names, caps) if cap is not None and cap >= weight]
+        detail = ', '.join(f"{name} {cap:g} lb" if cap is not None else f"{name} not published" for name, cap in zip(names, caps))
+        if len(ok) == 2:
+            lines.append(f"Both publish a capacity that supports **{weight:g} lb** ({detail}).")
+        elif ok:
+            lines.append(f"Only **{ok[0]}** publishes a capacity that supports **{weight:g} lb** ({detail}).")
+        else:
+            lines.append(f"Neither publishes a capacity that supports **{weight:g} lb** ({detail}).")
+    return lines
+
+
+def _pair_side_by_side_reply(pair, rec, *, intro):
+    from sales_agent import SalesReply, QuickReply, _fmt_price, _spec_customer_value
+    left, right = pair
+    fits = [lookup_fit_spec(product.display_name) for product in pair]
+
+    def fit_value(fit, attr, unit):
+        value = getattr(fit, attr, None) if fit else None
+        return f'{value:g}{unit}' if value is not None else 'not published'
+
+    rows = [
+        ('Price', _fmt_price(left.price_usd), _fmt_price(right.price_usd)),
+        ('Mechanism / track', f"{left.massage_mechanism or 'not listed'} / {left.track_type or 'not listed'}",
+         f"{right.massage_mechanism or 'not listed'} / {right.track_type or 'not listed'}"),
+        ('Foot rollers', _spec_customer_value(left.foot_roller) or 'not listed', _spec_customer_value(right.foot_roller) or 'not listed'),
+        ('Max user weight', fit_value(fits[0], 'max_user_lb', ' lb'), fit_value(fits[1], 'max_user_lb', ' lb')),
+        ('Assembled doorway', fit_value(fits[0], 'door_asm_in', ' in'), fit_value(fits[1], 'door_asm_in', ' in')),
+        ('Disassembled doorway', fit_value(fits[0], 'door_dis_in', ' in'), fit_value(fits[1], 'door_dis_in', ' in')),
+    ]
+    lines = [intro, '', f"**{left.display_name}** vs **{right.display_name}**"]
+    lines.extend(f"- **{label}**: {a} vs {b}" for label, a, b in rows)
+    issue_labels = {'budget': 'budget', 'mechanism': 'required mechanism', 'weight_capacity': 'user-weight capacity', 'doorway': 'doorway width'}
+    if any(rec.get(key) for key in ('budget_max_usd', 'weight_lb', 'doorway_in')):
+        lines.append('')
+        for product in pair:
+            issues = product_constraint_issues(product, rec)
+            lines.append(f"- {product.display_name}: " + ('✅ passes your saved limits' if not issues else
+                         '❌ misses your saved ' + ', '.join(issue_labels.get(key, key) for key in issues)))
+    lines.append('\nPublished doorway width is only a width check; turns, stairs and packaging still need confirmation before delivery.')
+    return SalesReply(reply='\n'.join(lines), intent='compare', products=[product.as_public_dict() for product in pair],
+                      tools_used=['catalog.compare', 'conversation.product_context'],
+                      quick_replies=[QuickReply(label=product.display_name, payload=f'specs:{product.handle}') for product in pair]
+                      + [QuickReply(label='Talk to a human', payload='human')],
+                      prefs_patch={'pending_compare_pair': [product.handle for product in pair], 'awaiting_compare_recommend': False})
 _OBJECTIVE = re.compile(
     r"\b(?:less\s+money|cheaper|cheap(?:est)?|(?:less|more|least|most)\s+expensive|"
     r"costs?|prices?|budget|door(?:way)?|opening|width|wide|clearance|"
-    r"capacity|weigh(?:t|s)?|heavy|heavier|mass|mechanism|[2345]d|track|(?:foot|calf)\s+rollers?|features?|specs?|"
+    r"capacity|weigh(?:t|s)?|heavy|heavier|mass|supports?|holds?|mechanism|[2345]d|track|(?:foot|calf)\s+rollers?|features?|specs?|"
     r"airbags?|heat(?:ing)?|zero\s+gravity|auto\s+programs?|massage\s+styles?|"
     r"bluetooth|body\s+scann?(?:ing)?|colou?rs?)\b", re.I,
 )
@@ -123,7 +229,11 @@ def _objective_pair_reply(message, pair, prefs, domain):
                     if key in {'doorway_in', 'doorway_fit', 'space'}})
     own_mass = bool(re.search(r"\bweight\s+of\s+(?:the\s+)?chair\b|\bchair(?:['’]s)?\s+(?:own\s+)?weight\b|\bheavier\s+to\s+(?:move|carry)\b|\bchair\s+(?:itself\s+)?weigh", message, re.I)
                     or re.search(r'\b(?:weighs?|weight|heavy|heavier|mass)\b', message, re.I) and re.search(r'\b(?:chair|product)\s+(?:itself|mass)\b', message, re.I))
-    lines = ["For the two models we are comparing:"]
+    if re.search(r"\bI(?:\s+(?:weigh|am)|['’]m)\b.{0,12}\d{2,3}\s*(?:lbs?|pounds?)\b", message, re.I):
+        rec.update({key: value for key, value in extract_constraints(message, rec).items()
+                    if key in {'weight_lb', 'user_weights_lb'}})
+    verdicts = [] if own_mass else _pair_verdicts(message, pair, rec)
+    lines = (verdicts + [""] if verdicts else []) + ["For the two models we are comparing:"]
     if own_mass:
         lines.append("The chair's own weight is not verified in this catalog, so I cannot determine which chair is heavier to move. Maximum user-weight capacity measures the person sitting in it; it is not the chair's mass.")
     eligible = []
@@ -297,6 +407,16 @@ def reply_for_context(message: str, prefs: dict | None, *, domain: str):
         replacement = _replace_compared_model(raw, pair, data, domain)
         if replacement is not None:
             return replacement
+        terms = split_compare_terms(raw)
+        named_pair = bool(terms) and all(lookup_shop_models(term).matches for term in terms)
+        if _guess_model_from_text(raw) is None and not named_pair:
+            rec = dict(data.get('recommend_prefs') or {})
+            if _KEEP_PAIR.search(raw):
+                return _pair_side_by_side_reply(
+                    pair, rec, intro=f"I'll keep comparing only **{pair[0].display_name}** and **{pair[1].display_name}**; "
+                                     "I won't swap in another chair.")
+            if _SIDE_BY_SIDE.search(raw) and _pair_referenced(raw, data):
+                return _pair_side_by_side_reply(pair, rec, intro="Here are both models side by side:")
 
     terms = split_compare_terms(raw)
     # A valid named pair takes priority over a single-name spec fallback. Use
@@ -343,7 +463,7 @@ def reply_for_context(message: str, prefs: dict | None, *, domain: str):
     # comparison. The retained pair is for referential follow-ups only.
     question = re.split(r'[.!?]\s+', raw)[-1]
     named_only_in_background = question != raw and _PAIR_REF.search(question) and _guess_model_from_text(question) is None
-    if pair and (named is None or named_only_in_background) and _PAIR_REF.search(raw) and not re.search(r'\b(?:new\s+search|start\s+over|other\s+models?|different\s+models?)\b', raw, re.I):
+    if pair and (named is None or named_only_in_background) and _pair_referenced(raw, data) and not re.search(r'\b(?:new\s+search|start\s+over|other\s+models?|different\s+models?)\b', raw, re.I):
         if _OBJECTIVE.search(raw):
             return _objective_pair_reply(raw, pair, data, domain)
         if re.search(r'\b(?:better|choose|pick|recommend|right\s+for|should\s+i)\b', raw, re.I):
