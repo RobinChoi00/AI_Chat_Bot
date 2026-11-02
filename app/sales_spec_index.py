@@ -112,6 +112,55 @@ def load_spec_index() -> dict[str, ModelFitSpec]:
     return out
 
 
+_ROMAN = {"ii": "2", "iii": "3", "iv": "4"}
+# Brand / line prefixes that shop titles add or drop; they never tell two models apart.
+_NON_DISTINCTIVE = frozenset({
+    "osaki", "titan", "platinum", "amamedic", "kanji", "theramedic", "ador", "os", "op",
+    "massage", "chair", "the", "series", "vending",
+})
+
+
+def _name_words(text: str) -> list[str]:
+    words = re.findall(r"[a-z0-9]+", (text or "").lower())
+    return [_ROMAN.get(word, word) for word in words]
+
+
+@lru_cache(maxsize=1)
+def _word_candidates() -> tuple[tuple[frozenset, bool, ModelFitSpec], ...]:
+    """(distinctive words of one published name or alias, active?, its spec)."""
+    index = load_spec_index()
+    by_name = {spec.name: spec for spec in index.values()}
+    try:
+        models = json.loads(_SPEC_INDEX_PATH.read_text(encoding="utf-8")).get("models") or []
+    except Exception:
+        return ()
+    out = []
+    for row in models:
+        spec = by_name.get(str(row.get("name") or "").strip()) if isinstance(row, dict) else None
+        if spec is None:
+            continue
+        active = str(row.get("status") or "").strip().lower() != "discontinued"
+        for variant in [row.get("name"), *(row.get("aliases") or [])]:
+            words = frozenset(word for word in _name_words(str(variant or "")) if word not in _NON_DISTINCTIVE)
+            if words:
+                out.append((words, active, spec))
+    return tuple(out)
+
+
+@lru_cache(maxsize=4096)
+def _best_word_match(model_name: str) -> Optional[ModelFitSpec]:
+    """Most specific published name whose distinctive words all appear in the title."""
+    words = set(_name_words(model_name))
+    joined = "".join(_name_words(model_name))
+    best = None
+    for required, active, spec in _word_candidates():
+        if all(word in words or (len(word) >= 4 and word in joined) for word in required):
+            score = (len(required), sum(len(word) for word in required), active)
+            if best is None or score > best[0]:
+                best = (score, spec)
+    return best[1] if best else None
+
+
 def lookup_fit_spec(model_name: str) -> Optional[ModelFitSpec]:
     key = _normalize_key(model_name)
     if not key:
@@ -120,7 +169,10 @@ def lookup_fit_spec(model_name: str) -> Optional[ModelFitSpec]:
     hit = index.get(key)
     if hit is not None:
         return hit
-    # Soft contains match against longer index keys / names.
+    hit = _best_word_match(model_name)
+    if hit is not None:
+        return hit
+    # Last resort: soft contains match against longer index keys / names.
     for cand_key, spec in index.items():
         if key in cand_key or cand_key in key:
             return spec
@@ -184,6 +236,8 @@ def _as_float(value) -> Optional[float]:
 
 def clear_spec_index_cache() -> None:
     load_spec_index.cache_clear()
+    _word_candidates.cache_clear()
+    _best_word_match.cache_clear()
 
 
 def sales_artifact_health() -> dict:

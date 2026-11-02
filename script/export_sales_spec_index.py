@@ -87,6 +87,13 @@ def _num(v) -> Optional[float]:
     return float(match.group(1)) if match else None
 
 
+def _cell_text(v) -> str:
+    """Model names typed as numbers (e.g. Osaki "4000") load as floats."""
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v).strip()
+
+
 def main() -> None:
     if not SPEC_XLSX.is_file():
         raise SystemExit(f"missing spec workbook: {SPEC_XLSX}")
@@ -99,9 +106,10 @@ def main() -> None:
         name = row[1]
         if not name:
             continue
-        by_key[(str(brand), str(name))] = {
-            "brand": str(brand),
-            "spec_name": str(name),
+        by_key[(_cell_text(brand), _cell_text(name))] = {
+            "brand": _cell_text(brand),
+            "spec_name": _cell_text(name),
+            "status": _cell_text(row[5]) if row[5] else "",  # col 6
             "max_user_lb": _num(row[63]),  # col 64
             "wall_clearance_in": _num(row[40]),  # col 41
             "door_asm_in": _num(row[64]),  # col 65
@@ -119,6 +127,7 @@ def main() -> None:
             "name": sales_name,
             "brand": row["brand"],
             "spec_name": row["spec_name"],
+            "status": row["status"],
             "max_user_lb": row["max_user_lb"],
             "wall_clearance_in": row["wall_clearance_in"],
             "door_asm_in": row["door_asm_in"],
@@ -157,6 +166,7 @@ def main() -> None:
                 "name": f"{row['brand']} {row['spec_name']}".strip(),
                 "brand": row["brand"],
                 "spec_name": row["spec_name"],
+                "status": row["status"],
                 "max_user_lb": row["max_user_lb"],
                 "wall_clearance_in": row["wall_clearance_in"],
                 "door_asm_in": row["door_asm_in"],
