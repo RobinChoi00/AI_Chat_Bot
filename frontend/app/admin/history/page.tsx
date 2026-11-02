@@ -39,9 +39,11 @@ export default async function AdminHistoryPage({ searchParams }: {
         </label>
         <label className="text-sm text-gray-700">
           Store domain
-          <input name="domain" maxLength={200} defaultValue={domain ?? ""} placeholder="e.g. osakiusa.com" className="ml-2 rounded border border-gray-300 px-3 py-2" />
+          <input name="domain" maxLength={200} defaultValue={domain ?? ""} placeholder="osakiusa.com or titanchair.com" className="ml-2 rounded border border-gray-300 px-3 py-2" />
         </label>
         <button type="submit" className="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white">Apply filters</button>
+        <Link href={historyListHref(1, source, "osakiusa.com")} className="px-2 py-2 text-sm text-indigo-700 underline">OsakiUSA</Link>
+        <Link href={historyListHref(1, source, "titanchair.com")} className="px-2 py-2 text-sm text-indigo-700 underline">Titan Chair</Link>
         <Link href="/admin/history" className="px-2 py-2 text-sm text-indigo-700 underline">Clear filters</Link>
       </form>
 

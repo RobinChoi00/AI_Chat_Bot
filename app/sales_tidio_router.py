@@ -115,6 +115,7 @@ class TidioTurnRequest(BaseModel):
     contact_id: Optional[str] = Field(default=None, max_length=200)
     session_id: Optional[str] = Field(default=None, max_length=200)
     domain: Optional[str] = Field(default=None, max_length=200)
+    page_url: Optional[str] = Field(default=None, max_length=500)
 
 
 class TidioTurnResponse(BaseModel):
@@ -204,6 +205,18 @@ def _require_turn_secret(request: Request) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _explicit_store(request: Request, page_url: Optional[str]) -> Optional[str]:
+    """A Titan Flow can keep the USA answer domain and still be tracked separately."""
+    raw = (
+        request.query_params.get("store")
+        or request.headers.get("X-Sales-Store")
+        or page_url
+        or ""
+    )
+    host = normalize_storefront_domain(raw)
+    return host if host and is_supported_storefront_domain(host) else None
+
+
 def _run_sales_turn(
     *,
     session_id: str,
@@ -212,16 +225,18 @@ def _run_sales_turn(
     contact_id: Optional[str],
     domain: str,
     background_tasks: Optional[BackgroundTasks] = None,
+    record_domain: Optional[str] = None,
 ) -> dict[str, Any]:
     from sales_models import SalesSession
     from warranty_models import warranty_db_session
     with warranty_db_session() as db:
         existing = db.query(SalesSession).filter(SalesSession.session_id == session_id).first()
-        if existing and normalize_storefront_domain(existing.domain) != normalize_storefront_domain(domain):
+        stored = normalize_storefront_domain(record_domain or domain)
+        if existing and normalize_storefront_domain(existing.domain) != stored:
             raise HTTPException(status_code=409, detail="Session belongs to another storefront.")
     get_or_create_session(
         session_id,
-        domain=domain,
+        domain=record_domain or domain,
         channel="tidio",
         tidio_visitor_id=contact_id,
     )
@@ -253,8 +268,9 @@ def _run_sales_turn(
         domain=domain,
         prefs=prefs,
     )
+    stored_domain = record_domain or domain
     result = persist_prepared_followup(
-        result, prefs=prefs, session_id=session_id, domain=domain,
+        result, prefs=prefs, session_id=session_id, domain=stored_domain,
         background_tasks=background_tasks, capture=capture_lead, schedule=schedule_lead_delivery,
     )
     if result.prefs_patch:
@@ -265,7 +281,7 @@ def _run_sales_turn(
             session_id,
             rating=str(result.feedback.get("rating") or ""),
             intent=result.feedback.get("intent"),
-            domain=domain,
+            domain=stored_domain,
         )
 
     buttons = prioritize_quick_replies(result.quick_replies)
@@ -311,7 +327,7 @@ def _run_sales_turn(
     )
     from sales_events import issue_event_token
     from sales_journey import record_reply
-    record_reply(session_id, domain, result)
+    record_reply(session_id, stored_domain, result)
 
     return {
         "reply": result.reply,
@@ -322,7 +338,7 @@ def _run_sales_turn(
         "handoff_state": 'requested' if result.handoff else None,
         "quick_replies": buttons,
         "session_id": session_id,
-        "analytics_token": issue_event_token(session_id, domain),
+        "analytics_token": issue_event_token(session_id, stored_domain),
         "contact_id": contact_id,
         "next_action": action,
         "is_warranty_route": is_warranty_route,
@@ -477,6 +493,9 @@ async def tidio_turn(
     domain = normalize_storefront_domain(body.domain or tidio_domain())
     if not is_supported_storefront_domain(domain):
         raise HTTPException(status_code=422, detail="Unsupported storefront domain.")
+    # The imported USA Flow sends osakiusa.com. Titan adds ?store=titanchair.com
+    # so the admin history can filter it without changing the USA answer.
+    tracked = _explicit_store(request, body.page_url) or domain
 
     result = _run_sales_turn(
         session_id=session_id,
@@ -485,6 +504,7 @@ async def tidio_turn(
         contact_id=contact_id,
         domain=domain,
         background_tasks=background_tasks,
+        record_domain=tracked,
     )
     logger.info(
         "tidio_turn message_chars=%s has_payload=%s intent=%s resolved=%s stage=%s",

@@ -366,6 +366,24 @@ def test_only_authenticated_operator_webhook_confirms_staff_response(client):
         assert db.query(CustomerJourneyEvent).filter_by(surface='sales', stage='handoff', event='completed').count() == 1
 
 
+def test_titan_store_marker_is_tracked_while_the_answer_stays_on_osakiusa(client):
+    response = client.post(
+        '/api/v1/sales/tidio/turn?store=https://www.titanchair.com/pages/showroom',
+        json={'session_id': 'titan-tracked', 'domain': 'osakiusa.com', 'message': 'Where is the showroom?'},
+    )
+    assert response.status_code == 200
+    assert '888-501-5988' in response.json()['reply']
+    assert 'ext. 2' not in response.json()['reply']
+    from sales_models import SalesSession
+    with wm.warranty_db_session() as db:
+        assert db.query(SalesSession).filter_by(session_id='titan-tracked').one().domain == 'titanchair.com'
+    followed = client.post(
+        '/api/v1/sales/tidio/turn',
+        json={'session_id': 'titan-tracked', 'domain': 'osakiusa.com', 'page_url': 'https://titanchair.com/products/example', 'message': 'Saturday afternoon'},
+    )
+    assert followed.status_code == 200
+
+
 def test_tidio_turn_cannot_reassign_another_stores_existing_session(client):
     from sales_models import get_or_create_session
     get_or_create_session('store-owned', domain='titanchair.com')
