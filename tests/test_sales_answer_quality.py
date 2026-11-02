@@ -70,7 +70,7 @@ def test_exact_constraints_retained_across_short_answers():
     for product in third.products:
         assert product['specs']['massage_mechanism'] == '4D'
         assert product['fit']['maximum_user_weight_lb'] >= 350
-    assert 'height fit before purchase' in third.reply
+    assert "6'2\" is within the 5'0\"–6'2\" design range of our standard chairs" in third.reply
     assert 'mechanism label alone' in third.reply
 
 

@@ -499,13 +499,20 @@ def product_constraint_issues(product, constraints: Mapping[str, str], *, price_
         width = fit.doorway_for_mode(mode) if fit else None
         if width is None or width > float(constraints['doorway_in']):
             issues.append('doorway')
+    from sales_height import is_xl_line, needs_xl_line
+
+    if needs_xl_line(constraints.get('height_in')) and not is_xl_line(product):
+        issues.append('height')
     return issues
 
 
 def constraint_verification_notes(constraints: Mapping[str, str]) -> list[str]:
+    from sales_height import height_note
+
     notes = []
-    if constraints.get('height_in'):
-        notes.append('Your exact height is saved, but supported user-height limits are not published in this catalog. A specialist should confirm height fit before purchase.')
+    note = height_note(constraints)
+    if note:
+        notes.append(note)
     if constraints.get('intensity') == 'Strong':
         notes.append('Deep-tissue feel varies by model and user; the mechanism label alone does not verify pressure strength. A showroom trial or specialist confirmation is recommended.')
     return notes

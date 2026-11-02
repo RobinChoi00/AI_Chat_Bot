@@ -81,6 +81,7 @@ from sales_cta import (
     showroom_window_label,
 )
 from sales_shopify_stock import LiveStockSnapshot, fetch_live_stock, fetch_stock_many, stock_badge
+from sales_height import feet, height_guidance, is_xl_line, needs_xl_line, saved_heights
 from sales_spec_index import (
     doorway_inches_for_model,
     doorway_ok,
@@ -1255,7 +1256,14 @@ def _specs_reply(
     if re.search(r"\b(?:how\s+heavy|chair\s+weigh|chair\s+weight|weight\s+of\s+(?:the\s+)?chair)\b", message or "", re.I):
         lines.append("The chair's own weight is not verified in this catalog. Maximum user weight is a different specification; a specialist can confirm shipping and chair weight for this exact model.")
     if re.search(r"\b(?:min(?:imum)?|max(?:imum)?|supported|user)\b.{0,25}\bheight\b|\bheight\s+(?:range|limit)\b", message or "", re.I):
-        lines.append("The supported user-height range is not verified in this catalog. A specialist should confirm the minimum and maximum user height for this exact model before purchase.")
+        heights = saved_heights((prefs or {}).get("recommend_prefs") or {})
+        lines.append(
+            "A height range for this exact model is not published. Our standard chairs are designed for users 5'0\"–6'2\" "
+            "and our XL line for 6'3\"–6'5\"; "
+            + ("this model is in the XL line." if is_xl_line(product) else "this model is a standard-line chair.")
+            + (" " + " ".join(height_guidance(value, product) for value in heights.values()) if heights else
+               " Outside those ranges, a specialist should confirm the fit.")
+        )
 
     asked = [
         (label, key)
@@ -1386,11 +1394,8 @@ def _why_pick(product: ProductSpecs, request: RecommendationRequest) -> str:
     bits: list[str] = []
     if request.budget_usd and product.price_usd is not None:
         bits.append(f"near your ${request.budget_usd:,.0f} budget")
-    if request.height_in and request.height_in >= 74 and product.track_type in {
-        "L-Track",
-        "SL-Track",
-    }:
-        bits.append(f"{product.track_type}; exact height fit needs verification")
+    if request.height_in and needs_xl_line(request.height_in) and is_xl_line(product):
+        bits.append("XL line for 6'3\"–6'5\" users")
     if "back" in request.focus_areas and product.track_type in {"L-Track", "SL-Track"}:
         bits.append("strong back / full-body track coverage")
     if "neck" in request.focus_areas and product.massage_mechanism in {"3D", "4D"}:
@@ -1873,6 +1878,8 @@ def _miss_phrase(product: ProductSpecs, miss: str, prefs: dict[str, str]) -> str
         return f"is {product.massage_mechanism}, which you ruled out"
     if miss == "space":
         return "does not have a verified small-room wall clearance"
+    if miss == "height":
+        return f"is a standard-line chair (designed for up to 6'2\"; you are {feet(float(prefs['height_in']))})"
     return "misses one saved limit"
 
 
@@ -1931,6 +1938,8 @@ def _no_fit_recommend_reply(
         bits.append(f'a **{door}"** doorway{mode_bit}')
     if prefs.get("weight") and not prefs.get('weight_lb'):
         bits.append(f"**{prefs['weight']}** capacity")
+    if needs_xl_line(prefs.get("height_in")):
+        bits.append(f"an **XL-line chair** for your {feet(float(prefs['height_in']))} height")
     if prefs.get("space") == "Small Room":
         bits.append("**small-room** wall clearance")
     constraint = ", ".join(bits) if bits else "your fit answers"

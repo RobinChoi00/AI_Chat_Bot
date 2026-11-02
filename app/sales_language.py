@@ -273,9 +273,8 @@ def _localize_korean(result, prefs: dict):
                 url = product.get('product_url')
                 lines.append(f'- **{model}**' + (f' — **${float(price):,.0f} USD**' if isinstance(price, (int, float)) and not isinstance(price, bool) else ' — 가격 미확인')
                              + (f'\n  {url}' if url else ''))
-        lines.append('편안함과 강도는 직접 체험해 확인하시는 것이 좋습니다. 이 추천은 재고를 확보하거나 배송 날짜를 확정하지 않습니다. '
-                     '키에 맞는지는 공개되지 않아 상담원 확인이 필요합니다.' if rec_has_height(prefs, result) else
-                     '편안함과 강도는 직접 체험해 확인하시는 것이 좋습니다. 이 추천은 재고를 확보하거나 배송 날짜를 확정하지 않습니다.')
+        lines.append('편안함과 강도는 직접 체험해 확인하시는 것이 좋습니다. 이 추천은 재고를 확보하거나 배송 날짜를 확정하지 않습니다.'
+                     + _height_sentence(prefs, result, 'ko'))
         result.reply = '\n\n'.join(lines)
     elif result.intent in {'unclear', 'greeting'}:
         result.reply = '의자 추천, 가격과 카탈로그 정보 확인, 상담원 연결을 도와드릴 수 있습니다. 무엇이 필요하신가요?'
@@ -289,6 +288,33 @@ def _localize_korean(result, prefs: dict):
 def rec_has_height(prefs: dict, result) -> bool:
     rec = (result.prefs_patch or {}).get('recommend_prefs') or prefs.get('recommend_prefs') or {}
     return bool(rec.get('height_in'))
+
+
+def _height_sentence(prefs: dict, result, language: str) -> str:
+    """The company height guidance (5'0"–6'2" standard, 6'3"–6'5" XL) in Korean or Spanish."""
+    from sales_height import STANDARD_MAX_IN, STANDARD_MIN_IN, XL_MAX_IN
+
+    rec = (result.prefs_patch or {}).get('recommend_prefs') or prefs.get('recommend_prefs') or {}
+    try:
+        height = float(rec.get('height_in') or 0)
+    except (TypeError, ValueError):
+        return ''
+    if not height:
+        return ''
+    cm = round(height * 2.54)
+    if language == 'ko':
+        if height < STANDARD_MIN_IN or height > XL_MAX_IN:
+            return (f' 키 {cm}cm는 공개된 설계 기준 범위(일반 라인 152–188cm, XL 라인 191–196cm) 밖이라 '
+                    '쇼룸 체험이나 상담원 확인을 권해 드립니다.')
+        if height <= STANDARD_MAX_IN:
+            return f' 키 {cm}cm는 일반 라인의 설계 기준 범위(152–188cm) 안에 있습니다.'
+        return f' 키 {cm}cm는 일반 라인 기준(188cm)을 넘어, 191–196cm용으로 설계된 XL 라인으로 추천해 드렸습니다.'
+    if height < STANDARD_MIN_IN or height > XL_MAX_IN:
+        return (f' Una estatura de {cm} cm está fuera de los rangos de diseño publicados (152–188 cm línea estándar, '
+                '191–196 cm línea XL); le recomendamos probarlo en el showroom o consultar con un asesor.')
+    if height <= STANDARD_MAX_IN:
+        return f' Una estatura de {cm} cm está dentro del rango de diseño de nuestra línea estándar (152–188 cm).'
+    return f' Una estatura de {cm} cm supera la línea estándar (188 cm), por eso le recomendamos la línea XL, diseñada para 191–196 cm.'
 
 
 def localize_reply(result, language: str, prefs: dict):
@@ -333,7 +359,8 @@ def localize_reply(result, language: str, prefs: dict):
             model, price = product.get('model'), product.get('price_usd')
             if model:
                 lines.append(f'- **{model}**'+(f' — **${float(price):,.2f} USD**' if isinstance(price, (int, float)) and not isinstance(price, bool) else ' — precio sin confirmar'))
-        lines.append('La comodidad y la intensidad deben comprobarse personalmente. Esta recomendación no reserva existencias ni confirma una fecha de entrega. Puede abrir la ficha del producto o hablar con un asesor.')
+        lines.append('La comodidad y la intensidad deben comprobarse personalmente. Esta recomendación no reserva existencias ni confirma una fecha de entrega. Puede abrir la ficha del producto o hablar con un asesor.'
+                     + _height_sentence(prefs, result, 'es'))
         result.reply = '\n\n'.join(lines)
     elif result.intent in {'unclear', 'greeting'}:
         result.reply = 'Puedo ayudarle a buscar un sillón, revisar precios y datos del catálogo, o solicitar ayuda de una persona. ¿Qué necesita?'

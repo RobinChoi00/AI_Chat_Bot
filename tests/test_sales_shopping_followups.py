@@ -112,8 +112,10 @@ def test_heavy_couple_gets_catalog_verified_chairs_and_named_capacity(chat):
 
     height, _ = chat("If both users' height fit is not published, please tell me it needs confirmation from Sales.")
     assert height['intent'] != 'unclear'
-    assert "father (6'2\")" in height['reply'] and "mother (5'2\")" in height['reply']
-    assert 'needs to confirm height fit' in height['reply']
+    assert height['reply'].startswith('A height range for each exact model is not published')
+    assert "(standard line, 5'0\"–6'2\"): ✅ your father (6'2\"), your mother (5'2\")" in height['reply']
+    assert "(XL line, 6'3\"–6'5\"): your father (6'2\") fits our standard line better" in height['reply']
+    assert 'Sales can confirm the fit for both users' in height['reply']
 
 
 def test_owner_label_question_gets_label_guidance_not_the_menu(chat):
@@ -172,6 +174,59 @@ def test_shop_titles_resolve_to_the_most_specific_published_spec(title, spec_nam
     assert lookup_fit_spec(title).name == spec_name
 
 
+def test_tall_shopper_gets_only_the_xl_line(chat):
+    reply, prefs = chat("I'm 6'4, 230 lb, budget $8000, full body. Recommend a chair.")
+    assert reply['products'], reply['reply']
+    assert all('XL' in card['model'] for card in reply['products'])
+    assert "6'4\" is above the 5'0\"–6'2\" range of our standard chairs, so our XL line" in reply['reply']
+
+
+def test_standard_height_is_within_the_standard_design_range(chat):
+    reply, _ = chat("I'm 5'9, 170 lb, budget $5000, back focus. Recommend a chair.")
+    assert "5'9\" is within the 5'0\"–6'2\" design range of our standard chairs." in reply['reply']
+    assert 'not published' not in reply['reply']
+
+
+@pytest.mark.parametrize('message, expected', [
+    ("I'm 6'8, 230 lb, budget $8000, full body. Recommend a chair.", "6'8\" is above the 6'3\"–6'5\" design range of our XL line"),
+    ("I'm 4'10, 110 lb, budget $5000, neck focus. Recommend a chair.", "4'10\" is below the 5'0\"–6'2\" design range"),
+])
+def test_heights_outside_both_ranges_go_to_a_specialist(chat, message, expected):
+    reply, _ = chat(message)
+    assert expected in reply['reply'] and ('specialist' in reply['reply'])
+
+
+def test_named_model_height_fit_uses_the_line_ranges(chat):
+    standard, _ = chat("I'm 6'4. Will the Titan TP-Epic 4D fit me?")
+    assert "**Titan TP-Epic 4D** is a standard-line chair designed for up to 6'2\"" in standard['reply']
+    assert "XL line (6'3\"–6'5\") is the recommended fit" in standard['reply']
+    xl, _ = chat("Will the Grande XL fit me?")
+    assert "6'4\" is within the 6'3\"–6'5\" design range of our XL line" in xl['reply']
+
+
+def test_tall_household_user_keeps_the_recommendation_to_xl(chat):
+    reply, _ = chat("My husband is 6'4 and 240 lb, I'm 5'3 and 130 lb. One chair for both of us, budget $9000, full body.")
+    assert reply['products'], reply['reply']
+    assert all('XL' in card['model'] for card in reply['products'])
+    assert "taller user (6'4\") is above the 5'0\"–6'2\" standard range" in reply['reply']
+
+
+def test_compared_standard_chair_shows_the_xl_height_miss(chat):
+    chat("I'm 6'4 and 230 lb.")
+    chat('Compare Titan eCabin 3D vs Osaki OS-Champ')
+    table, _ = chat('Line them up side by side with price and capacity.')
+    assert 'misses your saved XL-line height range' in table['reply']
+
+
+def test_korean_height_guidance_uses_centimeters():
+    from types import SimpleNamespace
+    from sales_language import _height_sentence
+    result = SimpleNamespace(prefs_patch={'recommend_prefs': {'height_in': '76'}})
+    assert 'XL 라인' in _height_sentence({}, result, 'ko') and '193cm' in _height_sentence({}, result, 'ko')
+    result.prefs_patch['recommend_prefs']['height_in'] = '67'
+    assert '일반 라인의 설계 기준 범위(152–188cm) 안에' in _height_sentence({}, result, 'ko')
+
+
 def test_box_or_chair_weight_is_not_the_users_weight():
     from sales_followups import _weights_from_message
     assert _weights_from_message('The shipping box weighs only 210 pounds. Which chairs support 300 lb?') == [300.0]
@@ -197,7 +252,8 @@ def test_shortlist_feature_and_single_pick_use_every_saved_requirement(chat):
     one, _ = chat("Please show one suitable option using my father's requirements, or say which fit information still needs confirmation.")
     assert one['intent'] != 'unclear'
     assert "your father's requirements" in one['reply']
-    assert 'Still needs confirmation' in one['reply'] and 'Height fit for your father' in one['reply']
+    assert '✅ Your father (5\'8") is within the 5\'0"–6\'2" design range' in one['reply']
+    assert 'Still needs confirmation' in one['reply']
     assert len(one['products']) == 1 and one['products'][0]['price_usd'] <= 5000
 
 

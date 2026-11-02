@@ -231,9 +231,8 @@ def test_height_fit_pressure_gets_explicit_unknown_evidence(chat):
     chat('Give me the verified supported user-height range for Maestro 4D.')
     final, prefs = chat('I am 6 foot 8. Please just say it definitely fits me.')
     assert final['intent'] == 'specs'
-    assert '80 in' in final['reply']
-    assert 'cannot confirm personal height fit' in final['reply']
-    assert 'not verified' in final['reply'] and 'specialist' in final['reply']
+    assert "6'8\" is above the 6'3\"–6'5\" design range of our XL line" in final['reply']
+    assert 'definitely fits' not in final['reply'] and 'specialist' in final['reply']
     assert float(prefs['recommend_prefs']['height_in']) == 80
 
 
@@ -242,7 +241,8 @@ def test_personal_fit_question_after_pair_keeps_both_unknown_ranges(chat):
     final, _ = chat('Will it fit me? I am six feet four.')
     assert final['intent'] == 'specs'
     assert 'Maestro' in final['reply'] and 'Paragon' in final['reply']
-    assert 'cannot confirm personal height fit' in final['reply']
+    assert final['reply'].count("standard-line chair designed for up to 6'2\"") == 2
+    assert "XL line (6'3\"–6'5\") is the recommended fit" in final['reply']
 
 
 @pytest.mark.parametrize('promise', [

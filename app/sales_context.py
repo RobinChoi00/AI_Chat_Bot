@@ -122,7 +122,8 @@ def _pair_side_by_side_reply(pair, rec, *, intro):
     ]
     lines = [intro, '', f"**{left.display_name}** vs **{right.display_name}**"]
     lines.extend(f"- **{label}**: {a} vs {b}" for label, a, b in rows)
-    issue_labels = {'budget': 'budget', 'mechanism': 'required mechanism', 'weight_capacity': 'user-weight capacity', 'doorway': 'doorway width'}
+    issue_labels = {'budget': 'budget', 'mechanism': 'required mechanism', 'weight_capacity': 'user-weight capacity', 'doorway': 'doorway width',
+                    'height': 'XL-line height range'}
     if any(rec.get(key) for key in ('budget_max_usd', 'weight_lb', 'doorway_in')):
         lines.append('')
         for product in pair:
@@ -238,7 +239,7 @@ def _objective_pair_reply(message, pair, prefs, domain):
         lines.append("The chair's own weight is not verified in this catalog, so I cannot determine which chair is heavier to move. Maximum user-weight capacity measures the person sitting in it; it is not the chair's mass.")
     eligible = []
     issue_labels = {'budget': 'budget', 'mechanism': 'required mechanism',
-                    'weight_capacity': 'user-weight capacity', 'doorway': 'doorway width'}
+                    'weight_capacity': 'user-weight capacity', 'doorway': 'doorway width', 'height': 'XL-line height range'}
     for product in pair:
         lines.append(f"\n**{product.display_name}** — {_fmt_price(product.price_usd)}")
         if own_mass:
@@ -371,16 +372,25 @@ def _personal_height_fit_reply(raw, data):
     product = named or _focus_product_from_prefs(data) or (pair[0] if pair and data.get('last_rateable_intent') == 'compare' else None)
     if product is None:
         return None
+    from sales_height import STANDARD_RANGE, XL_RANGE, height_guidance, is_xl_line
+
     rec = data.get('recommend_prefs') or {}
-    height = f"Your saved height is **{rec['height_in']} in**. " if rec.get('height_in') else ''
-    names = f'**{product.display_name}**'
-    if pair and named is None and data.get('last_rateable_intent') == 'compare':
-        names = ' and '.join(f'**{item.display_name}**' for item in pair)
+    stated = extract_constraints(raw).get('height_in')
+    updated = {**rec, **{key: value for key, value in extract_constraints(raw, rec).items()
+                         if key in {'height_in', 'user_heights_in'}}} if stated else rec
+    height = float(updated.get('height_in') or 0)
+    products = list(pair) if pair and named is None and data.get('last_rateable_intent') == 'compare' else [product]
+    if height:
+        reply = ' '.join(height_guidance(height, item) for item in products)
+    else:
+        lines = ', '.join(f"**{item.display_name}** is {'an XL-line' if is_xl_line(item) else 'a standard-line'} chair" for item in products)
+        reply = (f"Our standard chairs are designed for users {STANDARD_RANGE} and our XL line for {XL_RANGE}; {lines}. "
+                 "Tell me the user's height and I'll check it against those ranges.")
+    reply += " These are line-level design ranges, not a custom fitting; the showroom is the best place to check the feel."
     return SalesReply(
-        reply=height + f"The supported user-height range for {names} is not verified in this catalog, so I cannot confirm personal height fit. "
-        "A specialist should confirm the minimum and maximum supported height before purchase; I will not infer it from the model name or track type.",
-        intent='specs', tools_used=['catalog.height_fit'],
+        reply=reply, intent='specs', tools_used=['catalog.height_fit'],
         quick_replies=[QuickReply(label='Talk to a human', payload='human')],
+        prefs_patch={'recommend_prefs': updated} if stated else {},
     )
 
 

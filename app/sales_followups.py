@@ -12,6 +12,8 @@ from typing import Optional
 
 from sales_catalog import ProductSpecs, list_active_products
 from sales_constraints import _read_person_measurements, extract_constraints, product_constraint_issues
+from sales_height import (STANDARD_MIN_IN, STANDARD_RANGE, XL_MAX_IN, XL_RANGE, height_guidance, is_xl_line,
+                          needs_xl_line)
 from sales_spec_index import lookup_fit_spec
 
 WARRANTY_EMAIL = "service@osakititan.com"
@@ -91,27 +93,33 @@ def _shortlist(data: dict) -> list[ProductSpecs]:
     return out
 
 
-def _title_height_claim(product: ProductSpecs) -> Optional[str]:
-    match = re.search(r"\b(\d)'\s?(\d{1,2})\"?", product.display_name or '')
-    return f"{match.group(1)}'{match.group(2)}\"" if match else None
+def _height_in_line_range(height: float, product: ProductSpecs) -> bool:
+    if height < STANDARD_MIN_IN or height > XL_MAX_IN:
+        return False
+    return is_xl_line(product) == needs_xl_line(height)
 
 
 def _height_confirmation(products: list[ProductSpecs], users) -> Optional[str]:
     heights = [(label, height) for label, height, _ in users if height]
     if not heights or not products:
         return None
-    who = ' and '.join(f"{_person(label)} ({_feet(height)})" for label, height in heights)
-    names = ' and '.join(f"**{product.display_name}**" for product in products)
-    line = (f"Height fit for {who}: the supported user-height range for {names} is not published in our verified specs, "
-            "so Sales needs to confirm height fit before you order.")
-    claims = [(product, _title_height_claim(product)) for product in products]
-    claims = [(product, claim) for product, claim in claims if claim]
-    if claims:
-        line += ' ' + ' '.join(
-            f"(The {product.display_name.split('(')[0].strip()} product title mentions up to {claim}; that is a listing claim, not a verified fit check.)"
-            for product, claim in claims
-        )
-    return line
+    if len(heights) == 1 and len(products) == 1:
+        label, height = heights[0]
+        return f"Height for {_person(label)}: {height_guidance(height, products[0])}"
+    lines = []
+    for product in products:
+        xl = is_xl_line(product)
+        fits = [f"{_person(label)} ({_feet(height)})" for label, height in heights if _height_in_line_range(height, product)]
+        misses = [(label, height) for label, height in heights if not _height_in_line_range(height, product)]
+        parts = [f"✅ {', '.join(fits)}"] if fits else []
+        for label, height in misses:
+            if STANDARD_MIN_IN <= height <= XL_MAX_IN:
+                parts.append(f"{_person(label)} ({_feet(height)}) fits our {'standard line' if xl else 'XL line'} better")
+            else:
+                parts.append(f"{_person(label)} ({_feet(height)}) is outside our published ranges; a specialist should confirm")
+        lines.append(f"- **{product.display_name}** ({'XL line, ' + XL_RANGE if xl else 'standard line, ' + STANDARD_RANGE}): "
+                     + '; '.join(parts))
+    return '\n'.join(lines)
 
 
 def _weights_from_message(raw: str) -> list[float]:
@@ -309,8 +317,6 @@ def named_model_fit_reply(message: str, data: dict):
     height = _height_confirmation([product], _saved_users(rec))
     if height:
         lines.append(height)
-    elif _title_height_claim(product):
-        lines.append(f"The product title mentions up to {_title_height_claim(product)}; the supported height range is not in our verified specs.")
     patch = {'pending_primary': product.display_name}
     if keep:
         patch['recommend_prefs'] = rec
@@ -490,10 +496,15 @@ def single_pick_reply(message: str, data: dict, *, domain: str):
         mode = rec.get('doorway_fit') or 'assembled'
         width = fit.doorway_for_mode(mode)
         lines.append(f"- ✅ {width:g}\" {'with disassembly' if mode == 'disassembled' else 'assembled'} fits the {door}\" doorway")
-    lines.extend(["", "Still needs confirmation:"])
     heights = [(label, height) for label, height, _ in users if height]
+    unconfirmed = []
     for label, height in heights:
-        lines.append(f"- Height fit for {_person(label)} ({_feet(height)}): the supported height range is not published")
+        if _height_in_line_range(height, product):
+            line_range = XL_RANGE if is_xl_line(product) else STANDARD_RANGE
+            lines.append(f"- ✅ {_person(label).capitalize()} ({_feet(height)}) is within the {line_range} design range of this chair's line")
+        else:
+            unconfirmed.append(f"- Height for {_person(label)}: {height_guidance(height, product)}")
+    lines.extend(["", "Still needs confirmation:", *unconfirmed])
     if rec.get('intensity') == 'Gentle' or re.search(r'\bgentle\b', str(rec.get('goal') or '') + raw, re.I):
         lines.append("- Gentle feel: pressure range and intensity levels are not verified; a showroom trial or specialist can confirm")
     lines.append("- Delivery path: turns, stairs and packaging beyond the doorway width")
@@ -525,7 +536,10 @@ def saved_users_height_reply(message: str, data: dict):
     if not products or not users:
         return None
     line = _height_confirmation(products, users)
-    text = line + "\n\nI won't treat height fit as confirmed. A Sales specialist can check both users before you order."
+    text = ("A height range for each exact model is not published, so here is how each user compares with our line-level "
+            f"design ranges ({STANDARD_RANGE} standard, {XL_RANGE} XL):\n" + line +
+            "\n\nThat is a design-range check, not a confirmed fitting: Sales can confirm the fit for both users before you order, "
+            "and the showroom is the best place to check the feel together.")
     return _reply(text, intent='specs', tools=['catalog.height_fit', 'conversation.saved_requirements'], products=products)
 
 
