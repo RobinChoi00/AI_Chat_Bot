@@ -150,7 +150,7 @@ _CLOSING_CTA = {
         "Then use the check below to tell us whether the chair is set up correctly.**"
     ),
     "delivery": (
-        "**Please gather the photos and delivery paperwork above. "
+        "**Please gather what is listed above. "
         "Then use the check below to send this delivery case to our team.**"
     ),
     "defect": (
@@ -1662,14 +1662,30 @@ def infer_delivery_symptom_from_turns(turns, node_id: str = "") -> str:
     return "no_box_damage"
 
 
+_DELIVERY_REVIEW_BASIS: dict[str, str] = {
+    "missing_parts": "photos of what arrived and the packing list",
+    "wrong_item": "photos of the item you received and its label",
+    "never_arrived": "the carrier tracking for your order",
+    "late_delivery": "the carrier timeline for your order",
+    "other_delivery_problem": "your description and any photos",
+}
+
+
 def build_delivery_diagnosis(
     *,
     symptom: str,
     path_text: str,
     model_name: str = "",
+    receipt_unknown: bool = False,
 ) -> dict[str, Any]:
     """Customer-safe guidance for delivery / freight cases before team review."""
     base_steps = _DELIVERY_STEPS.get(symptom, _DELIVERY_STEPS["no_box_damage"])
+    if receipt_unknown:
+        base_steps = tuple(
+            "If you have any delivery paperwork, a phone photo of it is helpful; it is fine if you don't."
+            if "receipt" in step.lower() else step
+            for step in base_steps
+        )
     query = f"{path_text} delivery tracking shipping box damage carrier"
     matches: list[KnowledgeEntry] = contextual_search_knowledge(
         path_text=query,
@@ -1682,15 +1698,17 @@ def build_delivery_diagnosis(
     steps: list[str] = list(base_steps)
     steps = _dedupe_steps(steps)
 
-    model_display = (model_name or "your chair").strip()
+    model = (model_name or "").strip()
+    owner = f"For your **{model}**, our team" if model else "Our team"
     label = _DELIVERY_SUMMARY_LABELS.get(symptom, "a delivery concern")
-    summary = (
-        f"For your **{model_display}**, **{label}** is usually handled by our team "
-        "after they review the photos and your signed delivery receipt."
-    )
+    basis = _DELIVERY_REVIEW_BASIS.get(symptom)
+    if basis is None:
+        basis = "your photos" if receipt_unknown else "your photos and the delivery receipt"
+    summary = f"{owner} handles **{label}** after reviewing {basis}."
     if symptom == "visible_at_unboxing":
+        keep = "" if receipt_unknown else " Keep the receipt noting the damage."
         summary = (
-            f"{summary} Keep the receipt noting the damage. The team must review the case "
+            f"{summary}{keep} The team must review the case "
             "before determining eligibility or any repair, replacement, or compensation."
         )
     elif symptom == "signed_cleared":
@@ -1714,7 +1732,6 @@ def format_delivery_self_help_message(*, diagnosis: dict[str, Any], repair_manua
         parts.append("\n\n**What to prepare before our team follows up:**")
         for idx, step in enumerate(steps, start=1):
             parts.append(f"{idx}. {step}")
-    parts.append(f"\n\nMore guides: [{repair_manual_url}]({repair_manual_url}).")
     parts.append(
         "\n\n**Please complete the preparation above first. Then use the check below if you still need warranty team review.**"
     )

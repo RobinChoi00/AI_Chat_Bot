@@ -1118,6 +1118,58 @@ def _quick_start_ticket(
     return payload
 
 
+def _natural_delivery_start(engine, session_id: str, message: str, domain: str) -> Dict[str, Any]:
+    """Open a delivery case from free text, using whatever the first message already says."""
+    from delivery_intake import delivery_identity_parts, map_delivery_free_text, tracking_number_in  # noqa: WPS433
+    from delivery_lookup import (  # noqa: WPS433
+        persist_snapshot,
+        public_delivery_tracking_summary,
+        safe_lookup_by_order_or_email,
+        safe_lookup_by_tracking_number,
+    )
+
+    payload = _quick_start_ticket(engine, session_id, "delivery", domain)
+    ticket_id = str(((payload.get("ticket") or {}).get("ticket_id")) or "")
+    node = engine.get_current_node(ticket_id) if ticket_id else None
+    if not node or str(node.get("node_id") or "") != "delivery_intent_q":
+        return payload
+    store = normalize_warranty_domain(str(getattr(engine.get_ticket(ticket_id), "domain", "") or domain))
+    order, email = delivery_identity_parts(message)
+    tracking = tracking_number_in(message)
+    if map_delivery_free_text("delivery_intent_q", message) == "damage_issue":
+        engine.submit_answer(ticket_id, "damage_issue", customer_display=message)
+        saved = ""
+        if tracking:
+            engine.submit_answer(ticket_id, "has_tracking")
+            engine.submit_answer(ticket_id, tracking)
+            persist_snapshot(ticket_id, safe_lookup_by_tracking_number(tracking, store), raw_input=tracking, lookup_kind="tracking")
+            saved = f"I saved tracking number **{tracking}**. "
+        elif order and email:
+            lookup = f"#{order} {email}"
+            engine.submit_answer(ticket_id, "no_tracking")
+            engine.submit_answer(ticket_id, lookup)
+            persist_snapshot(ticket_id, safe_lookup_by_order_or_email(lookup, store), raw_input=lookup, lookup_kind="order")
+            saved = f"I saved order number **{order}** with your checkout email. "
+        ticket = engine.get_ticket(ticket_id)
+        next_node = engine.get_current_node(ticket_id)
+        payload = _serialize_ticket_state(session_id, ticket, next_node, engine=engine)
+        lead = f"I'm sorry the delivery had a problem. I'll record it for our team. {saved}".rstrip()
+        payload["assistant_message"] = f"{lead}\n\n{str((next_node or {}).get('prompt') or '').strip()}"
+        return payload
+    if order and email:
+        lookup = f"#{order} {email}"
+        snapshot = safe_lookup_by_order_or_email(lookup, store)
+        engine.submit_answer(ticket_id, "status_check", customer_display=message)
+        engine.submit_answer(ticket_id, "no_tracking")
+        persist_snapshot(ticket_id, snapshot, raw_input=lookup, lookup_kind="order")
+        engine.submit_answer(ticket_id, lookup)
+        ticket = engine.get_ticket(ticket_id)
+        payload = _serialize_ticket_state(session_id, ticket, engine.get_current_node(ticket_id), engine=engine)
+        if snapshot.available:
+            payload["tracking_summary"] = public_delivery_tracking_summary(snapshot, store)
+    return payload
+
+
 def _require_single_model_name(model: str) -> None:
     """Keep a customer's alternative model guesses unconfirmed."""
     if re.search(r"\b(?:or|either|versus|vs)\b|또는|아니면", model, re.I):
@@ -1824,6 +1876,14 @@ def _submit_answer_with_nlp(
         if not node:
             raise
 
+        from delivery_intake import map_delivery_free_text  # noqa: WPS433
+
+        current_id = str(node.get("node_id") or "")
+        delivery_key = map_delivery_free_text(current_id, answer)
+        if delivery_key and delivery_key in {str(o.get("answer_key") or "") for o in node.get("options") or []}:
+            result, interpreted, clarify, option = _submit_mapped_answer(engine, ticket_id, delivery_key, answer, node)
+            return _carry_delivery_detail(engine, ticket_id, current_id, delivery_key, answer, result), interpreted, clarify, option
+
         # Free-text capture nodes may normalize input; safe to store as typed.
         if node.get("type") == "question_text":
             mapped = interpret_warranty_answer(node, answer)
@@ -1901,6 +1961,84 @@ def _recover_explicit_component_correction(engine, ticket_id: str, answer: str) 
     return str((engine.get_current_node(ticket_id) or {}).get("node_id") or "") == "defect_problem_type"
 
 
+_NO_IDENTITY_PIECE_RE = re.compile(
+    r"\b(don'?t|do not|dont)\s+(have|know|remember)\b|\b(can'?t|cannot|couldn'?t)\s+find\b|\bno order (number|#)\b|"
+    r"\b(skip|not sure|lost)\b",
+    re.I,
+)
+
+
+def _delivery_identity_reply(engine, ticket_id: str, node: Optional[dict], answer: str) -> tuple[Optional[str], str]:
+    """Collect order number and checkout email across turns before a lookup.
+
+    Returns (reply, answer): a reply keeps the question open; otherwise answer
+    is the text to submit, combined from both pieces when available.
+    """
+    from delivery_intake import IDENTITY_NODES, delivery_identity_parts  # noqa: WPS433
+
+    node_id = str((node or {}).get("node_id") or "")
+    if node_id not in IDENTITY_NODES:
+        return None, answer
+    ticket = engine.get_ticket(ticket_id)
+    if ticket is None:
+        return None, answer
+    from pii_redact import mask_email  # noqa: WPS433
+
+    collected = ticket.get_collected()
+    order, email = delivery_identity_parts(answer)
+    order = order or str(collected.get("pending_order_number") or collected.get("order_number") or "").lstrip("#")
+    email = email or str(collected.get("pending_checkout_email") or "")
+    declined = bool(_NO_IDENTITY_PIECE_RE.search(answer))
+    if order and email:
+        return None, f"#{order} {email}"
+    if not order and not email:
+        if declined:
+            return (
+                "Your order number is in the order confirmation email (for example #12345). "
+                "Please send it together with the email used at checkout. If you can't find it, "
+                "send the checkout email and Sales can help locate the order.\n\n"
+                f"{str((node or {}).get('prompt') or '').strip()}"
+            ), answer
+        return None, answer
+    if node_id != "delivery_status_get_order_email":
+        # A damage report only needs something our team can match; the status lookup needs both.
+        return None, answer
+    if declined:
+        return None, (f"#{order}" if order else email)
+    if order:
+        ticket.set_collected("pending_order_number", order)
+        reply = (
+            f"I have order number **{order}**. Please also send the email used at checkout — "
+            "the lookup needs both."
+        )
+    else:
+        ticket.set_collected("pending_checkout_email", email)
+        reply = (
+            f"I have the checkout email **{mask_email(email)}**. Please also send the order number from your "
+            "order confirmation email (for example #12345) — the lookup needs both. "
+            "If you can't find it, type *no order number*."
+        )
+    engine.persist_collected_data(ticket_id, str(ticket.collected_data or "{}"))
+    return reply, answer
+
+
+def _carry_delivery_detail(engine, ticket_id: str, node_id: str, mapped: str, answer: str, result: dict) -> dict:
+    """A tracking number or order details typed at the 'do you have tracking' question go straight to lookup."""
+    from delivery_intake import TRACKING_QUESTION_NODES, delivery_identity_parts, is_plausible_tracking_number  # noqa: WPS433
+
+    if node_id not in TRACKING_QUESTION_NODES:
+        return result
+    if mapped == "has_tracking" and is_plausible_tracking_number(answer.strip()):
+        return engine.submit_answer(ticket_id, answer.strip())
+    if mapped == "no_tracking":
+        order, email = delivery_identity_parts(answer)
+        if order and email:
+            return engine.submit_answer(ticket_id, f"#{order} {email}")
+        if order or email:
+            _delivery_identity_reply(engine, ticket_id, engine.get_current_node(ticket_id), answer)
+    return result
+
+
 def build_clarifying_workflow_message_safe(node: dict, answer: str) -> str:
     from warranty_nlp import build_clarifying_workflow_message  # noqa: WPS433
 
@@ -1936,12 +2074,13 @@ def _finalize_answer_response(
             engine.submit_answer(ticket_id, "still_no_heat", customer_display=evidence)
     tracking_summary: Optional[Dict[str, Any]] = None
     previous_node = result.get("previous_node_id")
-    if previous_node in (
+    lookup_ran = previous_node in (
         "delivery_get_tracking_number",
         "delivery_get_name",
         "delivery_status_get_tracking",
         "delivery_status_get_order_email",
-    ):
+    )
+    if lookup_ran:
         from delivery_lookup import (  # noqa: WPS433
             persist_snapshot,
             public_delivery_tracking_summary,
@@ -1971,7 +2110,10 @@ def _finalize_answer_response(
             raw_input=lookup_text,
             lookup_kind=lookup_kind,
         )
-        tracking_summary = public_delivery_tracking_summary(snapshot, domain)
+        tracking_summary = public_delivery_tracking_summary(snapshot, domain, lookup_kind)
+        if not snapshot.available and previous_node in ("delivery_get_name", "delivery_get_tracking_number"):
+            # A problem report continues either way; a failed status line is noise there.
+            tracking_summary = None
 
     ticket = engine.get_ticket(ticket_id)
     if ticket is None:
@@ -1991,7 +2133,7 @@ def _finalize_answer_response(
             ticket_row.set_collected("clarification_count", 0)
             turns = engine.get_turns(ticket_id)
             # A tracking lookup is not an instruction to send an email.
-            if tracking_summary is None:
+            if not lookup_ran:
                 _detected, sent_now = maybe_send_warranty_transcript(
                     ticket=ticket_row,
                     answer_text=answer,
@@ -2011,6 +2153,8 @@ def _finalize_answer_response(
         payload["interpreted_option"] = interpreted_option
         ack = build_mapped_ack_safe(str(interpreted_option.get("label") or ""))
         existing = str(payload.get("assistant_message") or "").strip()
+        if not existing and node:
+            existing = str(node.get("prompt") or "").strip()
         payload["assistant_message"] = f"{ack}\n\n{existing}" if existing else ack
 
     if (result.get("is_terminal") or str(ticket.status) in (
@@ -2669,8 +2813,11 @@ async def natural_start_warranty(
     model_help = _model_identification_help_payload(_lazy_engine(), session_id, message)
     if model_help is not None:
         return model_help
-    if (is_delivery_inquiry(message) or is_obvious_delivery_inquiry(message)) and not is_pre_purchase_shipping_policy(message):
-        return _quick_start_ticket(_lazy_engine(), session_id, "delivery", body.domain)
+    from delivery_intake import looks_like_delivery_report  # noqa: WPS433
+
+    if (is_delivery_inquiry(message) or is_obvious_delivery_inquiry(message) or looks_like_delivery_report(message)) \
+            and not is_pre_purchase_shipping_policy(message):
+        return _natural_delivery_start(_lazy_engine(), session_id, message, body.domain)
 
     from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
 
@@ -2729,7 +2876,7 @@ async def natural_start_warranty(
 
     issue_type = interpret_issue_type(message)
     if issue_type == "delivery":
-        return _quick_start_ticket(engine, session_id, "delivery", body.domain)
+        return _natural_delivery_start(engine, session_id, message, body.domain)
     if ticket is None:
         raise HTTPException(
             status_code=422,
@@ -2818,8 +2965,11 @@ async def smart_start_warranty(
     model_help = _model_identification_help_payload(_lazy_engine(), session_id, message)
     if model_help is not None:
         return model_help
-    if (is_delivery_inquiry(message) or is_obvious_delivery_inquiry(message)) and not is_pre_purchase_shipping_policy(message):
-        return _quick_start_ticket(_lazy_engine(), session_id, "delivery", body.domain)
+    from delivery_intake import looks_like_delivery_report  # noqa: WPS433
+
+    if (is_delivery_inquiry(message) or is_obvious_delivery_inquiry(message) or looks_like_delivery_report(message)) \
+            and not is_pre_purchase_shipping_policy(message):
+        return _natural_delivery_start(_lazy_engine(), session_id, message, body.domain)
 
     from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
 
@@ -3012,6 +3162,10 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
 
     _recover_explicit_component_correction(engine, ticket_id, answer)
     node = engine.get_current_node(ticket_id)
+    customer_text = answer
+    identity_reply, answer = _delivery_identity_reply(engine, ticket_id, node, answer)
+    if identity_reply:
+        return _build_side_question_response(engine, ticket_id, identity_reply, customer_text=customer_text)
     if node and node.get("options") and _is_workflow_confusion(answer):
         from warranty_nlp import build_clarifying_workflow_message
         from warranty_side_questions import _looks_like_valid_workflow_answer

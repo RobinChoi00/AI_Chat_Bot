@@ -442,13 +442,17 @@ def reported_safety_hazard(ticket=None, turns=(), text: str = "") -> bool:
 
 def try_side_question_for_ticket(engine, ticket_id: str, answer: str) -> Optional[str]:
     """Shared side-question handler for REST API and chat agent tools."""
-    from warranty_side_questions import try_answer_side_question  # noqa: WPS433
+    from warranty_side_questions import mentioned_order_number, try_answer_side_question  # noqa: WPS433
 
     node = engine.get_current_node(ticket_id)
     ticket = engine.get_ticket(ticket_id)
     if not node or ticket is None:
         return None
 
+    order = mentioned_order_number(answer)
+    if order:
+        ticket.set_collected("order_number", order)
+        engine.persist_collected_data(ticket_id, str(ticket.collected_data or "{}"))
     return try_answer_side_question(
         node=node,
         answer=answer,

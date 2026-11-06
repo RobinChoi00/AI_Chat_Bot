@@ -72,7 +72,7 @@ def _reprompt_current(node: dict) -> str:
 def _reprompt_order_or_email() -> str:
     return (
         "To look up your delivery, please enter your **order number** "
-        "(for example `#12345` or `OSKUS11308`) or the **email address** "
+        "(for example `#12345` or `OSKUS11308`) and the **email address** "
         "used at checkout."
     )
 
@@ -110,6 +110,85 @@ def _build_spec_side_answer(
     return "\n\n".join(parts)
 
 
+_BRANDED_ORDER_RE = re.compile(r"\b((?:OSTI|OSKUS|OSKMC|OSK)[A-Za-z0-9-]{3,})\b", re.I)
+_ORDER_LABEL_RE = re.compile(
+    r"(?:order\s*(?:number|no\.?|#)?\s*[:#]?\s*|#)\s*([A-Za-z0-9-]{4,})",
+    re.I,
+)
+_CASE_PROGRESS_RE = re.compile(
+    r"\b(?:working on (?:it|this|my(?:\s+order)?)|are you working|wrong number|worng number|"
+    r"wrong order|is this (?:the )?(?:wrong|right)|did you (?:start|get|receive))\b",
+    re.I,
+)
+
+
+def mentioned_order_number(text: str) -> Optional[str]:
+    """An order id the customer stated, including store prefixes such as OSTI."""
+    raw = text or ""
+    branded = _BRANDED_ORDER_RE.search(raw)
+    if branded:
+        return branded.group(1).upper()
+    if re.search(r"\border\b|#", raw, re.I):
+        numbered = _ORDER_LABEL_RE.search(raw)
+        if numbered and any(char.isdigit() for char in numbered.group(1)):
+            return numbered.group(1).upper()
+    return None
+
+
+def _order_progress_reply(node: dict, text: str, ticket) -> Optional[str]:
+    """Answer an order number or a 'are you working on it' question without a lookup."""
+    if _looks_like_valid_workflow_answer(node, text):
+        return None
+    order = mentioned_order_number(text)
+    saved = ""
+    if ticket is not None and hasattr(ticket, "get_collected"):
+        saved = str(ticket.get_collected().get("order_number") or "").strip()
+    number = order or saved
+    progress = bool(_CASE_PROGRESS_RE.search(text or ""))
+    if not order and not progress:
+        return None
+    if order and progress:
+        lead = (
+            f"I saved **{order}**, but nobody is working on it yet and this chat has not verified that number. "
+            "If it is wrong, send the correct order number."
+        )
+    elif order:
+        lead = (
+            f"I saved order number **{order}**. Nobody is working on it yet, and this chat has not looked it up. "
+            "The number alone does not show whether it is correct; a lookup also needs the checkout email."
+        )
+    elif number:
+        lead = (
+            f"Nobody is working on this yet, and **{number}** has not been verified. "
+            "If that number is wrong, send the correct order number."
+        )
+    else:
+        lead = "Nobody is working on this yet, and I do not have an order number saved. Send the order number if you have it."
+    return f"{lead}\n\n{_reprompt_current(node)}"
+
+
+def _delivery_side_reply(node: dict, text: str, issue_type: str) -> Optional[str]:
+    """Order questions owned by Sales, and what a tracking number is, during a delivery case."""
+    from delivery_intake import delivery_sales_topic, tracking_number_explainer  # noqa: WPS433
+    from warranty_scope import SALES_PHONE  # noqa: WPS433
+
+    node_id = str(node.get("node_id") or "")
+    if not (node_id.startswith("delivery_") or node_id == "issue_type" or issue_type == "delivery"):
+        return None
+    if _looks_like_valid_workflow_answer(node, text):
+        return None
+    explainer = tracking_number_explainer(text)
+    if explainer:
+        return f"{explainer}\n\n{_reprompt_current(node)}"
+    lead = delivery_sales_topic(text)
+    if not lead:
+        return None
+    return (
+        f"{lead} Sales handles that at **{SALES_PHONE}**, and I have not changed anything on your order.\n\n"
+        f"{_reprompt_current(node)}"
+    )
+
+
 def _looks_like_faq_question(text: str) -> bool:
     raw = (text or "").strip()
     if not raw:
@@ -139,9 +218,12 @@ def _looks_like_valid_workflow_answer(node: dict, text: str) -> bool:
         return False
 
     if node.get("type") == "question":
+        from delivery_intake import map_delivery_free_text  # noqa: WPS433
         from warranty_error_code_gate import is_gate_node, map_gate_free_text  # noqa: WPS433
 
         node_id = str(node.get("node_id") or "")
+        if map_delivery_free_text(node_id, raw):
+            return True
         if is_gate_node(node_id):
             mapped = map_gate_free_text(node_id, raw)
             if mapped:
@@ -250,6 +332,12 @@ def try_answer_side_question(
     text = (answer or "").strip()
     if not text or not node:
         return None
+    progress = _order_progress_reply(node, text, ticket)
+    if progress:
+        return progress
+    delivery = _delivery_side_reply(node, text, issue_type)
+    if delivery:
+        return delivery
     if not _should_handle_side_question(node, text):
         return None
 

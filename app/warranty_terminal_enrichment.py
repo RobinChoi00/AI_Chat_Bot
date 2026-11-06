@@ -406,12 +406,63 @@ def _delivery_self_help_message(engine, ticket_id: str, ticket, node_id: str) ->
         symptom=symptom,
         path_text=path_text,
         model_name=model_name,
+        receipt_unknown=any(str(getattr(t, "answer_key", "") or "") == "signed_unknown" for t in turns),
     )
     body = format_delivery_self_help_message(
         diagnosis=diagnosis,
         repair_manual_url=REPAIR_MANUAL_URL,
     )
     return _help_offer_enrichment(body, diagnosis=diagnosis)
+
+
+def _delivery_status_message(ticket) -> dict[str, Any]:
+    """Close a status lookup with what the lookup found, never a photo checklist."""
+    import json
+
+    from warranty_scope import SALES_PHONE
+
+    collected = ticket.get_collected() if hasattr(ticket, "get_collected") else {}
+    raw = collected.get("tracking_snapshot")
+    try:
+        snapshot = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except ValueError:
+        snapshot = {}
+    kind = str(collected.get("delivery_lookup_kind") or "")
+    order = str(collected.get("order_number") or "").strip()
+    email = str(collected.get("checkout_email") or "").strip()
+    if snapshot.get("available"):
+        lead = (
+            "That is the latest status I could find for your delivery. Carrier estimates can change, "
+            "and this chat can't change the delivery date or address."
+        )
+    elif kind == "order" and not (order and email):
+        lead = (
+            "I couldn't look up this delivery because the lookup needs both the order number "
+            "and the email used at checkout."
+        )
+    elif kind == "tracking":
+        lead = "I couldn't find a current carrier update for that tracking number. New shipments can take a day to show a first scan."
+    else:
+        lead = "I couldn't find a current update for that order and checkout email."
+    body = (
+        f"{lead} No delivery date has been confirmed in this chat.\n\n"
+        f"Sales can check the order at **{SALES_PHONE}**. "
+        "If the chair arrives damaged or incomplete, or does not arrive, start a delivery chat and choose "
+        "**Report damage or a delivery problem**."
+    )
+    return {
+        "message": body,
+        "diagnosis": None,
+        "phase": "awaiting_help_consent",
+        "interaction_mode": "preparation",
+        "issue_type": "delivery",
+        "help_offer_options": [
+            {"answer_key": "no_self_help", "label": "That answers my question"},
+            {"answer_key": "yes_team_help", "label": "I still need help with this delivery"},
+        ],
+        "show_contact_form": False,
+        "defer_email": True,
+    }
 
 
 def _workflow_end_message(
@@ -484,6 +535,8 @@ def build_terminal_enrichment(
     issue_type = str(getattr(ticket, "issue_type", "") or "").lower()
     action = str(node.get("action") or "")
 
+    if node_id == "delivery_status_terminal":
+        return _delivery_status_message(ticket)
     if node_id == "install_air_hose_terminal":
         result = _install_air_hose_message(engine, ticket_id, ticket)
     elif node_id == "defect_voice_not_working_terminal":

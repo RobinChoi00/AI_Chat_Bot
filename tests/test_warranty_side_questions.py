@@ -136,3 +136,54 @@ def test_faq_without_knowledge_still_reprompts():
     )
     assert msg is not None
     assert "installation issue" in msg.lower()
+
+
+_ISSUE_TYPE = {
+    "node_id": "issue_type",
+    "type": "question",
+    "prompt": "Which area do you need help with: setup, delivery, or a chair malfunction?",
+    "options": [
+        {"answer_key": "installation", "label": "Installation Issue"},
+        {"answer_key": "delivery", "label": "Delivery Issue"},
+        {"answer_key": "defect", "label": "Defect / Malfunction"},
+    ],
+}
+
+
+class _Ticket:
+    def __init__(self, order_number=""):
+        self.collected = {"order_number": order_number} if order_number else {}
+
+    def get_collected(self):
+        return dict(self.collected)
+
+
+def test_order_number_at_area_menu_is_saved_in_the_reply():
+    msg = try_answer_side_question(
+        node=_ISSUE_TYPE,
+        answer="order # OSTI1254",
+        model_name="Titan TI Reflex 3D",
+        turns=[],
+        ticket=_Ticket(),
+    )
+    assert msg is not None
+    assert "OSTI1254" in msg
+    assert "not looked it up" in msg
+    assert "wasn't fully sure" not in msg
+    assert "setup, delivery, or a chair malfunction" in msg
+
+
+def test_case_progress_question_does_not_use_the_generic_faq_line():
+    msg = try_answer_side_question(
+        node=_ISSUE_TYPE,
+        answer="are you working on it or this is worng number",
+        model_name="Titan TI Reflex 3D",
+        turns=[],
+        ticket=_Ticket("OSTI1254"),
+    )
+    assert msg is not None
+    assert "Nobody is working on this yet" in msg
+    assert "OSTI1254" in msg
+    assert "has not been verified" in msg
+    assert "don't have a specific answer" not in msg
+    assert "setup, delivery, or a chair malfunction" in msg

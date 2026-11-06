@@ -251,7 +251,7 @@ def lookup_by_order_or_email(raw: str, domain: str) -> TrackingSnapshot:
     return _snapshot_from_tracking_data(data, source="shopify")
 
 
-def public_delivery_tracking_summary(snapshot: TrackingSnapshot, domain: str) -> Dict[str, Any]:
+def public_delivery_tracking_summary(snapshot: TrackingSnapshot, domain: str, lookup_kind: str = "order") -> Dict[str, Any]:
     """Minimal delivery status; deliberately omit customer/order purchase details."""
     from urllib.parse import urlparse
     from warranty_scope import support_contact
@@ -271,6 +271,8 @@ def public_delivery_tracking_summary(snapshot: TrackingSnapshot, domain: str) ->
         if snapshot.eta and snapshot.eta != "Pending carrier update":
             message += f" Carrier estimate: {snapshot.eta}. This is an estimate, not a delivery guarantee."
         message += " Use Refresh to request another update; carrier scans can take time to appear."
+    elif lookup_kind == "tracking":
+        message = "We couldn't find a current update for that tracking number. Check the number, or try again later. No delivery date has been confirmed."
     else:
         message = "We couldn't verify a current delivery update. Check the order number and checkout email, or try again later. No delivery date has been confirmed."
     return {

@@ -53,7 +53,7 @@
 
     "delivery_status_get_order_email": {
       "type": "question_text",
-      "prompt": "Please share your checkout email (preferred). If you also have an order number, include both — for example: #12345 you@example.com so we can look up your delivery status.",
+      "prompt": "Please share your order number and the email used at checkout together — for example: #12345 you@example.com. The lookup needs both.",
       "answer_key": "order_or_email",
       "next": "delivery_status_terminal"
     },
@@ -68,7 +68,7 @@
     "delivery_status_terminal": {
       "type": "terminal",
       "action": "awaiting_admin",
-      "prompt": "Thanks — we've received your details and looked up what we can on our side. Our team will follow up with your delivery status shortly.",
+      "prompt": "Thanks — I've saved your details with this chat. Sales can help with anything else about this order.",
       "internal_note": "Status-only delivery inquiry. Use collected order/email/tracking + delivery_lookup snapshot. Check Netsuite/Shopify/carrier and reply to the customer.",
       "evidence_required": []
     },
@@ -117,7 +117,7 @@
 
     "delivery_get_name": {
       "type": "question_text",
-      "prompt": "Please share your checkout email (preferred). If you also have an order number, include both — for example: #12345 you@example.com. Next we'll ask what kind of delivery problem you have.",
+      "prompt": "Please share your order number and the email used at checkout — for example: #12345 you@example.com — so our team can match your order. Next we'll ask what kind of delivery problem you have.",
       "answer_key": "order_or_email",
       "next": "delivery_problem_type_q"
     },
@@ -152,7 +152,7 @@
     "delivery_missing_parts_terminal": {
       "type": "terminal",
       "action": "awaiting_admin",
-      "prompt": "Thanks — we've noted the missing items. Please send photos of what you received (and the packing list if you have it). Our team will follow up to arrange the missing parts.",
+      "prompt": "Thanks — we've noted the missing items. Please send photos of what you received (and the packing list if you have it). Our team will review what is missing and follow up about next steps.",
       "internal_note": "Missing parts / incomplete delivery. Review order BOM vs customer description + photos. Ship missing parts or open carrier claim as needed.",
       "evidence_required": ["damage_photos"],
       "evidence_email": "service@osakititan.com"
@@ -161,7 +161,7 @@
     "delivery_wrong_item_terminal": {
       "type": "terminal",
       "action": "awaiting_admin",
-      "prompt": "Thanks — please send photos of the item you received (labels/serial if visible). Our team will confirm the order and arrange the correct product or a return label.",
+      "prompt": "Thanks — please send photos of the item you received (labels/serial if visible). Our team will confirm the order and follow up about next steps.",
       "internal_note": "Wrong item delivered. Compare Shopify/Netsuite order to photos. Arrange swap / return label / pickup.",
       "evidence_required": ["damage_photos"],
       "evidence_email": "service@osakititan.com"
@@ -178,7 +178,7 @@
     "delivery_late_terminal": {
       "type": "terminal",
       "action": "awaiting_admin",
-      "prompt": "Thanks — we've noted the late delivery. Our team will review the carrier timeline and follow up with an update or goodwill options if appropriate.",
+      "prompt": "Thanks — we've noted the late delivery. Our team will review the carrier timeline and follow up with an update.",
       "internal_note": "Late delivery complaint. Verify ETA vs actual; carrier delay vs warehouse delay. Reply with status / courtesy credit if policy allows.",
       "evidence_required": []
     },
@@ -221,7 +221,8 @@
       "prompt": "When you received the delivery, was the receipt signed as 'Cleared' (no damage noted) or 'Damaged' (damage was noted on the receipt)?",
       "options": [
         {"label": "Signed as Cleared (no damage noted on receipt)", "answer_key": "signed_cleared", "next": "delivery_signed_cleared_terminal"},
-        {"label": "Signed as Damaged (damage was noted)",           "answer_key": "signed_damaged", "next": "delivery_damage_when_opened_q"}
+        {"label": "Signed as Damaged (damage was noted)",           "answer_key": "signed_damaged", "next": "delivery_damage_when_opened_q"},
+        {"label": "Not sure / I didn't sign anything",               "answer_key": "signed_unknown", "next": "delivery_damage_when_opened_q"}
       ]
     },
 
@@ -246,7 +247,7 @@
     "delivery_replace_claim_terminal": {
       "type": "terminal",
       "action": "awaiting_admin",
-      "prompt": "Please send photos of both the damaged box and the damage to the chair. Our team will review and arrange either a repair or replacement at no cost to you.",
+      "prompt": "Please send photos of both the damaged box and the damage to the chair. Our team will review the photos and the delivery receipt before deciding on any next step.",
       "internal_note": "Signed as damaged + visible at unboxing. Admin action: send replacement part/chair and file carrier claim. Request signed delivery receipt and photos.",
       "evidence_required": ["damage_photos", "box_photos", "signed_delivery_receipt"],
       "evidence_email": "service@osakititan.com"
@@ -255,7 +256,7 @@
     "delivery_minor_comp_terminal": {
       "type": "terminal",
       "action": "awaiting_admin",
-      "prompt": "Please send us photos of the damage. If the damage is minor, our team may be able to offer a compensation.",
+      "prompt": "Please send us photos of the damage. Our team will review them before deciding on any next step.",
       "internal_note": "Damage noticed after delivery, signed as damaged. If minor: admin to offer small compensation. Admin to review photos and decide.",
       "evidence_required": ["damage_photos"],
       "evidence_email": "service@osakititan.com"
@@ -614,7 +615,7 @@
     "defect_cosmetic_wg_terminal": {
       "type": "terminal",
       "action": "awaiting_admin",
-      "prompt": "Please send photos of the damage. Our team will review and arrange a resolution with the White Glove service provider at no cost to you.",
+      "prompt": "Please send photos of the damage. Our team will review them with the White Glove service provider before deciding on any next step.",
       "internal_note": "White Glove delivery + cosmetic damage visible at unboxing. File claim with WG company. Send replacement/repair. Request damage and box photos.",
       "evidence_required": ["damage_photos", "box_photos"],
       "evidence_email": "service@osakititan.com"
@@ -659,7 +660,7 @@
     "defect_cosmetic_replace_terminal": {
       "type": "terminal",
       "action": "awaiting_admin",
-      "prompt": "Please send us photos of the damage. Our team will review and determine whether a repair or replacement is appropriate at no cost to you.",
+      "prompt": "Please send us photos of the damage. Our team will review them before deciding on any next step.",
       "internal_note": "Signed damaged + box appeared fine. Admin to send replacement part/chair and file claim.",
       "evidence_required": ["damage_photos", "signed_delivery_receipt"],
       "evidence_email": "service@osakititan.com"
