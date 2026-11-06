@@ -563,7 +563,14 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "it looked fine",
     ),
     "warranty": ("warranty", "claim"),
-    "too_hot": ("too hot", "too warm", "uneven heat", "burns"),
+    "too_hot": ("too hot", "too warm", "uneven heat", "heat feels too hot", "burns"),
+    "moves_on_off": (
+        "moves back to default",
+        "moves back to its default",
+        "returns to default",
+        "goes back when powered off",
+        "moves back when powered off",
+    ),
     "not_heating": (
         "doesn't heat",
         "doesnt heat",
@@ -920,6 +927,9 @@ def _keyword_issue_type(text: str) -> Optional[str]:
     if re.search(
         r"\b(?:will\s+not|does\s+not|won't|doesn't)\s+(?:turn\s+on|start|work|respond|recline)|"
         r"\b(?:stopped\s+working|shuts?\s+off|torn|ripped|not\s+getting\s+warm|clicking\s+noise)\b|"
+        r"\b(?:error|err)\s*(?:code\s*)?#?\s*[a-z]?\d{1,3}\b|\b[ef]\d{1,2}\s+(?:error|code)\b|"
+        r"\b(?:peeling|flaking|cracked|cracking|grinding|squeak(?:s|ing|y)?|rattl(?:es?|ing)|"
+        r"(?:loud|strange|weird)\s+(?:noise|sound)|not\s+inflating|won't\s+inflate|too\s+hot)\b|"
         r"의자[^.!?]{0,15}작동하지|리모컨[^.!?]{0,15}안\s*켜|"
         r"\b(?:silla\s+no\s+enciende|airbags?\s+no\s+se\s+inflan)\b", norm,
     ):

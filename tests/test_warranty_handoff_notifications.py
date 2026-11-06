@@ -42,7 +42,8 @@ def test_transport_failure_remains_retryable_and_does_not_claim_success(chat, mo
     state = client.get("/api/v1/warranty/session/customer").json()
     assert state["handoff"]["notification_status"] == "failed"
     assert state["handoff"]["notification_sent"] is False
-    assert "haven't sent a notification" in state["assistant_message"]
+    assert "callback has not been booked" in state["assistant_message"]
+    assert "notification has not been confirmed" in state["assistant_message"] or "queued" in state["assistant_message"]
 
 
 def test_safety_escalation_after_a_completed_support_request_gets_a_new_notification(chat, monkeypatch):

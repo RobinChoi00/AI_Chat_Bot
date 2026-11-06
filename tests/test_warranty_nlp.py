@@ -25,6 +25,17 @@ class TestKeywordIssueType:
     def test_defect_keywords(self):
         assert nlp.interpret_issue_type("The remote is not working") == "defect"
 
+    @pytest.mark.parametrize("text", [
+        "E4 error",
+        "error code E4",
+        "the leather is peeling",
+        "it makes a grinding noise",
+        "airbags not inflating",
+        "the heat is too hot",
+    ])
+    def test_symptom_keywords_are_defect(self, text):
+        assert nlp.interpret_issue_type(text) == "defect"
+
     def test_ambiguous_returns_none_without_llm(self, monkeypatch):
         monkeypatch.setattr(nlp, "_llm_json", lambda _prompt, **kwargs: None)
         assert nlp.interpret_issue_type("hello there") is None
@@ -56,6 +67,50 @@ class TestHeuristicOptionMatch:
     def test_question_text_passthrough(self):
         node = {"type": "question_text", "prompt": "Model name?", "next": "x", "answer_key": "model_name"}
         assert nlp.interpret_warranty_answer(node, "  Maestro V2  ") == "Maestro V2"
+
+    def test_instruction_labels_map_without_llm(self, monkeypatch):
+        monkeypatch.setattr(nlp, "_llm_json", lambda *_a, **_k: None)
+        recline = {
+            "type": "instruction",
+            "prompt": "When powered off, does it move back?",
+            "options": [
+                {
+                    "answer_key": "moves_on_off",
+                    "label": "Yes, it moves back to its default position when powered off",
+                },
+                {"answer_key": "stays_stuck", "label": "No, it stays stuck in its current position"},
+            ],
+        }
+        assert nlp.interpret_warranty_answer(
+            recline, "Yes, it moves back to its default position when powered off",
+        ) == "moves_on_off"
+        clicking = {
+            "type": "instruction",
+            "prompt": "Check the back switch.",
+            "options": [
+                {
+                    "answer_key": "clicking_sound",
+                    "label": "Heard a clicking sound when toggling the back switch",
+                },
+                {"answer_key": "no_clicking", "label": "No clicking sound and nothing resolved"},
+            ],
+        }
+        assert nlp.interpret_warranty_answer(
+            clicking, "Heard a clicking sound when toggling the back switch",
+        ) == "clicking_sound"
+
+    def test_heat_too_hot_label_maps(self, monkeypatch):
+        monkeypatch.setattr(nlp, "_llm_json", lambda *_a, **_k: None)
+        node = {
+            "type": "question",
+            "prompt": "Which heating issue?",
+            "options": [
+                {"answer_key": "not_heating", "label": "Heating does not warm up at all"},
+                {"answer_key": "too_hot", "label": "Heat feels too hot or uneven"},
+            ],
+        }
+        assert nlp.interpret_warranty_answer(node, "Heat feels too hot or uneven") == "too_hot"
+        assert nlp.interpret_warranty_answer(node, "heat feels too hot or uneven") == "too_hot"
 
     def test_label_substring_match(self):
         options = [

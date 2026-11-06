@@ -211,10 +211,10 @@ def test_build_step_enrichment_drops_off_topic_air_tips_on_remote(monkeypatch):
 
 def test_pick_step_tips_rejects_raw_freshdesk_even_when_flagged():
     qa = KnowledgeEntry(
-        source="qa_csv",
+        source="reviewed_knowledge",
         category="power",
-        title="QA power",
-        diagnostic="qa",
+        title="Reviewed power",
+        diagnostic="reviewed",
         customer_steps=("Confirm the power cord and outlet are working before follow-up.",),
     )
     freshdesk = KnowledgeEntry(
@@ -232,6 +232,19 @@ def test_pick_step_tips_rejects_raw_freshdesk_even_when_flagged():
     assert tips
     assert "Confirm the power cord" in tips[0]
     assert all("Toggle the back power switch" not in tip for tip in tips)
+
+
+@pytest.mark.parametrize("source", ["qa_csv", "auto_check", "fault_judgment", "fonz_error_code"])
+def test_technician_sources_never_become_customer_tips(source):
+    internal = KnowledgeEntry(
+        source=source,
+        category="footrest",
+        title="Internal note",
+        diagnostic="internal",
+        customer_steps=("Check and change rolling mechanism.",),
+    )
+    tips = step_enrich._pick_step_tips([internal], ("Note whether the footrest moves at all.",))
+    assert tips == ["Note whether the footrest moves at all."]
 
 
 def test_pick_step_tips_prefers_freshdesk_kb_over_qa_by_default():

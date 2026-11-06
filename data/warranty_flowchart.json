@@ -406,7 +406,7 @@
     "defect_air_pump_terminal": {
       "type": "terminal",
       "action": "awaiting_admin",
-      "prompt": "Our team will review your case and arrange the necessary service.",
+      "prompt": "Our team will review your case and follow up about next steps.",
       "internal_note": "Air never worked OR no air blowing from hose. Most likely air pump needs replacement.",
       "evidence_required": ["video_of_issue"]
     },
@@ -432,7 +432,7 @@
     "defect_air_arms_tech_terminal": {
       "type": "terminal",
       "action": "awaiting_admin",
-      "prompt": "Our team will review and arrange the necessary service.",
+      "prompt": "Our team will review your case and follow up about next steps.",
       "internal_note": "Air blowing from base hose but not inflating arms. Under warranty: tech needed — airbag leak or loose connection in arms.",
       "evidence_required": ["video_of_issue"]
     },
@@ -449,7 +449,7 @@
     "defect_air_shoulders_tech_terminal": {
       "type": "terminal",
       "action": "awaiting_admin",
-      "prompt": "Our team will review and arrange the necessary service for the shoulder / hip airbag.",
+      "prompt": "Our team will review the shoulder / hip airbag issue and follow up about next steps.",
       "internal_note": "Hissing heard = airbag has a leak or loose connection in shoulders/hips. Under warranty: tech needed.",
       "evidence_required": ["video_of_issue"]
     },
@@ -800,7 +800,7 @@
     "defect_rolling_no_movement_terminal": {
       "type": "terminal",
       "action": "awaiting_admin",
-      "prompt": "Our team will review and arrange the necessary service for the massage mechanism.",
+      "prompt": "Our team will review the massage mechanism issue and follow up about next steps.",
       "internal_note": "Massage heads do not move at all when powered off. Check fuse and powercord first; if both OK, likely Power PCB issue.",
       "evidence_required": ["video_of_issue"]
     },

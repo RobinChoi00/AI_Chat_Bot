@@ -1159,4 +1159,70 @@ def test_error_code_gate_midflow_side_question(client):
     assert "C6" in data["assistant_message"]
     assert data["ticket"]["current_node"]["node_id"] == "defect_problem_type"
 
+
+def test_heat_too_hot_label_is_not_swallowed_by_safety_handoff(client):
+    session_id = "cust-api-heat-label"
+    _register_model(client, session_id)
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "defect", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+    client.post(f"/api/v1/warranty/{ticket_id}/answer", json={"answer": "heat"})
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "Heat feels too hot or uneven"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    node = data["ticket"]["current_node"]
+    assert node["node_id"] == "defect_heating_too_hot_terminal"
+    assert "human_support_requested" not in (data["ticket"].get("collected") or {})
+    assert "stop using" in (data.get("assistant_message") or "").lower() or "too hot" in (
+        data.get("assistant_message") or ""
+    ).lower()
+
+
+def test_phone_question_at_delivery_intent_stays_on_the_menu(client):
+    session_id = "cust-api-phone-q"
+    _register_model(client, session_id)
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "delivery", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "what is your phone number?"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["ticket"]["current_node"]["node_id"] == "delivery_intent_q"
+    assert "888-848-2630" in (data.get("assistant_message") or "")
+    assert "don't have a specific answer" not in (data.get("assistant_message") or "")
+
+
+def test_instruction_option_label_advances(client):
+    session_id = "cust-api-recline-label"
+    _register_model(client, session_id)
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "defect", "domain": "osaki.com"},
+    )
+    ticket_id = start.json()["ticket"]["ticket_id"]
+    client.post(f"/api/v1/warranty/{ticket_id}/answer", json={"answer": "power"})
+    client.post(f"/api/v1/warranty/{ticket_id}/answer", json={"answer": "remote_on"})
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "recline_not_working"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ticket"]["current_node"]["node_id"] == "defect_power_recline_move_q"
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "Yes, it moves back to its default position when powered off"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ticket"]["current_node"]["node_id"] == "defect_power_actuator_terminal"
+
 # Privacy deploy gate lives in tests/test_warranty_privacy_smoke.py

@@ -13,6 +13,7 @@ from warranty_knowledge import (
     KnowledgeEntry,
     contextual_search_knowledge,
     customer_knowledge_entries,
+    customer_step_entries,
     search_knowledge,
     is_customer_instruction_safe,
     is_presentable_match_title,
@@ -112,7 +113,7 @@ _CATEGORY_ADMIN_PREP_HINTS: dict[str, tuple[str, ...]] = {
     ),
     "heat": (
         "Note how long you ran heat before deciding it failed and which zones feel cold or too hot.",
-        "Power cycle the chair once and retest heat for at least 10 minutes before follow-up.",
+        "If any area feels too hot, stop using heat and keep the chair off.",
     ),
     "voice": (
         "Note which voice commands you tried and whether background noise may be triggering the mic.",
@@ -604,8 +605,8 @@ _AIR_SUMMARY_LABELS: dict[str, str] = {
     "base_hose": "base or whole-chair air issues",
     "pump_no_air": "no air blowing from the hose or air never worked",
     "hose_fix": "a kinked or disconnected air hose",
-    "tech_needed": "air inflation after hose checks look OK",
-    "wg_install": "air issues that may relate to White Glove installation",
+    "tech_needed": "air still not inflating after the hose checks",
+    "wg_install": "an air issue after White Glove installation",
 }
 
 _FOOTREST_SUMMARY_LABELS: dict[str, str] = {
@@ -618,7 +619,7 @@ _POWER_SUMMARY_LABELS: dict[str, str] = {
     "remote_off": "a chair that will not power on",
     "no_response": "a remote that turns on but does not control the chair",
     "quick_control_ok": "a main remote issue while side controls still work",
-    "back_switch_sound": "power symptoms after toggling the back switch",
+    "back_switch_sound": "a sound from the chair when toggling the back switch",
     "recline_not_working": "a recline function that is not working",
     "moves_on_off": "a recline part that returns when powered off",
     "stays_stuck": "a recline part that stays stuck when powered off",
@@ -763,7 +764,7 @@ def build_install_air_hose_diagnosis(
     matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(_INSTALL_AIR_HOSE_STEPS)
     for entry in matches:
-        if customer_knowledge_entries((entry,)):
+        if customer_step_entries((entry,)):
             steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     steps = _dedupe_steps(steps)
 
@@ -828,7 +829,7 @@ def build_voice_diagnosis(
     matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     for entry in matches:
-        if customer_knowledge_entries((entry,)):
+        if customer_step_entries((entry,)):
             steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     steps = _dedupe_steps(steps)
 
@@ -873,7 +874,7 @@ def _merge_knowledge_steps(
     defect_category: Optional[str],
 ) -> list[str]:
     """Merge instructions from curated and human-approved knowledge only."""
-    for entry in customer_knowledge_entries(matches):
+    for entry in customer_step_entries(matches):
         steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     return steps
 
@@ -911,8 +912,8 @@ def build_rolling_noise_diagnosis(
     }
     when = labels.get(noise_type, "with the massage mechanism")
     summary = (
-        f"For your **{model_display}**, noise **{when}** is often related to the "
-        "**strap, back pad, or track area**. Try the steps below first."
+        f"For your **{model_display}**, you described noise **{when}**. "
+        "The steps below check the **strap, back pad, and track area** first."
     )
     return {
         "summary": summary,
@@ -964,8 +965,8 @@ def build_remote_diagnosis(
     model_display = (model_name or "your chair").strip()
     label = _REMOTE_SUMMARY_LABELS.get(symptom, "a remote or controller issue")
     summary = (
-        f"For your **{model_display}**, **{label}** can often be improved by checking "
-        "the **cable, fuse, and connections** below."
+        f"For your **{model_display}**, you described **{label}**. "
+        "The steps below check the **cable, fuse, and connections** first."
     )
     return {
         "summary": summary,
@@ -1017,8 +1018,8 @@ def build_power_diagnosis(
     model_display = (model_name or "your chair").strip()
     label = _POWER_SUMMARY_LABELS.get(symptom, "a power issue")
     summary = (
-        f"For your **{model_display}**, **{label}** is often related to the "
-        "**power cord, outlet, fuse, or back switch**. Try the steps below first."
+        f"For your **{model_display}**, you described **{label}**. "
+        "The steps below check the **power cord, outlet, fuse, and back switch** first."
     )
     return {
         "summary": summary,
@@ -1060,15 +1061,15 @@ def build_air_diagnosis(
     matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     for entry in matches:
-        if customer_knowledge_entries((entry,)):
+        if customer_step_entries((entry,)):
             steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     steps = _dedupe_steps(steps)
 
     model_display = (model_name or "your chair").strip()
     label = _AIR_SUMMARY_LABELS.get(symptom, "an air inflation issue")
     summary = (
-        f"For your **{model_display}**, **{label}** is often related to "
-        "**air hoses, connections, or the footrest-to-base hose**. Try the steps below first."
+        f"For your **{model_display}**, you described **{label}**. "
+        "The steps below check the **air hoses and connections** first."
     )
     if symptom == "footrest_air" and "white glove" in path_text.lower():
         summary = (
@@ -1114,15 +1115,15 @@ def build_footrest_diagnosis(
     matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     for entry in matches:
-        if customer_knowledge_entries((entry,)):
+        if customer_step_entries((entry,)):
             steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     steps = _dedupe_steps(steps)
 
     model_display = (model_name or "your chair").strip()
     label = _FOOTREST_SUMMARY_LABELS.get(symptom, "a footrest issue")
     summary = (
-        f"For your **{model_display}**, **{label}** can often be checked with "
-        "**power cycling, side panel buttons, and visible obstructions** below."
+        f"For your **{model_display}**, you described **{label}**. "
+        "The steps below start with **power cycling, the side panel buttons, and anything blocking it**."
     )
     return {
         "summary": summary,
@@ -1189,7 +1190,7 @@ _COSMETIC_STEPS: dict[str, tuple[str, ...]] = {
     "signed_damaged_visible": (
         "Take photos of the damage on the chair and the damaged shipping box.",
         "Locate the signed delivery receipt that notes 'Damaged' — a phone photo is fine.",
-        "Send all three together so our team can file the carrier claim quickly.",
+        "Send these together so our team can review the delivery damage.",
     ),
     "signed_damaged_box_ok": (
         "Take clear photos of the chair damage from multiple angles.",
@@ -1275,7 +1276,7 @@ def build_cosmetic_diagnosis(
     matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     for entry in matches:
-        if customer_knowledge_entries((entry,)):
+        if customer_step_entries((entry,)):
             steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     steps = _dedupe_steps(steps)
 
@@ -1283,7 +1284,7 @@ def build_cosmetic_diagnosis(
     label = _COSMETIC_SUMMARY_LABELS.get(symptom, "cosmetic damage")
     summary = (
         f"For your **{model_display}**, **{label}** is best handled by sending clear "
-        "photos so our team can assess repair vs. replacement."
+        "photos so our team can review it."
     )
     if symptom == "wg_install":
         summary = (
@@ -1519,16 +1520,16 @@ def build_heating_diagnosis(
     matches = customer_knowledge_entries(matches, model_name=model_name)
     steps: list[str] = list(base_steps)
     for entry in matches:
-        if customer_knowledge_entries((entry,)):
+        if customer_step_entries((entry,)):
             steps.extend(step for step in entry.customer_steps[:2] if _is_customer_safe_step(step))
     steps = _dedupe_steps(steps)
 
     model_display = (model_name or "your chair").strip()
     label = _HEATING_SUMMARY_LABELS.get(symptom, "a heating issue")
     summary = (
-        f"For your **{model_display}**, **{label}** is often related to the **heating "
-        "element, setting, or warm-up time**. Heat in massage chairs is intentionally mild "
-        "and builds up gradually — give it at least 10 minutes before deciding it's broken."
+        f"For your **{model_display}**, you described **{label}**. Heat in massage chairs is "
+        "intentionally mild and builds up gradually, so give it at least 10 minutes before "
+        "deciding it isn't working."
     )
     return {
         "summary": summary,
@@ -1570,7 +1571,7 @@ _DELIVERY_STEPS: dict[str, tuple[str, ...]] = {
     "missing_parts": (
         "Photograph everything that arrived, including the packing list if you have one.",
         "List each missing part (remote, side panels, bolts, accessories) as specifically as you can.",
-        "Keep all packaging until our team confirms the missing items have been shipped.",
+        "Keep all packaging until our team has reviewed what arrived.",
     ),
     "wrong_item": (
         "Photograph the item you received, including any model labels or serial stickers.",
@@ -1585,7 +1586,7 @@ _DELIVERY_STEPS: dict[str, tuple[str, ...]] = {
     "late_delivery": (
         "Save the promised delivery date from your confirmation email if you still have it.",
         "Note the last carrier scan time and location from tracking.",
-        "Our team will compare the carrier timeline to your order and follow up with options.",
+        "Our team will compare the carrier timeline to your order before following up.",
     ),
     "other_delivery_problem": (
         "Keep tracking and order details handy for our team.",
@@ -1596,12 +1597,12 @@ _DELIVERY_STEPS: dict[str, tuple[str, ...]] = {
         "Take clear photos of the chair damage and the shipping box from multiple angles.",
         "Note exactly when you first saw the damage relative to delivery (same day, next day, etc.).",
         "Keep the packaging if possible — our team may use it to file a courtesy claim with the carrier.",
-        "Be honest about the signed receipt so our team can match the right resolution path for you.",
+        "If you have the signed delivery receipt, a phone photo of it helps our team review the case.",
     ),
     "visible_at_unboxing": (
         "Take photos of the chair damage and the damaged box BEFORE moving the chair.",
         "Locate the signed delivery receipt that says 'Damaged' — a phone photo of it is fine.",
-        "Send all three together (damage, box, signed receipt) so our team can file the carrier claim quickly.",
+        "Send all three together (damage, box, signed receipt) so our team can review the delivery damage.",
         "Do not throw away the box until our team has reviewed your photos.",
     ),
     "noticed_later": (
@@ -1769,6 +1770,8 @@ def build_workflow_diagnosis(
         fallback_len=len(fallback),
         defect_category=defect_category,
     )
+    if not steps and defect_category:
+        steps = list(category_fallback_hints(defect_category))
     steps = _dedupe_steps(steps)
 
     if matches:
@@ -1884,7 +1887,7 @@ def soften_terminal_prompt(prompt: str) -> str:
         lower,
     ):
         return (
-            "We've noted everything from your workflow answers. If you'd like our team involved, "
+            "I've noted your answers. If you'd like our team involved, "
             "they will review your case and follow up with next steps."
         )
     return ""

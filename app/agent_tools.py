@@ -227,7 +227,7 @@ def tool_source_evidence(name: str, result: str) -> List[Dict[str, Any]]:
             except (ValueError, TypeError, AttributeError):
                 continue
     elif name == "get_repair_help" and result.startswith("VERIFIED_REPAIR_GUIDANCE:"):
-        allowed = {"qa_csv", "auto_check", "fault_judgment", "fonz_error_code", "freshdesk_kb", "freshdesk_qa", "reviewed_knowledge"}
+        allowed = {"freshdesk_kb", "freshdesk_qa", "reviewed_knowledge"}
         for line in result.splitlines():
             if line.startswith("SOURCE_TYPE: ") and (source := line.split(": ", 1)[1]) in allowed:
                 item = {"source_type": source, "available": True}
@@ -586,11 +586,11 @@ def tool_get_repair_help(
     if not str(model_name or "").strip():
         return "NO_RESULTS: Ask for the exact chair model before giving model-specific repair guidance. Do not infer a model from the error code." + suppress
     from warranty_knowledge import (  # noqa: WPS433
-        customer_knowledge_entries, is_customer_instruction_safe, search_knowledge,
+        customer_step_entries, is_customer_instruction_safe, search_knowledge,
         _is_customer_safe_step,
     )
     query = f"error code {error_code} {issue_description}" if error_code else issue_description
-    entries = customer_knowledge_entries(
+    entries = customer_step_entries(
         search_knowledge(path_text=query, model_name=model_name, limit=5),
         model_name=model_name,
     )

@@ -326,8 +326,9 @@ def _notification_copy(language: str, sent: bool, status: str | None) -> str:
                 "ko": "지원팀 수신함으로 알림을 제출했습니다. 콜백은 아직 예약되지 않았습니다. ",
                 "es": "Se ha enviado una notificación al buzón de soporte. Todavía no se ha reservado una llamada de seguimiento. "}[language]
     if language == "en":
-        pending = "The support notification is queued; delivery has not been confirmed. " if status in {"pending", "processing"} else ""
-        return "I haven't sent a notification or booked a callback. " + pending
+        if status in {"pending", "processing"}:
+            return "A support notification is queued, but its delivery has not been confirmed. A callback has not been booked. "
+        return "Delivery of a support notification has not been confirmed. A callback has not been booked. "
     if status in {"pending", "processing"}:
         return {"ko": "지원팀 알림이 발송 대기 중입니다. 전달 완료는 아직 확인되지 않았으며, 콜백도 예약되지 않았습니다. ",
                 "es": "La notificación a soporte está en cola; su entrega aún no está confirmada. Todavía no se ha reservado una llamada de seguimiento. "}[language]

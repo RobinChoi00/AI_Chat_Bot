@@ -55,7 +55,7 @@ def test_repeated_human_requests_interrupt_before_node_mapping_and_preserve_cont
         assert body["ticket"]["current_node"]["options"] == []
         assert body["handoff"]["requested"] is True
         assert body["handoff"]["notification_sent"] is False
-        assert "haven't sent a notification" in body["assistant_message"]
+        assert "callback has not been booked" in body["assistant_message"]
     stored = wf.WarrantyEngine.get_ticket(ticket_id)
     assert stored.current_node_id == previous
     assert stored.model_name == "OS-4000T"

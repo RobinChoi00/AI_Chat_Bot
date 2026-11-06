@@ -58,6 +58,16 @@ def test_sales_topics_are_not_forced_into_a_menu_choice(text):
     assert map_delivery_free_text("delivery_intent_q", text) is None
 
 
+@pytest.mark.parametrize("text", [
+    "when will a technician come?",
+    "where do I find the model number?",
+    "what's the status of my case?",
+    "how long is the warranty?",
+])
+def test_support_questions_are_not_delivery_status(text):
+    assert map_delivery_free_text("delivery_intent_q", text) is None
+
+
 def test_wrong_item_is_not_treated_as_an_address_change():
     assert delivery_sales_topic("they sent the wrong chair") is None
 

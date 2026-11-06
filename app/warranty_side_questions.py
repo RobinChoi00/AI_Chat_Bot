@@ -19,11 +19,16 @@ from delivery_intake import (
     is_plausible_order_id,
     is_plausible_tracking_number,
 )
+from warranty_common_questions import (
+    try_confusion_common_question,
+    try_factual_common_question,
+    WARRANTY_PHONE,
+    WARRANTY_TEAM_EMAIL,
+)
 from warranty_intake_context import enrich_path_text
-from warranty_knowledge import contextual_search_knowledge
+from warranty_knowledge import contextual_search_knowledge, customer_step_entries
 from warranty_self_help import (
     _collect_fallback_hints,
-    _friendly_match_summary,
     build_path_text,
     infer_defect_category_from_turns,
 )
@@ -203,7 +208,7 @@ def _looks_like_faq_question(text: str) -> bool:
 
 
 def _matches_option_heuristic(node: dict, text: str) -> bool:
-    if node.get("type") != "question":
+    if not (node.get("options") or []):
         return False
     from warranty_nlp import _heuristic_option_match  # noqa: WPS433
 
@@ -217,18 +222,20 @@ def _looks_like_valid_workflow_answer(node: dict, text: str) -> bool:
     if not raw:
         return False
 
-    if node.get("type") == "question":
+    options = list(node.get("options") or [])
+    if options:
         from delivery_intake import map_delivery_free_text  # noqa: WPS433
         from warranty_error_code_gate import is_gate_node, map_gate_free_text  # noqa: WPS433
+        from warranty_common_questions import looks_like_factual_common_question  # noqa: WPS433
 
-        node_id = str(node.get("node_id") or "")
+        if looks_like_factual_common_question(raw):
+            return False
         if map_delivery_free_text(node_id, raw):
             return True
         if is_gate_node(node_id):
             mapped = map_gate_free_text(node_id, raw)
             if mapped:
                 return True
-        options = list(node.get("options") or [])
         keys = {_normalize(str(o.get("answer_key") or "")) for o in options}
         if _normalize(raw) in keys:
             return True
@@ -281,12 +288,15 @@ def _format_knowledge_side_answer(
         ticket,
     )
     defect_category = infer_defect_category_from_turns(turns)
-    matches = contextual_search_knowledge(
-        path_text=path_text,
-        issue_type=issue_type,
-        defect_category=defect_category,
-        model_name=model_name,
-        limit=2,
+    matches = customer_step_entries(
+        contextual_search_knowledge(
+            path_text=path_text,
+            issue_type=issue_type,
+            defect_category=defect_category,
+            model_name=model_name,
+            limit=2,
+        ),
+        model_name=model_name or None,
     )
     node_id = str(node.get("node_id") or "")
     fallback = _collect_fallback_hints(turns, node_id)
@@ -295,18 +305,16 @@ def _format_knowledge_side_answer(
     if not matches and not tips:
         return None
 
-    if matches:
-        summary = _friendly_match_summary(
-            matches,
-            defect_category=defect_category,
-            model_name=model_name,
-            issue_type=issue_type or "warranty",
+    model_display = (model_name or "your chair").strip()
+    if defect_category:
+        summary = (
+            f"Here's a published check we can share for the **{defect_category}** "
+            f"issue on your **{model_display}** before the next step."
         )
     else:
-        model_display = (model_name or "your chair").strip()
         summary = (
-            f"Here's what we can share about your **{model_display}** before we "
-            "continue with the next step."
+            f"Here's a published check we can share about your **{model_display}** "
+            "before the next step."
         )
 
     return format_step_message(
@@ -332,12 +340,19 @@ def try_answer_side_question(
     text = (answer or "").strip()
     if not text or not node:
         return None
+    factual = try_factual_common_question(node, text, ticket=ticket)
+    if factual:
+        return factual
     progress = _order_progress_reply(node, text, ticket)
     if progress:
         return progress
     delivery = _delivery_side_reply(node, text, issue_type)
     if delivery:
         return delivery
+    if not _looks_like_valid_workflow_answer(node, text):
+        confusion = try_confusion_common_question(node, text)
+        if confusion:
+            return confusion
     if not _should_handle_side_question(node, text):
         return None
 
@@ -369,8 +384,9 @@ def try_answer_side_question(
 
     if _looks_like_faq_question(text):
         return (
-            "I don't have a specific answer for that in our records yet, but we "
-            "can keep going with your warranty case.\n\n"
+            f"I don't have a published answer for that in this chat. "
+            f"Warranty support is **{WARRANTY_PHONE}**. Email **{WARRANTY_TEAM_EMAIL}**. "
+            "This chat cannot approve a replacement, refund, or repair quote.\n\n"
             f"{_reprompt_current(node)}"
         )
 

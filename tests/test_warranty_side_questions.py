@@ -118,6 +118,41 @@ def test_delivery_faq_side_question_does_not_show_defect_tips(monkeypatch):
     assert "order number" in msg.lower()
 
 
+def test_technician_qa_csv_is_not_shown_as_a_side_answer(monkeypatch):
+    import warranty_knowledge as wk
+
+    tech = wk.KnowledgeEntry(
+        source="qa_csv",
+        category="air",
+        title="chair has no air at all",
+        diagnostic="The number of laps detected that Hall was damaged",
+        customer_steps=("Check and change rolling mechanism",),
+    )
+    monkeypatch.setattr(wk, "contextual_search_knowledge", lambda **kwargs: [tech])
+    monkeypatch.setattr(wk, "search_knowledge", lambda **kwargs: [tech])
+
+    node = {
+        "node_id": "defect_air_location",
+        "type": "question",
+        "prompt": "Which area has no air?",
+        "options": [
+            {"answer_key": "feet", "label": "Feet / Calves"},
+            {"answer_key": "back", "label": "Back"},
+        ],
+    }
+    msg = try_answer_side_question(
+        node=node,
+        answer="what does this mean?",
+        model_name="OS-4000T",
+        issue_type="defect",
+        turns=[],
+    )
+    assert msg is not None
+    assert "Hall was damaged" not in msg
+    assert "chair has no air at all" not in msg
+    assert "Check and change rolling mechanism" not in msg
+
+
 def test_faq_without_knowledge_still_reprompts():
     node = {
         "node_id": "install_concern",

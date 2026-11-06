@@ -25,6 +25,7 @@ from warranty_intake_context import intake_aware_step_summary
 from warranty_knowledge import (
     KnowledgeEntry,
     customer_knowledge_entries,
+    customer_step_entries,
     is_presentable_match_title,
 )
 from warranty_self_help import (
@@ -181,7 +182,7 @@ def _pick_step_tips(
     max_tips: int = 2,
     prefer_freshdesk: bool = False,
 ) -> list[str]:
-    matches = customer_knowledge_entries(matches)
+    matches = customer_step_entries(matches)
     tips: list[str] = []
     seen: set[str] = set()
 
@@ -397,16 +398,25 @@ def build_step_enrichment(
     )
     matches = [fonz_entry] if fonz_entry else []
 
-    fallback = _collect_fallback_hints(turns, node_id)
-    if not fallback and defect_category:
-        fallback = category_fallback_hints(defect_category)
-    tips = _pick_step_tips(matches, fallback, prefer_freshdesk=False)
+    def _tips_for(answered: list, at_node: str) -> list[str]:
+        hints = _collect_fallback_hints(answered, at_node)
+        category = infer_defect_category_from_turns(answered)
+        if not hints and category:
+            hints = category_fallback_hints(category)
+        return _pick_step_tips(matches, hints, prefer_freshdesk=False)
+
     from warranty_intake_context import filter_completed_check_steps
 
-    tips = filter_completed_check_steps(tips, ticket=ticket, turns=turns)
+    tips = filter_completed_check_steps(_tips_for(turns, node_id), ticket=ticket, turns=turns)
 
     if not tips:
         return None
+    previous_node = _turn_text(turns[-1], "node_id")
+    if previous_node and len(turns) > 1 and not fonz_entry:
+        earlier = filter_completed_check_steps(_tips_for(turns[:-1], previous_node), ticket=ticket, turns=turns[:-1])
+        if earlier == tips:
+            # The customer saw these exact tips on the previous question.
+            return None
 
     if fonz_entry:
         summary = _step_enrichment_summary(

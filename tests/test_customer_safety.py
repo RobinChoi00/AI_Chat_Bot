@@ -101,7 +101,8 @@ def test_localized_safety_copy_has_safe_actions_and_truthful_pending_status(lang
     assert "submitted to our support inbox" not in text
     if language == "en":
         assert "Do not run another test" in text
-        assert "haven't sent a notification" in text
+        assert "queued" in text
+        assert "callback has not been booked" in text
 
 
 @pytest.mark.parametrize("language,submitted,unbooked", [
@@ -121,7 +122,7 @@ def test_english_default_copy_remains_compatible_and_generic_requests_localize()
                     "Do not run another test, resume use, or open panels. "
                     "If there is an active fire or immediate danger, move away and contact local emergency services. "
                     "I've saved the reported safety concern and conversation context with this case for team review. "
-                    "I haven't sent a notification or booked a callback. Please call **PHONE** for direct support.")
+                    "Delivery of a support notification has not been confirmed. A callback has not been booked. Please call **PHONE** for direct support.")
     assert "담당자 상담 요청" in support_handoff_message("ko", "PHONE")
     assert "solicitud de llamada" in support_handoff_message("es", "PHONE", "callback_request")
 

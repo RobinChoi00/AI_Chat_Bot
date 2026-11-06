@@ -322,6 +322,24 @@ def customer_knowledge_entries(
     ]
 
 
+# Factory error tables, Auto-Check, fault judgment, and the internal Q&A sheet are
+# technician notes (often machine-translated). They can inform matching, but only
+# published articles and human-reviewed procedures may become customer steps.
+_CUSTOMER_STEP_SOURCES = frozenset({"freshdesk_kb", "freshdesk_qa", "reviewed_knowledge"})
+
+
+def customer_step_entries(
+    entries,
+    *,
+    model_name: Optional[str] = None,
+) -> list[KnowledgeEntry]:
+    """Entries whose customer_steps may be shown to a customer verbatim."""
+    return [
+        entry for entry in customer_knowledge_entries(entries, model_name=model_name)
+        if entry.source in _CUSTOMER_STEP_SOURCES
+    ]
+
+
 def _model_signature(text: str) -> str:
     tokens = re.findall(r"[a-z0-9]+", str(text or "").lower())
     noise = {"osaki", "titan", "os", "massage", "chair", "model"}

@@ -27,6 +27,8 @@ def test_is_plausible_order_id_accepts_common_formats():
 def test_is_plausible_order_id_rejects_sentences():
     assert not is_plausible_order_id("give me size of the box")
     assert not is_plausible_order_id("what is my order")
+    assert not is_plausible_order_id("asdfgh")
+    assert not is_plausible_order_id("qwerty")
 
 
 def test_is_plausible_tracking_number_accepts_carrier_formats():

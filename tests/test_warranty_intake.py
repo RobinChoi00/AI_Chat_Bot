@@ -257,6 +257,11 @@ def test_extract_sanitizes_llm_power_guess_for_code_only(monkeypatch):
         "_fonz_prefill_from_text",
         lambda text: None,
     )
+    monkeypatch.setattr(
+        warranty_intake,
+        "_keyword_workflow_prefill",
+        lambda text: None,
+    )
     payload = {
         "answer_keys": ["warranty", "defect", "power"],
         "model_name": "Hiro",

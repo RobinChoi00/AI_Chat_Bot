@@ -1974,7 +1974,11 @@ def _delivery_identity_reply(engine, ticket_id: str, node: Optional[dict], answe
     Returns (reply, answer): a reply keeps the question open; otherwise answer
     is the text to submit, combined from both pieces when available.
     """
-    from delivery_intake import IDENTITY_NODES, delivery_identity_parts  # noqa: WPS433
+    from delivery_intake import IDENTITY_NODES, delivery_identity_parts, detect_delivery_spec_question  # noqa: WPS433
+    from warranty_common_questions import (  # noqa: WPS433
+        looks_like_confusion,
+        looks_like_factual_common_question,
+    )
 
     node_id = str((node or {}).get("node_id") or "")
     if node_id not in IDENTITY_NODES:
@@ -1984,6 +1988,14 @@ def _delivery_identity_reply(engine, ticket_id: str, node: Optional[dict], answe
         return None, answer
     from pii_redact import mask_email  # noqa: WPS433
 
+    if (
+        looks_like_factual_common_question(answer)
+        or looks_like_confusion(answer)
+        or detect_delivery_spec_question(answer)
+        or re.search(r"[\uac00-\ud7a3]", answer)
+    ):
+        return None, answer
+
     collected = ticket.get_collected()
     order, email = delivery_identity_parts(answer)
     order = order or str(collected.get("pending_order_number") or collected.get("order_number") or "").lstrip("#")
@@ -1992,14 +2004,19 @@ def _delivery_identity_reply(engine, ticket_id: str, node: Optional[dict], answe
     if order and email:
         return None, f"#{order} {email}"
     if not order and not email:
+        prompt = str((node or {}).get("prompt") or "").strip()
         if declined:
             return (
                 "Your order number is in the order confirmation email (for example #12345). "
                 "Please send it together with the email used at checkout. If you can't find it, "
                 "send the checkout email and Sales can help locate the order.\n\n"
-                f"{str((node or {}).get('prompt') or '').strip()}"
+                f"{prompt}"
             ), answer
-        return None, answer
+        return (
+            "To look up your delivery, please send your **order number** and the "
+            "**email address** used at checkout together — for example `#12345 buyer@example.com`.\n\n"
+            f"{prompt}"
+        ), answer
     if node_id != "delivery_status_get_order_email":
         # A damage report only needs something our team can match; the status lookup needs both.
         return None, answer
@@ -2918,6 +2935,9 @@ async def natural_start_warranty(
         )
 
     if not issue_type:
+        side = _maybe_side_question_message(engine, ticket_id, message)
+        if side:
+            return _build_side_question_response(engine, ticket_id, side, customer_text=message)
         model_name = str(getattr(ticket, "model_name", "") or "")
         clarify = build_clarifying_issue_type_message(message, model_name=model_name)
         return _build_side_question_response(engine, ticket_id, clarify)
@@ -3144,8 +3164,12 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
         raise HTTPException(status_code=422, detail="answer must not be empty")
 
     from warranty_scope import human_support_reason, is_order_cancel_request  # noqa: WPS433
+    from warranty_common_questions import _is_exact_option_text  # noqa: WPS433
 
-    human_reason = _support_interrupt_reason(answer)
+    node = engine.get_current_node(ticket_id)
+    # Exact menu labels (e.g. "Heat feels too hot or uneven") are workflow
+    # answers. Heuristic synonym hits must not skip a real safety report.
+    human_reason = None if _is_exact_option_text(node or {}, answer) else _support_interrupt_reason(answer)
     if human_reason or ticket.get_collected().get("human_support_requested"):
         return _request_human_handoff(engine, str(ticket.session_id), answer, str(ticket.domain),
             reason=human_reason or str(ticket.get_collected().get("human_support_reason") or "customer_request"))

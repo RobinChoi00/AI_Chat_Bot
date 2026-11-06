@@ -49,10 +49,12 @@ _WEIGHT_Q_RE = re.compile(
 
 _CHAIR_DIMENSIONS_Q_RE = re.compile(
     r"\b(chair|unit|massage chair).{0,30}\b(dimension|dimensions|size|wide|"
-    r"width|height|depth|long)\b|"
+    r"width|height|depth|length)\b|"
     r"\b(dimension|dimensions|size).{0,30}\b(chair|unit|massage chair)\b|"
     r"\bhow (wide|tall|deep)\b|"
-    r"\bhow long\b(?!.{0,40}\b(take|takes|ship|shipping|deliver|delivery|arrive|wait|transit|days?|weeks?)\b)",
+    r"\bhow long (is|are) (the |this |my |your |that )?(chair|unit|massage chair|it|footrest|legrest)\b"
+    r"(?!.{0,30}\b(warranty|covered|coverage|take|last|going|been|out|gone)\b)|"
+    r"\bhow long\b.{0,20}\b(when|fully)\s+(reclined|extended|flat)\b",
     re.IGNORECASE,
 )
 
@@ -114,6 +116,8 @@ def is_plausible_order_id(text: str) -> bool:
     if not clean or " " in clean:
         return False
     if _QUESTION_WORDS_RE.search(clean):
+        return False
+    if not any(char.isdigit() for char in clean):
         return False
     return bool(_ORDER_ID_RE.fullmatch(clean))
 
@@ -351,10 +355,21 @@ def tracking_number_explainer(text: str) -> Optional[str]:
     return None
 
 
+_NOT_DELIVERY_STATUS_RE = re.compile(
+    r"\btechnician\b|\btech(?:nician)? visit\b|\bmodel number\b|"
+    r"\bstatus of my (?:case|ticket|claim|warranty)\b|"
+    r"\b(?:case|ticket|claim) status\b|"
+    r"\bhow long is (?:the |my )?warrant",
+    re.I,
+)
+
+
 def map_delivery_free_text(node_id: str, text: str) -> Optional[str]:
     """Map a free-text reply on a delivery menu to one answer_key, or None."""
     raw = (text or "").strip()
     if not raw or delivery_sales_topic(raw) or tracking_number_explainer(raw):
+        return None
+    if _NOT_DELIVERY_STATUS_RE.search(raw):
         return None
     if node_id == "delivery_intent_q":
         already_came = re.search(r"\b(arrived|came|delivered|showed up|got (it|here))\b", raw, re.I)
