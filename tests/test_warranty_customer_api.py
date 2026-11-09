@@ -1095,7 +1095,7 @@ def test_smart_start_answers_opening_questions_instead_of_the_issue_menu(client,
         (
             "cust-open-glove",
             "Does the $275 White Glove Delivery include full assembly in my living room?",
-            ("white glove", "ext. 2"),
+            ("white glove", "$275", "ext. 2"),
         ),
         (
             "cust-open-bt",

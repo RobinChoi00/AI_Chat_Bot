@@ -296,12 +296,14 @@ def _model_where_answer() -> str:
 def _white_glove_answer(domain: str) -> str:
     url = _policy_url(domain, "pages/shipping-handling")
     return (
-        "**White Glove** is in-home delivery plus assembly of the chair, for an extra fee. "
+        "**White Glove** is in-home delivery plus assembly of the chair. "
         "Standard curbside delivery does not include assembly. "
-        "This chat cannot confirm a dollar amount, add White Glove to an order, or book a crew.\n\n"
+        "The published **basic White Glove fee is $275**. Extra charges can apply for "
+        "stairs (a third person, **$120–$300**), more on-site time, added distance, "
+        "or a redelivery attempt. This chat cannot add White Glove to an order or book a crew.\n\n"
         "Published details: the usual team is two people; they do not move your furniture, "
         "remove doors, or haul away an old chair. The White Glove fee is not refundable. "
-        "Sales confirms the current fee and whether it is on your order.\n\n"
+        "Sales confirms the amount for your address and whether it is on your order.\n\n"
         f"Full details: {url}\n\n"
         f"Call **{SALES_PHONE}** for White Glove, fees, or scheduling."
     )

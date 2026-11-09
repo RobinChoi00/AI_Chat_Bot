@@ -240,7 +240,8 @@ def _localize_korean(result, prefs: dict):
         return result
     shipping = any(tool in result.tools_used for tool in ['policy.shipping', 'policy.white_glove'])
     shipping_copy = ('기본 배송은 집 앞(커브사이드) 배송이며 조립은 포함되지 않습니다. 공개된 배송 기간은 최대 2주입니다. '
-                     'White Glove(화이트 글러브) 배송은 추가 요금으로 실내 반입과 조립이 포함되며, 공개된 배송 기간은 최대 3주입니다. '
+                     'White Glove(화이트 글러브) 배송은 실내 반입과 조립이 포함되며, 공개된 기본 요금은 $275입니다. '
+                     '계단 추가 인력, 현장 시간, 거리 등에 따라 금액이 더 붙을 수 있습니다. 공개된 배송 기간은 최대 3주입니다. '
                      'White Glove 요금은 환불되지 않습니다. 이 기간은 특정 배송 날짜를 확정하는 것이 아닙니다.') if shipping else ''
     if shipping:
         urls = re.findall(r'https://[^\s)]+', result.reply)
@@ -330,7 +331,8 @@ def localize_reply(result, language: str, prefs: dict):
         return result
     shipping = any(tool in result.tools_used for tool in ['policy.shipping', 'policy.white_glove'])
     shipping_copy = ('El envío estándar es a pie de calle y no incluye montaje; el plazo publicado es de hasta 2 semanas. '
-                     'White Glove añade entrega dentro de casa y montaje por un cargo adicional, con un plazo publicado de hasta 3 semanas. '
+                     'White Glove añade entrega dentro de casa y montaje. La tarifa básica publicada es de $275; '
+                     'pueden aplicarse cargos extra por escaleras, tiempo en sitio o distancia. El plazo publicado es de hasta 3 semanas. '
                      'El cargo de White Glove no es reembolsable. Estos plazos no confirman una fecha concreta.') if shipping else ''
     if shipping:
         urls = re.findall(r'https://[^\s)]+', result.reply)

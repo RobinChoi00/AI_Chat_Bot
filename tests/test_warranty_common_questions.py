@@ -215,6 +215,8 @@ def test_opening_questions_from_real_customer_turns_are_answered():
         ),
         "Does the $275 White Glove Delivery include full assembly and installation in my living room? Will the delivery team set up the chair, test that it works properly, and remove all packaging?": (
             "White Glove",
+            "$275",
+            "extra charges",
             "ext. 2",
         ),
         "How do I pair my chair with Bluetooth? My Bluetooth is set up on my ohone": (
@@ -238,7 +240,8 @@ def test_opening_questions_from_real_customer_turns_are_answered():
             assert needle.lower() in lower, (text, needle)
         assert "don't have a specific answer" not in lower
         assert "wasn't fully sure" not in lower
-        assert "$275" not in msg
+        if "white glove" not in text.lower():
+            assert "$275" not in msg
 
 
 def test_bluetooth_pairing_failure_is_not_a_how_to_faq():

@@ -544,7 +544,8 @@ def _ask_question_before_human() -> SalesReply:
 
 def _shopping_facts_lines() -> list[str]:
     return [
-        "- **Shipping:** up to **2 weeks** curbside, **3 weeks** White Glove.",
+        "- **Shipping:** up to **2 weeks** curbside, **3 weeks** White Glove. "
+        "Published basic White Glove fee is **$275**; extras can apply.",
         "- **Returns:** 30 days from delivery; you pay shipping both ways; "
         "White Glove fee is not refundable.",
         "- **Financing:** Affirm at checkout (I won't quote a rate).",

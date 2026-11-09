@@ -331,6 +331,14 @@ def test_tablet_install_does_not_invent_a_tablet_service():
     assert "3 weeks" in answer
 
 
+def test_white_glove_states_published_basic_fee_and_extras():
+    answer = policy_answer(TOPIC_WHITE_GLOVE, "osakiusa.com").lower()
+    assert "$275" in answer
+    assert "basic" in answer
+    assert "$120" in answer and "$300" in answer
+    assert "not a final quote" in answer or "extra charges" in answer
+
+
 def test_want_a_new_chair_is_not_refurbished():
     assert detect_topic("I want a new chair") is None
     assert classify("I want a new chair").label != INTENT_PREPURCHASE_POLICY
