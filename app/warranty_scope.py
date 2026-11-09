@@ -59,6 +59,54 @@ _SALES_ONLY_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PRE_PURCHASE_SALES_RE = re.compile(
+    r"\b("
+    r"haven'?t\s+(?:bought|purchased|ordered)|have\s+not\s+(?:bought|purchased)|"
+    r"considering\s+(?:to\s+buy|buying)|interested\s+in\s+(?:buying|purchasing)|"
+    r"looking\s+for\s+(?:a\s+|an\s+)?(?:\d+d\s+|massage\s+)?(?:chair|seat)|"
+    r"sales\s+(?:team|rep(?:resentative)?|department|specialist)|"
+    r"connect\s+me\s+with\s+(?:a\s+)?sales|"
+    r"black\s+friday|price\s+match|"
+    r"fsa|hsa|flexible\s+spending|health\s+savings"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_WHITE_GLOVE_POLICY_RE = re.compile(
+    r"\bwhite[- ]?glove\b.{0,90}\b("
+    r"include|included|assembly|install|set\s*up|living\s+room|packaging|"
+    r"what(?:'s| is) (?:included|in)|fee|cost|\$\d"
+    r")|"
+    r"\b("
+    r"include|included|assembly|install|set\s*up|what(?:'s| is) included"
+    r").{0,90}\bwhite[- ]?glove\b",
+    re.IGNORECASE,
+)
+
+_HALLWAY_FIT_RE = re.compile(
+    r"\b(?:tight|narrow)\s+(?:hallway|doorway|stair(?:s|case)?)\b|"
+    r"\b(?:hallway|doorway|stair(?:s|case)?)\b.{0,50}\b(?:fit|ok|okay|delivery|deliver)|"
+    r"\bfit\s+(?:through|in)\s+(?:the\s+|my\s+|a\s+)?(?:hallway|door|doorway|stair)",
+    re.IGNORECASE,
+)
+
+_SALES_CONTACT_RE = re.compile(
+    r"\bsales\s+(?:team|rep(?:resentative)?|department|specialist)\b|"
+    r"\b(?:connect|speak|talk|email).{0,40}\bsales\b|"
+    r"\bsales.{0,24}\b(?:email|chat|phone)\b",
+    re.IGNORECASE,
+)
+
+_OWNED_CHAIR_RE = re.compile(
+    r"\b("
+    r"my\s+(?:chair|unit)\s+(?:is|won'?t|doesn'?t|does\s+not)|"
+    r"not\s+working|malfunction|defect|broken|"
+    r"won'?t\s+(?:turn|power|start|inflate)|error\s*code|"
+    r"need\s+(?:a\s+)?new\s+(?:touch\s*)?screen|rattl"
+    r")\b",
+    re.IGNORECASE,
+)
+
 # Pre-purchase shipping eligibility (not post-purchase tracking / damage claims).
 _RESTRICTED_SHIP_REGION_RE = re.compile(
     r"\b("
@@ -166,6 +214,37 @@ def is_order_cancel_request(text: str) -> bool:
     return bool(_ORDER_CANCEL_RE.search(raw))
 
 
+def is_pre_purchase_sales(text: str) -> bool:
+    """True for buying, sales-team, White Glove policy, or fit-before-order questions."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if _POST_PURCHASE_DELIVERY_RE.search(raw):
+        return False
+    if _OWNED_CHAIR_RE.search(raw) and not _PRE_PURCHASE_SALES_RE.search(raw):
+        return False
+    if _PRE_PURCHASE_SALES_RE.search(raw):
+        return True
+    if _WHITE_GLOVE_POLICY_RE.search(raw):
+        return True
+    if _HALLWAY_FIT_RE.search(raw) and re.search(
+        r"\b(?:haven'?t|have not|not yet)\s+(?:bought|purchased|ordered)\b|"
+        r"\bbought anything yet\b",
+        raw,
+        re.I,
+    ):
+        return True
+    return False
+
+
+def wants_sales_contact(text: str) -> bool:
+    """True when the customer asked for Sales, not Warranty."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    return bool(_SALES_CONTACT_RE.search(raw) or is_pre_purchase_sales(raw))
+
+
 def build_order_cancel_handoff_message() -> str:
     """Minimal confirmation — no cancel policy advice from the bot."""
     return (
@@ -211,6 +290,8 @@ def is_delivery_inquiry(text: str) -> bool:
     """True for post-purchase delivery / tracking supported by this chat."""
     raw = (text or "").strip()
     if not raw:
+        return False
+    if is_pre_purchase_sales(raw):
         return False
     if _normalize(raw) == "delivery":
         return True
@@ -309,6 +390,11 @@ def evaluate_warranty_scope(
 
     if is_sales_workflow_answer(raw):
         return WarrantyScopeDecision(in_scope=False, reason="sales")
+
+    # Buying, sales-team, White Glove policy, and fit-before-order questions
+    # stay out of the warranty flowchart even if they mention "warranty" or "delivery".
+    if is_pre_purchase_sales(raw):
+        return WarrantyScopeDecision(in_scope=False, reason="sales_topic")
 
     # Pre-purchase HI/AK/Guam / free-shipping questions must not enter the
     # post-purchase delivery flowchart (even though they contain "delivery").

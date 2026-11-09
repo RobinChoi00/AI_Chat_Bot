@@ -19,6 +19,12 @@ SUPPORTED_STOREFRONT_DOMAINS = frozenset(
     }
 )
 
+STORE_KEY_PREFIXES = ("OSAKIUSA", "TITANCHAIR", "OSAKIMASSAGE", "OSAKITITAN")
+_LEGACY_STORE_PREFIX = {
+    "OSAKIUSA": "OSAKI",
+    "TITANCHAIR": "TITAN",
+}
+
 
 def normalize_storefront_domain(target_domain: str) -> str:
     """Return a lower-case hostname without scheme, path, port, or ``www``."""
@@ -41,14 +47,23 @@ def is_supported_storefront_domain(target_domain: str) -> bool:
 def get_store_key_prefix(target_domain: str) -> str:
     lowered = (target_domain or "").lower()
     if "titanchair.com" in lowered or "osakichair.com" in lowered:
-        return "TITAN"
+        return "TITANCHAIR"
     if "osakimassagechair.com" in lowered:
         return "OSAKIMASSAGE"
     if "osaki-titan.com" in lowered or "osakititan.com" in lowered:
         return "OSAKITITAN"
-    if "osakiusa.com" in lowered:
-        return "OSAKI"
-    return "OSAKI"
+    return "OSAKIUSA"
+
+
+def getenv_store(prefix: str, suffix: str) -> str:
+    """Read ``{PREFIX}_{SUFFIX}``, then a renamed legacy prefix if needed."""
+    value = os.getenv(f"{prefix}_{suffix}", "").strip()
+    if value:
+        return value
+    legacy = _LEGACY_STORE_PREFIX.get(prefix, "")
+    if legacy:
+        return os.getenv(f"{legacy}_{suffix}", "").strip()
+    return ""
 
 
 def get_storefront_base_url(target_domain: str) -> str:
@@ -73,7 +88,7 @@ def get_order_tracking_page_url(target_domain: str) -> str:
     ``ORDER_TRACKING_PAGE_URL`` in the environment.
     """
     prefix = get_store_key_prefix(target_domain)
-    env_url = os.getenv(f"{prefix}_ORDER_TRACKING_URL", "").strip()
+    env_url = getenv_store(prefix, "ORDER_TRACKING_URL")
     if env_url:
         return env_url
     global_url = os.getenv("ORDER_TRACKING_PAGE_URL", "").strip()
@@ -86,15 +101,15 @@ def get_order_tracking_page_url(target_domain: str) -> str:
 def get_store_config(target_domain: str) -> Dict[str, str]:
     """Resolve per-store Shopify and Track123 credentials from env."""
     prefix = get_store_key_prefix(target_domain)
-    track123_key = os.getenv(f"{prefix}_TRACK123_API_KEY", "").strip()
+    track123_key = getenv_store(prefix, "TRACK123_API_KEY")
     if not track123_key:
         track123_key = os.getenv("TRACK123_API_KEY", "").strip()
-    track123_token = os.getenv(f"{prefix}_TRACK123_TOKEN", "").strip()
+    track123_token = getenv_store(prefix, "TRACK123_TOKEN")
     if not track123_token:
         track123_token = os.getenv("TRACK123_TOKEN", "").strip()
     return {
-        "shop_domain": os.getenv(f"{prefix}_SHOP_DOMAIN", "").strip(),
-        "shop_access_token": os.getenv(f"{prefix}_ACCESS_TOKEN", "").strip(),
+        "shop_domain": getenv_store(prefix, "SHOP_DOMAIN"),
+        "shop_access_token": getenv_store(prefix, "ACCESS_TOKEN"),
         "track123_api_key": track123_key,
         "track123_token": track123_token,
         "store_prefix": prefix,

@@ -95,7 +95,9 @@ def test_get_store_key_prefix_osaki_titan():
     from store_config import get_store_key_prefix  # noqa: E402
 
     assert get_store_key_prefix("osaki-titan.com") == "OSAKITITAN"
-    assert get_store_key_prefix("www.osakiusa.com") == "OSAKI"
+    assert get_store_key_prefix("www.osakiusa.com") == "OSAKIUSA"
+    assert get_store_key_prefix("titanchair.com") == "TITANCHAIR"
+    assert get_store_key_prefix("www.osakichair.com") == "TITANCHAIR"
 
 
 def test_get_store_config_falls_back_to_global_track123(monkeypatch):

@@ -804,6 +804,16 @@ export default function WarrantyChat({
           return;
         }
 
+        if (resp.side_question && resp.assistant_message) {
+          await sleep(THINKING_DELAY_MS);
+          setMessages((prev) => [
+            ...prev,
+            assistantMessage(resp.assistant_message!),
+          ]);
+          setOptionsUsed(false);
+          return;
+        }
+
         if (resp.model_confirmation?.message) {
           await sleep(THINKING_DELAY_MS);
           setMessages((prev) => [

@@ -376,7 +376,8 @@ def sync_osakiusa_products(
             ok=False,
             message=(
                 f"Missing Shopify credentials for {target_domain}. "
-                "Set OSAKI_SHOP_DOMAIN and OSAKI_ACCESS_TOKEN."
+                f"Set {store.get('store_prefix') or 'OSAKIUSA'}_SHOP_DOMAIN and "
+                f"{store.get('store_prefix') or 'OSAKIUSA'}_ACCESS_TOKEN."
             ),
         )
 

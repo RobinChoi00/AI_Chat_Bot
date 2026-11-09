@@ -1418,10 +1418,12 @@ def _request_human_handoff(engine, session_id: str, message: str, domain: str, *
             # the customer has already received in their original language.
             if not current_hazard and not requested_customer_language(message):
                 language = prior_language
-        from warranty_scope import is_delivery_inquiry  # noqa: WPS433
+        from warranty_scope import is_delivery_inquiry, wants_sales_contact  # noqa: WPS433
 
         department = str(row.get_collected().get("human_support_department") or "warranty")
         if str(row.issue_type or "") == "delivery" or is_delivery_inquiry(message):
+            department = "sales"
+        if wants_sales_contact(message):
             department = "sales"
         if reason == "safety_hazard":
             department = "warranty"
@@ -1701,6 +1703,73 @@ def _refuse_warranty_scope_payload(
         ticket_id,
         build_warranty_scope_refusal(reason),
     )
+
+
+def _should_start_verified_delivery(message: str) -> bool:
+    from delivery_intake import is_plausible_order_id, looks_like_delivery_report  # noqa: WPS433
+    from warranty_common_questions import looks_like_factual_common_question  # noqa: WPS433
+    from warranty_intake import is_obvious_delivery_inquiry  # noqa: WPS433
+    from warranty_scope import (  # noqa: WPS433
+        is_delivery_inquiry,
+        is_pre_purchase_sales,
+        is_pre_purchase_shipping_policy,
+    )
+
+    if is_pre_purchase_sales(message) or is_pre_purchase_shipping_policy(message):
+        return False
+    if looks_like_factual_common_question(message):
+        return False
+    if is_plausible_order_id(message):
+        return True
+    return bool(
+        is_delivery_inquiry(message)
+        or is_obvious_delivery_inquiry(message)
+        or looks_like_delivery_report(message)
+    )
+
+
+_OPENING_ISSUE_NODE = {
+    "node_id": "issue_type",
+    "type": "question",
+    "prompt": "Which area do you need help with: setup, delivery, or a chair malfunction?",
+    "options": [
+        {"answer_key": "installation", "label": "Installation Issue"},
+        {"answer_key": "delivery", "label": "Delivery Issue"},
+        {"answer_key": "defect", "label": "Defect / Malfunction"},
+    ],
+}
+
+
+def _try_opening_question_payload(
+    engine,
+    session_id: str,
+    message: str,
+    domain: str,
+) -> Optional[Dict[str, Any]]:
+    """Answer a first-turn question instead of ignoring it for the issue menu."""
+    from types import SimpleNamespace
+
+    from warranty_common_questions import try_factual_common_question  # noqa: WPS433
+    from warranty_intake_context import persist_intake_summary  # noqa: WPS433
+    from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
+
+    stub = SimpleNamespace(domain=domain)
+    factual = try_factual_common_question(_OPENING_ISSUE_NODE, message, ticket=stub)
+    if factual:
+        ticket_id = _open_warranty_menu_ticket(engine, session_id, domain)
+        ticket = engine.get_ticket(ticket_id)
+        persist_intake_summary(ticket, raw_message=message)
+        if ticket is not None:
+            _persist_ticket_row(ticket_id, ticket)
+        node = engine.get_current_node(ticket_id) or _OPENING_ISSUE_NODE
+        reply = try_factual_common_question(node, message, ticket=ticket) or factual
+        return _build_side_question_response(
+            engine, ticket_id, reply, customer_text=message
+        )
+    scope = evaluate_warranty_scope(message)
+    if scope.is_blocked and scope.reason != "order_cancel":
+        return _refuse_warranty_scope_payload(engine, session_id, domain, scope.reason)
+    return None
 
 
 def _build_side_question_response(
@@ -2821,8 +2890,7 @@ async def natural_start_warranty(
     if not message:
         raise HTTPException(status_code=422, detail="message must not be empty")
 
-    from warranty_scope import human_support_reason, is_delivery_inquiry, is_pre_purchase_shipping_policy  # noqa: WPS433
-    from warranty_intake import is_obvious_delivery_inquiry
+    from warranty_scope import human_support_reason  # noqa: WPS433
 
     human_reason = _support_interrupt_reason(message)
     if human_reason:
@@ -2830,24 +2898,24 @@ async def natural_start_warranty(
     model_help = _model_identification_help_payload(_lazy_engine(), session_id, message)
     if model_help is not None:
         return model_help
-    from delivery_intake import looks_like_delivery_report  # noqa: WPS433
+    engine = _lazy_engine()
+    if _should_start_verified_delivery(message):
+        return _natural_delivery_start(engine, session_id, message, body.domain)
 
-    if (is_delivery_inquiry(message) or is_obvious_delivery_inquiry(message) or looks_like_delivery_report(message)) \
-            and not is_pre_purchase_shipping_policy(message):
-        return _natural_delivery_start(_lazy_engine(), session_id, message, body.domain)
+    from warranty_scope import evaluate_warranty_scope, is_order_cancel_request  # noqa: WPS433
 
-    from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
-
+    if is_order_cancel_request(message):
+        return _escalate_order_cancel_to_warranty_team(
+            engine,
+            session_id,
+            message,
+            body.domain,
+        )
+    opening = _try_opening_question_payload(engine, session_id, message, body.domain)
+    if opening is not None:
+        return opening
     scope = evaluate_warranty_scope(message)
     if scope.is_blocked:
-        engine = _lazy_engine()
-        if scope.reason == "order_cancel":
-            return _escalate_order_cancel_to_warranty_team(
-                engine,
-                session_id,
-                message,
-                body.domain,
-            )
         return _refuse_warranty_scope_payload(
             engine, session_id, body.domain, scope.reason
         )
@@ -2862,7 +2930,6 @@ async def natural_start_warranty(
         needs_model_confirmation,
     )
 
-    engine = _lazy_engine()
     ticket = engine.get_active_session_ticket(session_id)
     if ticket is not None:
         _require_registered_model(ticket)
@@ -2976,8 +3043,7 @@ async def smart_start_warranty(
     if not message:
         raise HTTPException(status_code=422, detail="message must not be empty")
 
-    from warranty_scope import human_support_reason, is_delivery_inquiry, is_pre_purchase_shipping_policy  # noqa: WPS433
-    from warranty_intake import is_obvious_delivery_inquiry
+    from warranty_scope import human_support_reason, is_order_cancel_request  # noqa: WPS433
 
     human_reason = _support_interrupt_reason(message)
     if human_reason:
@@ -2985,27 +3051,19 @@ async def smart_start_warranty(
     model_help = _model_identification_help_payload(_lazy_engine(), session_id, message)
     if model_help is not None:
         return model_help
-    from delivery_intake import looks_like_delivery_report  # noqa: WPS433
-
-    if (is_delivery_inquiry(message) or is_obvious_delivery_inquiry(message) or looks_like_delivery_report(message)) \
-            and not is_pre_purchase_shipping_policy(message):
-        return _natural_delivery_start(_lazy_engine(), session_id, message, body.domain)
-
-    from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
-
-    scope = evaluate_warranty_scope(message)
-    if scope.is_blocked:
-        engine = _lazy_engine()
-        if scope.reason == "order_cancel":
-            return _escalate_order_cancel_to_warranty_team(
-                engine,
-                session_id,
-                message,
-                body.domain,
-            )
-        return _refuse_warranty_scope_payload(
-            engine, session_id, body.domain, scope.reason
+    engine = _lazy_engine()
+    if _should_start_verified_delivery(message):
+        return _natural_delivery_start(engine, session_id, message, body.domain)
+    if is_order_cancel_request(message):
+        return _escalate_order_cancel_to_warranty_team(
+            engine,
+            session_id,
+            message,
+            body.domain,
         )
+    opening = _try_opening_question_payload(engine, session_id, message, body.domain)
+    if opening is not None:
+        return opening
 
     from warranty_intake import (  # noqa: WPS433
         apply_prefill_to_engine,
@@ -3013,7 +3071,6 @@ async def smart_start_warranty(
     )
     from warranty_workflow import _NODES  # type: ignore  # noqa: WPS433
 
-    engine = _lazy_engine()
     existing = engine.get_active_session_ticket(session_id)
     if existing is not None:
         _require_registered_model(existing)
@@ -3031,12 +3088,18 @@ async def smart_start_warranty(
         if key in ("installation", "delivery", "defect"):
             suggested_issue_type = key
             break
+    if not suggested_issue_type:
+        from warranty_nlp import interpret_issue_type  # noqa: WPS433
+
+        guessed = interpret_issue_type(message)
+        if guessed in ("installation", "delivery", "defect"):
+            suggested_issue_type = guessed
 
     if (
         str(extraction.get("route") or "") == "sales_delivery"
         or suggested_issue_type == "delivery"
         or "delivery" in answer_keys
-    ):
+    ) and _should_start_verified_delivery(message):
         return _quick_start_ticket(engine, session_id, "delivery", body.domain)
 
     safe_keys: list[str] = []

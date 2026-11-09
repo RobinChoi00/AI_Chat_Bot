@@ -239,6 +239,7 @@ def test_real_sales_chat_actions_signed_order_lifecycle_and_metrics_join(monkeyp
 
     webhook_secret = "integration-webhook-test-secret"
     monkeypatch.setenv("SHOPIFY_WEBHOOK_SECRET", webhook_secret)
+    monkeypatch.delenv("OSAKIUSA_SHOPIFY_WEBHOOK_SECRET", raising=False)
     monkeypatch.delenv("OSAKI_SHOPIFY_WEBHOOK_SECRET", raising=False)
     monkeypatch.setattr(sales_metrics, "_ADMIN_API_KEY", "analytics-test-admin")
     monkeypatch.setattr(sales_router, "respond", lambda *args, **kwargs: SalesReply(

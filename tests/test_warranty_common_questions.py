@@ -207,6 +207,51 @@ def test_already_tried_is_acknowledged():
     assert "wasn't fully sure" not in msg
 
 
+def test_opening_questions_from_real_customer_turns_are_answered():
+    cases = {
+        "I am considering to buy the 4D + 3D Virtus chair and am wondering about the extended warranty. What does it cover and how would the repair (scheduled by the seller or me)?": (
+            "cannot confirm or approve",
+            "pages/warranty",
+        ),
+        "Does the $275 White Glove Delivery include full assembly and installation in my living room? Will the delivery team set up the chair, test that it works properly, and remove all packaging?": (
+            "White Glove",
+            "ext. 2",
+        ),
+        "How do I pair my chair with Bluetooth? My Bluetooth is set up on my ohone": (
+            "Bluetooth",
+            "remote or tablet",
+        ),
+        "Hello i purchased a massage chair back inApril 2, 2026. This purchse is FSA eligible. They need a receipt from. can you help": (
+            "FSA",
+            "ext. 2",
+        ),
+        "again.  havent bought anything yet.  Want to make sure that the tight hallway I have is ok for delivery.": (
+            "hallway",
+            "ext. 2",
+        ),
+    }
+    for text, needles in cases.items():
+        msg = try_factual_common_question(_MENU, text, ticket=_Ticket())
+        assert msg is not None, text
+        lower = msg.lower()
+        for needle in needles:
+            assert needle.lower() in lower, (text, needle)
+        assert "don't have a specific answer" not in lower
+        assert "wasn't fully sure" not in lower
+        assert "$275" not in msg
+
+
+def test_bluetooth_pairing_failure_is_not_a_how_to_faq():
+    failures = (
+        "The chair's Bluetooth will not pair with my phone.",
+        "My chair's Bluetooth cannot connect to my phone.",
+        "I need help with a Bluetooth connection fault.",
+    )
+    for text in failures:
+        assert looks_like_factual_common_question(text) is False, text
+        assert try_factual_common_question(_MENU, text, ticket=_Ticket()) is None, text
+
+
 def test_send_part_at_problem_type_is_not_treated_as_remote_option():
     node = {
         "node_id": "defect_problem_type",

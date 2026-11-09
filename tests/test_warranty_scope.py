@@ -20,6 +20,27 @@ def test_blocks_sales_pricing_question():
     assert decision.reason == "sales_topic"
 
 
+def test_blocks_pre_purchase_and_sales_team_questions():
+    from warranty_scope import is_pre_purchase_sales, wants_sales_contact
+
+    for text in (
+        "Looking for a 4d seat that will give me plenty room, 6ft 245",
+        "Hi, I’m interested in buying the Osaki AI 4D Yoga Flex massage chair. Is there an email address or live chat for the sales team?",
+        "Does the $275 White Glove Delivery include full assembly and installation in my living room?",
+        "again. havent bought anything yet. Want to make sure that the tight hallway I have is ok for delivery.",
+    ):
+        assert is_pre_purchase_sales(text), text
+        decision = evaluate_warranty_scope(text)
+        assert decision.is_blocked, text
+        assert decision.reason == "sales_topic", text
+
+    assert wants_sales_contact(
+        "Could you please connect me with a sales representative?"
+    )
+    assert not is_pre_purchase_sales("OS-4000T footrest air not inflating")
+    assert evaluate_warranty_scope("OS-4000T footrest air not inflating").in_scope
+
+
 def test_blocks_off_topic():
     decision = evaluate_warranty_scope("Write me a Python script")
     assert decision.is_blocked

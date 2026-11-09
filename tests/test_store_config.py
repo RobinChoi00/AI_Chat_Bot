@@ -30,11 +30,26 @@ def test_get_order_tracking_page_url_defaults_to_track123_app():
 
 
 def test_get_order_tracking_page_url_env_override(monkeypatch):
-    monkeypatch.setenv("TITAN_ORDER_TRACKING_URL", "https://example.com/track")
+    monkeypatch.setenv("TITANCHAIR_ORDER_TRACKING_URL", "https://example.com/track")
     assert (
         get_order_tracking_page_url("titanchair.com")
         == "https://example.com/track"
     )
+
+
+def test_legacy_osaki_and_titan_env_names_still_resolve(monkeypatch):
+    from store_config import get_store_config
+
+    monkeypatch.delenv("OSAKIUSA_SHOP_DOMAIN", raising=False)
+    monkeypatch.delenv("TITANCHAIR_TRACK123_API_KEY", raising=False)
+    monkeypatch.setenv("OSAKI_SHOP_DOMAIN", "legacy-osaki.myshopify.com")
+    monkeypatch.setenv("TITAN_TRACK123_API_KEY", "legacy-titan-key")
+    osaki = get_store_config("osakiusa.com")
+    titan = get_store_config("titanchair.com")
+    assert osaki["store_prefix"] == "OSAKIUSA"
+    assert osaki["shop_domain"] == "legacy-osaki.myshopify.com"
+    assert titan["store_prefix"] == "TITANCHAIR"
+    assert titan["track123_api_key"] == "legacy-titan-key"
 
 
 def test_normalize_and_validate_storefront_domain():

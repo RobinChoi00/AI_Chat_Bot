@@ -264,6 +264,13 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "blank screen",
         "no display",
         "screen is off",
+        "touch screen",
+        "touchscreen",
+        "the screen",
+        "screen does not turn on",
+        "screen doesn't turn on",
+        "screen will not turn on",
+        "screen won't turn on",
     ),
     "rolling": (
         "rollers not moving",
@@ -916,6 +923,19 @@ def _explicit_check_result(options: list[dict], norm: str) -> Optional[str]:
 def _keyword_issue_type(text: str) -> Optional[str]:
     """Cheap keyword vote before calling the LLM."""
     norm = _normalize(text)
+    try:
+        from warranty_scope import is_pre_purchase_sales  # noqa: WPS433
+
+        if is_pre_purchase_sales(text):
+            return None
+    except ImportError:
+        pass
+    if re.search(
+        r"\b(?:how\s+(?:do|can)\s+i)\b.{0,40}\b(?:pair|connect)\b.{0,30}\bbluetooth|"
+        r"\bbluetooth.{0,40}\b(?:pair|connect)\b",
+        norm,
+    ) and not re.search(r"\b(?:will not|won't|does not|doesn't|cannot|can't)\s+(?:pair|connect)\b", norm):
+        return None
     if re.search(r"\b(?:how\s+(?:do|can)\s+i\s+(?:assemble|install|attach)|help\s+(?:with\s+)?installing|need\s+(?:help\s+)?(?:assembling|installing))\b", norm):
         return "installation"
     if re.search(
@@ -929,7 +949,8 @@ def _keyword_issue_type(text: str) -> Optional[str]:
         r"\b(?:stopped\s+working|shuts?\s+off|torn|ripped|not\s+getting\s+warm|clicking\s+noise)\b|"
         r"\b(?:error|err)\s*(?:code\s*)?#?\s*[a-z]?\d{1,3}\b|\b[ef]\d{1,2}\s+(?:error|code)\b|"
         r"\b(?:peeling|flaking|cracked|cracking|grinding|squeak(?:s|ing|y)?|rattl(?:es?|ing)|"
-        r"(?:loud|strange|weird)\s+(?:noise|sound)|not\s+inflating|won't\s+inflate|too\s+hot)\b|"
+        r"(?:loud|strange|weird)\s+(?:noise|sound)|not\s+inflating|won't\s+inflate|too\s+hot|"
+        r"touch\s*screen|screen (?:does not|doesn't|won'?t|will not) turn)\b|"
         r"의자[^.!?]{0,15}작동하지|리모컨[^.!?]{0,15}안\s*켜|"
         r"\b(?:silla\s+no\s+enciende|airbags?\s+no\s+se\s+inflan)\b", norm,
     ):

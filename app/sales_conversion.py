@@ -63,14 +63,13 @@ def attribution_window_days() -> int:
 
 
 def _webhook_secret(domain: str = "") -> str:
-    from store_config import get_store_key_prefix
+    from store_config import getenv_store, get_store_key_prefix
 
     prefix = get_store_key_prefix(domain)
-    for key in (f"{prefix}_SHOPIFY_WEBHOOK_SECRET", "SHOPIFY_WEBHOOK_SECRET"):
-        secret = (os.getenv(key) or "").strip()
-        if secret:
-            return secret
-    return ""
+    secret = getenv_store(prefix, "SHOPIFY_WEBHOOK_SECRET")
+    if secret:
+        return secret
+    return (os.getenv("SHOPIFY_WEBHOOK_SECRET") or "").strip()
 
 
 def verify_shopify_hmac(body: bytes, header: str, secret: str) -> bool:
@@ -185,7 +184,13 @@ def resolve_order_store(domain: str) -> Optional[str]:
     Unknown hosts never inherit the default store. Ambiguous configured shop
     hosts are rejected rather than crediting a different storefront.
     """
-    from store_config import get_store_key_prefix, is_supported_storefront_domain, normalize_storefront_domain
+    from store_config import (  # noqa: WPS433
+        STORE_KEY_PREFIXES,
+        getenv_store,
+        get_store_key_prefix,
+        is_supported_storefront_domain,
+        normalize_storefront_domain,
+    )
 
     host = normalize_storefront_domain(domain)
     if not host:
@@ -193,16 +198,19 @@ def resolve_order_store(domain: str) -> Optional[str]:
     if is_supported_storefront_domain(host):
         return get_store_key_prefix(host)
     matches = {
-        prefix for prefix in ("OSAKI", "TITAN", "OSAKIMASSAGE", "OSAKITITAN")
-        if normalize_storefront_domain(os.getenv(f"{prefix}_SHOP_DOMAIN", "")) == host
+        prefix
+        for prefix in STORE_KEY_PREFIXES
+        if normalize_storefront_domain(getenv_store(prefix, "SHOP_DOMAIN")) == host
     }
     return next(iter(matches)) if len(matches) == 1 else None
 
 
 def conversion_storefront_domain(domain: str) -> Optional[str]:
     return {
-        "OSAKI": "osakiusa.com", "TITAN": "titanchair.com",
-        "OSAKIMASSAGE": "osakimassagechair.com", "OSAKITITAN": "osaki-titan.com",
+        "OSAKIUSA": "osakiusa.com",
+        "TITANCHAIR": "titanchair.com",
+        "OSAKIMASSAGE": "osakimassagechair.com",
+        "OSAKITITAN": "osaki-titan.com",
     }.get(resolve_order_store(domain) or "")
 
 

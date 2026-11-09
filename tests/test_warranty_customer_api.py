@@ -1077,6 +1077,73 @@ def test_smart_start_shipping_help_opens_verified_delivery_lookup(client):
     assert "order number" in msg and "checkout" in msg
 
 
+def test_smart_start_answers_opening_questions_instead_of_the_issue_menu(client, monkeypatch):
+    import warranty_intake as wi  # noqa: WPS433
+
+    monkeypatch.setattr(
+        wi,
+        "extract_workflow_prefill",
+        lambda **kwargs: {
+            "answer_keys": ["delivery"],
+            "model_name": "",
+            "confidence": "high",
+            "summary": "Delivery",
+            "source": "llm",
+        },
+    )
+    cases = (
+        (
+            "cust-open-glove",
+            "Does the $275 White Glove Delivery include full assembly in my living room?",
+            ("white glove", "ext. 2"),
+        ),
+        (
+            "cust-open-bt",
+            "How do I pair my chair with Bluetooth? My Bluetooth is set up on my ohone",
+            ("bluetooth", "888-848-2630"),
+        ),
+        (
+            "cust-open-fsa",
+            "This purchse is FSA eligible. They need a receipt from. can you help",
+            ("fsa", "ext. 2"),
+        ),
+        (
+            "cust-open-buy",
+            "Looking for a 4d seat that will give me plenty room, 6ft 245",
+            ("sales", "ext. 2"),
+        ),
+    )
+    for session_id, message, needles in cases:
+        resp = client.post(
+            f"/api/v1/warranty/session/{session_id}/smart-start",
+            json={"message": message, "domain": "osakiusa.com"},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data.get("side_question") is True, message
+        assert data["ticket"]["issue_type"] in ("", None)
+        lower = data["assistant_message"].lower()
+        for needle in needles:
+            assert needle in lower, (message, needle)
+        assert "which area do you need help with" in lower or "setup" in lower
+
+
+def test_sales_representative_handoff_uses_sales_extension(client):
+    session_id = "cust-sales-human"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/smart-start",
+        json={
+            "message": "Could you please connect me with a sales representative?",
+            "domain": "osakiusa.com",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data.get("handoff", {}).get("requested") is True
+    assert data["handoff"]["department"] == "sales"
+    assert data["handoff"]["phone"].endswith("ext. 2")
+
+
 def _start_defect_air_feet(client, session_id: str, model: str = "3D LTX") -> str:
     _register_model(client, session_id, model=model)
     resp = client.post(

@@ -90,8 +90,12 @@ def send_sales_notification(contact: str, details: str, product_info: str, domai
     if not is_supported_storefront_domain(domain):
         raise SalesEmailError('sales_inbox_unconfigured')
     store = normalize_storefront_domain(domain)
-    inbox_key = {'TITAN': 'titanchair', 'OSAKI': 'osakiusa',
-                 'OSAKIMASSAGE': 'osakimassagechair', 'OSAKITITAN': 'titanchair'}[get_store_key_prefix(store)]
+    inbox_key = {
+        'TITANCHAIR': 'titanchair',
+        'OSAKIUSA': 'osakiusa',
+        'OSAKIMASSAGE': 'osakimassagechair',
+        'OSAKITITAN': 'titanchair',
+    }[get_store_key_prefix(store)]
     recipient = SALES_EMAIL_BY_DOMAIN.get(inbox_key)
     if not recipient:
         raise SalesEmailError('sales_inbox_unconfigured')

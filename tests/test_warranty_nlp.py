@@ -40,6 +40,27 @@ class TestKeywordIssueType:
         monkeypatch.setattr(nlp, "_llm_json", lambda _prompt, **kwargs: None)
         assert nlp.interpret_issue_type("hello there") is None
 
+    def test_bluetooth_pairing_how_to_is_not_an_issue_type(self, monkeypatch):
+        monkeypatch.setattr(nlp, "_llm_json", lambda *_a, **kwargs: None)
+        assert nlp.interpret_issue_type(
+            "How do I pair my chair with Bluetooth? My Bluetooth is set up on my ohone"
+        ) is None
+
+    @pytest.mark.parametrize("text", [
+        "The chair's Bluetooth will not pair with my phone.",
+        "My chair's Bluetooth cannot connect to my phone.",
+        "I need help with a Bluetooth connection fault.",
+    ])
+    def test_bluetooth_pairing_failure_is_defect(self, text, monkeypatch):
+        monkeypatch.setattr(nlp, "_llm_json", lambda *_a, **kwargs: None)
+        assert nlp.interpret_issue_type(text) == "defect"
+
+    def test_white_glove_policy_is_not_delivery(self, monkeypatch):
+        monkeypatch.setattr(nlp, "_llm_json", lambda *_a, **kwargs: None)
+        assert nlp.interpret_issue_type(
+            "Does the $275 White Glove Delivery include full assembly?"
+        ) is None
+
 
 class TestHeuristicOptionMatch:
     def test_yes_no_mapping(self):
@@ -441,6 +462,11 @@ class TestCustomerPhraseGaps:
         assert nlp.interpret_warranty_answer(defect, "dead chair") == "power"
         assert nlp.interpret_warranty_answer(defect, "won't start") == "power"
         assert nlp.interpret_warranty_answer(defect, "no display") == "remote"
+        assert nlp.interpret_warranty_answer(defect, "touch screen") == "remote"
+        assert nlp.interpret_warranty_answer(defect, "the screen") == "remote"
+        assert nlp.interpret_warranty_answer(
+            defect, "The screen will occasionally not turn on"
+        ) == "remote"
         assert nlp.interpret_warranty_answer(defect, "heads stuck") == "rolling"
 
         remote_checks = {

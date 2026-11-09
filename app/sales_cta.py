@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from store_config import get_store_key_prefix, get_storefront_base_url
+from store_config import getenv_store, get_store_key_prefix, get_storefront_base_url
 
 _EMAIL_RE = re.compile(r"\b([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b", re.I)
 
@@ -50,10 +50,9 @@ def financing_page_url(domain: str, *, product_url: Optional[str] = None) -> Opt
     product page so they can open Affirm at checkout (no invented APR/terms).
     """
     prefix = get_store_key_prefix(domain)
-    for key in (f"{prefix}_FINANCING_URL", "SALES_FINANCING_URL"):
-        override = (os.getenv(key) or "").strip()
-        if override:
-            return override
+    override = getenv_store(prefix, "FINANCING_URL") or (os.getenv("SALES_FINANCING_URL") or "").strip()
+    if override:
+        return override
     return product_url
 
 

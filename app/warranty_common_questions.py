@@ -130,6 +130,46 @@ _ALREADY_TRIED_RE = re.compile(
     r"\bdid that already\b",
     re.I,
 )
+_EXTENDED_COVER_RE = re.compile(
+    r"\bextended warrant|"
+    r"\bwarrant\w*.{0,60}\bcover|"
+    r"\bwhat does (?:the |it |extended )?warrant|"
+    r"\bwhat does it cover\b",
+    re.I,
+)
+_WHITE_GLOVE_RE = re.compile(
+    r"\bwhite[- ]?glove\b.{0,90}\b("
+    r"include|included|assembly|install|set\s*up|living\s+room|packaging|"
+    r"what(?:'s| is)|fee|cost|\$\d"
+    r")|"
+    r"\b("
+    r"include|included|assembly|what(?:'s| is) included"
+    r").{0,90}\bwhite[- ]?glove\b",
+    re.I,
+)
+_BLUETOOTH_PAIR_RE = re.compile(
+    r"\b(?:how do i|how to|help(?: me)?)\b.{0,40}\b(?:pair|connect)\b.{0,40}\bbluetooth|"
+    r"\bpair(?:ing)? (?:my |the )?(?:chair|bluetooth)|"
+    r"\bbluetooth.{0,40}\b(?:pair|connect|set up|setup)\b",
+    re.I,
+)
+_BLUETOOTH_FAULT_RE = re.compile(
+    r"\b(?:will\s+not|won't|does\s+not|doesn't|cannot|can't)\s+(?:pair|connect)\b|"
+    r"\bbluetooth\s+(?:connection\s+)?(?:fault|problem|failure|issue)\b",
+    re.I,
+)
+_FSA_RECEIPT_RE = re.compile(
+    r"\b(?:fsa|hsa|flexible spending|health savings)\b|"
+    r"\breceipt\b.{0,40}\b(?:fsa|hsa|eligible)|"
+    r"\b(?:fsa|hsa|eligible).{0,40}\breceipt\b",
+    re.I,
+)
+_HALLWAY_FIT_RE = re.compile(
+    r"\b(?:tight|narrow)\s+(?:hallway|doorway|stair(?:s|case)?)\b|"
+    r"\b(?:hallway|doorway|stair(?:s|case)?)\b.{0,50}\b(?:fit|ok|okay|delivery|deliver)|"
+    r"\bfit\s+(?:through|in)\s+(?:the\s+|my\s+|a\s+)?(?:hallway|door|doorway|stair)",
+    re.I,
+)
 
 _DESCRIPTION_TEXT_NODES = frozenset({
     "delivery_missing_parts_q",
@@ -253,6 +293,54 @@ def _model_where_answer() -> str:
     )
 
 
+def _white_glove_answer(domain: str) -> str:
+    url = _policy_url(domain, "pages/shipping-handling")
+    return (
+        "**White Glove** is in-home delivery plus assembly of the chair, for an extra fee. "
+        "Standard curbside delivery does not include assembly. "
+        "This chat cannot confirm a dollar amount, add White Glove to an order, or book a crew.\n\n"
+        "Published details: the usual team is two people; they do not move your furniture, "
+        "remove doors, or haul away an old chair. The White Glove fee is not refundable. "
+        "Sales confirms the current fee and whether it is on your order.\n\n"
+        f"Full details: {url}\n\n"
+        f"Call **{SALES_PHONE}** for White Glove, fees, or scheduling."
+    )
+
+
+def _bluetooth_pair_answer() -> str:
+    return (
+        "This chat does not walk through a model-specific pairing sequence. "
+        "On most Osaki and Titan chairs, Bluetooth is turned on from the remote or tablet, "
+        "then you pair from your phone's Bluetooth list. Button names differ by model.\n\n"
+        "If pairing still fails after that, choose **setup** below if you are assembling the chair, "
+        "or **malfunction** if an already-setup chair will not connect.\n\n"
+        f"{_contact_blurb()}"
+    )
+
+
+def _fsa_receipt_answer() -> str:
+    return (
+        "This chat cannot issue an FSA/HSA letter or a copy of your receipt. "
+        f"**Sales** handles order documents at **{SALES_PHONE}**. I have not changed your order."
+    )
+
+
+def _hallway_fit_answer() -> str:
+    return (
+        "This chat cannot confirm whether a chair will fit your hallway or stairs. "
+        "Measure doorways, hallways, and stairs before ordering. "
+        f"Sales can check a specific model against your measurements at **{SALES_PHONE}**."
+    )
+
+
+def _is_bluetooth_pairing_howto(text: str) -> bool:
+    """How-to pairing questions only — a failed pair is a malfunction, not a FAQ."""
+    raw = (text or "").strip()
+    if not raw or _BLUETOOTH_FAULT_RE.search(raw):
+        return False
+    return bool(_BLUETOOTH_PAIR_RE.search(raw))
+
+
 def looks_like_factual_common_question(text: str) -> bool:
     """True when the message is a common policy/contact question, not a menu pick."""
     raw = (text or "").strip()
@@ -261,6 +349,7 @@ def looks_like_factual_common_question(text: str) -> bool:
     return bool(
         _WARRANTY_LENGTH_RE.search(raw)
         or _COVERED_RE.search(raw)
+        or _EXTENDED_COVER_RE.search(raw)
         or _REPLACE_RE.search(raw)
         or _SEND_PART_RE.search(raw)
         or _REFUND_RE.search(raw)
@@ -272,6 +361,10 @@ def looks_like_factual_common_question(text: str) -> bool:
         or _CASE_STATUS_RE.search(raw)
         or _PHONE_RE.search(raw)
         or _MODEL_WHERE_RE.search(raw)
+        or _WHITE_GLOVE_RE.search(raw)
+        or _is_bluetooth_pairing_howto(raw)
+        or _FSA_RECEIPT_RE.search(raw)
+        or _HALLWAY_FIT_RE.search(raw)
     )
 
 
@@ -299,8 +392,21 @@ def try_factual_common_question(
     if not raw or not node or _is_exact_option_text(node, raw):
         return None
     domain = _domain_from(ticket)
-    if _WARRANTY_LENGTH_RE.search(raw) or _COVERED_RE.search(raw):
+    if (
+        _WARRANTY_LENGTH_RE.search(raw)
+        or _COVERED_RE.search(raw)
+        or (re.search(r"\bwarrant", raw, re.I) and re.search(r"\bcover", raw, re.I))
+        or _EXTENDED_COVER_RE.search(raw)
+    ):
         return _join(_warranty_length_answer(domain), node)
+    if _WHITE_GLOVE_RE.search(raw):
+        return _join(_white_glove_answer(domain), node)
+    if _is_bluetooth_pairing_howto(raw):
+        return _join(_bluetooth_pair_answer(), node)
+    if _FSA_RECEIPT_RE.search(raw):
+        return _join(_fsa_receipt_answer(), node)
+    if _HALLWAY_FIT_RE.search(raw):
+        return _join(_hallway_fit_answer(), node)
     if _REPLACE_RE.search(raw) or _SEND_PART_RE.search(raw):
         return _join(_replacement_answer(), node)
     if _REFUND_RE.search(raw) or _RETURN_RE.search(raw):

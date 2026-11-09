@@ -342,7 +342,7 @@ def test_shopify_offset_time_is_converted_before_attribution(monkeypatch):
     ordered = datetime(2026, 7, 10, 20, tzinfo=timezone.utc)
     _touch("correct", ordered - timedelta(minutes=10))
     _touch("too-late", ordered + timedelta(minutes=1))
-    monkeypatch.setenv("OSAKI_SHOP_DOMAIN", "actual-osaki.myshopify.com")
+    monkeypatch.setenv("OSAKIUSA_SHOP_DOMAIN", "actual-osaki.myshopify.com")
     payload = {**_order(), "created_at": "2026-07-10T15:00:00-05:00"}
     row = record_order(payload, domain="actual-osaki.myshopify.com")
     assert row["session_id"] == "correct"
@@ -353,8 +353,8 @@ def test_unknown_or_ambiguous_shop_does_not_inherit_a_default(monkeypatch):
     from sales_conversion import conversion_storefront_domain, record_order
 
     assert record_order(_order(), domain="unrecognized.myshopify.com") is None
-    monkeypatch.setenv("OSAKI_SHOP_DOMAIN", "shared.myshopify.com")
-    monkeypatch.setenv("TITAN_SHOP_DOMAIN", "shared.myshopify.com")
+    monkeypatch.setenv("OSAKIUSA_SHOP_DOMAIN", "shared.myshopify.com")
+    monkeypatch.setenv("TITANCHAIR_SHOP_DOMAIN", "shared.myshopify.com")
     assert conversion_storefront_domain("shared.myshopify.com") is None
 
 
