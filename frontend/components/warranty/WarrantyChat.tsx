@@ -726,7 +726,7 @@ export default function WarrantyChat({
             ...prev,
             assistantMessage(resp.assistant_message!),
           ]);
-          setOptionsUsed(false);
+          setOptionsUsed(Boolean(resp.hide_workflow_options));
           return;
         }
         if (resp.tracking_summary?.message) {
@@ -810,7 +810,7 @@ export default function WarrantyChat({
             ...prev,
             assistantMessage(resp.assistant_message!),
           ]);
-          setOptionsUsed(false);
+          setOptionsUsed(Boolean(resp.hide_workflow_options));
           return;
         }
 
@@ -1101,7 +1101,7 @@ export default function WarrantyChat({
                 ...prev,
                 assistantMessage(defectResp.assistant_message!),
               ]);
-              setOptionsUsed(false);
+              setOptionsUsed(Boolean(defectResp.hide_workflow_options));
             } else {
               await appendAssistantFromResponse(defectResp.ticket, defectResp);
             }
@@ -1239,6 +1239,7 @@ export default function WarrantyChat({
     !isTerminal &&
     !handoff?.requested &&
     !needsModelConfirmation &&
+    !optionsUsed &&
     !warrantyState?.issue_type &&
     (warrantyState?.ready_for_issue_type ||
       (!!warrantyState?.model_name && atIssueTypeNode));

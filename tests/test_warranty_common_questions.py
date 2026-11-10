@@ -9,6 +9,7 @@ APP_DIR = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(APP_DIR))
 
 from warranty_common_questions import (  # noqa: E402
+    is_sales_bound_opening_question,
     looks_like_factual_common_question,
     try_answer_common_question,
     try_confusion_common_question,
@@ -219,6 +220,10 @@ def test_opening_questions_from_real_customer_turns_are_answered():
             "extra charges",
             "ext. 2",
         ),
+        "How do you assemble a vera massage chair": (
+            "otasupport.com",
+            "setup",
+        ),
         "How do I pair my chair with Bluetooth? My Bluetooth is set up on my ohone": (
             "Bluetooth",
             "remote or tablet",
@@ -228,8 +233,27 @@ def test_opening_questions_from_real_customer_turns_are_answered():
             "ext. 2",
         ),
         "again.  havent bought anything yet.  Want to make sure that the tight hallway I have is ok for delivery.": (
-            "hallway",
-            "ext. 2",
+            "narrowest",
+            "published doorway",
+            "model",
+        ),
+        "Want to make sure that the tight hallway I have is ok for delivery.": (
+            "narrowest",
+            "published doorway",
+            "model",
+        ),
+        "Will the Osaki Oasis fit through a 32 inch hallway?": (
+            "29",
+            "assembled",
+            "32",
+        ),
+        "Airbags on the calfs and the arms are absolutely too intense. I cannot find any way to lower the intensity.": (
+            "will not inflate",
+            "otasupport.com",
+        ),
+        "They are OVER inflating. They are too intense and I need to know how to lower the intensity": (
+            "will not inflate",
+            "otasupport.com",
         ),
     }
     for text, needles in cases.items():
@@ -242,6 +266,38 @@ def test_opening_questions_from_real_customer_turns_are_answered():
         assert "wasn't fully sure" not in lower
         if "white glove" not in text.lower():
             assert "$275" not in msg
+        if any(token in text.lower() for token in ("white glove", "fsa", "hallway", "assemble")):
+            assert "which area do you need help with" not in lower
+            assert is_sales_bound_opening_question(text)
+
+
+def test_hallway_fit_uses_published_doorway_width_from_the_ticket_model():
+    ticket = _Ticket()
+    ticket.model_name = "OS-4000T"
+    msg = try_factual_common_question(
+        _MENU,
+        "Want to make sure that the tight hallway I have is ok for delivery.",
+        ticket=ticket,
+    )
+    assert msg is not None
+    lower = msg.lower()
+    assert "35" in msg
+    assert "assembled" in lower
+    assert "narrowest" in lower
+    too_narrow = try_factual_common_question(
+        _MENU,
+        "Will the Osaki Oasis fit through a 28 inch hallway?",
+        ticket=_Ticket(),
+    )
+    assert too_narrow is not None
+    assert "wider" in too_narrow.lower()
+    assert "28" in too_narrow.lower()
+
+
+def test_install_help_is_not_an_assembly_how_to():
+    text = "I need help installing the side panels."
+    assert is_sales_bound_opening_question(text) is False
+    assert try_factual_common_question(_MENU, text, ticket=_Ticket()) is None
 
 
 def test_bluetooth_pairing_failure_is_not_a_how_to_faq():

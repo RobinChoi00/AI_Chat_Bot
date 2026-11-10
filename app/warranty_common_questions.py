@@ -165,9 +165,39 @@ _FSA_RECEIPT_RE = re.compile(
     re.I,
 )
 _HALLWAY_FIT_RE = re.compile(
-    r"\b(?:tight|narrow)\s+(?:hallway|doorway|stair(?:s|case)?)\b|"
-    r"\b(?:hallway|doorway|stair(?:s|case)?)\b.{0,50}\b(?:fit|ok|okay|delivery|deliver)|"
-    r"\bfit\s+(?:through|in)\s+(?:the\s+|my\s+|a\s+)?(?:hallway|door|doorway|stair)",
+    r"\b(?:tight|narrow)\s+(?:hallway|doorway|stair(?:s|case)?|doors?)\b|"
+    r"\b(?:hallway|doorway|stair(?:s|case)?)\b.{0,60}\b(?:fit|fits|ok|okay|delivery|deliver|width|wide)|"
+    r"\b(?:fit|fits|fitting)\b.{0,60}\b(?:hallway|doorway|stair(?:s|case)?|doors?)\b|"
+    r"\bfit\s+(?:through|in)\s+(?:the\s+|my\s+|a\s+)?.{0,24}\b(?:hallway|doors?|doorway|stair)|"
+    r"\b(?:door|doorway|hallway)\s+width\b|"
+    r"\b\d{2}(?:\.\d+)?\s*(?:\"|in(?:ch(?:es)?)?)\s+(?:wide\s+)?(?:door|doorway|hallway|opening)|"
+    r"\b(?:door|doorway|hallway|opening)\s+(?:is\s+|of\s+)?\d{2}(?:\.\d+)?\s*(?:\"|in)",
+    re.I,
+)
+_ASSEMBLY_HOWTO_RE = re.compile(
+    r"\b(?:how\s+(?:do|can)\s+(?:i|you|we)|how\s+to|how\s+do\s+you)\b.{0,40}\b"
+    r"(?:assembl(?:e|y|ing)|install(?:ation)?|set\s*up)\b|"
+    r"\bassembl(?:y|e|ing)\s+(?:instructions?|guide|video|manual|steps?)\b",
+    re.I,
+)
+_AIR_INTENSITY_RE = re.compile(
+    r"\b(?:airbags?|air bags?|air)\b.{0,50}\b(?:too\s+(?:intense|strong|hard|much)|over[\s-]?inflat)|"
+    r"\b(?:too\s+(?:intense|strong|hard)|over[\s-]?inflat).{0,50}\b(?:airbags?|air bags?|air)|"
+    r"\b(?:lower|reduce|turn\s+down)\b.{0,40}\b(?:air\s+)?(?:intensity|pressure|airbags?)\b|"
+    r"\bhow\s+(?:do|can)\s+i\b.{0,40}\b(?:lower|reduce|turn\s+down).{0,24}\b(?:intensity|pressure|airbags?)",
+    re.I,
+)
+_AIR_NOT_INFLATING_RE = re.compile(
+    r"\b(?:will\s+not|won't|does\s+not|doesn't|cannot|can't|not)\s+"
+    r"(?:inflat(?:e|ing)|stay\s+inflated)\b|"
+    r"\bno\s+air\b|\bnot\s+inflating\b",
+    re.I,
+)
+_ASSEMBLY_FAULT_RE = re.compile(
+    r"\b(?:will\s+not|won't|cannot|can't|does\s+not|doesn't)\s+"
+    r"(?:assembl(?:e|y)|attach|install|fit|go\s+together)\b|"
+    r"\b(?:missing|broken|damaged)\s+(?:part|piece|bolt|screw|panel|footrest)\b|"
+    r"\b(?:won't|will\s+not|can't)\s+(?:attach|go\s+on|fit\s+together)\b",
     re.I,
 )
 
@@ -207,8 +237,19 @@ def _is_exact_option_text(node: dict, text: str) -> bool:
     return False
 
 
-def _join(lead: str, node: dict) -> str:
-    return f"{lead.rstrip()}\n\n{_reprompt(node)}"
+def _join(lead: str, node: dict, *, reprompt: bool = True) -> str:
+    text = lead.rstrip()
+    if not reprompt:
+        return text
+    return f"{text}\n\n{_reprompt(node)}"
+
+
+def _join_without_issue_menu(lead: str, node: dict) -> str:
+    """Sales/how-to answers should not reopen setup / delivery / malfunction."""
+    node_id = str((node or {}).get("node_id") or "")
+    if node_id in ("", "root", "issue_type"):
+        return _join(lead, node, reprompt=False)
+    return _join(lead, node)
 
 
 def _contact_blurb() -> str:
@@ -327,11 +368,166 @@ def _fsa_receipt_answer() -> str:
     )
 
 
-def _hallway_fit_answer() -> str:
+def _hallway_model_name(text: str, ticket=None) -> str:
+    try:
+        from product_catalog import resolve_model_name  # noqa: WPS433
+
+        named = resolve_model_name(text)
+        if named:
+            return named
+    except Exception:
+        pass
+    return str(getattr(ticket, "model_name", "") or "").strip()
+
+
+def _hallway_opening_inches(text: str) -> Optional[float]:
+    try:
+        from sales_constraints import doorway_width_from_text  # noqa: WPS433
+
+        inches = doorway_width_from_text(text)
+        if inches is not None:
+            return inches
+    except Exception:
+        pass
+    match = re.search(
+        r"(\d{2}(?:\.\d+)?)\s*(?:\"|in(?:ch(?:es)?)?)\s+(?:wide\s+)?"
+        r"(?:hallway|door|doorway|opening|stair)|"
+        r"(?:hallway|door|doorway|opening|stair).{0,24}?"
+        r"(\d{2}(?:\.\d+)?)\s*(?:\"|in(?:ch(?:es)?)?)",
+        text or "",
+        re.I,
+    )
+    if not match:
+        return None
+    raw = match.group(1) or match.group(2)
+    try:
+        width = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if 20 <= width <= 48:
+        return width
+    return None
+
+
+def _hallway_fit_answer(text: str, ticket=None) -> str:
+    """Compare the shopper's opening to published assembled / disassembled doorway width."""
+    model = _hallway_model_name(text, ticket)
+    inches = _hallway_opening_inches(text)
+    fit = None
+    if model:
+        try:
+            from sales_spec_index import lookup_fit_spec  # noqa: WPS433
+
+            fit = lookup_fit_spec(model)
+        except Exception:
+            fit = None
+
+    lines = [
+        "We check hallway and door fit against the **published doorway width** "
+        "for the model — assembled and, when listed, disassembled. "
+        "Measure the **narrowest opening** on the path (door, hallway, or stair width).",
+    ]
+    if model and fit is not None and fit.door_asm_in is not None:
+        from sales_spec_index import doorway_ok  # noqa: WPS433
+
+        lines.append(f"**{model}** published doorway:")
+        lines.append(f"- Assembled: **{fit.door_asm_in:g} in**")
+        if fit.door_dis_in is not None:
+            lines.append(f"- Disassembled: **{fit.door_dis_in:g} in**")
+        if inches is not None:
+            if doorway_ok(model, limit_in=inches, mode="assembled"):
+                lines.append(
+                    f"A **{inches:g} in** opening is at least as wide as the assembled figure, "
+                    "so that published width fits."
+                )
+            else:
+                lines.append(
+                    f"The assembled figure is wider than a **{inches:g} in** opening."
+                )
+                if fit.door_dis_in is not None:
+                    if doorway_ok(model, limit_in=inches, mode="disassembled"):
+                        lines.append(
+                            "The disassembled figure fits that width. "
+                            "I won't promise a delivery crew will disassemble on site."
+                        )
+                    else:
+                        lines.append(
+                            "Even the disassembled figure is wider than that opening."
+                        )
+        else:
+            lines.append(
+                "Tell me the width in inches of the **narrowest door or hallway** on the path "
+                "and I will compare it to those numbers."
+            )
+    elif model:
+        lines.append(
+            f"I don't have a published doorway number for **{model}**. "
+            "Share the **narrowest opening in inches** and Sales can still check "
+            f"at **{SALES_PHONE}**."
+        )
+    elif inches is not None:
+        lines.append(
+            f"A **{inches:g} in** opening is tight for some chairs. "
+            "Which **model** should I compare against the published doorway figures?"
+        )
+    else:
+        lines.append(
+            "Tell me the **model** and the **narrowest door or hallway width in inches**, "
+            "and I will compare them to the published doorway figures."
+        )
+    lines.append(
+        "This check is **width only**. It does not confirm a stair turn, furniture in the path, "
+        "or that White Glove will remove a door."
+    )
+    return "\n".join(lines)
+
+
+def _is_air_intensity_question(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw or _AIR_NOT_INFLATING_RE.search(raw):
+        return False
+    return bool(_AIR_INTENSITY_RE.search(raw))
+
+
+def _air_intensity_answer() -> str:
     return (
-        "This chat cannot confirm whether a chair will fit your hallway or stairs. "
-        "Measure doorways, hallways, and stairs before ordering. "
-        f"Sales can check a specific model against your measurements at **{SALES_PHONE}**."
+        "This chat's **air** path is for bags that **will not inflate**, not for lowering strength. "
+        "Published warranty materials do not list a model-specific air-intensity control, "
+        "so I will not invent a remote setting.\n\n"
+        "Look up your exact model at [https://www.otasupport.com](https://www.otasupport.com) "
+        "for the remote buttons that are documented there. "
+        "If a bag **stays over-inflated and will not release**, say that — that is a malfunction."
+    )
+
+
+def _assembly_howto_answer() -> str:
+    return (
+        "This chat does not walk through a model-specific assembly sequence. "
+        "Published setup guides are at [https://www.otasupport.com](https://www.otasupport.com) — "
+        "look up your exact model there.\n\n"
+        "If a part will not attach, a piece is missing, or an already-assembled chair is wrong, "
+        "say that and we can continue with **setup** or a **malfunction**."
+    )
+
+
+def _is_assembly_howto(text: str) -> bool:
+    """How-to assembly questions only — a failed install is still a setup case."""
+    raw = (text or "").strip()
+    if not raw or _ASSEMBLY_FAULT_RE.search(raw):
+        return False
+    return bool(_ASSEMBLY_HOWTO_RE.search(raw))
+
+
+def is_sales_bound_opening_question(text: str) -> bool:
+    """FSA, hallway fit, White Glove policy — answer these without the issue menu."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    return bool(
+        _FSA_RECEIPT_RE.search(raw)
+        or _HALLWAY_FIT_RE.search(raw)
+        or _WHITE_GLOVE_RE.search(raw)
+        or _is_assembly_howto(raw)
     )
 
 
@@ -367,6 +563,8 @@ def looks_like_factual_common_question(text: str) -> bool:
         or _is_bluetooth_pairing_howto(raw)
         or _FSA_RECEIPT_RE.search(raw)
         or _HALLWAY_FIT_RE.search(raw)
+        or _is_assembly_howto(raw)
+        or _is_air_intensity_question(raw)
     )
 
 
@@ -402,13 +600,17 @@ def try_factual_common_question(
     ):
         return _join(_warranty_length_answer(domain), node)
     if _WHITE_GLOVE_RE.search(raw):
-        return _join(_white_glove_answer(domain), node)
+        return _join_without_issue_menu(_white_glove_answer(domain), node)
     if _is_bluetooth_pairing_howto(raw):
         return _join(_bluetooth_pair_answer(), node)
     if _FSA_RECEIPT_RE.search(raw):
-        return _join(_fsa_receipt_answer(), node)
+        return _join_without_issue_menu(_fsa_receipt_answer(), node)
     if _HALLWAY_FIT_RE.search(raw):
-        return _join(_hallway_fit_answer(), node)
+        return _join_without_issue_menu(_hallway_fit_answer(raw, ticket), node)
+    if _is_assembly_howto(raw):
+        return _join_without_issue_menu(_assembly_howto_answer(), node)
+    if _is_air_intensity_question(raw):
+        return _join(_air_intensity_answer(), node)
     if _REPLACE_RE.search(raw) or _SEND_PART_RE.search(raw):
         return _join(_replacement_answer(), node)
     if _REFUND_RE.search(raw) or _RETURN_RE.search(raw):

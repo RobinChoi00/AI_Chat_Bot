@@ -137,8 +137,29 @@ def scenarios():
             return c.evidence()
         add("intake-" + cid, "warranty_intake", family, "Recognize: " + symptom, run, {"model": "OS-4000T", "message": symptom})
 
+    def run_assembly_howto(client):
+        message = "I just unpacked it. How do I assemble the footrest?"
+        c = WarrantyConversation(client, "w3-i-assembly-howto")
+        c.identity()
+        data = c.request("smart-start", {"message": message, "domain": DOMAIN}, customer=message)
+        actual = (data.get("smart_start") or {}).get("suggested_issue_type") or data["ticket"]["issue_type"]
+        c.check(not actual, "Assembly how-to must not enter the issue-type menu",
+                expected="no issue type", observed={"route": actual, "response": data})
+        c.check(data.get("side_question") is True and data.get("hide_workflow_options") is True,
+                "Assembly how-to should hide setup / delivery / malfunction buttons",
+                observed=data)
+        c.check("otasupport.com" in (data.get("assistant_message") or "").lower(),
+                "Assembly how-to should point to the published setup guides",
+                observed=data.get("assistant_message"))
+        c.check("which area do you need help with" not in (data.get("assistant_message") or "").lower(),
+                "Assembly how-to must not re-ask the issue-type menu",
+                observed=data.get("assistant_message"))
+        return c.evidence()
+    add("intake-assembly-howto", "warranty_intake", "setup_delivery_boundary",
+        "I just unpacked it. How do I assemble the footrest?", run_assembly_howto,
+        {"message": "I just unpacked it. How do I assemble the footrest?"})
+
     for cid, message, expected in [
-        ("assembly", "I just unpacked it. How do I assemble the footrest?", "installation"),
         ("loose-cable-setup", "I need help installing the side panels.", "installation"),
         ("box-damage", "The delivery box arrived crushed and the chair is damaged.", "delivery"),
         ("tracking", "Where is my order? I have not received the chair yet.", "delivery"),

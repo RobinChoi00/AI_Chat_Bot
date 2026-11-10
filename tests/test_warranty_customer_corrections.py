@@ -23,7 +23,6 @@ def conversation():
     ("The heater is not getting warm.", "defect"),
     ("The rollers make a clicking noise.", "defect"),
     ("The leather is torn on the armrest.", "defect"),
-    ("I just unpacked it. How do I assemble the footrest?", "installation"),
     ("I need help installing the side panels.", "installation"),
     ("의자가 작동하지 않아요.", "defect"),
     ("Mi silla no enciende.", "defect"),

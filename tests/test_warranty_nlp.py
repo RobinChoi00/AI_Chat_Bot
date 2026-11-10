@@ -46,6 +46,13 @@ class TestKeywordIssueType:
             "How do I pair my chair with Bluetooth? My Bluetooth is set up on my ohone"
         ) is None
 
+    def test_assembly_how_to_is_not_an_issue_type(self, monkeypatch):
+        monkeypatch.setattr(nlp, "_llm_json", lambda *_a, **kwargs: None)
+        assert nlp.interpret_issue_type("How do you assemble a vera massage chair") is None
+        assert nlp.interpret_issue_type(
+            "I just unpacked it. How do I assemble the footrest?"
+        ) is None
+
     @pytest.mark.parametrize("text", [
         "The chair's Bluetooth will not pair with my phone.",
         "My chair's Bluetooth cannot connect to my phone.",
@@ -205,6 +212,14 @@ class TestCustomerPhraseGaps:
         assert nlp.interpret_warranty_answer(node, "won't inflate") == "air"
         assert nlp.interpret_warranty_answer(node, "won't turn on") == "power"
         assert nlp.interpret_warranty_answer(node, "airbags not inflating") == "air"
+        assert nlp.interpret_warranty_answer(
+            node,
+            "Airbags on the calfs and the arms are absolutely too intense. I cannot find any way to lower the intensity.",
+        ) is None
+        assert nlp.interpret_warranty_answer(
+            node,
+            "They are OVER inflating. They are too intense and I need to know how to lower the intensity",
+        ) is None
 
     def test_air_coming_out_is_not_no_air(self, monkeypatch):
         monkeypatch.setattr(nlp, "_llm_json", lambda *_a, **_k: None)

@@ -28,6 +28,8 @@ def test_blocks_pre_purchase_and_sales_team_questions():
         "Hi, I’m interested in buying the Osaki AI 4D Yoga Flex massage chair. Is there an email address or live chat for the sales team?",
         "Does the $275 White Glove Delivery include full assembly and installation in my living room?",
         "again. havent bought anything yet. Want to make sure that the tight hallway I have is ok for delivery.",
+        "Want to make sure that the tight hallway I have is ok for delivery.",
+        "Will the Osaki Oasis fit through a 32 inch hallway?",
     ):
         assert is_pre_purchase_sales(text), text
         decision = evaluate_warranty_scope(text)
@@ -59,8 +61,10 @@ def test_blocks_hawaii_free_delivery_policy():
     assert "hawaii" in msg.lower()
     assert "alaska" in msg.lower()
     assert "guam" in msg.lower()
-    assert "you pay the freight" in msg.lower()
-    assert "do not ship" in msg.lower()
+    assert "sales" in msg.lower()
+    assert "ext. 2" in msg
+    assert "you pay the freight" not in msg.lower()
+    assert "do not ship" not in msg.lower()
 
 
 def test_blocks_alaska_and_guam_shipping_questions():
@@ -124,11 +128,27 @@ def test_filters_sales_but_keeps_delivery_in_root_menu():
     assert keys == ["warranty", "delivery"]
 
 
+def test_greeting_hi_with_white_glove_is_not_hawaii_shipping_policy():
+    from warranty_scope import is_pre_purchase_shipping_policy, is_pre_purchase_sales
+
+    text = (
+        "Hi, I’m planning to purchase the Titan eCabin 3D massage chair.\n\n"
+        "I live on the second floor with no elevator, and the staircase has a turn in the middle.\n\n"
+        "Does the $275 White Glove Delivery include carrying the chair up the stairs?"
+    )
+    assert is_pre_purchase_shipping_policy(text) is False
+    assert is_pre_purchase_sales(text) is True
+    decision = evaluate_warranty_scope(text)
+    assert decision.is_blocked
+    assert decision.reason == "sales_topic"
+
+
 def test_shipping_policy_refusal_lists_both_extensions():
     msg = build_warranty_scope_refusal("shipping_policy")
     assert "ext. 2" in msg
     assert "ext. 3" in msg
-    assert "you pay the freight" in msg.lower()
+    assert "sales" in msg.lower()
+    assert "you pay the freight" not in msg.lower()
     msg = build_warranty_scope_refusal()
     assert "warranty support" in msg.lower()
     assert "ext. 2" in msg

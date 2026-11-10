@@ -878,6 +878,15 @@ def _option_contradicts_customer(key: str, text: str) -> bool:
         norm,
     ):
         return True
+    if key == "air" and re.search(
+        r"\b(?:too\s+(?:intense|strong|hard|much)|over[\s-]?inflat|"
+        r"lower\s+(?:the\s+)?(?:air\s+)?intensity|reduce\s+(?:the\s+)?(?:air\s+)?(?:pressure|intensity))\b",
+        norm,
+    ) and not re.search(
+        r"\b(?:will\s+not|won't|does\s+not|doesn't|cannot|can't|not)\s+inflat",
+        norm,
+    ):
+        return True
     if key in {"fuse_broken", "fuse_blown"}:
         if re.search(r"\bfuse\b[^.;!?]{0,20}\b(?:not|isn't|is not)\s+(?:intact|fine|good|okay|ok|normal)\b", norm):
             return False
@@ -936,7 +945,14 @@ def _keyword_issue_type(text: str) -> Optional[str]:
         norm,
     ) and not re.search(r"\b(?:will not|won't|does not|doesn't|cannot|can't)\s+(?:pair|connect)\b", norm):
         return None
-    if re.search(r"\b(?:how\s+(?:do|can)\s+i\s+(?:assemble|install|attach)|help\s+(?:with\s+)?installing|need\s+(?:help\s+)?(?:assembling|installing))\b", norm):
+    try:
+        from warranty_common_questions import _is_assembly_howto  # noqa: WPS433
+
+        if _is_assembly_howto(text):
+            return None
+    except ImportError:
+        pass
+    if re.search(r"\b(?:help\s+(?:with\s+)?installing|need\s+(?:help\s+)?(?:assembling|installing))\b", norm):
         return "installation"
     if re.search(
         r"\bbluetooth\b[^.!?\n]{0,45}\b(?:will\s+not|won't|does\s+not|doesn't|cannot|can't)\s+(?:pair|connect)\b|"
@@ -1398,6 +1414,14 @@ def interpret_issue_type(user_text: str) -> Optional[str]:
     text = user_text.strip()
     if not text:
         return None
+
+    try:
+        from warranty_common_questions import is_sales_bound_opening_question  # noqa: WPS433
+
+        if is_sales_bound_opening_question(text):
+            return None
+    except ImportError:
+        pass
 
     keyword = _keyword_issue_type(text)
     if keyword:

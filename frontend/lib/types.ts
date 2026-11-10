@@ -205,6 +205,7 @@ export interface WarrantySessionResponse {
   model_confirmation?: ModelConfirmationMetadata | null;
   order_cancel_escalated?: boolean;
   side_question?: boolean;
+  hide_workflow_options?: boolean;
   went_back?: boolean;
   rewind?: { restored_node_id: string; turn_count: number; can_go_back: boolean };
 }

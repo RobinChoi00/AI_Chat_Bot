@@ -1577,6 +1577,13 @@ def _maybe_side_question_message(engine, ticket_id: str, answer: str) -> Optiona
     ticket = engine.get_ticket(ticket_id)
     issue_type = str(getattr(ticket, "issue_type", "") or "") if ticket else ""
 
+    from warranty_common_questions import looks_like_factual_common_question  # noqa: WPS433
+
+    if looks_like_factual_common_question(answer):
+        faq = try_side_question_for_ticket(engine, ticket_id, answer)
+        if faq:
+            return faq
+
     if node and not is_gate_node(node_id):
         from warranty_side_questions import _looks_like_valid_workflow_answer  # noqa: WPS433
 
@@ -1677,6 +1684,15 @@ def _record_unmapped_phrase(engine, ticket_id: str, node: dict, answer: str) -> 
         row.set_collected("unmapped_phrases", json.dumps(updated))
 
 
+def _open_session_ticket(engine, session_id: str, domain: str) -> str:
+    """Open a warranty session without advancing into the issue-type menu."""
+    existing = engine.get_active_session_ticket(session_id)
+    if existing is None:
+        ticket_id, _root = engine.start_session(session_id, domain)
+        return str(ticket_id)
+    return str(existing.ticket_id)
+
+
 def _open_warranty_menu_ticket(engine, session_id: str, domain: str) -> str:
     existing = engine.get_active_session_ticket(session_id)
     if existing is None:
@@ -1697,11 +1713,12 @@ def _refuse_warranty_scope_payload(
 ) -> Dict[str, Any]:
     from warranty_scope import build_warranty_scope_refusal  # noqa: WPS433
 
-    ticket_id = _open_warranty_menu_ticket(engine, session_id, domain)
+    ticket_id = _open_session_ticket(engine, session_id, domain)
     return _build_side_question_response(
         engine,
         ticket_id,
         build_warranty_scope_refusal(reason),
+        hide_workflow_options=True,
     )
 
 
@@ -1749,22 +1766,36 @@ def _try_opening_question_payload(
     """Answer a first-turn question instead of ignoring it for the issue menu."""
     from types import SimpleNamespace
 
-    from warranty_common_questions import try_factual_common_question  # noqa: WPS433
+    from warranty_common_questions import (  # noqa: WPS433
+        is_sales_bound_opening_question,
+        try_factual_common_question,
+    )
     from warranty_intake_context import persist_intake_summary  # noqa: WPS433
     from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
 
     stub = SimpleNamespace(domain=domain)
     factual = try_factual_common_question(_OPENING_ISSUE_NODE, message, ticket=stub)
     if factual:
-        ticket_id = _open_warranty_menu_ticket(engine, session_id, domain)
+        hide_menu = is_sales_bound_opening_question(message)
+        ticket_id = (
+            _open_session_ticket(engine, session_id, domain)
+            if hide_menu
+            else _open_warranty_menu_ticket(engine, session_id, domain)
+        )
         ticket = engine.get_ticket(ticket_id)
         persist_intake_summary(ticket, raw_message=message)
         if ticket is not None:
             _persist_ticket_row(ticket_id, ticket)
-        node = engine.get_current_node(ticket_id) or _OPENING_ISSUE_NODE
+        node = engine.get_current_node(ticket_id) or (
+            {"node_id": "root"} if hide_menu else _OPENING_ISSUE_NODE
+        )
         reply = try_factual_common_question(node, message, ticket=ticket) or factual
         return _build_side_question_response(
-            engine, ticket_id, reply, customer_text=message
+            engine,
+            ticket_id,
+            reply,
+            customer_text=message,
+            hide_workflow_options=hide_menu,
         )
     scope = evaluate_warranty_scope(message)
     if scope.is_blocked and scope.reason != "order_cancel":
@@ -1779,6 +1810,7 @@ def _build_side_question_response(
     *,
     customer_text: str = "",
     suggested_option: Optional[Dict[str, str]] = None,
+    hide_workflow_options: bool = False,
 ) -> Dict[str, Any]:
     ticket = engine.get_ticket(ticket_id)
     node = engine.get_current_node(ticket_id)
@@ -1810,6 +1842,27 @@ def _build_side_question_response(
     payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
     payload["side_question"] = True
     payload["assistant_message"] = message
+    at_issue_menu = node_id in ("", "root", "issue_type")
+    should_hide = hide_workflow_options
+    if at_issue_menu and not should_hide and customer_text.strip():
+        try:
+            from warranty_common_questions import is_sales_bound_opening_question  # noqa: WPS433
+
+            should_hide = is_sales_bound_opening_question(customer_text)
+        except ImportError:
+            should_hide = False
+        if not should_hide:
+            try:
+                from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
+
+                scope = evaluate_warranty_scope(customer_text)
+                should_hide = bool(
+                    scope.is_blocked and scope.reason != "order_cancel"
+                )
+            except Exception:
+                pass
+    if at_issue_menu and should_hide:
+        payload["hide_workflow_options"] = True
     suggestion = suggested_option or _pending_suggestion_from_ticket(ticket)
     if suggestion:
         payload["suggested_option"] = suggestion

@@ -63,6 +63,7 @@ _PRE_PURCHASE_SALES_RE = re.compile(
     r"\b("
     r"haven'?t\s+(?:bought|purchased|ordered)|have\s+not\s+(?:bought|purchased)|"
     r"considering\s+(?:to\s+buy|buying)|interested\s+in\s+(?:buying|purchasing)|"
+    r"planning\s+to\s+(?:buy|purchase|order)|"
     r"looking\s+for\s+(?:a\s+|an\s+)?(?:\d+d\s+|massage\s+)?(?:chair|seat)|"
     r"sales\s+(?:team|rep(?:resentative)?|department|specialist)|"
     r"connect\s+me\s+with\s+(?:a\s+)?sales|"
@@ -84,9 +85,13 @@ _WHITE_GLOVE_POLICY_RE = re.compile(
 )
 
 _HALLWAY_FIT_RE = re.compile(
-    r"\b(?:tight|narrow)\s+(?:hallway|doorway|stair(?:s|case)?)\b|"
-    r"\b(?:hallway|doorway|stair(?:s|case)?)\b.{0,50}\b(?:fit|ok|okay|delivery|deliver)|"
-    r"\bfit\s+(?:through|in)\s+(?:the\s+|my\s+|a\s+)?(?:hallway|door|doorway|stair)",
+    r"\b(?:tight|narrow)\s+(?:hallway|doorway|stair(?:s|case)?|doors?)\b|"
+    r"\b(?:hallway|doorway|stair(?:s|case)?)\b.{0,60}\b(?:fit|fits|ok|okay|delivery|deliver|width|wide)|"
+    r"\b(?:fit|fits|fitting)\b.{0,60}\b(?:hallway|doorway|stair(?:s|case)?|doors?)\b|"
+    r"\bfit\s+(?:through|in)\s+(?:the\s+|my\s+|a\s+)?.{0,24}\b(?:hallway|doors?|doorway|stair)|"
+    r"\b(?:door|doorway|hallway)\s+width\b|"
+    r"\b\d{2}(?:\.\d+)?\s*(?:\"|in(?:ch(?:es)?)?)\s+(?:wide\s+)?(?:door|doorway|hallway|opening)|"
+    r"\b(?:door|doorway|hallway|opening)\s+(?:is\s+|of\s+)?\d{2}(?:\.\d+)?\s*(?:\"|in)",
     re.IGNORECASE,
 )
 
@@ -118,6 +123,12 @@ _RESTRICTED_SHIP_REGION_RE = re.compile(
 
 _RESTRICTED_STATE_CODE_RE = re.compile(
     r"(?:^|[^\w])(?:hi|ak)(?:$|[^\w])",
+    re.IGNORECASE,
+)
+
+# "Hi, I'm planning delivery" is a greeting, not Hawaii.
+_GREETING_PREFIX_RE = re.compile(
+    r"^(?:hi|hello|hey|howdy)(?:\s*,)?\s+",
     re.IGNORECASE,
 )
 
@@ -227,9 +238,8 @@ def is_pre_purchase_sales(text: str) -> bool:
         return True
     if _WHITE_GLOVE_POLICY_RE.search(raw):
         return True
-    if _HALLWAY_FIT_RE.search(raw) and re.search(
-        r"\b(?:haven'?t|have not|not yet)\s+(?:bought|purchased|ordered)\b|"
-        r"\bbought anything yet\b",
+    if _HALLWAY_FIT_RE.search(raw) and not re.search(
+        r"\b(?:damaged|broken|crushed|dented|missing)\b",
         raw,
         re.I,
     ):
@@ -262,11 +272,9 @@ def build_warranty_scope_refusal(reason: str = "") -> str:
     if (reason or "").strip().lower() == "shipping_policy":
         return (
             "This chat is for **warranty support** after a purchase.\n\n"
-            "**Hawaii and Alaska:** we do ship there, but **you pay the freight**. "
-            "The cost depends on the model and address — sales gets a carrier quote.\n"
-            "**Guam:** we do not ship there.\n\n"
-            "For a quote or any other shipping question, please call **sales** "
-            f"at {SALES_PHONE}. I won't quote a dollar amount here.\n\n"
+            "Questions about shipping to **Hawaii, Alaska, or Guam** are handled by **sales**. "
+            f"Please call **sales** at {SALES_PHONE}. "
+            "I won't quote freight, eligibility, or a dollar amount here.\n\n"
             f"{phones}"
         )
     if (reason or "").strip().lower() == "delivery":
@@ -321,6 +329,17 @@ def is_delivery_inquiry(text: str) -> bool:
     return has_ship and has_help
 
 
+def _has_restricted_ship_region(text: str) -> bool:
+    """True for Hawaii / Alaska / Guam — not the greeting 'Hi,'."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if _RESTRICTED_SHIP_REGION_RE.search(raw):
+        return True
+    remainder = _GREETING_PREFIX_RE.sub("", raw, count=1)
+    return bool(_RESTRICTED_STATE_CODE_RE.search(remainder))
+
+
 def is_pre_purchase_shipping_policy(text: str) -> bool:
     """True for free-shipping / region-eligibility questions (not claim tracking)."""
     raw = (text or "").strip()
@@ -329,9 +348,7 @@ def is_pre_purchase_shipping_policy(text: str) -> bool:
     if _POST_PURCHASE_DELIVERY_RE.search(raw):
         return False
 
-    has_region = bool(
-        _RESTRICTED_SHIP_REGION_RE.search(raw) or _RESTRICTED_STATE_CODE_RE.search(raw)
-    )
+    has_region = _has_restricted_ship_region(raw)
     has_shipping_ask = bool(_PRE_PURCHASE_SHIPPING_ASK_RE.search(raw))
 
     if has_region and has_shipping_ask:

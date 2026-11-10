@@ -1096,24 +1096,46 @@ def test_smart_start_answers_opening_questions_instead_of_the_issue_menu(client,
             "cust-open-glove",
             "Does the $275 White Glove Delivery include full assembly in my living room?",
             ("white glove", "$275", "ext. 2"),
+            True,
         ),
         (
             "cust-open-bt",
             "How do I pair my chair with Bluetooth? My Bluetooth is set up on my ohone",
             ("bluetooth", "888-848-2630"),
+            False,
         ),
         (
             "cust-open-fsa",
             "This purchse is FSA eligible. They need a receipt from. can you help",
             ("fsa", "ext. 2"),
+            True,
+        ),
+        (
+            "cust-open-hall",
+            "again. havent bought anything yet. Want to make sure that the tight hallway I have is ok for delivery.",
+            ("narrowest", "published doorway"),
+            True,
+        ),
+        (
+            "cust-open-hall-oasis",
+            "Will the Osaki Oasis fit through a 32 inch hallway?",
+            ("29", "assembled", "32"),
+            True,
+        ),
+        (
+            "cust-open-assemble",
+            "How do you assemble a vera massage chair",
+            ("otasupport.com",),
+            True,
         ),
         (
             "cust-open-buy",
             "Looking for a 4d seat that will give me plenty room, 6ft 245",
             ("sales", "ext. 2"),
+            True,
         ),
     )
-    for session_id, message, needles in cases:
+    for session_id, message, needles, hide_menu in cases:
         resp = client.post(
             f"/api/v1/warranty/session/{session_id}/smart-start",
             json={"message": message, "domain": "osakiusa.com"},
@@ -1125,7 +1147,45 @@ def test_smart_start_answers_opening_questions_instead_of_the_issue_menu(client,
         lower = data["assistant_message"].lower()
         for needle in needles:
             assert needle in lower, (message, needle)
-        assert "which area do you need help with" in lower or "setup" in lower
+        if hide_menu:
+            assert data.get("hide_workflow_options") is True, message
+            assert "which area do you need help with" not in lower, message
+            node = (data.get("ticket") or {}).get("current_node") or {}
+            assert node.get("node_id") != "issue_type", message
+        else:
+            assert "setup" in lower or "bluetooth" in lower
+
+
+def test_white_glove_after_delivery_tap_is_not_hawaii_policy(client):
+    session_id = "cust-wg-after-delivery"
+    _register_model(client, session_id, model="Titan eCabin 3D")
+    start = client.post(
+        f"/api/v1/warranty/session/{session_id}/quick-start",
+        json={"issue_type": "delivery", "domain": "titanchair.com"},
+    )
+    assert start.status_code == 200, start.text
+    ticket_id = start.json()["ticket"]["ticket_id"]
+    resp = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={
+            "answer": (
+                "Hi, I’m planning to purchase the Titan eCabin 3D massage chair.\n\n"
+                "I live on the second floor with no elevator, and the staircase has a turn in the middle.\n\n"
+                "Does the $275 White Glove Delivery include carrying the chair up the stairs, "
+                "navigating the turn, unpacking, and installation?\n\n"
+                "Are there any additional stair-carrying fees?"
+            )
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    lower = (data.get("assistant_message") or "").lower()
+    assert data.get("side_question") is True
+    assert "white glove" in lower
+    assert "$275" in data["assistant_message"]
+    assert "hawaii" not in lower
+    assert "guam" not in lower
+    assert "you pay the freight" not in lower
 
 
 def test_sales_representative_handoff_uses_sales_extension(client):
