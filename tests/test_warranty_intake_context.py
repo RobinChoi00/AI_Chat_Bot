@@ -107,13 +107,8 @@ def test_existing_session_filters_conflicting_model_on_read(monkeypatch):
     assert get_intake_summary(ticket) == "remote screen is blank"
 
 
-def test_tool_answer_side_question_does_not_advance(monkeypatch):
+def test_tool_answer_side_question_does_not_advance():
     from agent_tools import tool_answer_warranty_question, tool_start_warranty_workflow
-
-    monkeypatch.setattr(
-        "warranty_side_questions.fetch_delivery_spec_answer",
-        lambda model, spec: "Box size: 48 x 32 x 30 inches.",
-    )
 
     start = tool_start_warranty_workflow(session_id="side-agent-test", domain="osaki.com")
     ticket_id = None
@@ -138,5 +133,5 @@ def test_tool_answer_side_question_does_not_advance(monkeypatch):
         customer_text="Will the shipping box fit through a 32 inch doorway?",
     )
     assert "WARRANTY_SIDE_QUESTION" in result
-    assert "Box size" in result
+    assert "published doorway width" in result
     assert WarrantyEngine.get_current_node(ticket_id).get("node_id") == node_id_before

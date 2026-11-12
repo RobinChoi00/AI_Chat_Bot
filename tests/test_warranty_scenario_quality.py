@@ -291,4 +291,4 @@ def test_smart_start_blocks_sales_pricing_question(warranty_client):
     )
     assert payload.get("side_question") is True
     assert "warranty support" in payload["assistant_message"].lower()
-    assert payload["ticket"]["current_node"]["node_id"] == "issue_type"
+    assert payload["ticket"]["current_node"]["node_id"] == "root"

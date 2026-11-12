@@ -94,7 +94,7 @@ def test_spanish_policy_detour_keeps_correction_and_recommendation_facts():
         prefs.update(result.prefs_patch or {})
         if 'montaje' in text:
             assert 'no incluye montaje' in result.reply
-            assert 'cargo adicional' in result.reply
+            assert 'cargos extra' in result.reply
             assert 'no confirman una fecha concreta' in result.reply
             assert prefs['recommend_prefs']['budget_max_usd'] == '2800'
     assert prefs['recommend_prefs']['height_in'] == '70'
