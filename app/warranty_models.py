@@ -166,6 +166,16 @@ class WarrantyTicket(Base):
         }
 
 
+class WarrantyRuntimeSetting(Base):
+    """Small admin-controlled switches that must survive a process restart."""
+
+    __tablename__ = "warranty_runtime_settings"
+
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=False)
+    updated_at = Column(DateTime, default=_now_cst, onupdate=_now_cst)
+
+
 class WarrantyChatConsent(Base):
     """Customer acceptance of live-chat privacy / recording notice (per browser session)."""
 

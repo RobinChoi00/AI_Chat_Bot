@@ -20,11 +20,77 @@ EMAIL_GATE_PROVIDED = "provided"
 EMAIL_GATE_SKIPPED = "skipped"
 
 
-def chat_privacy_enforced() -> bool:
-    """Use one recording-consent policy for every browser chat entry point."""
-    return os.getenv("WARRANTY_REQUIRE_CHAT_PRIVACY", "1").strip().lower() not in {
+ASK_CUSTOMER_EMAIL_KEY = "ask_customer_email"
+
+
+def _env_enabled(name: str, default: str) -> bool:
+    return os.getenv(name, default).strip().lower() not in {
         "0", "false", "no", "off",
     }
+
+
+def chat_privacy_enforced() -> bool:
+    """Use one recording-consent policy for every browser chat entry point."""
+    return _env_enabled("WARRANTY_REQUIRE_CHAT_PRIVACY", "1")
+
+
+def chat_email_required() -> bool:
+    """Ask for a contact email after I Agree.
+
+    The admin switch is stored in the database and wins over the environment.
+    Until someone sets it, ``WARRANTY_REQUIRE_CHAT_EMAIL`` applies and defaults
+    off so a training demo can open the chat without collecting addresses.
+    """
+    if not chat_privacy_enforced():
+        return False
+    stored = _read_runtime_setting(ASK_CUSTOMER_EMAIL_KEY)
+    if stored is not None:
+        return stored.strip().lower() not in {"0", "false", "no", "off"}
+    return _env_enabled("WARRANTY_REQUIRE_CHAT_EMAIL", "0")
+
+
+def set_chat_email_required(enabled: bool) -> bool:
+    """Persist the admin switch and return whether customers are asked now."""
+    _write_runtime_setting(ASK_CUSTOMER_EMAIL_KEY, "1" if enabled else "0")
+    return chat_email_required()
+
+
+def chat_email_prompt_status() -> dict[str, str | bool]:
+    """Admin view of the email step, including whether a saved switch exists."""
+    stored = _read_runtime_setting(ASK_CUSTOMER_EMAIL_KEY)
+    return {
+        "enabled": chat_email_required(),
+        "source": "admin" if stored is not None else "default",
+    }
+
+
+def _read_runtime_setting(key: str) -> Optional[str]:
+    from warranty_models import WarrantyRuntimeSetting, warranty_db_session
+
+    with warranty_db_session() as db:
+        row = (
+            db.query(WarrantyRuntimeSetting)
+            .filter(WarrantyRuntimeSetting.key == key)
+            .first()
+        )
+        if row is None:
+            return None
+        return str(row.value)
+
+
+def _write_runtime_setting(key: str, value: str) -> None:
+    from warranty_models import WarrantyRuntimeSetting, warranty_db_session
+
+    with warranty_db_session() as db:
+        row = (
+            db.query(WarrantyRuntimeSetting)
+            .filter(WarrantyRuntimeSetting.key == key)
+            .first()
+        )
+        if row is None:
+            db.add(WarrantyRuntimeSetting(key=key, value=value))
+        else:
+            row.value = value
 
 
 def require_chat_privacy(session_id: str) -> None:

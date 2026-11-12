@@ -28,6 +28,7 @@ import warranty_workflow as wf  # noqa: E402
 @pytest.fixture
 def privacy_client(monkeypatch):
     monkeypatch.setenv("WARRANTY_REQUIRE_CHAT_PRIVACY", "1")
+    monkeypatch.setenv("WARRANTY_REQUIRE_CHAT_EMAIL", "1")
 
     mem_engine = create_engine(
         "sqlite:///:memory:",
@@ -181,6 +182,57 @@ def test_disabled_privacy_mode_retains_its_explicit_opt_out(privacy_client, monk
     assert skipped.json()["privacy"]["contact_email_available"] is False
     response = client.post("/api/v1/warranty/session/disabled/register-model", json={"model": "OS-4000T"})
     assert response.status_code == 200, response.text
+
+
+def test_training_default_opens_chat_after_consent_without_email(privacy_client, monkeypatch):
+    monkeypatch.setenv("WARRANTY_REQUIRE_CHAT_EMAIL", "0")
+    client = privacy_client
+    consent = client.post("/api/v1/warranty/session/training/consent", json={"domain": "titanchair.com"})
+    assert consent.status_code == 200
+    assert consent.json()["privacy"]["consent_recorded"] is True
+    assert consent.json()["privacy"]["email_required_before_help"] is False
+    response = client.post(
+        "/api/v1/warranty/session/training/register-model",
+        json={"model": "Titan Nido 3D", "domain": "titanchair.com"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["privacy"]["email_gate_status"] == "pending"
+
+
+def test_admin_can_turn_the_email_prompt_back_on(privacy_client, monkeypatch):
+    monkeypatch.setenv("WARRANTY_REQUIRE_CHAT_EMAIL", "0")
+    monkeypatch.setattr("warranty_router._ADMIN_API_KEY", "training-admin")
+    client = privacy_client
+    hidden = client.get("/admin/warranty/chat-email-prompt", headers={"X-Admin-Key": "training-admin"})
+    assert hidden.status_code == 200
+    assert hidden.json() == {"enabled": False, "source": "default"}
+    assert client.get("/admin/warranty/chat-email-prompt").status_code == 401
+
+    shown = client.post(
+        "/admin/warranty/chat-email-prompt",
+        headers={"X-Admin-Key": "training-admin"},
+        json={"enabled": True},
+    )
+    assert shown.status_code == 200
+    assert shown.json()["enabled"] is True
+    consent = client.post("/api/v1/warranty/session/restored/consent", json={"domain": "titanchair.com"})
+    assert consent.json()["privacy"]["email_required_before_help"] is True
+    blocked = client.post(
+        "/api/v1/warranty/session/restored/register-model",
+        json={"model": "Titan Nido 3D"},
+    )
+    assert blocked.status_code == 403
+
+    client.post(
+        "/admin/warranty/chat-email-prompt",
+        headers={"X-Admin-Key": "training-admin"},
+        json={"enabled": False},
+    )
+    opened = client.post(
+        "/api/v1/warranty/session/restored/register-model",
+        json={"model": "Titan Nido 3D"},
+    )
+    assert opened.status_code == 200, opened.text
 
 
 def test_phone_ticket_does_not_require_browser_email(privacy_client):

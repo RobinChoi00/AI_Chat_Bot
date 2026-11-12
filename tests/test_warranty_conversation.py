@@ -21,6 +21,7 @@ from warranty_conversation import customer_conversation_page
 @pytest.fixture
 def chat(monkeypatch):
     monkeypatch.setenv("WARRANTY_REQUIRE_CHAT_PRIVACY", "1")
+    monkeypatch.setenv("WARRANTY_REQUIRE_CHAT_EMAIL", "1")
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     wm.Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)

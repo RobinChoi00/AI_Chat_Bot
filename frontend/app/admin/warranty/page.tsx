@@ -10,6 +10,7 @@ import Link from "next/link";
 import AdminTicketQueue from "@/components/admin/AdminTicketQueue";
 import AdminQueueFilters from "@/components/admin/AdminQueueFilters";
 import AdminFreshdeskSync from "@/components/admin/AdminFreshdeskSync";
+import AdminEmailPromptToggle from "@/components/admin/AdminEmailPromptToggle";
 import type { TicketListResponse } from "@/lib/adminTypes";
 import { getBackendUrl } from "@/lib/backendUrl";
 import {
@@ -112,6 +113,8 @@ export default async function AdminWarrantyQueuePage({
             <code>.env.local</code> on the Next.js server.
           </div>
         )}
+
+        <AdminEmailPromptToggle />
 
         {/* Admin decision warning */}
         <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">

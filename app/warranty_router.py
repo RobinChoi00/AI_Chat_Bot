@@ -70,6 +70,12 @@ def _chat_privacy_enforced() -> bool:
     return chat_privacy_enforced()
 
 
+def _chat_email_required() -> bool:
+    from warranty_consent import chat_email_required
+
+    return chat_email_required()
+
+
 def _session_email_gate_state(row) -> tuple[str, bool]:
     """Recognize saved email, including consent rows from before gate status existed."""
     from warranty_email import extract_email  # noqa: WPS433
@@ -98,7 +104,7 @@ def _require_web_chat_privacy(session_id: str) -> None:
             status_code=403,
             detail="Please agree to the privacy notice before continuing.",
         )
-    if _session_email_gate_state(row)[0] != "provided":
+    if _chat_email_required() and _session_email_gate_state(row)[0] != "provided":
         raise HTTPException(
             status_code=403,
             detail="Please enter your email address before starting the chat.",
@@ -112,7 +118,7 @@ def _public_privacy_state(session_id: str) -> dict:
     status, email_available = _session_email_gate_state(row)
     return {
         "consent_required": _chat_privacy_enforced(),
-        "email_required_before_help": _chat_privacy_enforced(),
+        "email_required_before_help": _chat_email_required(),
         "consent_recorded": row is not None,
         "email_gate_status": status,
         "contact_email_available": email_available,
@@ -1020,6 +1026,11 @@ class WarrantySessionContactEmailRequest(BaseModel):
     """Save the contact email required after consent and before browser chat."""
     customer_email: str = Field(default="", max_length=254)
     skipped: bool = False
+
+
+class ChatEmailPromptUpdate(BaseModel):
+    """Admin switch for the customer email step. Consent stays on either way."""
+    enabled: bool
 
 
 class WarrantyDeliveryTrackingRequest(BaseModel):
@@ -2738,9 +2749,8 @@ async def record_warranty_session_contact_email(
     body: WarrantySessionContactEmailRequest,
 ):
     """
-    Required email after I Agree: store on the session so it copies onto
-    the ticket when the warranty workflow starts. Skip is disabled when
-    ``WARRANTY_REQUIRE_CHAT_PRIVACY`` is on (default).
+    Required email after I Agree when the admin email prompt is on.
+    Skip is rejected only while that prompt is on.
     """
     from warranty_consent import (  # noqa: WPS433
         get_chat_consent,
@@ -2752,7 +2762,7 @@ async def record_warranty_session_contact_email(
             status_code=403,
             detail="Please agree to the privacy notice before providing your email.",
         )
-    if body.skipped and _chat_privacy_enforced():
+    if body.skipped and _chat_email_required():
         raise HTTPException(
             status_code=422,
             detail="Please enter your email address before starting the chat.",
@@ -3516,6 +3526,28 @@ def _serialize_admin_ticket(ticket, turns=None, evidences=None) -> dict:
         current_prompt = None
     payload["current_node_prompt"] = current_prompt
     return payload
+
+
+@router.get("/admin/warranty/chat-email-prompt", tags=["admin-warranty"])
+async def get_chat_email_prompt(x_admin_key: Optional[str] = Header(default=None)):
+    """Whether the customer chat currently asks for an email after I Agree."""
+    _require_admin(x_admin_key)
+    from warranty_consent import chat_email_prompt_status
+
+    return chat_email_prompt_status()
+
+
+@router.post("/admin/warranty/chat-email-prompt", tags=["admin-warranty"])
+async def update_chat_email_prompt(
+    body: ChatEmailPromptUpdate,
+    x_admin_key: Optional[str] = Header(default=None),
+):
+    """Turn the customer email step on or off without a deploy."""
+    _require_admin(x_admin_key)
+    from warranty_consent import set_chat_email_required
+
+    enabled = set_chat_email_required(body.enabled)
+    return {"enabled": enabled, "source": "admin"}
 
 
 @router.get("/admin/warranty/tickets", tags=["admin-warranty"])
