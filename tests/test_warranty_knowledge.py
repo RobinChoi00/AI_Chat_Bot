@@ -82,6 +82,34 @@ def test_search_power_path(tmp_path, monkeypatch):
     )
 
 
+def test_installation_search_uses_the_customer_words_until_air_is_mentioned():
+    seen = []
+
+    def _capture(**kwargs):
+        seen.append(kwargs)
+        return []
+
+    original = wk.search_knowledge
+    wk.search_knowledge = _capture
+    try:
+        wk.contextual_search_knowledge(
+            path_text="Where is the installation video for the tablet cable",
+            issue_type="installation",
+            limit=2,
+        )
+        wk.contextual_search_knowledge(
+            path_text="The footrest air hose will not click in during setup",
+            issue_type="installation",
+            limit=2,
+        )
+    finally:
+        wk.search_knowledge = original
+    assert "air hose" not in seen[0]["path_text"].lower()
+    assert seen[0]["defect_category"] is None
+    assert seen[1]["defect_category"] == "air"
+    assert "air hose" in seen[1]["path_text"].lower()
+
+
 def test_contextual_search_skips_defect_without_category():
     wk.load_knowledge_entries.cache_clear()
     results = wk.contextual_search_knowledge(

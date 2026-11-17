@@ -141,12 +141,13 @@ def is_medical_scope_question(message: str) -> bool:
     """Recognize requested clinical clearance or treatment, not ordinary fit."""
     value = _fold(message)
     eligibility = re.search(r'\b(?:pacemaker|pregnan\w*|(?:first|second|third)\s+trimester|implanted\s+defibrillator|implantable\s+(?:cardioverter\s+)?defibrillator|marcapasos|embaraz\w*|desfibrilador)\b|심박\s*조율기|임신|수술\s*후', value)
+    clinical_device = re.search(r'\b(?:heart\s+valve|valve\s+(?:replacement|transplant)|transplant|stent|cardiac)\b', value) and re.search(r'\b(?:use|using|safe\w*|chair|massage|sit)\b', value)
     icd = re.search(r'\bicd\b', value) and re.search(r'\b(?:implant\w*|heart|cardiac|defibrillator|safe|use)\b', value)
     surgery = re.search(r'\b(?:surgery|operacion|cirugia|operaron|operado|operada|postoperative|post[ -]op)\b', value) and re.search(r'\b(?:safe\w*|use|try|after|recent\w*|segur\w*|usar|probar|despues|reciente|sin\s+riesgo|hace\s+una\s+semana)\b', value)
     condition = r'(?:sciatica|scoliosis|arthritis|neuropathy|herniated\s+disc|back\s+pain|chronic\s+pain|disease|condition|ciatica|artritis|neuropatia|dolor|enfermedad|hernia(?:\s+de\s+disco)?)'
     treatment = r'(?:cur\w*|treat\w*|heal\w*|revers\w*|eliminat\w*|fix|sanar|trat\w*|get\s+rid\s+of)'
     guaranteed_relief = re.search(r'\b(?:guarantee\w*|promise\w*)\b[^.!?]{0,50}\b(?:pain\s+relief|relie\w*\s+pain)\b|\bgarant\w*\b[^.!?]{0,50}\bdolor\b|통증.{0,20}보장', value)
-    return bool(eligibility or icd or surgery or guaranteed_relief or re.search(rf'\b{treatment}\b[^.!?]{{0,70}}\b{condition}\b|\b{condition}\b[^.!?]{{0,70}}\b{treatment}\b', value)
+    return bool(eligibility or clinical_device or icd or surgery or guaranteed_relief or re.search(rf'\b{treatment}\b[^.!?]{{0,70}}\b{condition}\b|\b{condition}\b[^.!?]{{0,70}}\b{treatment}\b', value)
                 or re.search(r'(?:의자|안마|마사지).{0,40}(?:완치|치료|고칠|낫게)|(?:좌골|디스크|관절염|척추|허리\s*통증).{0,30}(?:완치|치료|고칠|낫게)', value))
 
 

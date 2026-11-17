@@ -646,10 +646,75 @@ def label_location_reply(message, data):
     )
 
 
+_USER_HEIGHT_LIMIT = re.compile(
+    r"\b(?:height\s+(?:max(?:imum)?|limit|range)|"
+    r"max(?:imum)?\s+(?:user\s+)?height|"
+    r"good\s+(?:up\s+)?(?:to|till|until)|"
+    r"up\s+to\s+what\s+height|height\s+maximum|"
+    r"how\s+tall\s+(?:can|should|of\s+(?:a\s+)?(?:person|user|someone))|"
+    r"what\s+height\s+(?:can|should|is\s+(?:this|it|the\s+chair)\s+good))\b",
+    re.I,
+)
+_SOURCE_ASK = re.compile(
+    r"\bwhere\b.{0,40}\b(?:say|said|listed|written|published|find|come\s+from)\b|"
+    r"\bwhere\s+does\s+(?:it|that|this)\s+say\b",
+    re.I,
+)
+
+
+def focused_height_limit_reply(message: str, data: dict):
+    """Answer the user-height question for the chair already in focus."""
+    raw = message or ""
+    if not _USER_HEIGHT_LIMIT.search(raw):
+        return None
+    if re.search(r"\bhow\s+tall\s+is\s+the\s+chair\b|\b(?:door|doorway|product|chair)\s+height\b", raw, re.I):
+        return None
+    from sales_agent import _focus_product_from_prefs, _guess_model_from_text
+    from sales_height import STANDARD_RANGE, XL_RANGE, is_xl_line
+
+    product = _guess_model_from_text(raw) or _focus_product_from_prefs(data)
+    if product is None:
+        return None
+    xl = is_xl_line(product)
+    line = XL_RANGE if xl else STANDARD_RANGE
+    kind = "XL" if xl else "standard"
+    return _reply(
+        f"A user-height range for **{product.display_name}** itself is not published. "
+        f"It is a **{kind}** chair, designed for **{line}**. "
+        "Outside that range, a specialist should confirm the fit.",
+        intent="specs",
+        tools=["catalog.height_fit"],
+        products=[product],
+        patch={"pending_primary": product.display_name},
+    )
+
+
+def published_source_reply(message: str, data: dict):
+    """Point back at the catalog figure instead of restarting the menu."""
+    raw = message or ""
+    if not _SOURCE_ASK.search(raw):
+        return None
+    from sales_agent import _focus_product_from_prefs, _guess_model_from_text
+
+    product = _guess_model_from_text(raw) or _focus_product_from_prefs(data)
+    if product is None:
+        return None
+    return _reply(
+        f"That figure for **{product.display_name}** comes from the **published catalog specs** this chat uses. "
+        "I can't open the product-page sentence it was copied from. "
+        "A specialist can point you to the listing if you need the page itself.",
+        intent="specs",
+        tools=["catalog.source"],
+        products=[product],
+        patch={"pending_primary": product.display_name},
+    )
+
+
 def followup_reply(message: str, prefs: Optional[dict], *, domain: str):
     """Context-grounded shopping follow-up, or ``None`` to continue normal routing."""
     data = prefs or {}
-    for handler in (label_location_reply, concept_reply, named_width_reply, named_model_fit_reply, capacity_list_reply,
+    for handler in (published_source_reply, focused_height_limit_reply, label_location_reply, concept_reply,
+                    named_width_reply, named_model_fit_reply, capacity_list_reply,
                     shortlist_feature_reply, saved_users_height_reply):
         reply = handler(message, data)
         if reply is not None:

@@ -54,8 +54,9 @@ _REPLACE_RE = re.compile(
     re.I,
 )
 _SEND_PART_RE = re.compile(
-    r"\b(?:just send|send|ship|mail)\b.{0,30}\b(?:new\s+)?(?:part|remote|controller|fuse|airbag|cover|cord)\b|"
-    r"\b(?:new|replacement)\s+(?:part|remote|controller)\b",
+    r"\b(?:just send|send|ship|mail)\b.{0,30}\b(?:new\s+)?(?:parts?|remote|controller|fuse|airbag|cover|cord)\b|"
+    r"\b(?:new|replacement)\s+(?:parts?|remote|controller)\b|"
+    r"\b(?:parts?\s+diagram|exploded\s+view)\b",
     re.I,
 )
 _REFUND_RE = re.compile(
@@ -184,7 +185,25 @@ _AIR_INTENSITY_RE = re.compile(
     r"\b(?:airbags?|air bags?|air)\b.{0,50}\b(?:too\s+(?:intense|strong|hard|much)|over[\s-]?inflat)|"
     r"\b(?:too\s+(?:intense|strong|hard)|over[\s-]?inflat).{0,50}\b(?:airbags?|air bags?|air)|"
     r"\b(?:lower|reduce|turn\s+down)\b.{0,40}\b(?:air\s+)?(?:intensity|pressure|airbags?)\b|"
-    r"\bhow\s+(?:do|can)\s+i\b.{0,40}\b(?:lower|reduce|turn\s+down).{0,24}\b(?:intensity|pressure|airbags?)",
+    r"\bhow\s+(?:do|can)\s+i\b.{0,40}\b(?:lower|reduce|turn\s+down).{0,24}\b(?:intensity|pressure|airbags?)|"
+    r"\b(?:not|isn'?t|aren'?t|don'?t|doesn'?t|does not|do not)\s+squeez\w*|"
+    r"\bnot\s+enough\s+(?:pressure|squeeze)\b|"
+    r"\b(?:too\s+)?(?:small|petite)\b.{0,50}\b(?:squeez|pressure|shoulder|arm)",
+    re.I,
+)
+_AUTO_CHECK_RE = re.compile(
+    r"\b(?:auto[\s-]?check|automatic\s+check)\b|"
+    r"\bhow\s+(?:do|can)\s+i\b.{0,40}\b(?:start|run|begin)\b.{0,30}\b(?:body[\s-]?scan|auto)\b|"
+    r"\b(?:start|run|begin)\b.{0,20}\b(?:the\s+)?(?:auto[\s-]?check|body[\s-]?scan)\b",
+    re.I,
+)
+_WATTS_RE = re.compile(
+    r"\b(?:watts?|wattage|power\s+draw|amps?|amperage)\b",
+    re.I,
+)
+_PARTS_DIAGRAM_RE = re.compile(
+    r"\b(?:parts?\s+diagram|exploded\s+view|schematic)\b|"
+    r"\b(?:replacement|spare)\s+parts?\b",
     re.I,
 )
 _AIR_NOT_INFLATING_RE = re.compile(
@@ -491,12 +510,41 @@ def _is_air_intensity_question(text: str) -> bool:
 
 def _air_intensity_answer() -> str:
     return (
-        "This chat's **air** path is for bags that **will not inflate**, not for lowering strength. "
-        "Published warranty materials do not list a model-specific air-intensity control, "
-        "so I will not invent a remote setting.\n\n"
+        "This chat's **air** path is for bags that **will not inflate**. "
+        "It does not cover bags that feel **too strong** or **not strong enough**.\n\n"
+        "Published warranty materials do not list a model-specific control for raising or lowering "
+        "air pressure, so I will not invent a remote setting. A smaller or larger body can change "
+        "how the bags feel; that is not, by itself, a broken bag.\n\n"
         "Look up your exact model at [https://www.otasupport.com](https://www.otasupport.com) "
         "for the remote buttons that are documented there. "
-        "If a bag **stays over-inflated and will not release**, say that — that is a malfunction."
+        "If a bag **stays over-inflated and will not release**, or **never inflates**, say that — "
+        "that is a malfunction."
+    )
+
+
+def _auto_check_answer() -> str:
+    return (
+        "I don't have a published button sequence for starting the **automatic body check** "
+        "on this model, so I won't guess the remote buttons.\n\n"
+        "Look up your exact model at [https://www.otasupport.com](https://www.otasupport.com). "
+        "If the check starts and then shows a **fault code**, tell me the code."
+    )
+
+
+def _watts_answer() -> str:
+    return (
+        "A **wattage** or power-draw figure for this chair is not in the published specs I can quote. "
+        "I won't estimate it.\n\n"
+        "The manual for your exact model is at [https://www.otasupport.com](https://www.otasupport.com)."
+    )
+
+
+def _parts_diagram_answer() -> str:
+    return (
+        "I can't send a **parts diagram** or ship a part from this chat. "
+        "Email **service@osakititan.com** with the chair model, the broken piece, and a photo. "
+        "Warranty reviews parts requests; nothing has been approved here.\n\n"
+        f"You can also call **{WARRANTY_PHONE}**."
     )
 
 
@@ -565,6 +613,9 @@ def looks_like_factual_common_question(text: str) -> bool:
         or _HALLWAY_FIT_RE.search(raw)
         or _is_assembly_howto(raw)
         or _is_air_intensity_question(raw)
+        or _AUTO_CHECK_RE.search(raw)
+        or _WATTS_RE.search(raw)
+        or _PARTS_DIAGRAM_RE.search(raw)
     )
 
 
@@ -611,6 +662,12 @@ def try_factual_common_question(
         return _join_without_issue_menu(_assembly_howto_answer(), node)
     if _is_air_intensity_question(raw):
         return _join(_air_intensity_answer(), node)
+    if _AUTO_CHECK_RE.search(raw):
+        return _join(_auto_check_answer(), node)
+    if _WATTS_RE.search(raw):
+        return _join(_watts_answer(), node)
+    if _PARTS_DIAGRAM_RE.search(raw) or _SEND_PART_RE.search(raw):
+        return _join(_parts_diagram_answer() if _PARTS_DIAGRAM_RE.search(raw) else _replacement_answer(), node)
     if _REPLACE_RE.search(raw) or _SEND_PART_RE.search(raw):
         return _join(_replacement_answer(), node)
     if _REFUND_RE.search(raw) or _RETURN_RE.search(raw):

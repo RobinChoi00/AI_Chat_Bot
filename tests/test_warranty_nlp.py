@@ -196,6 +196,45 @@ class TestLlmFallback:
         )
         assert nlp.interpret_warranty_answer(node, "maybe sort of") is None
 
+    def test_llm_cannot_invent_an_ungrounded_option(self, monkeypatch):
+        options = [
+            {"answer_key": "air", "label": "Air / Inflation not working"},
+            {"answer_key": "power", "label": "Power issue"},
+        ]
+        node = {"type": "question", "prompt": "What kind of defect?", "options": options}
+        monkeypatch.setattr(nlp, "_heuristic_option_match", lambda _opts, _text: None)
+        monkeypatch.setattr(
+            nlp,
+            "_llm_json",
+            lambda _prompt, **kwargs: {"answer_key": "air", "confidence": "high"},
+        )
+        assert nlp.interpret_warranty_answer(node, "how many watts does the chair use") is None
+
+    def test_llm_cannot_turn_air_strength_into_an_air_failure(self, monkeypatch):
+        options = [
+            {"answer_key": "air", "label": "Air / Inflation not working"},
+            {"answer_key": "power", "label": "Power issue"},
+        ]
+        node = {"type": "question", "prompt": "What kind of defect?", "options": options}
+        monkeypatch.setattr(
+            nlp,
+            "_llm_json",
+            lambda _prompt, **kwargs: {"answer_key": "air", "confidence": "high"},
+        )
+        assert nlp.interpret_warranty_answer(
+            node,
+            "the air is too intense, can I lower the intensity",
+        ) is None
+
+    def test_llm_issue_type_needs_the_customers_words(self, monkeypatch):
+        monkeypatch.setattr(nlp, "_keyword_issue_type", lambda _text: None)
+        monkeypatch.setattr(
+            nlp,
+            "_llm_json",
+            lambda _prompt, **kwargs: {"issue_type": "defect", "confidence": "high"},
+        )
+        assert nlp.interpret_issue_type("how many watts does the Escape Duo use") is None
+
 
 class TestCustomerPhraseGaps:
     """Phrases that used to stick or map to the wrong option without an LLM."""

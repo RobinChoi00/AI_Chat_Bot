@@ -283,6 +283,16 @@ def _format_knowledge_side_answer(
     turns: Sequence[Any],
     ticket=None,
 ) -> Optional[str]:
+    if re.search(
+        r"too\s+intense|over[\s-]?inflat|not\s+enough\s+(?:pressure|squeeze)|"
+        r"(?:not|isn't|aren't|don't|doesn't)\s+squeez|lower\s+the\s+intensity|"
+        r"auto[\s-]?check|automatic\s+check|\bwatts?\b|wattage|parts?\s+diagram|"
+        r"replacement\s+parts",
+        query_text or "",
+        re.I,
+    ):
+        return None
+
     path_text = enrich_path_text(
         f"{query_text} {build_path_text(turns)}".strip(),
         ticket,

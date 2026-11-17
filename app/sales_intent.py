@@ -213,7 +213,7 @@ _DISCOUNT_RE = re.compile(
     r"financing|monthly\s+payment|payment\s+plan|"
     r"할인|쿠폰|프로모"
     r")\b|"
-    r"코스트코|왜\s*더\s*비싸"
+    r"코스트코.{0,16}(?:가격|할인|비싸|더\s*싸)|왜\s*더\s*비싸"
     r")",
     re.IGNORECASE,
 )
@@ -221,8 +221,8 @@ _DISCOUNT_RE = re.compile(
 # Competitor / "why is this $1000 more" — never a recommend budget.
 _PRICE_GAP_RE = re.compile(
     r"("
-    r"\bcostco\b|"
-    r"\bwalmart\b|"
+    r"\b(?:costco|walmart|amazon)\b.{0,48}\b(?:cheaper|expensive|price|priced|discount|deal|coupon|\$)|"
+    r"\b(?:cheaper|expensive|price|priced|discount|deal|coupon|\$\s*\d).{0,48}\b(?:costco|walmart|amazon)\b|"
     r"on\s+amazon|"
     r"amazon\.com|"
     r"amazon\s+site|"
@@ -232,7 +232,7 @@ _PRICE_GAP_RE = re.compile(
     r"why\s+is\s+(?:this|it|your).{0,40}more|"
     r"\$\s*\d[\d,]{2,5}\s+more|"
     r"\d[\d,]{2,5}\s+(?:dollars?\s+)?more\s+than|"
-    r"코스트코|왜\s*더\s*비싸"
+    r"코스트코.{0,16}(?:가격|할인|비싸|더\s*싸)|왜\s*더\s*비싸"
     r")",
     re.IGNORECASE,
 )
@@ -705,8 +705,9 @@ def classify(text: str) -> SalesIntent:
         )
 
     # 6) ETA / delivery date promise → Warranty Department redirect.
+    # An in-stock question that also asks lead time is still a catalog question.
     hits = _matched(_ETA_SHIPPING_RE, raw)
-    if hits:
+    if hits and not re.search(r"\b(?:in\s+stock|out\s+of\s+stock)\b", raw, re.I):
         return SalesIntent(
             label=INTENT_ETA_SHIPPING,
             confidence="high",

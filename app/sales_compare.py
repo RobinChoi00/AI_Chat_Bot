@@ -275,6 +275,7 @@ def clean_compare_term(text: str) -> str:
     # neither a third model nor a requirement to apply to both chairs.
     raw = re.sub(r",\s*(?:not|rather\s+than|instead\s+of)\s+[2345]\s*D\s*$", "", raw, flags=re.I)
     raw = _TRAILING_FLUFF_RE.sub("", raw)
+    raw = re.sub(r"\s+models?\b", " ", raw, flags=re.I)
     raw = _LEADING_FLUFF_RE.sub("", raw)
     return raw.strip(" ?,.")
 
@@ -291,6 +292,9 @@ def _looks_model_term(text: str) -> bool:
     cleaned = clean_compare_term(text)
     if len(cleaned) < 2:
         return False
+    # Brand lines are stripped out of nicknames, but "Quest vs Titan" is still a pair.
+    if _compact(cleaned) in {"osaki", "titan", "ador"}:
+        return True
     tokens = _tokens(cleaned)
     if not tokens:
         return False
@@ -400,22 +404,44 @@ def lookup_shop_models(text: str) -> ModelLookup:
         scored.append((extra, card.product))
     if not scored:
         # Correct one missing/replaced/transposed letter only when each word
-        # has a unique catalog spelling. Keep family ambiguity (Maestro vs LE)
-        # and explicit mechanisms intact instead of choosing a nearby model.
+        # has a unique catalog spelling. Extra words ("with", "flexible") do
+        # not erase the model name. Keep family ambiguity (Maestro vs LE).
         vocabulary = {token for card in cards for token in card.tokens}
-        corrected = []
+        noise = {"with", "and", "for", "the", "featuring", "including", "flexible", "sl"}
+        kept: list[str] = []
+        changed = False
         for token in tokens:
             if token in vocabulary:
-                corrected.append(token)
+                kept.append(token)
                 continue
-            alternatives = [word for word in vocabulary if len(token) >= 5 and _one_typo(token, word)]
-            if len(alternatives) != 1:
-                return ModelLookup(query=query, matches=(), vague=False)
-            corrected.append(alternatives[0])
-        if corrected == list(tokens):
+            alternatives = [
+                word
+                for word in vocabulary
+                if len(token) >= 4 and word not in _MECH_TOKENS and _one_typo(token, word)
+            ]
+            if len(alternatives) == 1:
+                kept.append(alternatives[0])
+                changed = True
+                continue
+            if token in noise:
+                changed = True
+                continue
             return ModelLookup(query=query, matches=(), vague=False)
-        wanted = set(corrected)
-        scored = [(len(set(card.tokens) - wanted), card.product) for card in cards if wanted <= set(card.tokens)]
+        if changed and kept and not set(kept) <= _MECH_TOKENS:
+            wanted = set(kept)
+            scored = [
+                (len(set(card.tokens) - wanted), card.product)
+                for card in cards
+                if wanted <= set(card.tokens)
+            ]
+            if not scored:
+                family = {token for token in kept if token not in _MECH_TOKENS}
+                if family:
+                    scored = [
+                        (len(set(card.tokens) - family), card.product)
+                        for card in cards
+                        if family <= set(card.tokens)
+                    ]
         if not scored:
             return ModelLookup(query=query, matches=(), vague=False)
     best_extra = min(item[0] for item in scored)

@@ -68,6 +68,12 @@ _ISSUE_KEYWORDS: dict[str, tuple[str, ...]] = {
         "wont inflate",
         "calf",
         "legrest",
+        "squeeze",
+        "squeezing",
+        "not enough pressure",
+        "fault code",
+        "blinking",
+        "snapped",
     ),
 }
 
@@ -1185,6 +1191,54 @@ def _llm_json(prompt: str, *, task: str = "mapping") -> Optional[dict[str, Any]]
         return None
 
 
+_ISSUE_GROUNDING = {
+    "installation": ("install", "assembly", "assemble", "setup", "set up", "put together"),
+    "delivery": ("deliver", "delivery", "shipping", "shipped", "tracking", "package", "box", "fedex", "ups", "usps", "arrived"),
+    "defect": ("broken", "defect", "not working", "does not work", "won't", "wont", "fault", "error", "power", "remote", "snapped", "blinking", "repair", "malfunction", "stopped"),
+}
+_GROUND_STOP = frozenset({
+    "the", "and", "not", "with", "from", "issue", "working", "yes", "that", "this",
+    "your", "chair", "have", "has", "was", "were", "for", "are", "will", "does",
+})
+_INTENSITY_NOT_FAILURE_RE = re.compile(
+    r"too\s+intense|over[\s-]?inflat|not\s+enough\s+(?:pressure|squeeze)|"
+    r"(?:not|isn'?t|aren'?t|don'?t|doesn'?t|dont|does not|do not)\s+squeez|"
+    r"lower\s+(?:the\s+)?intensity",
+    re.I,
+)
+_AIR_FAILURE_KEYS = frozenset({"air", "no_air", "air_blowing", "hose_issue", "footrest_or_no_air"})
+
+
+def _issue_type_is_grounded(text: str, issue_type: str) -> bool:
+    """Accept a model issue type only when the customer's words support it."""
+    norm = _normalize(text)
+    matched = [
+        issue
+        for issue, cues in _ISSUE_GROUNDING.items()
+        if any(cue in norm for cue in cues)
+    ]
+    return matched == [issue_type]
+
+
+def _option_choice_is_grounded(text: str, answer_key: str, options: list[dict]) -> bool:
+    """The chosen button must share a real word with the customer message."""
+    norm = _normalize(text)
+    option = next((row for row in options if str(row.get("answer_key") or "") == answer_key), {})
+    label = _normalize(str(option.get("label") or ""))
+    raw_tokens = re.findall(r"[a-z0-9]+", f"{label} {answer_key.replace('_', ' ')}")
+    tokens = [token for token in raw_tokens if len(token) >= 4 and token not in _GROUND_STOP]
+    if not tokens:
+        tokens = [token for token in raw_tokens if len(token) >= 3 and token not in _GROUND_STOP]
+    return any(re.search(rf"\b{re.escape(token)}\b", norm) for token in tokens)
+
+
+def _choice_contradicts_customer(answer_key: str, text: str) -> bool:
+    """Air-failure buttons are for bags that do not inflate, not for strength."""
+    if answer_key not in _AIR_FAILURE_KEYS:
+        return False
+    return bool(_INTENSITY_NOT_FAILURE_RE.search(text or ""))
+
+
 def _accept_llm_choice(
     parsed: Optional[dict[str, Any]],
     field: str,
@@ -1444,6 +1498,16 @@ def interpret_issue_type(user_text: str) -> Optional[str]:
         return None
 
     issue = _accept_llm_choice(parsed, "issue_type", list(_ISSUE_TYPES))
+    if issue and not _issue_type_is_grounded(text, issue):
+        return None
+    if issue:
+        try:
+            from warranty_common_questions import _is_assembly_howto  # noqa: WPS433
+
+            if _is_assembly_howto(text):
+                return None
+        except ImportError:
+            pass
     return issue
 
 
@@ -1496,7 +1560,7 @@ def interpret_warranty_answer(node: dict, user_text: str) -> Optional[str]:
         return None
 
     heuristic = _heuristic_option_match(options, text)
-    if heuristic:
+    if heuristic and not _choice_contradicts_customer(heuristic, text):
         return heuristic
 
     valid_keys = [str(o.get("answer_key", "")) for o in options]
@@ -1522,7 +1586,12 @@ def interpret_warranty_answer(node: dict, user_text: str) -> Optional[str]:
     if not parsed:
         return None
 
-    return _accept_llm_choice(parsed, "answer_key", valid_keys)
+    chosen = _accept_llm_choice(parsed, "answer_key", valid_keys)
+    if not chosen or _choice_contradicts_customer(chosen, text):
+        return None
+    if not _option_choice_is_grounded(text, chosen, options):
+        return None
+    return chosen
 
 
 def interpret_troubleshooting_outcome(

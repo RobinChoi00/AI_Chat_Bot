@@ -52,7 +52,7 @@ _PREFIX_PRIORITY: list[tuple[str, int]] = [
     ("recommend:", 70),
     ("specs:", 80),
     ("stock:", 85),
-    ("menu", 95),
+    ("menu", 140),
 ]
 
 # Never lead with this. Tidio's numbered menu and button_1_label used to put

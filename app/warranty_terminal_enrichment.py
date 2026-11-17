@@ -206,8 +206,6 @@ def _install_message(model_name: str, base_prompt: str) -> dict[str, Any]:
     body = (
         f"{intro}\n"
         f"{link_lines}\n\n"
-        f"If **air does not work anywhere on the chair** after setup, check that the "
-        f"**air hose between the footrest and base** is firmly connected.\n\n"
         f"More guides: [{REPAIR_MANUAL_URL}]({REPAIR_MANUAL_URL}).\n\n"
         f"**Please watch the guide and try the setup checks first. Then use the check below to tell us whether the issue is resolved.**"
     )

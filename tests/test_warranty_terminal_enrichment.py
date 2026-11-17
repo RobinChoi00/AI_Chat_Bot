@@ -59,7 +59,7 @@ def test_install_terminal_includes_video_and_help_offer():
     assert result is not None
     assert "Open guide —" in result["message"]
     assert "related series resource" in result["message"]
-    assert "footrest and base" in result["message"].lower()
+    assert "footrest and base" not in result["message"].lower()
     assert result["defer_email"] is True
     assert result["phase"] == "awaiting_help_consent"
     assert len(result["help_offer_options"]) == 2

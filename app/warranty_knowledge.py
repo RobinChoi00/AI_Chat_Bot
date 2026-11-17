@@ -1227,10 +1227,15 @@ def contextual_search_knowledge(
         return _filter_delivery_entries(raw, limit)
 
     if issue == "installation":
-        query = f"installation assembly setup footrest air hose video {path_text}"
+        # Search the customer's own words. Air-hose articles are for an air or
+        # footrest setup question, not for every installation message.
+        air_setup = bool(re.search(r"\b(?:air|hose|footrest|foot\s*rest|inflat\w*)\b", path_text or "", re.I))
+        query = f"installation assembly setup {path_text}".strip()
+        if air_setup:
+            query = f"{query} footrest air hose"
         raw = search_knowledge(
             path_text=query,
-            defect_category="air",
+            defect_category="air" if air_setup else None,
             model_name=model_name,
             limit=max(limit * 2, 4),
         )

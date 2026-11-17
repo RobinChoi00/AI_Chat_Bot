@@ -420,7 +420,18 @@ def detect_topic(text: str) -> Optional[str]:
         )
     )
     # A mechanism keyword in a model name must not replace a concrete feature
-    # question with the generic 2D/3D/4D explainer.
+    # question with the generic 2D/3D/4D explainer. A product title such as
+    # "4D massage chair" is not a request to define 4D.
+    mechanism_definition = bool(re.search(
+        r"\b(?:what(?:'s|\s+is)|explain|mean(?:ing)?|difference|versus|\bvs\.?\b)\b",
+        raw,
+        re.I,
+    ))
+    concrete_purchase = bool(re.search(
+        r"\b(?:in\s+stock|out\s+of\s+stock|lead\s+time|how\s+much|sku|quantity)\b",
+        raw,
+        re.I,
+    ))
     specific_spec = bool(
         re.search(
             r"\bhow\s+(?:heavy|wide|tall|long)|how\s+much.{0,48}\bweigh|"
@@ -436,7 +447,7 @@ def detect_topic(text: str) -> Optional[str]:
     for topic, pattern in _TOPIC_PATTERNS:
         if skip_shipping and topic == TOPIC_SHIPPING:
             continue
-        if specific_spec and topic == TOPIC_MECHANISM:
+        if topic == TOPIC_MECHANISM and (specific_spec or concrete_purchase or not mechanism_definition):
             continue
         if topic == TOPIC_WHITE_GLOVE and specific_spec and not re.search(
             r"\b(?:white[\s-]*glove|delivery|deliver|crew|assembly\s+(?:service|fee|cost)|installation\s+(?:service|fee|cost))\b", raw, re.I,

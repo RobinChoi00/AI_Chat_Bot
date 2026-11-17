@@ -554,6 +554,82 @@ def _shopping_facts_lines() -> list[str]:
     ]
 
 
+def _direct_shopper_reply(message: str) -> Optional[SalesReply]:
+    """Answer the question that was asked before a discount or definition template."""
+    raw = message or ""
+    human = [QuickReply(label="Talk to a human", payload="human")]
+    if re.search(r"letter of medical|\bmedical\s+necessit|\blmn\b", raw, re.I):
+        return SalesReply(
+            reply=(
+                "I can't write or sign a **letter of medical necessity**. "
+                "A clinician who treats you has to decide whether a letter is appropriate.\n\n"
+                "A sales specialist can send the published product description for a named model. "
+                "This chat cannot say a chair is medically required, or that a plan will reimburse it."
+            ),
+            intent=INTENT_PREPURCHASE_POLICY,
+            quick_replies=human,
+            tools_used=["policy.medical_necessity"],
+            flow_stage="policy",
+        )
+    if (
+        re.search(r"\b(?:costco|walmart|sam'?s\s+club|amazon)\b", raw, re.I)
+        and re.search(r"\b(?:same|identical|equivalent|exactly)\b", raw, re.I)
+        and re.search(r"\b(?:model|product|chair|mechanism|components?)\b", raw, re.I)
+        and not re.search(r"\bprice\s+match\b|\bbest\s+price\b", raw, re.I)
+    ):
+        return SalesReply(
+            reply=(
+                "I can't confirm that a **club or marketplace listing** is the same chair "
+                "as a model on this storefront. Those listings often use a different model number, "
+                "even when the name looks similar.\n\n"
+                "A sales specialist can check the listing's model number against ours. "
+                "I won't treat the two prices as the same product."
+            ),
+            intent=INTENT_PREPURCHASE_POLICY,
+            quick_replies=human,
+            tools_used=["policy.retail_identity"],
+            flow_stage="policy",
+        )
+    if re.search(
+        r"\bblack\s+friday\b|\bcyber\s+monday\b|"
+        r"\bwhen\s+is\s+(?:the\s+|your\s+)?(?:next\s+)?sale\b",
+        raw,
+        re.I,
+    ):
+        # "Arrive before Black Friday" is a delivery question, not a sale date.
+        if re.search(r"\b(?:before|by|arrive|deliver|ship(?:ping)?|delivery)\b", raw, re.I) and not re.search(
+            r"\bwhen\s+is\b|\bsales?\b|\bdeals?\b|\bdiscount", raw, re.I
+        ):
+            return None
+        return SalesReply(
+            reply=(
+                "I don't have a published **sale calendar**, including Black Friday or Cyber Monday. "
+                "The price I can confirm is the current storefront price.\n\n"
+                "A specialist is the only person who can say whether a limited-time offer exists."
+            ),
+            intent=INTENT_PREPURCHASE_POLICY,
+            quick_replies=human,
+            tools_used=["policy.sale_calendar"],
+            flow_stage="policy",
+        )
+    return None
+
+
+def _named_compare_pair(message: str) -> bool:
+    """True when the shopper named two chairs, even without the word compare."""
+    pair = split_compare_terms(message or "")
+    if not pair:
+        return False
+
+    def specific(term: str) -> bool:
+        looked = lookup_shop_models(term)
+        if looked.matches:
+            return True
+        return bool(re.search(r"\b(?:osaki|titan|quest|maestro|malibu|duke|kairos|paragon)\b|\d", term, re.I))
+
+    return specific(pair[0]) and specific(pair[1])
+
+
 def _discount_facts_reply(message: str, prefs: Optional[dict], *, domain: str) -> SalesReply:
     """Published facts only — never a % — then a specialist can negotiate."""
     product = _guess_model_from_text(message or "")
@@ -610,7 +686,7 @@ def _attach_human_footer(inner: SalesReply) -> SalesReply:
         for q in inner.quick_replies
         if q.payload not in {"human", "human:confirm"}
     ]
-    kept.append(QuickReply(label="That's all I needed", payload="menu"))
+    kept.append(QuickReply(label="That's all I needed", payload="done"))
     kept.append(QuickReply(label="Still connect me to sales", payload="human:confirm"))
     inner.quick_replies = kept
     inner.tools_used = list(inner.tools_used or []) + ["human.complete"]
@@ -936,6 +1012,11 @@ def _stock_reply(
         reply = (
             f"**{product.display_name}** is **not in our active catalog** right now. "
             "A rep can confirm restock timing — I won't guess a date."
+        )
+    if re.search(r"\blead\s+time\b|\bhow\s+long\b|\bshipping\s+time\b", message or "", re.I):
+        reply += (
+            "\n\nPublished shipping is up to **2 weeks** curbside and **3 weeks** "
+            "White Glove. That is not a confirmed date for an order."
         )
     extra, close_quick, close_patch = _product_closeout(product, domain=domain)
     return SalesReply(
@@ -2973,6 +3054,29 @@ def _resolve_compare_side(
     """Return a reply when this side is not a unique match; None if unique."""
     looked = lookup_shop_models(query)
     if looked.vague:
+        brand = {"osaki": "Osaki", "titan": "Titan", "ador": "Ador"}.get((query or "").strip().lower())
+        if other is not None and brand:
+            return SalesReply(
+                reply=(
+                    f"**{other.display_name}** is one side. **{brand}** is a brand, not one model. "
+                    f"Which {brand} chair should I compare it with?"
+                ),
+                intent=INTENT_COMPARE,
+                quick_replies=[
+                    QuickReply(label="See all models", payload="list"),
+                    QuickReply(label="Talk to a human", payload="human"),
+                ],
+                tools_used=["catalog.compare"],
+                prefs_patch={
+                    "awaiting_compare_pick": slot,
+                    "pending_compare_left_query": other.display_name if slot == "right" else query,
+                    "pending_compare_right_query": other.display_name if slot == "left" else query,
+                    "pending_compare_left": other.handle if slot == "right" else "",
+                    "pending_compare_right": other.handle if slot == "left" else "",
+                    "pending_compare_candidates": [],
+                    "awaiting_compare_recommend": False,
+                },
+            )
         return SalesReply(
             reply=(
                 f"**{query or 'that'}** is too vague — I need a model nickname "
@@ -4103,6 +4207,19 @@ def _payload_reply(
 ) -> Optional[SalesReply]:
     parts = (payload or "").split(":")
     root = parts[0].strip().lower() if parts else ""
+    if root == "done":
+        return SalesReply(
+            reply=(
+                "Glad that covers it. Ask another question whenever you want, "
+                "or tap **Start over** for a new search."
+            ),
+            intent=INTENT_GREETING,
+            quick_replies=[
+                QuickReply(label="Start over", payload="menu"),
+                QuickReply(label="Recommend a chair", payload="recommend"),
+            ],
+            flow_stage="menu",
+        )
     if root == "menu":
         return _greeting_reply(prefs)
     if root == "resume":
@@ -4801,6 +4918,11 @@ def _respond_turn(
                 _finalize_flow_stage(forced), message, payload
             )
 
+    if not payload:
+        direct = _direct_shopper_reply(message or "")
+        if direct is not None:
+            return _remember_question(_finalize_flow_stage(direct), message, payload)
+
     intent = classify(message or "")
 
     # Regexes miss unusual phrasing, which showed up in production as a 27%
@@ -4813,6 +4935,13 @@ def _respond_turn(
         revised = revise_recommend(intent, message or "")
         if revised is not None:
             intent = revised
+
+    if not payload and intent.label in {INTENT_SPECS, INTENT_UNCLEAR} and _named_compare_pair(message or ""):
+        return _remember_question(
+            _finalize_flow_stage(_compare_reply(message or "", prefs=prefs, domain=domain)),
+            message,
+            payload,
+        )
 
     if not before_handoff and intent.label == INTENT_HUMAN:
         reply = _handoff_reply(intent)
