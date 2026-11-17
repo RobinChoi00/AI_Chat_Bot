@@ -3115,7 +3115,13 @@ def _compare_reply(
     prefs: Optional[dict] = None,
     domain: str = "osakiusa.com",
 ) -> SalesReply:
-    terms = [term.strip() for term in re.split(r"\s+(?:vs\.?|versus|and)\s+|,", message or '', flags=re.I) if term.strip()]
+    counted = re.sub(
+        r",\s*(?:not|rather\s+than|instead\s+of)\s+[2345]\s*D\b.*$",
+        "",
+        message or "",
+        flags=re.I,
+    )
+    terms = [term.strip() for term in re.split(r"\s+(?:vs\.?|versus|and)\s+|,", counted, flags=re.I) if term.strip()]
     if len(terms) > 2:
         return SalesReply(reply="You named more than two models. Which two should I compare first? I can compare the remaining model afterward.", intent=INTENT_COMPARE, quick_replies=[QuickReply(label="See all models", payload="list"), QuickReply(label="Talk to a human", payload="human")], tools_used=['catalog.compare'], prefs_patch=_clear_compare_state())
     pair = split_compare_terms(message)
