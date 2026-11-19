@@ -268,6 +268,9 @@ async def upload_evidence(
     if ticket is None:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id!r} not found.")
     _require_web_chat_privacy_for_ticket(ticket)
+    node = engine.get_current_node(ticket_id)
+    if node and str(node.get("type") or "") == "terminal":
+        _require_team_review_outcome(ticket)
 
     normalized_email = extract_email(customer_email.strip())
     if not normalized_email:
@@ -452,6 +455,7 @@ async def submit_warranty_contact(ticket_id: str, body: WarrantyContactRequest):
             status_code=422,
             detail="Contact can only be submitted after the warranty workflow is complete.",
         )
+    _require_team_review_outcome(ticket)
 
     normalized_email = extract_email(body.customer_email.strip())
     if not normalized_email:
@@ -662,6 +666,36 @@ class WarrantyTroubleshootingOutcomeRequest(BaseModel):
 _TROUBLESHOOTING_OUTCOMES = frozenset(
     {"steps_completed", "resolved", "unresolved", "unable_to_attempt", "deferred", "delivery_answered"}
 )
+# Contact/evidence is only for cases that still need the team after a real result.
+_TEAM_REVIEW_OUTCOMES = frozenset({"unresolved", "unable_to_attempt"})
+
+
+def _require_team_review_outcome(ticket) -> str:
+    """Block contact/evidence until the customer records fixed / still broken / unable."""
+    from warranty_quality import ticket_purpose
+
+    purpose = ticket_purpose(ticket)
+    if purpose == "delivery":
+        # Delivery review can continue after an explicit unresolved/unable choice
+        # or after confirming the lookup answered the question (no contact needed).
+        outcome = str(ticket.get_collected().get("troubleshooting_outcome") or "").strip().lower()
+        delivery_outcome = str(ticket.get_collected().get("delivery_service_outcome") or "").strip().lower()
+        if outcome in _TEAM_REVIEW_OUTCOMES or delivery_outcome in {"needs_review", "unable_to_attempt"}:
+            return outcome or delivery_outcome
+        raise HTTPException(
+            status_code=409,
+            detail="Tell us whether the delivery update helped before sending this case for review.",
+        )
+    outcome = str(ticket.get_collected().get("troubleshooting_outcome") or "").strip().lower()
+    if outcome in _TEAM_REVIEW_OUTCOMES:
+        return outcome
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Please confirm whether the steps fixed the issue, the issue remains, "
+            "or you cannot safely try them — then continue to team review."
+        ),
+    )
 
 
 def _followup_context(ticket, outcome: Optional[str] = None, session_id: Optional[str] = None) -> dict:

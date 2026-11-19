@@ -1830,6 +1830,7 @@ def build_admin_review_diagnosis(
     turns=None,
     defect_category: Optional[str] = None,
     model_name: str = "",
+    honest_hardware: bool = False,
 ) -> dict[str, Any]:
     """
     Customer-safe summary for unmapped ``awaiting_admin`` terminals.
@@ -1837,18 +1838,27 @@ def build_admin_review_diagnosis(
     Uses the flowchart prompt (softened when it mentions parts/repair) plus
     evidence and path-specific prep steps — not generic KB DIY fallbacks.
     """
-    softened = soften_terminal_prompt(base_prompt)
-    summary = softened or str(base_prompt or "").strip()
-    if not summary:
-        model_display = (model_name or "your chair").strip()
-        if defect_category:
-            label = _CATEGORY_LABELS.get(defect_category, defect_category)
-            summary = (
-                f"Based on your answers, our team will review this **{label}** issue "
-                f"with your {model_display}."
-            )
-        else:
-            summary = "Based on your answers, our team will review this case and follow up with next steps."
+    model_display = (model_name or "your chair").strip()
+    if honest_hardware or _looks_like_hardware_prompt(base_prompt):
+        label = _CATEGORY_LABELS.get(defect_category or "", defect_category or "product")
+        summary = (
+            f"Based on your answers for your **{model_display}**, this looks like a "
+            f"**{label}** case that needs warranty team review — not more chat troubleshooting. "
+            "Chat cannot approve a PCB, motor, actuator, or parts shipment. "
+            "Prepare the items below so the team can follow up with next steps."
+        )
+    else:
+        softened = soften_terminal_prompt(base_prompt)
+        summary = softened or str(base_prompt or "").strip()
+        if not summary:
+            if defect_category:
+                label = _CATEGORY_LABELS.get(defect_category, defect_category)
+                summary = (
+                    f"Based on your answers, our team will review this **{label}** issue "
+                    f"with your {model_display}."
+                )
+            else:
+                summary = "Based on your answers, our team will review this case and follow up with next steps."
 
     steps: list[str] = _evidence_prep_steps(list(evidence_required or []))
     steps.extend(
@@ -1861,7 +1871,18 @@ def build_admin_review_diagnosis(
         "steps": steps,
         "sources": [],
         "top_match": None,
+        "honest_hardware": bool(honest_hardware or _looks_like_hardware_prompt(base_prompt)),
     }
+
+
+def _looks_like_hardware_prompt(prompt: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(pcb|actuator|motor|transformer|replacement|replace|parts? shipment|"
+            r"arrange (?:a |the )?(?:replacement|repair)|send (?:a |you )?(?:new |replacement )?)\b",
+            (prompt or "").lower(),
+        )
+    )
 
 
 def format_admin_review_message(*, diagnosis: dict[str, Any], repair_manual_url: str) -> str:

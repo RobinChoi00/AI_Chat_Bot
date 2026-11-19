@@ -63,6 +63,33 @@ def test_up_and_down_motion_maps_without_option_mismatch_loop():
         assert not client.attempted_external_delivery
 
 
+def test_soho_ticking_maps_to_massage_noise_guide():
+    with offline_api() as client:
+        chat = WarrantyConversation(client, "answer-first-soho-tick")
+        chat.identity(model="Osaki 3D Soho")
+        chat.defect()
+        chat.answer("rolling")
+        data = chat.answer("annoying high pitch ticking noise during the massage")
+        assert data.get("interpreted_option", {}).get("answer_key") == "noise_massaging"
+        assert chat.node() == "defect_rolling_noise_massage_terminal"
+        assert not client.attempted_external_delivery
+
+
+def test_remote_blinking_maps_to_partial_commands_guide():
+    with offline_api() as client:
+        chat = WarrantyConversation(client, "answer-first-remote-blink")
+        chat.identity(model="Osaki OS-4000T")
+        chat.defect()
+        chat.answer("remote")
+        assert chat.node() == "defect_remote_power_q"
+        chat.answer("has_power")
+        assert chat.node() == "defect_remote_screen_q"
+        data = chat.answer("the power button is blinking fast")
+        assert data.get("interpreted_option", {}).get("answer_key") == "commands_not_responding"
+        assert chat.node() == "defect_remote_partial_terminal"
+        assert not client.attempted_external_delivery
+
+
 def test_second_option_mismatch_hands_off_instead_of_looping():
     with offline_api() as client:
         chat = WarrantyConversation(client, "answer-first-mismatch")

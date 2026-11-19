@@ -1,0 +1,84 @@
+{
+  "version": "repair-kb-review-v1",
+  "purpose": "Human review queue for the highest-traffic repair/install terminals. Approved drafts become reviewed_knowledge; do not paste customer PII.",
+  "priority_terminals": [
+    {
+      "node_id": "install_send_video",
+      "issue_type": "installation",
+      "why": "Most-reached terminal historically; wrong model video destroys trust",
+      "check": [
+        "Model-matched install video URL resolves",
+        "Prompt tells customer to match model label before watching",
+        "Missing-model fallback does not invent a generic YouTube link"
+      ]
+    },
+    {
+      "node_id": "defect_remote_partial_terminal",
+      "issue_type": "defect",
+      "why": "Common remote path including blinking/partial commands",
+      "check": [
+        "Customer text distinguishes blank screen vs partial commands vs cable",
+        "Prompt does not promise free replacement before review",
+        "Evidence ask is photo/video of remote only"
+      ]
+    },
+    {
+      "node_id": "defect_remote_blank_screen_terminal",
+      "issue_type": "defect",
+      "why": "Blank screen with working commands",
+      "check": [
+        "Steps confirm commands still work",
+        "No invented PCB diagnosis in customer copy"
+      ]
+    },
+    {
+      "node_id": "defect_rolling_noise_updown_terminal",
+      "issue_type": "defect",
+      "why": "Travel noise / ticking while heads move",
+      "check": [
+        "Internal diagnostics mention strap/track/frame",
+        "Customer copy stays review-only (no free mech approval)",
+        "Video evidence request is present"
+      ]
+    },
+    {
+      "node_id": "defect_rolling_noise_massage_terminal",
+      "issue_type": "defect",
+      "why": "Noise during massage including high-pitch ticking",
+      "check": [
+        "Backpad/lining checks are documented for staff",
+        "Customer copy does not claim the part is already approved"
+      ]
+    },
+    {
+      "node_id": "defect_rolling_no_movement_terminal",
+      "issue_type": "defect",
+      "why": "Heads do not move — often hardware",
+      "check": [
+        "Honest handoff: fuse/powercord check then team review",
+        "No DIY that risks injury",
+        "Maps from 'up and down motion has stopped' / Quantum roller language"
+      ]
+    },
+    {
+      "node_id": "defect_rolling_heads_q",
+      "issue_type": "defect",
+      "why": "Branching question before no-move terminals",
+      "check": [
+        "Free-text synonyms map to no_movement / worked_before_stopped / power_but_no_move",
+        "One mismatch then handoff, not endless re-ask"
+      ]
+    }
+  ],
+  "admin_workflow": [
+    "Open /admin/quality → Submit a knowledge draft per terminal",
+    "Include source URL (Freshdesk/OTAsupport) and applicable models",
+    "Approve only after a second reviewer checks customer-safe wording",
+    "Re-measure confirmed_fix + unknown rate on the release cohort after publish"
+  ],
+  "success_metrics": {
+    "B_first_answer_match": "Terminal/guide reached without re-showing the area menu",
+    "A_confirmed_fix": "Customer taps resolved after steps",
+    "C_handoff_followthrough": "Unresolved/unable cases get staff receipt within 24h (separate from request saved)"
+  }
+}

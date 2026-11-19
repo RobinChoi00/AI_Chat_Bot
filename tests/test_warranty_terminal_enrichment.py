@@ -213,7 +213,7 @@ def test_4000xt_blank_remote_message_hides_internal_sources_and_repair_rows():
     assert "Replace main PCB" not in message
 
 
-def test_power_no_click_terminal_includes_diy_steps():
+def test_power_no_click_terminal_uses_honest_hardware_prep():
     node = {
         "node_id": "defect_power_no_click_terminal",
         "type": "terminal",
@@ -233,12 +233,11 @@ def test_power_no_click_terminal_includes_diy_steps():
 
     result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
     assert result is not None
-    assert "What you can try" in result["message"]
+    assert result["interaction_mode"] == "preparation"
+    assert "What to prepare" in result["message"]
+    assert "What you can try" not in result["message"]
     assert "Power PCB replacement" not in result["message"]
-    assert any(
-        "fuse" in step.lower() or "outlet" in step.lower() or "switch" in step.lower()
-        for step in result["diagnosis"]["steps"]
-    )
+    assert "cannot approve" in result["message"].lower()
     assert result["phase"] == "awaiting_help_consent"
 
 
@@ -254,11 +253,14 @@ def test_defect_terminal_diagnosis_and_help_offer():
     assert result is not None
     assert result["phase"] == "awaiting_help_consent"
     assert result["defer_email"] is True
+    assert result["interaction_mode"] == "preparation"
     assert "PCB repair or replacement" not in result["message"]
-    assert "Try the steps above first" in result["message"]
+    assert "cannot approve" in result["message"].lower()
+    assert "What to prepare" in result["message"]
+    assert "What you can try" not in result["message"]
     assert "product issue" in result["message"]
     assert result["issue_type"] == "defect"
-    assert "What you can try" in result["message"]
+    assert result["diagnosis"]["honest_hardware"] is True
     assert result["diagnosis"]["steps"]
 
 
@@ -369,7 +371,7 @@ def test_cosmetic_side_fixed_terminal_uses_self_help():
     assert result["phase"] == "awaiting_help_consent"
 
 
-def test_recline_actuator_terminal_includes_diy_steps():
+def test_recline_actuator_terminal_uses_honest_hardware_prep():
     node = {
         "node_id": "defect_recline_actuator_terminal",
         "type": "terminal",
@@ -390,16 +392,15 @@ def test_recline_actuator_terminal_includes_diy_steps():
 
     result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
     assert result is not None
-    assert "What you can try" in result["message"]
+    assert result["interaction_mode"] == "preparation"
+    assert "What to prepare" in result["message"]
+    assert "What you can try" not in result["message"]
     assert "actuator replacement" not in result["message"]
-    assert any(
-        "power" in step.lower() or "side panel" in step.lower()
-        for step in result["diagnosis"]["steps"]
-    )
+    assert "cannot approve" in result["message"].lower()
     assert result["phase"] == "awaiting_help_consent"
 
 
-def test_recline_main_pcb_terminal_uses_none_working_steps():
+def test_recline_main_pcb_terminal_uses_honest_hardware_prep():
     node = {
         "node_id": "defect_recline_main_pcb_terminal",
         "type": "terminal",
@@ -419,12 +420,11 @@ def test_recline_main_pcb_terminal_uses_none_working_steps():
 
     result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
     assert result is not None
+    assert result["interaction_mode"] == "preparation"
     assert "Main PCB review" not in result["message"]
-    assert "What you can try" in result["message"]
-    assert any(
-        "side panel" in step.lower() or "power cycle" in step.lower()
-        for step in result["diagnosis"]["steps"]
-    )
+    assert "What to prepare" in result["message"]
+    assert "What you can try" not in result["message"]
+    assert "cannot approve" in result["message"].lower()
 
 
 def test_heating_not_heating_terminal_includes_warmup_steps():
@@ -589,9 +589,11 @@ def test_unmapped_rolling_worked_terminal_softens_repair_language():
     result = build_terminal_enrichment(_Engine(), _TicketDefect(), node)
     assert result is not None
     assert "appropriate repair" not in result["message"].lower()
-    assert "review your case" in result["message"].lower()
+    assert "cannot approve" in result["message"].lower()
+    assert "warranty team review" in result["message"].lower()
     assert "What to prepare" in result["message"]
     assert result["diagnosis"]["steps"]
+    assert result["diagnosis"]["honest_hardware"] is True
 
 
 def test_unmapped_rolling_power_no_move_terminal_includes_category_prep_hints():

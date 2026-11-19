@@ -894,6 +894,32 @@ def test_troubleshooting_outcome_requires_terminal_and_valid_value(client):
     assert skipped_steps.status_code == 409
 
 
+def test_team_review_contact_requires_conclusive_outcome(client):
+    """R4: contact/evidence stay locked until fixed / still broken / unable."""
+    session_id = "cust-api-outcome-required-contact"
+    ticket_id = _start_installation_terminal(client, session_id)
+    body = {"customer_email": "customer@example.com", "evidence_na": True}
+
+    blocked = client.post(f"/api/v1/warranty/{ticket_id}/contact", json=body)
+    assert blocked.status_code == 409
+    assert "confirm" in blocked.json()["detail"].lower() or "steps" in blocked.json()["detail"].lower()
+
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "steps_completed"},
+    )
+    still_blocked = client.post(f"/api/v1/warranty/{ticket_id}/contact", json=body)
+    assert still_blocked.status_code == 409
+
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+        json={"outcome": "unresolved"},
+    )
+    allowed = client.post(f"/api/v1/warranty/{ticket_id}/contact", json=body)
+    assert allowed.status_code == 200
+    assert allowed.json()["contact_submitted"] is True
+
+
 def test_customer_note_appends_to_collected_data(client):
     """Customer follow-up notes should append to collected_data.customer_notes."""
     session_id = "cust-api-note"

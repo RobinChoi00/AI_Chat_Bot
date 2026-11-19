@@ -1269,8 +1269,17 @@ export default function WarrantyChat({
     helpConsent === null &&
     !contactSubmitted;
 
+  const conclusiveOutcome = String(warrantyState?.troubleshooting_outcome || "").toLowerCase();
+  const teamReviewOutcomeReady =
+    conclusiveOutcome === "unresolved" || conclusiveOutcome === "unable_to_attempt";
   const inEmailStep = Boolean(
-    isTerminal && !deferredPaused && !handoff?.requested && helpConsent === "yes" && !contactSubmitted && warrantyState?.ticket_id
+    isTerminal &&
+      !deferredPaused &&
+      !handoff?.requested &&
+      helpConsent === "yes" &&
+      teamReviewOutcomeReady &&
+      !contactSubmitted &&
+      warrantyState?.ticket_id
   );
 
   const showEmailSection = helpAccessReady && inEmailStep;

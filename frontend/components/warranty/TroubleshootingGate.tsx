@@ -104,8 +104,8 @@ export default function TroubleshootingGate({
               ? "What would you like to do next?"
               : "Did the steps solve the issue?",
             outcomeBody: isPreparation
-              ? "Continue only if you still need the warranty team to review this product issue."
-              : "If the chair is working now, we’ll close this request as self-resolved.",
+              ? "Choose one option below before we can send this for team review."
+              : "Choose one option below. If it’s working, we close the case; if not, you can send it for review.",
             resolved: "Yes — it’s working now",
             unresolved: isPreparation
               ? "Yes — continue to team review"

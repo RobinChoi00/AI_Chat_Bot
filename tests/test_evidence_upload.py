@@ -431,6 +431,16 @@ class TestWarrantyContactEndpoint:
         WarrantyEngine.submit_answer(ticket_id, "footrest_or_no_air")
         return ticket_id
 
+    def _ready_for_team_review(self, client, ticket_id: str) -> None:
+        assert client.post(
+            f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+            json={"outcome": "steps_completed"},
+        ).status_code == 200
+        assert client.post(
+            f"/api/v1/warranty/{ticket_id}/troubleshooting-outcome",
+            json={"outcome": "unresolved"},
+        ).status_code == 200
+
     def test_email_only_contact_on_terminal(self, client, monkeypatch):
         from warranty_workflow import WarrantyEngine
 
@@ -450,6 +460,7 @@ class TestWarrantyContactEndpoint:
         )
 
         ticket_id = self._terminal_ticket()
+        self._ready_for_team_review(client, ticket_id)
         response = client.post(
             f"/api/v1/warranty/{ticket_id}/contact",
             json={"customer_email": "buyer@example.com", "evidence_na": True},
@@ -494,6 +505,7 @@ class TestWarrantyContactEndpoint:
         monkeypatch.setattr("warranty_email.EMAIL_PASSWORD", "secret")
 
         ticket_id = self._terminal_ticket()
+        self._ready_for_team_review(client, ticket_id)
         response = client.post(
             f"/api/v1/warranty/{ticket_id}/contact",
             json={"customer_email": "buyer@example.com", "evidence_na": True},
@@ -521,6 +533,7 @@ class TestWarrantyContactEndpoint:
 
     def test_contact_invalid_email_rejected(self, client):
         ticket_id = self._terminal_ticket()
+        self._ready_for_team_review(client, ticket_id)
         response = client.post(
             f"/api/v1/warranty/{ticket_id}/contact",
             json={"customer_email": "not-an-email", "evidence_na": True},

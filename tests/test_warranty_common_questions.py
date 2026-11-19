@@ -300,6 +300,34 @@ def test_install_help_is_not_an_assembly_how_to():
     assert try_factual_common_question(_MENU, text, ticket=_Ticket()) is None
 
 
+def test_warranty_registration_and_accessory_fit_skip_issue_menu():
+    register = "Do I need to register my massage chair to have the warranty?"
+    accessory = "Does the grand duo aromodule fit the osaki platinum escape duo"
+    fit_feel = (
+        "It isnt squeezing enough because im small in the arms and shoulders"
+    )
+    for text, needles in (
+        (register, ("won't invent", "registration", "warranty")),
+        (accessory, ("sales", "accessory", "defective")),
+        (fit_feel, ("will not inflate", "smaller or larger body", "otasupport.com")),
+    ):
+        assert is_sales_bound_opening_question(text) is True, text
+        msg = try_factual_common_question(_MENU, text, ticket=_Ticket())
+        assert msg is not None, text
+        lower = msg.lower()
+        for needle in needles:
+            assert needle.lower() in lower, (text, needle)
+        assert "which area do you need help with" not in lower
+
+
+def test_watts_question_skips_issue_menu():
+    text = "Only I needs know how many watts is it"
+    msg = try_factual_common_question(_MENU, text, ticket=_Ticket())
+    assert msg is not None
+    assert "wattage" in msg.lower() or "power-draw" in msg.lower()
+    assert "which area do you need help with" not in msg.lower()
+
+
 def test_bluetooth_pairing_failure_is_not_a_how_to_faq():
     failures = (
         "The chair's Bluetooth will not pair with my phone.",

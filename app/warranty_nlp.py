@@ -484,6 +484,12 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "partial remote",
         "only some buttons work",
         "some commands don't work",
+        "blinking fast",
+        "blinking",
+        "flashing",
+        "power button blinking",
+        "lights blinking",
+        "remote blinking",
     ),
     "late_delivery": ("was late", "delayed", "still hasn't arrived", "running late"),
     "no_tracking": (
@@ -620,6 +626,8 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "heads dont move",
         "heads not moving",
         "massage heads not moving",
+        "up and down motion has stopped",
+        "up and down motion stopped",
         "up and down motion",
         "motion has stopped",
         "stopped moving up",
@@ -630,6 +638,8 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "sits at the butt",
         "stuck at the bottom",
         "not moving up or down",
+        "roller stopped moving up",
+        "rollers stopped moving up",
     ),
     "legrest_not_lowering": (
         "won't go down",
@@ -818,6 +828,9 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "noisy when it travels",
         "screeching up and down",
         "grinding when moving up",
+        "ticking when moving up",
+        "ticking when it travels",
+        "ticking going up or down",
     ),
     "noise_massaging": (
         "noise while massaging",
@@ -825,6 +838,12 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "makes noise during the massage",
         "loud while massaging",
         "grinding during massage",
+        "ticking during massage",
+        "ticking noise",
+        "high pitch ticking",
+        "high-pitch ticking",
+        "high pitched ticking",
+        "annoying high pitch",
     ),
     "backrest": (
         "backrest",
@@ -1048,6 +1067,12 @@ def _synonym_option_match(options: list[dict], norm: str) -> Optional[str]:
         r"\b(foot|calf|leg) rollers?\b", norm
     ):
         return "footrest"
+    # Stopped travel is a no-movement case, not "loud while traveling".
+    if "heads_not_moving" in uniq and "noise_up_down" in uniq:
+        if re.search(r"\b(?:stopped|not moving|doesn't move|does not move|won't move|wont move)\b", norm) and not re.search(
+            r"\b(?:loud|noise|noisy|grind|screech|tick(?:ing)?|click(?:ing)?)\b", norm
+        ):
+            return "heads_not_moving"
     return None
 
 

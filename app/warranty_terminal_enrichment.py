@@ -25,7 +25,6 @@ from warranty_self_help import (
     build_install_air_hose_diagnosis,
     build_path_text,
     build_power_diagnosis,
-    build_recline_diagnosis,
     build_remote_diagnosis,
     build_rolling_noise_diagnosis,
     build_voice_diagnosis,
@@ -39,7 +38,6 @@ from warranty_self_help import (
     format_heating_self_help_message,
     format_install_air_hose_message,
     format_power_self_help_message,
-    format_recline_self_help_message,
     format_remote_self_help_message,
     format_rolling_noise_self_help_message,
     format_voice_self_help_message,
@@ -51,7 +49,6 @@ from warranty_self_help import (
     infer_footrest_symptom_from_turns,
     infer_heating_symptom_from_turns,
     infer_power_symptom_from_turns,
-    infer_recline_symptom_from_turns,
     infer_remote_symptom_from_turns,
     infer_rolling_noise_type_from_turns,
     infer_voice_symptom_from_turns,
@@ -64,6 +61,24 @@ _ROLLING_NOISE_TERMINALS = frozenset({
     "defect_rolling_pops_terminal",
 })
 
+# PCB / motor / actuator / parts-approval terminals: prep + team review only.
+# Chat must not keep asking DIY steps once the flowchart already reached hardware.
+_HARDWARE_HANDOFF_TERMINALS = frozenset({
+    "defect_power_main_pcb_terminal",
+    "defect_power_actuator_terminal",
+    "defect_power_main_pcb_wire_terminal",
+    "defect_power_pcb_fuse_terminal",
+    "defect_power_no_click_terminal",
+    "defect_power_remote_replace_terminal",
+    "defect_recline_actuator_terminal",
+    "defect_recline_main_pcb_wire_terminal",
+    "defect_recline_main_pcb_terminal",
+    "defect_remote_pcb_check_terminal",
+    "defect_rolling_no_movement_terminal",
+    "defect_rolling_worked_terminal",
+    "defect_rolling_power_no_move_terminal",
+})
+
 _REMOTE_TERMINALS = frozenset({
     "defect_remote_blank_screen_terminal",
     "defect_remote_cable_terminal",
@@ -71,17 +86,10 @@ _REMOTE_TERMINALS = frozenset({
     "defect_remote_fuse_terminal",
     "defect_remote_connection_terminal",
     "defect_remote_intermittent_terminal",
-    "defect_remote_pcb_check_terminal",
 })
 
 _POWER_TERMINALS = frozenset({
-    "defect_power_remote_replace_terminal",
-    "defect_power_main_pcb_terminal",
-    "defect_power_actuator_terminal",
-    "defect_power_main_pcb_wire_terminal",
-    "defect_power_pcb_fuse_terminal",
     "defect_power_clicking_terminal",
-    "defect_power_no_click_terminal",
 })
 
 _AIR_TERMINALS = frozenset({
@@ -110,12 +118,6 @@ _COSMETIC_TERMINALS = frozenset({
     "defect_cosmetic_signed_cleared_terminal",
     "defect_cosmetic_box_photos_terminal",
     "defect_cosmetic_replace_terminal",
-})
-
-_RECLINE_TERMINALS = frozenset({
-    "defect_recline_actuator_terminal",
-    "defect_recline_main_pcb_wire_terminal",
-    "defect_recline_main_pcb_terminal",
 })
 
 _HEATING_TERMINALS = frozenset({
@@ -158,6 +160,7 @@ def _help_offer_enrichment(
         "diagnosis": diagnosis,
         "phase": "awaiting_help_consent",
         "interaction_mode": interaction_mode,
+        "outcome_required": True,
         "help_offer_options": list(HELP_OFFER_OPTIONS),
         "show_contact_form": False,
         "defer_email": True,
@@ -355,23 +358,6 @@ def _cosmetic_self_help_message(engine, ticket_id: str, ticket, node_id: str) ->
     return _help_offer_enrichment(body, diagnosis=diagnosis)
 
 
-def _recline_self_help_message(engine, ticket_id: str, ticket, node_id: str) -> dict[str, Any]:
-    model_name = str(getattr(ticket, "model_name", "") or "")
-    turns = engine.get_turns(ticket_id)
-    path_text = build_path_text(turns)
-    symptom = infer_recline_symptom_from_turns(turns, node_id=node_id)
-    diagnosis = build_recline_diagnosis(
-        symptom=symptom,
-        path_text=path_text,
-        model_name=model_name,
-    )
-    body = format_recline_self_help_message(
-        diagnosis=diagnosis,
-        repair_manual_url=REPAIR_MANUAL_URL,
-    )
-    return _help_offer_enrichment(body, diagnosis=diagnosis)
-
-
 def _heating_self_help_message(engine, ticket_id: str, ticket, node_id: str) -> dict[str, Any]:
     model_name = str(getattr(ticket, "model_name", "") or "")
     turns = engine.get_turns(ticket_id)
@@ -453,6 +439,7 @@ def _delivery_status_message(ticket) -> dict[str, Any]:
         "diagnosis": None,
         "phase": "awaiting_help_consent",
         "interaction_mode": "preparation",
+        "outcome_required": True,
         "issue_type": "delivery",
         "help_offer_options": [
             {"answer_key": "no_self_help", "label": "That answers my question"},
@@ -500,6 +487,7 @@ def _admin_review_terminal_message(
     turns = engine.get_turns(ticket_id)
     category = infer_defect_category_from_turns(turns)
     model_name = str(getattr(ticket, "model_name", "") or "")
+    honest_hardware = node_id in _HARDWARE_HANDOFF_TERMINALS
 
     diagnosis = build_admin_review_diagnosis(
         base_prompt=base_prompt,
@@ -508,12 +496,17 @@ def _admin_review_terminal_message(
         turns=turns,
         defect_category=category,
         model_name=model_name,
+        honest_hardware=honest_hardware,
     )
     message = format_admin_review_message(
         diagnosis=diagnosis,
         repair_manual_url=REPAIR_MANUAL_URL,
     )
-    return _help_offer_enrichment(message, diagnosis=diagnosis)
+    return _help_offer_enrichment(
+        message,
+        diagnosis=diagnosis,
+        interaction_mode="preparation",
+    )
 
 
 def build_terminal_enrichment(
@@ -553,8 +546,11 @@ def build_terminal_enrichment(
         result = _footrest_self_help_message(engine, ticket_id, ticket, node_id)
     elif node_id in _COSMETIC_TERMINALS:
         result = _cosmetic_self_help_message(engine, ticket_id, ticket, node_id)
-    elif node_id in _RECLINE_TERMINALS:
-        result = _recline_self_help_message(engine, ticket_id, ticket, node_id)
+    elif node_id in _HARDWARE_HANDOFF_TERMINALS or (
+        action == "awaiting_admin"
+        and any(token in node_id for token in ("pcb", "actuator", "no_movement", "power_no_move"))
+    ):
+        result = _admin_review_terminal_message(engine, ticket_id, ticket, node)
     elif node_id in _HEATING_TERMINALS:
         result = _heating_self_help_message(engine, ticket_id, ticket, node_id)
     elif node_id in _DELIVERY_TERMINALS:

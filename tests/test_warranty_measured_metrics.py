@@ -211,7 +211,7 @@ def test_returning_to_result_choice_withdraws_old_result_and_new_choice_is_lates
 
 
 def test_contact_request_is_saved_without_claiming_a_failed_notification_was_sent(client, monkeypatch):
-    seed("repair")
+    seed("repair", collected={"troubleshooting_outcome": "unresolved"})
     monkeypatch.setattr("warranty_summary.summarize_warranty_case", lambda **_kw: {"summary": "Reported repair issue", "source": "rules"})
     monkeypatch.setattr("warranty_email.send_warranty_transcript_email", lambda **_kw: False)
     monkeypatch.setattr("warranty_email.notify_email_only_contact_async", lambda **_kw: None)
@@ -227,7 +227,7 @@ def test_contact_request_is_saved_without_claiming_a_failed_notification_was_sen
 
 
 def test_uploaded_evidence_remains_submitted_after_session_reload(client, monkeypatch, tmp_path):
-    seed("repair")
+    seed("repair", collected={"troubleshooting_outcome": "unresolved"})
     monkeypatch.setattr(router, "_UPLOAD_ROOT", tmp_path)
     monkeypatch.setattr("warranty_email.notify_evidence_upload_async", lambda **_kw: None)
     monkeypatch.setattr("warranty_freshdesk_case.schedule_freshdesk_case_creation", lambda *_a, **_kw: {})

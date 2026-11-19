@@ -627,6 +627,39 @@ class TestCustomerPhraseGaps:
             )
             == "noise_up_down"
         )
+        assert (
+            nlp.interpret_warranty_answer(
+                rolling_noise, "annoying high pitch ticking during massage"
+            )
+            == "noise_massaging"
+        )
+        assert (
+            nlp.interpret_warranty_answer(
+                rolling_noise, "ticking when moving up or down"
+            )
+            == "noise_up_down"
+        )
+        assert (
+            nlp.interpret_warranty_answer(
+                rolling_noise, "the rollers stopped moving up and down"
+            )
+            == "heads_not_moving"
+        )
+
+        remote_symptom = {
+            "type": "question",
+            "options": [
+                {"answer_key": "blank_screen_commands_ok", "label": "All commands respond, but the screen is blank"},
+                {"answer_key": "cable_damaged", "label": "The remote cable appears damaged or cut"},
+                {"answer_key": "commands_not_responding", "label": "Certain commands do not respond at all"},
+            ],
+        }
+        assert (
+            nlp.interpret_warranty_answer(
+                remote_symptom, "the power button is blinking fast"
+            )
+            == "commands_not_responding"
+        )
 
         cosmetic_side = {
             "type": "question",

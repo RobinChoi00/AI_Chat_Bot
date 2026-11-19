@@ -186,9 +186,23 @@ _AIR_INTENSITY_RE = re.compile(
     r"\b(?:too\s+(?:intense|strong|hard)|over[\s-]?inflat).{0,50}\b(?:airbags?|air bags?|air)|"
     r"\b(?:lower|reduce|turn\s+down)\b.{0,40}\b(?:air\s+)?(?:intensity|pressure|airbags?)\b|"
     r"\bhow\s+(?:do|can)\s+i\b.{0,40}\b(?:lower|reduce|turn\s+down).{0,24}\b(?:intensity|pressure|airbags?)|"
-    r"\b(?:not|isn'?t|aren'?t|don'?t|doesn'?t|does not|do not)\s+squeez\w*|"
+    r"\b(?:not|isn'?t|aren'?t|don'?t|doesn'?t|dont|does not|do not)\s+squeez\w*|"
     r"\bnot\s+enough\s+(?:pressure|squeeze)\b|"
-    r"\b(?:too\s+)?(?:small|petite)\b.{0,50}\b(?:squeez|pressure|shoulder|arm)",
+    r"\b(?:too\s+)?(?:small|petite)(?:[\s-]?framed)?\b.{0,60}\b(?:squeez|pressure|shoulder|arm)|"
+    r"\b(?:squeez\w*|pressure).{0,40}\b(?:small|petite|short|thin)\b",
+    re.I,
+)
+_WARRANTY_REGISTER_RE = re.compile(
+    r"\b(?:do i (?:need|have) to|need to|must i|should i|have to)\b.{0,48}\bregist\w*.{0,48}\bwarrant|"
+    r"\bregist\w*.{0,48}\b(?:my |the )?(?:chair|product|massage).{0,48}\bwarrant|"
+    r"\bwarrant\w*.{0,40}\bregist|"
+    r"\bregist\w*\s+(?:for|to (?:get|have|activate))\s+(?:the\s+)?warrant",
+    re.I,
+)
+_ACCESSORY_COMPAT_RE = re.compile(
+    r"\b(?:aromodule|aro[\s-]?module|ottoman|accessory|attachment)\b.{0,40}\b(?:fit|compatible|work with)|"
+    r"\b(?:does|will|can)\b.{0,48}\b(?:aromodule|aro[\s-]?module|ottoman|accessory|attachment)\b.{0,40}\bfit|"
+    r"\bdoes\b.{0,40}\bfit\b.{0,40}\b(?:osaki|titan|platinum|escape|duo|chair)\b",
     re.I,
 )
 _AUTO_CHECK_RE = re.compile(
@@ -558,6 +572,26 @@ def _assembly_howto_answer() -> str:
     )
 
 
+def _warranty_register_answer() -> str:
+    return (
+        "I won't invent a registration rule here. Whether a product registration is required "
+        "for coverage depends on the **purchase channel and the warranty terms that came with "
+        "your chair**.\n\n"
+        "Check the warranty card or the page linked from your order, or ask Warranty at "
+        f"**{WARRANTY_PHONE}** / **{WARRANTY_TEAM_EMAIL}** with your model and proof of purchase. "
+        "This chat has not registered a chair or opened a claim."
+    )
+
+
+def _accessory_compat_answer() -> str:
+    return (
+        "Accessory fit (for example an **Aromodule**, ottoman, or add-on) is a **Sales** "
+        "compatibility question, not a repair intake.\n\n"
+        f"Contact Sales at **{SALES_PHONE}** with both product names, or continue in the Sales chat. "
+        "I will not mark the chair as defective for an accessory-fit question."
+    )
+
+
 def _is_assembly_howto(text: str) -> bool:
     """How-to assembly questions only — a failed install is still a setup case."""
     raw = (text or "").strip()
@@ -567,7 +601,7 @@ def _is_assembly_howto(text: str) -> bool:
 
 
 def is_sales_bound_opening_question(text: str) -> bool:
-    """FSA, hallway fit, White Glove policy — answer these without the issue menu."""
+    """Policy/sales openings — answer these without the install/delivery/defect menu."""
     raw = (text or "").strip()
     if not raw:
         return False
@@ -576,6 +610,9 @@ def is_sales_bound_opening_question(text: str) -> bool:
         or _HALLWAY_FIT_RE.search(raw)
         or _WHITE_GLOVE_RE.search(raw)
         or _is_assembly_howto(raw)
+        or _WARRANTY_REGISTER_RE.search(raw)
+        or _ACCESSORY_COMPAT_RE.search(raw)
+        or _is_air_intensity_question(raw)
     )
 
 
@@ -613,6 +650,8 @@ def looks_like_factual_common_question(text: str) -> bool:
         or _HALLWAY_FIT_RE.search(raw)
         or _is_assembly_howto(raw)
         or _is_air_intensity_question(raw)
+        or _WARRANTY_REGISTER_RE.search(raw)
+        or _ACCESSORY_COMPAT_RE.search(raw)
         or _AUTO_CHECK_RE.search(raw)
         or _WATTS_RE.search(raw)
         or _PARTS_DIAGRAM_RE.search(raw)
@@ -661,11 +700,15 @@ def try_factual_common_question(
     if _is_assembly_howto(raw):
         return _join_without_issue_menu(_assembly_howto_answer(), node)
     if _is_air_intensity_question(raw):
-        return _join(_air_intensity_answer(), node)
+        return _join_without_issue_menu(_air_intensity_answer(), node)
+    if _WARRANTY_REGISTER_RE.search(raw):
+        return _join_without_issue_menu(_warranty_register_answer(), node)
+    if _ACCESSORY_COMPAT_RE.search(raw):
+        return _join_without_issue_menu(_accessory_compat_answer(), node)
     if _AUTO_CHECK_RE.search(raw):
         return _join(_auto_check_answer(), node)
     if _WATTS_RE.search(raw):
-        return _join(_watts_answer(), node)
+        return _join_without_issue_menu(_watts_answer(), node)
     if _PARTS_DIAGRAM_RE.search(raw) or _SEND_PART_RE.search(raw):
         return _join(_parts_diagram_answer() if _PARTS_DIAGRAM_RE.search(raw) else _replacement_answer(), node)
     if _REPLACE_RE.search(raw) or _SEND_PART_RE.search(raw):

@@ -32,6 +32,7 @@ data/*
 !data/fonz_error_codes.json
 !data/fonz_model_diagnostics.json
 !data/install_videos.json
+!data/warranty_kb_review_checklist.json
 !data/sales/
 !data/sales/**
 faiss_index/
