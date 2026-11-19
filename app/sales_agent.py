@@ -2662,6 +2662,16 @@ def _recommend_reply(
     domain: str = "osakiusa.com",
     prefs: Optional[dict] = None,
 ) -> SalesReply:
+    awaiting_interview = bool((prefs or {}).get("awaiting_recommend"))
+    # Concrete catalog questions answer first; height interview waits for "help me choose".
+    if not awaiting_interview and not payload and (message or "").strip():
+        from sales_intent import _DIRECT_SPEC_QUESTION_RE, _SPECS_RE, _matched
+
+        if _DIRECT_SPEC_QUESTION_RE.search(message) and _matched(_SPECS_RE, message):
+            looked = lookup_shop_models(message)
+            if looked.unique is not None or looked.matches:
+                return _specs_reply(message, domain=domain, prefs=prefs)
+
     request = parse_recommendation_hints(message)
     merged = dict((prefs or {}).get("recommend_prefs") or {})
     if payload:
@@ -4365,8 +4375,13 @@ def _finalize_flow_stage(result: SalesReply) -> SalesReply:
     if not any(t.startswith("stage:") for t in tools):
         result.tools_used = tools + [f"stage:{stage}"]
 
-    # Offer a rating on answers substantial enough for it to mean something.
-    if result.intent in RATEABLE_INTENTS and not result.handoff:
+    # Offer a rating after published answers (not mid-interview prompts).
+    published_recommend = (
+        result.intent == INTENT_RECOMMEND
+        and bool(result.products)
+        and not stage.startswith("ask_")
+    )
+    if (result.intent in RATEABLE_INTENTS or published_recommend) and not result.handoff:
         existing = {q.payload for q in result.quick_replies}
         for quick in feedback_quick_replies():
             if quick.payload not in existing:

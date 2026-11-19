@@ -362,19 +362,57 @@ def enrich_tracking_from_track123(
     company: str = "",
     tracking_url: str = "",
 ) -> Dict[str, Any]:
-    """Fetch richer location/hub/ETA data from Track123 if configured."""
+    """Fetch richer location/hub/ETA data from Track123 if configured.
+
+    Prefers the Track123 Shopify App API (Settings → API & Webhook / X-Api-Key),
+    then falls back to the Open API client when that path is empty.
+    """
+    tn = (tracking_number or "").strip()
+    if not tn:
+        return {}
+
+    # 1) Shopify App API — matches credentials in Track123 App → API & Webhook.
+    try:
+        from track123_shopify_client import query_by_tracking_number as shopify_by_tn  # noqa: WPS433
+    except ImportError:
+        from app.track123_shopify_client import query_by_tracking_number as shopify_by_tn  # type: ignore  # noqa: WPS433
+
+    shopify_result = shopify_by_tn(
+        tn,
+        store_config,
+        http_get=http_get_with_retry,
+    )
+    if shopify_result and not shopify_result.get("track123_shopify_error"):
+        return shopify_result
+    if shopify_result.get("track123_shopify_error") not in {None, "not_found"}:
+        logger.warning(
+            "Track123 Shopify App lookup failed code=%s store_prefix=%s",
+            shopify_result.get("track123_shopify_error"),
+            store_config.get("store_prefix"),
+        )
+
+    # 2) Open API fallback (api.track123.com) — usually unused with Shopify-app keys.
     try:
         from track123_client import query_track123_tracking  # noqa: WPS433
     except ImportError:
         from app.track123_client import query_track123_tracking  # type: ignore  # noqa: WPS433
 
-    return query_track123_tracking(
-        tracking_number,
+    result = query_track123_tracking(
+        tn,
         store_config,
         company=company,
         tracking_url=tracking_url,
         http_post=http_post_with_retry,
     )
+    # Auth failures are operational — callers fall back to Shopify / carrier URL.
+    if result.get("track123_auth_failed"):
+        logger.warning(
+            "Track123 Open API auth failed code=%s store_prefix=%s",
+            result.get("track123_error_code"),
+            store_config.get("store_prefix"),
+        )
+        return {}
+    return result
 
 def _extract_shopify_order_details(node: Dict[str, Any]) -> Dict[str, Any]:
     """Pull warranty-relevant order fields from a Shopify GraphQL order node."""
@@ -621,6 +659,16 @@ def fetch_shopify_order_status(
             )
         if enriched:
             tracking_data.update(enriched)
+        # Always keep a usable carrier link even when Track123 enrichment fails.
+        if not str(tracking_data.get("tracking_url") or "").strip() and raw_number:
+            try:
+                from delivery_lookup import build_carrier_tracking_url  # noqa: WPS433
+            except ImportError:
+                from app.delivery_lookup import build_carrier_tracking_url  # type: ignore  # noqa: WPS433
+
+            tracking_data["tracking_url"] = build_carrier_tracking_url(
+                raw_number, resolved_company
+            )
         return tracking_data
     except Exception as e:
         logger.error("Shopify API failed kind=%s", type(e).__name__)

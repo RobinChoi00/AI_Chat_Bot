@@ -30,7 +30,9 @@ def conversation():
 def test_clear_symptom_retains_customer_confirmation(conversation, message, issue):
     data = conversation.request("smart-start", {"message": message, "domain": "osakiusa.com"})
     assert data["smart_start"]["suggested_issue_type"] == issue
-    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
+    assert data["smart_start"].get("auto_entered") is True
+    assert data["ticket"]["issue_type"] == issue
+    assert data["ticket"]["current_node"]["node_id"] != "issue_type"
     assert data["ticket"]["model_name"] == "OS-4000T"
 
 
@@ -188,8 +190,9 @@ def test_model_location_help_does_not_register_the_question_as_a_model():
 def test_owned_bluetooth_failure_receives_a_confirmable_malfunction_route(conversation, message):
     data = conversation.request("smart-start", {"message": message, "domain": "osakiusa.com"})
     assert data["smart_start"]["suggested_issue_type"] == "defect"
-    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
-    assert data["smart_start"]["applied_keys"] in ([], ["warranty"])
+    assert data["smart_start"].get("auto_entered") is True
+    assert data["ticket"]["issue_type"] == "defect"
+    assert data["ticket"]["current_node"]["node_id"] != "issue_type"
 
 
 @pytest.mark.parametrize("message", [

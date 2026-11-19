@@ -4,6 +4,7 @@ Track123 API client for warranty delivery lookups.
 Uses Track123 v2.1:
   - POST /tk/v2.1/track/query-realtime  (ad-hoc tracking numbers)
   - POST /tk/v2.1/track/query           (numbers already in Track123 account)
+  - POST /tk/v2/track/query             (legacy trackNos body)
 
 Docs: https://docs.track123.com/reference/query-realtime
 """
@@ -143,7 +144,7 @@ def _extract_tracking_record(payload: Dict[str, Any]) -> Optional[Dict[str, Any]
             if isinstance(content, list) and content:
                 first = content[0]
                 return first if isinstance(first, dict) else None
-            if isinstance(accepted, dict) and accepted.get("trackNo"):
+            if accepted.get("trackNo"):
                 return accepted
         if isinstance(accepted, list) and accepted:
             first = accepted[0]
@@ -157,17 +158,30 @@ def _extract_tracking_record(payload: Dict[str, Any]) -> Optional[Dict[str, Any]
     return None
 
 
+def _credential_candidates(store_config: Dict[str, str]) -> list[tuple[str, str]]:
+    """Prefer API key, then token — some storefronts store the Open API secret as TOKEN."""
+    candidates: list[tuple[str, str]] = []
+    for label, raw in (
+        ("api_key", store_config.get("track123_api_key")),
+        ("token", store_config.get("track123_token")),
+    ):
+        value = str(raw or "").strip()
+        if value and value not in {item[1] for item in candidates}:
+            candidates.append((label, value))
+    return candidates
+
+
 def _track123_post(
     path: str,
     body: Dict[str, Any],
-    api_key: str,
+    api_secret: str,
     *,
     http_post,
 ) -> Optional[Dict[str, Any]]:
     base_url = os.getenv("TRACK123_API_BASE_URL", "https://api.track123.com").rstrip("/")
     url = f"{base_url}{path}"
     headers = {
-        "Track123-Api-Secret": api_key,
+        "Track123-Api-Secret": api_secret,
         "accept": "application/json",
         "Content-Type": "application/json",
     }
@@ -181,12 +195,21 @@ def _track123_post(
             return None
         code = str(payload.get("code", ""))
         if code and code not in ("00000", "0", "200"):
-            logger.warning("Track123 %s returned code=%s msg=%s", path, code, payload.get("msg"))
-            return None
+            logger.warning(
+                "Track123 %s returned code=%s msg=%s",
+                path,
+                code,
+                str(payload.get("msg") or "")[:80],
+            )
+            return {"__track123_error_code": code, "__track123_error_msg": str(payload.get("msg") or "")}
         return payload
     except Exception as exc:
-        logger.warning("Track123 %s error: %s", path, exc)
+        logger.warning("Track123 %s error: %s", path, type(exc).__name__)
         return None
+
+
+def _payload_ok(payload: Optional[Dict[str, Any]]) -> bool:
+    return bool(payload) and "__track123_error_code" not in (payload or {})
 
 
 def query_track123_tracking(
@@ -200,39 +223,78 @@ def query_track123_tracking(
     """
     Query Track123 for *tracking_number* using store credentials.
 
-    Tries realtime lookup first (no pre-registration), then registered query.
+    Tries each configured secret (API key, then token) against realtime,
+    registered v2.1, and legacy v2 query endpoints.
     """
     tn = (tracking_number or "").strip()
-    api_key = (store_config.get("track123_api_key") or "").strip()
-    if not api_key or not tn:
+    credentials = _credential_candidates(store_config)
+    if not credentials or not tn:
         return {}
 
     courier_code = infer_courier_code(company, tn, tracking_url)
     realtime_body: Dict[str, Any] = {"trackNo": tn, "lang": "en"}
     if courier_code:
         realtime_body["courierCode"] = courier_code
+    track_info: Dict[str, Any] = {"trackNo": tn}
+    if courier_code:
+        track_info["courierCode"] = courier_code
 
-    payload = _track123_post(
-        "/gateway/open-api/tk/v2.1/track/query-realtime",
-        realtime_body,
-        api_key,
-        http_post=http_post,
-    )
-    record = _extract_tracking_record(payload) if payload else None
-
-    if record is None:
-        track_info: Dict[str, Any] = {"trackNo": tn}
-        if courier_code:
-            track_info["courierCode"] = courier_code
-        payload = _track123_post(
+    attempts = (
+        ("/gateway/open-api/tk/v2.1/track/query-realtime", realtime_body),
+        (
             "/gateway/open-api/tk/v2.1/track/query",
             {"trackNoInfos": [track_info], "queryPageSize": 1},
-            api_key,
-            http_post=http_post,
-        )
-        record = _extract_tracking_record(payload) if payload else None
+        ),
+        ("/gateway/open-api/tk/v2/track/query", {"trackNos": [tn]}),
+    )
 
-    if not record:
-        return {}
+    last_auth_error = ""
+    for _label, secret in credentials:
+        for path, body in attempts:
+            payload = _track123_post(path, body, secret, http_post=http_post)
+            if payload and payload.get("__track123_error_code") in {"B0001", "A0230"}:
+                last_auth_error = str(payload.get("__track123_error_code") or "")
+                continue
+            if not _payload_ok(payload):
+                continue
+            record = _extract_tracking_record(payload or {})
+            if record:
+                return parse_track123_record(record)
 
-    return parse_track123_record(record)
+    if last_auth_error:
+        return {"track123_auth_failed": True, "track123_error_code": last_auth_error}
+    return {}
+
+
+def track123_auth_status(store_config: Dict[str, str], *, http_get) -> Dict[str, Any]:
+    """Non-secret health check against the account quota endpoint."""
+    credentials = _credential_candidates(store_config)
+    if not credentials:
+        return {"configured": False, "ok": False, "error_code": "missing_credentials"}
+
+    base_url = os.getenv("TRACK123_API_BASE_URL", "https://api.track123.com").rstrip("/")
+    url = f"{base_url}/gateway/open-api/tk/v2.1/account/quota"
+    for label, secret in credentials:
+        try:
+            response = http_get(
+                url,
+                headers={
+                    "Track123-Api-Secret": secret,
+                    "accept": "application/json",
+                },
+                timeout=8,
+            )
+            payload = response.json() if response.status_code < 500 else {}
+            code = str((payload or {}).get("code") or "")
+            if code in ("00000", "0", "200"):
+                return {"configured": True, "ok": True, "credential": label, "error_code": None}
+            if code:
+                return {
+                    "configured": True,
+                    "ok": False,
+                    "credential": label,
+                    "error_code": code,
+                }
+        except Exception:
+            continue
+    return {"configured": True, "ok": False, "error_code": "unreachable"}

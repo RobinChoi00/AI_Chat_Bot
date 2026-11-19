@@ -44,9 +44,23 @@ def is_supported_storefront_domain(target_domain: str) -> bool:
     )
 
 
+# Shared help / admin / API hosts default to OsakiUSA Shopify so delivery
+# lookups do not hit the Titan store when customers open help.osakichair.com.
+_HELP_PORTAL_HOSTS = frozenset(
+    {
+        "help.osakichair.com",
+        "admin.osakichair.com",
+        "api.osakichair.com",
+    }
+)
+
+
 def get_store_key_prefix(target_domain: str) -> str:
+    host = normalize_storefront_domain(target_domain)
     lowered = (target_domain or "").lower()
-    if "titanchair.com" in lowered or "osakichair.com" in lowered:
+    if host in _HELP_PORTAL_HOSTS:
+        return "OSAKIUSA"
+    if "titanchair.com" in lowered or host.endswith("osakichair.com") or host == "osakichair.com":
         return "TITANCHAIR"
     if "osakimassagechair.com" in lowered:
         return "OSAKIMASSAGE"
@@ -107,10 +121,16 @@ def get_store_config(target_domain: str) -> Dict[str, str]:
     track123_token = getenv_store(prefix, "TRACK123_TOKEN")
     if not track123_token:
         track123_token = os.getenv("TRACK123_TOKEN", "").strip()
+    # Track123 Shopify App API uuid = myshopify subdomain. May differ from the
+    # Admin API host when the shop was renamed (legacy alias still resolves).
+    track123_uuid = getenv_store(prefix, "TRACK123_SHOP_UUID")
+    if not track123_uuid:
+        track123_uuid = os.getenv("TRACK123_SHOP_UUID", "").strip()
     return {
         "shop_domain": getenv_store(prefix, "SHOP_DOMAIN"),
         "shop_access_token": getenv_store(prefix, "ACCESS_TOKEN"),
         "track123_api_key": track123_key,
         "track123_token": track123_token,
+        "track123_shop_uuid": track123_uuid,
         "store_prefix": prefix,
     }

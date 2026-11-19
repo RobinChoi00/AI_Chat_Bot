@@ -432,6 +432,26 @@ def revise_recommend(intent: SalesIntent, text: str) -> Optional[SalesIntent]:
             handoff=True,
             matched_terms=("revise_recommend",),
         )
+    # Named-model fact questions must not open the height interview.
+    try:
+        from sales_intent import (  # noqa: WPS433
+            INTENT_SPECS,
+            _DIRECT_SPEC_QUESTION_RE,
+            _SPECS_RE,
+            _matched,
+        )
+        from sales_compare import lookup_shop_models  # noqa: WPS433
+
+        if _DIRECT_SPEC_QUESTION_RE.search(raw) and _matched(_SPECS_RE, raw):
+            looked = lookup_shop_models(raw)
+            if looked.unique is not None or looked.matches:
+                return SalesIntent(
+                    label=INTENT_SPECS,
+                    confidence="high",
+                    matched_terms=("revise_recommend_specs",) + _matched(_SPECS_RE, raw),
+                )
+    except ImportError:
+        pass
     if not recommend_matched_dollar_only(intent.matched_terms):
         return None
     recovered = llm_fallback(raw)

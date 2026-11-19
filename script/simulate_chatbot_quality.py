@@ -108,6 +108,11 @@ def offline_api():
         warranty = importlib.import_module("warranty_router")
         models = importlib.import_module("warranty_models")
         workflow = importlib.import_module("warranty_workflow")
+        email_mod = importlib.import_module("warranty_email")
+        # Module constants may already have been loaded from a real .env; clear
+        # them so offline runs never attempt a receipt/handoff SMTP submit.
+        stack.enter_context(patch.object(email_mod, "EMAIL_SENDER", ""))
+        stack.enter_context(patch.object(email_mod, "EMAIL_PASSWORD", ""))
         stack.enter_context(patch.object(agent, "fetch_live_stock", lambda *a, **k: None))
         stack.enter_context(patch.object(agent, "fetch_stock_many", lambda *a, **k: {}))
         engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)

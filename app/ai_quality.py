@@ -187,6 +187,20 @@ async def ai_health(
     from sales_shopify_stock import stock_cache_status
     from warranty_embeddings import embedding_cache_status
 
+    track123_health: dict = {"configured": False, "ok": False, "error_code": "not_checked"}
+    try:
+        import requests
+        from store_config import get_store_config
+        from track123_shopify_client import shopify_app_auth_status
+
+        # Health check uses Shopify App API (API & Webhook / X-Api-Key), not Open API.
+        track123_health = shopify_app_auth_status(
+            get_store_config("osakiusa.com"),
+            http_get=lambda url, **kwargs: requests.get(url, timeout=8, **kwargs),
+        )
+    except Exception:
+        track123_health = {"configured": False, "ok": False, "error_code": "check_failed"}
+
     return {
         "models": {"agent": config.AGENT_MODEL, "router": config.ROUTER_MODEL, "embedding": config.EMBEDDING_MODEL},
         "model_configuration": _model_configuration(config),
@@ -197,5 +211,6 @@ async def ai_health(
         "latency_scope": "Successful JSON request duration; streamed general-chat completion timing remains in request traces.",
         "stock_cache": stock_cache_status(),
         "warranty_embeddings": embedding_cache_status(),
+        "track123": track123_health,
         "scope": "Local process observations; external integration access is not verified by this endpoint.",
     }

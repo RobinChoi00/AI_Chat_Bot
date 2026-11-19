@@ -14,6 +14,7 @@ from delivery_lookup import (  # noqa: E402
     lookup_by_order_or_email,
     lookup_by_tracking_number,
     parse_order_or_email,
+    public_delivery_tracking_summary,
 )
 
 
@@ -123,6 +124,36 @@ def test_safe_lookup_swallows_carrier_exception(monkeypatch):
     assert snap.available is False
     assert snap.tracking_number == "1Z999AA10123456784"
     assert snap.error == "carrier_lookup_failed"
+
+
+def test_tracking_number_falls_back_to_carrier_link_when_live_apis_empty(monkeypatch):
+    from delivery_lookup import lookup_by_tracking_number
+
+    class EmptyLive:
+        @staticmethod
+        def get_store_config(_domain):
+            return {"track123_api_key": "x"}
+
+        @staticmethod
+        def enrich_tracking_from_track123(*_a, **_k):
+            return {}
+
+        @staticmethod
+        def enrich_tracking_from_aftership(*_a, **_k):
+            return {}
+
+        @staticmethod
+        def resolve_carrier_name(*_a, **_k):
+            return "UPS"
+
+    monkeypatch.setattr("delivery_lookup._lazy_logistics", lambda: EmptyLive())
+    snap = lookup_by_tracking_number("1Z999AA10123456784", "osakiusa.com")
+    assert snap.available is True
+    assert snap.source == "carrier_link"
+    assert "ups.com" in snap.tracking_url
+    summary = public_delivery_tracking_summary(snap, "osakiusa.com", lookup_kind="tracking")
+    assert summary["available"] is True
+    assert summary["tracking_url"].startswith("https://")
 
 
 def test_format_unavailable_message_includes_self_service_links():

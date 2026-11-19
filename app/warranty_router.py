@@ -1877,6 +1877,42 @@ def _build_side_question_response(
     suggestion = suggested_option or _pending_suggestion_from_ticket(ticket)
     if suggestion:
         payload["suggested_option"] = suggestion
+    # After a published side answer, ask whether it resolved the question.
+    clarify_markers = (
+        "please tap",
+        "which area",
+        "i won't start",
+        "sounds like",
+        "pick a different",
+        "tell us your chair model",
+    )
+    lowered = message.lower()
+    if (
+        message.strip()
+        and not any(marker in lowered for marker in clarify_markers)
+        and not payload.get("help_offer_options")
+    ):
+        issue = str(getattr(ticket, "issue_type", "") or "").strip().lower()
+        if issue == "delivery":
+            payload["help_offer_options"] = [
+                {"answer_key": "delivery_answered", "label": "Yes — that answered my question"},
+                {"answer_key": "yes_team_help", "label": "No — I still need delivery help"},
+            ]
+        elif issue in {"installation", "defect"}:
+            payload["help_offer_options"] = [
+                {"answer_key": "no_self_help", "label": "Yes — that fixed / answered it"},
+                {"answer_key": "yes_team_help", "label": "No — I still need help"},
+            ]
+        else:
+            payload["help_offer_options"] = [
+                {"answer_key": "delivery_answered", "label": "Yes — that answered my question"},
+                {"answer_key": "yes_team_help", "label": "No — I still need help"},
+            ]
+        if "use the check below" not in lowered and "tell us whether" not in lowered:
+            payload["assistant_message"] = (
+                f"{message.rstrip()}\n\n"
+                "**Did that answer your question?** Use the check below."
+            )
     return payload
 
 
@@ -2985,7 +3021,6 @@ async def natural_start_warranty(
 
     from warranty_nlp import (  # noqa: WPS433
         build_clarifying_issue_type_message,
-        build_suggested_issue_type_message,
         interpret_issue_type,
     )
     from warranty_intake_context import (  # noqa: WPS433
@@ -3072,12 +3107,8 @@ async def natural_start_warranty(
         clarify = build_clarifying_issue_type_message(message, model_name=model_name)
         return _build_side_question_response(engine, ticket_id, clarify)
 
-    # Suggest issue type but require an explicit tap — never auto-enter the path.
-    confirm = build_suggested_issue_type_message(issue_type, message)
-    payload = _build_side_question_response(engine, ticket_id, confirm)
-    payload["suggested_issue_type"] = issue_type
-    payload["intent_confirmation_required"] = True
-    return payload
+    # Clear words already named the path — enter it instead of asking for a tap.
+    return _quick_start_ticket(engine, session_id, issue_type, body.domain)
 
 
 @router.post("/api/v1/warranty/session/{session_id}/smart-start", tags=["warranty"])
@@ -3228,14 +3259,41 @@ async def smart_start_warranty(
     if ticket is not None:
         _persist_ticket_row(ticket_id, ticket)
 
+    from warranty_intake_context import (  # noqa: WPS433
+        build_model_confirmation_message,
+        is_valid_model_input,
+        needs_model_confirmation,
+    )
+
     ticket = engine.get_ticket(ticket_id)
+    registered_model = str(getattr(ticket, "model_name", "") or "").strip() if ticket else ""
+    can_auto_enter = (
+        suggested_issue_type == "delivery"
+        or (bool(registered_model) and is_valid_model_input(registered_model) and not needs_model_confirmation(ticket))
+    )
+    if (
+        suggested_issue_type in ("installation", "delivery", "defect")
+        and ticket is not None
+        and can_auto_enter
+    ):
+        # Clear free-text already named the area — enter it without a second tap.
+        payload = _quick_start_ticket(engine, session_id, suggested_issue_type, body.domain)
+        payload["smart_start"] = {
+            "source": extraction.get("source", "empty"),
+            "summary": extraction.get("summary", ""),
+            "applied_keys": list(applied_keys_list) + [suggested_issue_type],
+            "skipped_keys": [],
+            "stopped_reason": "auto_routed",
+            "model_name_hint": extraction.get("model_name", ""),
+            "routing_confirmation": None,
+            "suggested_issue_type": suggested_issue_type,
+            "auto_entered": True,
+        }
+        return payload
+
     node = engine.get_current_node(ticket_id)
     payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
 
-    from warranty_intake_context import (  # noqa: WPS433
-        build_model_confirmation_message,
-        needs_model_confirmation,
-    )
     from warranty_nlp import build_suggested_issue_type_message  # noqa: WPS433
 
     routing_confirmation: Optional[Dict[str, Any]] = None
@@ -3627,6 +3685,8 @@ async def admin_warranty_decision(
         )
 
     engine = _lazy_engine()
+    prior = engine.get_ticket(ticket_id)
+    prior_collected = prior.get_collected() if prior is not None else {}
     try:
         ticket = engine.admin_decision(
             ticket_id=ticket_id,
@@ -3637,6 +3697,42 @@ async def admin_warranty_decision(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+    # Authenticated admin action on a human-support request is staff acceptance.
+    if prior_collected.get("human_support_requested") and not prior_collected.get(
+        "human_support_staff_accepted_at"
+    ):
+        from customer_journey import record_server_event, register_conversation  # noqa: WPS433
+        from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
+
+        accepted_at = _now_cst_iso()
+        with warranty_db_session() as db:
+            row = db.query(WarrantyTicket).filter(WarrantyTicket.ticket_id == ticket_id).first()
+            if row is not None:
+                row.set_collected("human_support_staff_accepted_at", accepted_at)
+                row.set_collected(
+                    "human_support_staff_accepted_by",
+                    str(body.decided_by or "admin")[:120],
+                )
+                register_conversation(
+                    db,
+                    surface="warranty",
+                    conversation_id=str(ticket_id),
+                    session_id=str(row.session_id or ""),
+                    domain=str(row.domain or ""),
+                    is_new=False,
+                )
+                record_server_event(
+                    db,
+                    surface="warranty",
+                    conversation_id=str(ticket_id),
+                    session_id=str(row.session_id or ""),
+                    domain=str(row.domain or ""),
+                    stage="handoff",
+                    event="completed",
+                    event_id=f"staff-accept:{ticket_id}:{body.decision}",
+                )
+        ticket = engine.get_ticket(ticket_id) or ticket
 
     turns = engine.get_turns(ticket_id)
     evidences = engine.get_evidences(ticket_id)
@@ -3674,6 +3770,11 @@ async def admin_warranty_decision(
         "customer_email_sent": customer_email_sent,
         "customer_email_skip_reason": customer_email_skip_reason,
         "freshdesk_sync": freshdesk_sync,
+        "staff_acceptance_recorded": bool(
+            (ticket.get_collected() if ticket is not None else {}).get(
+                "human_support_staff_accepted_at"
+            )
+        ),
     }
 
 
@@ -4019,7 +4120,8 @@ async def admin_rebuild_faiss(
     By default returns immediately (``202 Accepted``-style) and runs the
     rebuild in a BackgroundTask; poll ``/admin/warranty/faiss/status`` for
     progress. Set ``?wait=true`` to block until it finishes (mostly for the
-    CLI + tests).
+    CLI + tests). Also refreshes the warranty semantic embedding index from
+    published knowledge.
     """
     _require_admin(x_admin_key)
     try:
@@ -4030,15 +4132,26 @@ async def admin_rebuild_faiss(
             rebuild_freshdesk_qa_index,
         )
 
+    from warranty_embeddings import clear_embedding_cache, ensure_index, warmup_semantic_index  # noqa: WPS433
+
+    clear_embedding_cache()
     current = get_status()
     if current.get("running"):
-        return {"scheduled": False, **current, "message": "Already running."}
+        warmup_semantic_index()
+        return {"scheduled": False, **current, "message": "Already running.", "semantic_index": "warmup_scheduled"}
 
     if wait:
-        return rebuild_freshdesk_qa_index()
+        faiss_result = rebuild_freshdesk_qa_index()
+        semantic_ready = bool(ensure_index())
+        return {**faiss_result, "semantic_index_ready": semantic_ready}
 
     background_tasks.add_task(rebuild_freshdesk_qa_index)
-    return {"scheduled": True, "message": "FAISS rebuild scheduled in background."}
+    warmup_semantic_index()
+    return {
+        "scheduled": True,
+        "message": "FAISS rebuild and semantic index warmup scheduled in background.",
+        "semantic_index": "warmup_scheduled",
+    }
 
 
 @router.get(

@@ -527,14 +527,10 @@ def test_natural_start_maps_issue_type(client, monkeypatch):
     )
     assert resp.status_code == 200
     data = resp.json()
-    # Suggest defect, but do not auto-enter the path — wait for a tap.
-    assert data.get("side_question") is True
-    assert data.get("suggested_issue_type") == "defect"
-    assert data.get("intent_confirmation_required") is True
-    assert "defect" in data["assistant_message"].lower() or "warranty" in data["assistant_message"].lower()
-    assert "tap" in data["assistant_message"].lower()
-    assert not data["ticket"].get("issue_type")
-    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
+    # Clear free-text enters the defect path without a second confirmation tap.
+    assert data["ticket"].get("issue_type") == "defect"
+    assert data["ticket"]["current_node"]["node_id"] != "issue_type"
+    assert data.get("intent_confirmation_required") is not True
 
 
 def test_submit_answer_nlp_maps_natural_language(client):

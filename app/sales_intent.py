@@ -749,7 +749,8 @@ def classify(text: str) -> SalesIntent:
         return SalesIntent(label=INTENT_STOCK, confidence="high", matched_terms=stock_hits)
     if compare_hits:
         return SalesIntent(label=INTENT_COMPARE, confidence="high", matched_terms=compare_hits)
-    if specs_hits and not recommend_hits and _DIRECT_SPEC_QUESTION_RE.search(raw):
+    if specs_hits and _DIRECT_SPEC_QUESTION_RE.search(raw) and not body_fit_hits:
+        # Fact questions about a named feature beat a weak "which chair" match.
         return SalesIntent(label=INTENT_SPECS, confidence="high", matched_terms=specs_hits)
     if intensity_hits and not recommend_hits and re.search(r"\?|\b(?:can|does|how|what|adjust|settings?)\b", raw, re.I):
         return SalesIntent(label=INTENT_INTENSITY, confidence="high", matched_terms=intensity_hits)
@@ -833,8 +834,8 @@ _SALES_DELIVERY_CONTACT = (
 )
 
 _AGENT_CONNECT = (
-    "I'll connect you with our sales team. "
-    "Please share your **email** and they will follow up.\n\n"
+    "A sales specialist is requested. A team member has not yet confirmed they have joined. "
+    "Please share your **email** if you want a follow-up attempt, or call **sales** now.\n\n"
     f"{_phone_directory()}"
 )
 
@@ -881,8 +882,8 @@ def handoff_message(intent: SalesIntent) -> Optional[str]:
         return _AGENT_CONNECT
     if label == INTENT_HUMAN:
         return (
-            "I'll connect you with our sales team. "
-            "Please share your **email** (and optionally a phone number).\n\n"
+            "A sales specialist is requested. A team member has not yet confirmed they have joined. "
+            "Please share your **email** (and optionally a phone number), or call **sales** now.\n\n"
             f"{_phone_directory()}"
         )
     return None

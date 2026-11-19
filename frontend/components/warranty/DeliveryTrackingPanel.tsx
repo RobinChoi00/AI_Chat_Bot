@@ -40,6 +40,7 @@ export function DeliveryTrackingResult({ summary }: { summary: TrackingSummary }
           <div><dt className="inline font-medium">Status: </dt><dd className="inline">{summary.status || "Check tracking for details"}</dd></div>
           {summary.carrier && <div><dt className="inline font-medium">Carrier: </dt><dd className="inline">{summary.carrier}</dd></div>}
           {summary.eta && <div><dt className="inline font-medium">Delivery estimate: </dt><dd className="inline">{summary.eta}</dd></div>}
+          {summary.last_event && <div><dt className="inline font-medium">Latest scan: </dt><dd className="inline">{summary.last_event}</dd></div>}
         </dl>
         <p className="mt-2 text-xs text-gray-600">Delivery estimates can change. Carrier scans may take time to appear.</p>
         {trackingUrl && <a className="mt-2 inline-block text-sm font-medium text-sky-800 underline" href={trackingUrl} target="_blank" rel="noopener noreferrer">Open carrier tracking ↗</a>}

@@ -148,3 +148,17 @@ def test_fault_style_symptoms_leave_the_menu():
 def test_general_install_guide_does_not_teach_the_air_hose():
     body = _install_message("Osaki Pro 4D", "Please watch the setup guide.")
     assert "air hose" not in str(body.get("message") or "").lower()
+
+
+def test_named_feature_question_answers_before_height_interview():
+    reply = respond("Does the Maestro 4D have Bluetooth speakers?")
+    assert reply.intent == "specs"
+    assert "how tall" not in reply.reply.lower()
+    assert reply.flow_stage != "ask_height"
+
+
+def test_human_handoff_does_not_claim_staff_joined():
+    reply = respond("I want to talk to a human")
+    assert reply.handoff is True
+    assert "has not yet confirmed" in reply.reply.lower()
+    assert "they will follow up" not in reply.reply.lower()

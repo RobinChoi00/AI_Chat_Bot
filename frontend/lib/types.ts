@@ -117,6 +117,7 @@ export interface TrackingSummary {
   carrier?: string;
   eta?: string;
   tracking_url?: string;
+  last_event?: string;
   fetched_at?: string;
   source?: string;
   self_service_links?: { label: string; url: string }[];

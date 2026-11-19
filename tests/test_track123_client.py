@@ -98,6 +98,49 @@ def test_get_store_key_prefix_osaki_titan():
     assert get_store_key_prefix("www.osakiusa.com") == "OSAKIUSA"
     assert get_store_key_prefix("titanchair.com") == "TITANCHAIR"
     assert get_store_key_prefix("www.osakichair.com") == "TITANCHAIR"
+    assert get_store_key_prefix("help.osakichair.com") == "OSAKIUSA"
+    assert get_store_key_prefix("admin.osakichair.com") == "OSAKIUSA"
+    assert get_store_key_prefix("api.osakichair.com") == "OSAKIUSA"
+
+
+def test_query_track123_tries_token_when_api_key_unauthorized():
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.status_code = 200
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, **kwargs):
+        secret = (kwargs.get("headers") or {}).get("Track123-Api-Secret")
+        calls.append((url, secret))
+        if secret == "bad-key":
+            return FakeResponse({"code": "B0001", "msg": "Authorization failed"})
+        if "query-realtime" in url and secret == "good-token":
+            return FakeResponse(
+                {
+                    "code": "00000",
+                    "data": {
+                        "accepted": {
+                            "trackNo": "1Z999AA10123456784",
+                            "transitStatus": "IN_TRANSIT",
+                            "localLogisticsInfo": {"courierNameEN": "UPS", "trackingDetails": []},
+                        }
+                    },
+                }
+            )
+        return FakeResponse({"code": "00000", "data": {}})
+
+    result = query_track123_tracking(
+        "1Z999AA10123456784",
+        {"track123_api_key": "bad-key", "track123_token": "good-token"},
+        http_post=fake_post,
+    )
+    assert result["status"] == "IN_TRANSIT"
+    assert any(secret == "good-token" for _url, secret in calls)
 
 
 def test_get_store_config_falls_back_to_global_track123(monkeypatch):

@@ -128,12 +128,16 @@ def scenarios():
             data = c.request("smart-start", {"message": symptom, "domain": DOMAIN}, customer=symptom)
             smart = data.get("smart_start") or {}
             c.check(smart.get("suggested_issue_type") == "defect",
-                    "A clear everyday malfunction should receive a malfunction confirmation in the offline fallback",
-                    expected="defect suggestion, with customer confirmation retained", observed=smart)
+                    "A clear everyday malfunction should map to the defect path from the customer's words",
+                    expected="defect auto-route after a clear symptom", observed=smart)
             c.check(c.ticket_id == original and data["ticket"]["model_name"] == "OS-4000T",
                     "Describing symptoms must not discard the registered chair", observed=data["ticket"])
-            c.check(data["ticket"]["current_node"]["node_id"] == "issue_type",
-                    "Symptom recognition must not silently start an unconfirmed diagnostic path", observed=data["ticket"])
+            c.check(
+                data["ticket"].get("issue_type") == "defect"
+                and data["ticket"]["current_node"]["node_id"] != "issue_type",
+                "Clear symptoms should enter the defect path without a second confirmation tap",
+                observed=data["ticket"],
+            )
             return c.evidence()
         add("intake-" + cid, "warranty_intake", family, "Recognize: " + symptom, run, {"model": "OS-4000T", "message": symptom})
 

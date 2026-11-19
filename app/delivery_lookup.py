@@ -259,18 +259,52 @@ def public_delivery_tracking_summary(snapshot: TrackingSnapshot, domain: str, lo
     url = snapshot.tracking_url if snapshot.available else ""
     try:
         parsed = urlparse(url)
-        safe = parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password and not re.search(r"[\s\x00-\x1f]", url)
+        safe = (
+            parsed.scheme == "https"
+            and bool(parsed.hostname)
+            and not parsed.username
+            and not parsed.password
+            and not re.search(r"[\s\x00-\x1f]", url)
+        )
     except ValueError:
         safe = False
     if not safe:
-        url = build_carrier_tracking_url(snapshot.tracking_number, snapshot.carrier) if snapshot.available else ""
+        url = ""
+        if snapshot.tracking_number:
+            candidate = build_carrier_tracking_url(snapshot.tracking_number, snapshot.carrier)
+            try:
+                parsed = urlparse(candidate)
+                if (
+                    parsed.scheme == "https"
+                    and parsed.hostname
+                    and not parsed.username
+                    and not parsed.password
+                ):
+                    url = candidate
+            except ValueError:
+                url = ""
     if snapshot.available:
-        message = f"Latest delivery status: **{snapshot.status or 'Status pending'}**."
-        if snapshot.carrier:
-            message += f" Carrier: {snapshot.carrier}."
-        if snapshot.eta and snapshot.eta != "Pending carrier update":
-            message += f" Carrier estimate: {snapshot.eta}. This is an estimate, not a delivery guarantee."
-        message += " Use Refresh to request another update; carrier scans can take time to appear."
+        status = snapshot.status or "Status pending"
+        if status.upper() == "PROCESSING":
+            message = (
+                "Your order is **confirmed and being prepared**. "
+                "A carrier tracking number has not been assigned yet."
+            )
+        else:
+            message = f"Latest delivery status: **{status}**."
+            if snapshot.carrier:
+                message += f" Carrier: {snapshot.carrier}."
+            if snapshot.last_event:
+                message += f" Latest scan: {snapshot.last_event}."
+            if snapshot.eta and snapshot.eta != "Pending carrier update":
+                message += (
+                    f" Carrier estimate: {snapshot.eta}. "
+                    "This is an estimate, not a delivery guarantee."
+                )
+            if url:
+                message += " Open the carrier tracking link for live scans."
+            else:
+                message += " Use Refresh to request another update; carrier scans can take time to appear."
     elif lookup_kind == "tracking":
         message = "We couldn't find a current update for that tracking number. Check the number, or try again later. No delivery date has been confirmed."
     else:
@@ -280,6 +314,7 @@ def public_delivery_tracking_summary(snapshot: TrackingSnapshot, domain: str, lo
         "status": snapshot.status if snapshot.available else "unavailable",
         "carrier": snapshot.carrier if snapshot.available else "",
         "eta": snapshot.eta if snapshot.available else "", "tracking_url": url,
+        "last_event": snapshot.last_event if snapshot.available else "",
         "fetched_at": snapshot.looked_up_at or _now_iso(), "source": snapshot.source,
         "support_contact": support_contact("sales", domain),
         "self_service_links": [{"label": label, "url": link} for label, link in build_self_service_lookup_links(domain=domain, lookup_kind="order")],
@@ -301,7 +336,7 @@ def public_tracking_summary_payload(
 
 
 def lookup_by_tracking_number(tracking_number: str, domain: str) -> TrackingSnapshot:
-    """Track123 (+ AfterShip fallback) using the customer-supplied tracking number."""
+    """Track123 (+ AfterShip), then a carrier-site link when live APIs are unavailable."""
     tn = (tracking_number or "").strip()
     if not tn:
         return TrackingSnapshot(
@@ -323,6 +358,21 @@ def lookup_by_tracking_number(tracking_number: str, domain: str) -> TrackingSnap
             source = "aftership"
 
     if not enriched:
+        # Live carrier APIs can be down or unauthorized. Still give a direct
+        # carrier page when we can recognize the number format.
+        carrier = logistics.resolve_carrier_name("", tn, "")
+        carrier_url = build_carrier_tracking_url(tn, carrier)
+        if carrier_url:
+            return TrackingSnapshot(
+                source="carrier_link",
+                available=True,
+                status="Open carrier tracking",
+                carrier=carrier or "",
+                tracking_number=tn,
+                tracking_url=carrier_url,
+                last_event="Live scan feed is unavailable here; open the carrier site for the latest update.",
+                looked_up_at=_now_iso(),
+            )
         return TrackingSnapshot(
             source="unavailable",
             available=False,
@@ -335,7 +385,9 @@ def lookup_by_tracking_number(tracking_number: str, domain: str) -> TrackingSnap
         "status": enriched.get("status", "IN_TRANSIT"),
         "company": enriched.get("company") or logistics.resolve_carrier_name("", tn, ""),
         "tracking_number": tn,
-        "tracking_url": enriched.get("tracking_url", ""),
+        "tracking_url": enriched.get("tracking_url", "") or build_carrier_tracking_url(
+            tn, str(enriched.get("company") or "")
+        ),
         "current_location": enriched.get("current_location", "Carrier network"),
         "current_hub": enriched.get("current_hub", ""),
         "eta": enriched.get("eta", "Pending carrier update"),
@@ -344,6 +396,8 @@ def lookup_by_tracking_number(tracking_number: str, domain: str) -> TrackingSnap
     }
     snap = _snapshot_from_tracking_data(data, source=source, tracking_number=tn)
     snap.available = True
+    if not snap.tracking_url:
+        snap.tracking_url = build_carrier_tracking_url(tn, snap.carrier)
     return snap
 
 

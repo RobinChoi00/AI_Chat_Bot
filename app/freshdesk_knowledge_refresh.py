@@ -25,9 +25,11 @@ def invalidate_warranty_knowledge_caches() -> None:
 
     clear_knowledge_cache()
     try:
-        from warranty_embeddings import clear_embedding_cache  # noqa: WPS433
+        from warranty_embeddings import clear_embedding_cache, warmup_semantic_index  # noqa: WPS433
 
         clear_embedding_cache()
+        # Rebuild the published-knowledge index in the background after refresh.
+        warmup_semantic_index()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not clear warranty embedding cache: %s", exc)
 

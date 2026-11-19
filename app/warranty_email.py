@@ -924,7 +924,7 @@ def send_customer_receipt_email(
             mask_email(to_email),
         )
         return True
-    except (smtplib.SMTPException, OSError) as exc:
+    except Exception as exc:  # noqa: BLE001 — never fail the customer reply on mail
         logger.error("Customer receipt email failed: %s", type(exc).__name__)
         return False
 

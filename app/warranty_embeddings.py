@@ -321,10 +321,19 @@ def embedding_cache_status() -> dict:
 
 
 def warmup_semantic_index() -> Optional[threading.Thread]:
-    """Start one background warmup only when explicitly enabled by configuration."""
+    """Start one background warmup so published knowledge is searchable.
+
+    Default: warm when an API key is present. Set WARRANTY_EMBEDDING_WARMUP=0
+    to keep startup free of embedding requests.
+    """
     global _warmup_thread
-    if os.getenv("WARRANTY_EMBEDDING_WARMUP", "0") != "1":
+    warmup_flag = os.getenv("WARRANTY_EMBEDDING_WARMUP", "").strip().lower()
+    if warmup_flag in {"0", "false", "off", "no"}:
         return None
+    if warmup_flag not in {"1", "true", "on", "yes"}:
+        # Unset → warm only when credentials exist so production indexes fill.
+        if _openai_client() is None:
+            return None
     if os.getenv("WARRANTY_SEMANTIC_SEARCH", "1") != "1":
         return None
     with _lock:
