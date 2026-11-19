@@ -287,6 +287,12 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "rollers",
         "heads stuck",
         "mechanism stuck",
+        "up and down",
+        "stopped moving",
+        "does not move up",
+        "doesn't move up",
+        "won't move up",
+        "wont move up",
     ),
     "recline": (
         "won't recline",
@@ -614,6 +620,16 @@ _OPTION_SYNONYMS: dict[str, tuple[str, ...]] = {
         "heads dont move",
         "heads not moving",
         "massage heads not moving",
+        "up and down motion",
+        "motion has stopped",
+        "stopped moving up",
+        "does not move up and down",
+        "doesn't move up and down",
+        "won't move up and down",
+        "wont move up and down",
+        "sits at the butt",
+        "stuck at the bottom",
+        "not moving up or down",
     ),
     "legrest_not_lowering": (
         "won't go down",
@@ -967,8 +983,9 @@ def _keyword_issue_type(text: str) -> Optional[str]:
     ):
         return "defect"
     if re.search(
-        r"\b(?:will\s+not|does\s+not|won't|doesn't)\s+(?:turn\s+on|start|work|respond|recline)|"
-        r"\b(?:stopped\s+working|shuts?\s+off|torn|ripped|not\s+getting\s+warm|clicking\s+noise)\b|"
+        r"\b(?:will\s+not|does\s+not|won't|doesn't)\s+(?:turn\s+on|start|work|respond|recline|move)|"
+        r"\b(?:stopped\s+(?:working|moving)|shuts?\s+off|torn|ripped|not\s+getting\s+warm|clicking\s+noise)\b|"
+        r"\b(?:rollers?|massage\s+(?:heads?|mechanism)|up\s+and\s+down(?:\s+motion)?)\b|"
         r"\b(?:error|err)\s*(?:code\s*)?#?\s*[a-z]?\d{1,3}\b|\b[ef]\d{1,2}\s+(?:error|code)\b|"
         r"\b(?:peeling|flaking|cracked|cracking|grinding|squeak(?:s|ing|y)?|rattl(?:es?|ing)|"
         r"(?:loud|strange|weird)\s+(?:noise|sound)|not\s+inflating|won't\s+inflate|too\s+hot|"

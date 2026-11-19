@@ -78,7 +78,17 @@ _POWER_WORDS = (
 )
 _REMOTE_WORDS = ("remote", "controller", "tablet", "screen blank")
 _RECLINE_WORDS = ("recline", "zero g", "zero-g", "zerog", "lay flat")
-_ROLLING_WORDS = ("massage head", "rollers stuck", "rollers", "rolling", "kneading", "mechanism")
+_ROLLING_WORDS = (
+    "massage head",
+    "rollers stuck",
+    "rollers",
+    "roller",
+    "rolling",
+    "kneading",
+    "mechanism",
+    "up and down",
+    "stopped moving",
+)
 _HEAT_WORDS = ("heat", "heater", "heating", "won't heat", "wont heat", "too hot", "not warm")
 _VOICE_WORDS = ("voice", "alexa", "hey osaki", "microphone", "ghost voice")
 _COSMETIC_WORDS = ("scratch", "tear", "torn", "ripped", "cosmetic", "leather damage", "seam")
@@ -698,6 +708,18 @@ def _keyword_workflow_prefill(text: str) -> Optional[dict[str, Any]]:
         return {"answer_keys": ["warranty", "defect", "heat"],
                 "model_name": _extract_model_from_intake(text), "confidence": "high",
                 "summary": "Heating stays cold.", "source": "keyword"}
+    # Warmup / heat-run reports name the remote only as a setting — keep heat.
+    if re.search(r"\bheat(?:ing)?\b", norm) and re.search(
+        r"\b(?:ran|run|running|warmup|warm[\s-]?up|minutes?|still\s+cold|not\s+warm)\b",
+        norm,
+    ):
+        return {
+            "answer_keys": ["warranty", "defect", "heat"],
+            "model_name": _extract_model_from_intake(text),
+            "confidence": "high",
+            "summary": "Heating issue.",
+            "source": "keyword",
+        }
 
     has_air = _has_any(norm, _AIR_WORDS) and not _option_contradicts_customer("air", norm)
     has_foot = _has_any(norm, _FOOTREST_WORDS)

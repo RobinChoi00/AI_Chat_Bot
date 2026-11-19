@@ -97,11 +97,12 @@ def test_repeated_unmapped_replies_offer_then_save_handoff(client, monkeypatch):
     monkeypatch.setattr(wr, "_maybe_side_question_message", lambda *_a: None)
     monkeypatch.setattr("warranty_nlp.interpret_warranty_answer", lambda *_a, **_kw: None)
     monkeypatch.setattr("warranty_nlp.suggest_closest_option", lambda *_a, **_kw: None)
-    results = [client.post(f"/api/v1/warranty/{ticket_id}/answer", json={"answer": "unmatched explanation"}) for _ in range(3)]
-    assert all(response.status_code == 200 for response in results)
-    assert results[1].json()["handoff"]["offered"] is True
-    assert results[2].json()["handoff"]["reason"] == "clarification_loop"
-    assert results[2].json()["ticket"]["status"] == "awaiting_admin_review"
+    first = client.post(f"/api/v1/warranty/{ticket_id}/answer", json={"answer": "unmatched explanation"})
+    second = client.post(f"/api/v1/warranty/{ticket_id}/answer", json={"answer": "unmatched explanation"})
+    assert first.status_code == 200 and second.status_code == 200
+    assert not (first.json().get("handoff") or {}).get("requested")
+    assert second.json()["handoff"]["reason"] == "clarification_loop"
+    assert second.json()["ticket"]["status"] == "awaiting_admin_review"
 
 
 def test_delivery_starts_without_model_and_refresh_always_calls_provider(client, monkeypatch):

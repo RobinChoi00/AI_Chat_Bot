@@ -252,13 +252,11 @@ def test_smart_start_footrest_air_advances_flow(warranty_client, monkeypatch):
         {"message": "OS-4000T footrest air not inflating", "domain": DOMAIN},
     )
     assert payload["ticket"]["model_name"] == "OS-4000T"
-    # Suggest defect, but stay on the issue menu until the customer taps.
-    assert payload["smart_start"]["applied_keys"] == ["warranty"]
-    assert payload["ticket"]["current_node"]["node_id"] == "issue_type"
-    assert not payload["ticket"].get("issue_type")
-    confirm = payload["smart_start"]["routing_confirmation"]
-    assert confirm["requires_confirmation"] is True
-    assert "defect" in confirm["message"].lower() or "warranty" in confirm["message"].lower()
+    # Answer-first: clear footrest-air text auto-enters defect without a menu tap.
+    assert payload["smart_start"].get("auto_entered") is True
+    assert payload["ticket"]["issue_type"] == "defect"
+    assert payload["ticket"]["current_node"]["node_id"] != "issue_type"
+    assert "defect" in payload["smart_start"]["applied_keys"]
     text = _customer_message(payload)
     assert "Red blinking light" not in text
 

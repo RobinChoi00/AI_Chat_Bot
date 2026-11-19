@@ -749,7 +749,23 @@ def classify(text: str) -> SalesIntent:
         return SalesIntent(label=INTENT_STOCK, confidence="high", matched_terms=stock_hits)
     if compare_hits:
         return SalesIntent(label=INTENT_COMPARE, confidence="high", matched_terms=compare_hits)
-    if specs_hits and _DIRECT_SPEC_QUESTION_RE.search(raw) and not body_fit_hits:
+    # Real fit signals (height/weight/"I'm 6'") — not product-feature words like
+    # "foot rollers", "calf rollers", or "scan my body" on a Does-it-have ask.
+    real_body_fit = bool(
+        body_fit_hits
+        and re.search(
+            r"\b\d\s*(?:'|ft|feet|foot)\s*\d{0,2}|"
+            r"\b\d{2,3}\s*(?:lb|lbs|pound|pounds|kg)\b|"
+            r"\bi(?:\s*am|'m|m)\s+\d+|"
+            r"\bmy\s+(?:height|weight|back|neck|shoulders?|posture)\b|"
+            r"\b(?:tall|petite|short|large|big\s+guy)\b|"
+            r"\b(?:sciatica|scoliosis|posture)\b|"
+            r"\b(?:lower\s+back|hamstring|glute|buttock)s?\b",
+            raw,
+            re.I,
+        )
+    )
+    if specs_hits and _DIRECT_SPEC_QUESTION_RE.search(raw) and not real_body_fit:
         # Fact questions about a named feature beat a weak "which chair" match.
         return SalesIntent(label=INTENT_SPECS, confidence="high", matched_terms=specs_hits)
     if intensity_hits and not recommend_hits and re.search(r"\?|\b(?:can|does|how|what|adjust|settings?)\b", raw, re.I):
@@ -757,7 +773,11 @@ def classify(text: str) -> SalesIntent:
     # Body-fit cues (height/weight/body-part) win over intensity — a customer
     # who shares physical details wants a recommendation, not a lecture on
     # massage strength.
-    if recommend_hits or body_fit_hits:
+    body_fit_for_recommend = body_fit_hits if (
+        real_body_fit
+        or (body_fit_hits and not (specs_hits and _DIRECT_SPEC_QUESTION_RE.search(raw)))
+    ) else ()
+    if recommend_hits or body_fit_for_recommend:
         if looks_like_price_gap(raw):
             return SalesIntent(
                 label=INTENT_DISCOUNT,
@@ -768,7 +788,7 @@ def classify(text: str) -> SalesIntent:
         return SalesIntent(
             label=INTENT_RECOMMEND,
             confidence="high",
-            matched_terms=recommend_hits + body_fit_hits,
+            matched_terms=recommend_hits + body_fit_for_recommend,
         )
     if intensity_hits:
         return SalesIntent(

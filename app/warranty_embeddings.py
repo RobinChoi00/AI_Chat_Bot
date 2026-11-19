@@ -327,13 +327,11 @@ def warmup_semantic_index() -> Optional[threading.Thread]:
     to keep startup free of embedding requests.
     """
     global _warmup_thread
+    # Opt-in only: WARRANTY_EMBEDDING_WARMUP=1. Unset/0 keeps request threads
+    # free of background embedding work (matches module design contract).
     warmup_flag = os.getenv("WARRANTY_EMBEDDING_WARMUP", "").strip().lower()
-    if warmup_flag in {"0", "false", "off", "no"}:
-        return None
     if warmup_flag not in {"1", "true", "on", "yes"}:
-        # Unset → warm only when credentials exist so production indexes fill.
-        if _openai_client() is None:
-            return None
+        return None
     if os.getenv("WARRANTY_SEMANTIC_SEARCH", "1") != "1":
         return None
     with _lock:

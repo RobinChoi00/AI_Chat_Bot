@@ -979,14 +979,13 @@ def test_smart_start_sets_model_from_hint(client, monkeypatch):
     data = resp.json()
     assert data["ticket"]["model_name"] == "OS-4000T"
     assert data["smart_start"]["model_name_hint"] == "OS-4000T"
-    # Free-text must not deep-jump; only open warranty and ask for confirmation.
-    assert data["smart_start"]["applied_keys"] == ["warranty"]
-    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
-    assert not data["ticket"].get("issue_type")
+    # Answer-first: clear model + defect symptom auto-enters the branch.
     assert data["smart_start"]["suggested_issue_type"] == "defect"
-    confirm = data["smart_start"]["routing_confirmation"]
-    assert confirm["requires_confirmation"] is True
-    assert "tap" in confirm["message"].lower()
+    assert data["smart_start"].get("auto_entered") is True
+    assert data["ticket"]["issue_type"] == "defect"
+    assert data["ticket"]["current_node"]["node_id"] != "issue_type"
+    assert "warranty" in data["smart_start"]["applied_keys"]
+    assert "defect" in data["smart_start"]["applied_keys"]
 
 
 def test_smart_start_model_only_stays_on_issue_type(client, monkeypatch):

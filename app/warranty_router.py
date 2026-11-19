@@ -1129,6 +1129,55 @@ def _quick_start_ticket(
     return payload
 
 
+def _answer_first_apply_component(
+    engine,
+    session_id: str,
+    payload: Dict[str, Any],
+    *,
+    message: str,
+    answer_keys: list[str],
+) -> Dict[str, Any]:
+    """Advance one clear component/symptom step after issue-type auto-enter."""
+    ticket_id = str(((payload.get("ticket") or {}).get("ticket_id")) or "")
+    if not ticket_id:
+        return payload
+    from warranty_nlp import interpret_warranty_answer  # noqa: WPS433
+
+    # Prefer keys already extracted from intake, then NLP on the free text.
+    component_keys = [
+        k
+        for k in answer_keys
+        if k not in {"warranty", "installation", "delivery", "defect"}
+    ]
+    for _ in range(2):
+        node = engine.get_current_node(ticket_id)
+        if not node or not node.get("options"):
+            break
+        valid = {
+            str(opt.get("answer_key") or "")
+            for opt in node.get("options") or []
+            if str(opt.get("answer_key") or "")
+        }
+        mapped = next((k for k in component_keys if k in valid), None)
+        if not mapped:
+            mapped = interpret_warranty_answer(node, message)
+        if not mapped or mapped not in valid:
+            break
+        try:
+            engine.submit_answer(ticket_id, mapped, customer_display=message)
+        except ValueError:
+            break
+        component_keys = [k for k in component_keys if k != mapped]
+
+    ticket = engine.get_ticket(ticket_id)
+    node = engine.get_current_node(ticket_id)
+    updated = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    for key in ("delivery_lookup_required", "assistant_message"):
+        if key in payload:
+            updated[key] = payload[key]
+    return updated
+
+
 def _natural_delivery_start(engine, session_id: str, message: str, domain: str) -> Dict[str, Any]:
     """Open a delivery case from free text, using whatever the first message already says."""
     from delivery_intake import delivery_identity_parts, map_delivery_free_text, tracking_number_in  # noqa: WPS433
@@ -1471,13 +1520,11 @@ def _clarification_response(engine, ticket_id: str, answer: str, clarify: str) -
         row.set_collected("clarification_node", node_id)
         row.set_collected("clarification_count", count)
         session_id, domain = str(row.session_id), str(row.domain or DEFAULT_WARRANTY_DOMAIN)
-    if count >= 3:
+    # Answer-first: one clarify is enough. A second miss on the same node
+    # becomes an honest handoff instead of another option-mismatch loop.
+    if count >= 2:
         return _request_human_handoff(engine, session_id, answer, domain, reason="clarification_loop")
-    if count >= 2:
-        clarify += "\n\nIf these choices don't describe your problem, choose **Ask for a person** or type **human**. Your case context will be kept."
     payload = _build_side_question_response(engine, ticket_id, clarify, customer_text=answer)
-    if count >= 2:
-        payload["handoff"] = {"requested": False, "offered": True, "notification_sent": False}
     return payload
 
 
@@ -3119,16 +3166,15 @@ async def smart_start_warranty(
     body: WarrantySmartStartRequest,
 ):
     """
-    Multi-step free-text intake.
+    Multi-step free-text intake (answer-first).
 
-    LLM reads the customer's one-line description and may *suggest* an issue
-    type. We only auto-submit ``warranty`` (open the menu). Deep flowchart
-    keys are never applied until the customer taps a confirmed option.
+    When keyword/fonz intake is high-confidence, auto-enter the issue branch
+    and apply a clear component key so the customer is not re-asked the area
+    menu. Low-confidence or ambiguous text still opens the issue-type menu.
 
     Behavior:
-      - On failure / low confidence: advances only to the issue-type menu (never
-        silently defaults to defect).
-      - Deep answer_keys stay in ``skipped_keys`` until the customer confirms.
+      - Clear defect/install/delivery text + registered model → auto_routed.
+      - Delivery status language opens the order+email lookup panel first.
       - Returns the same ticket-state payload as other warranty endpoints, plus
         `smart_start` metadata explaining what was inferred.
     """
@@ -3175,8 +3221,9 @@ async def smart_start_warranty(
     extraction = extract_workflow_prefill(free_text=message, nodes=_NODES)
     answer_keys: list[str] = list(extraction.get("answer_keys") or [])
 
-    # Intent safety: never auto-walk deep flowchart paths from free text.
-    # Only open the warranty menu; ask the customer to confirm issue type.
+    # Answer-first: when free text clearly names the branch, prefer that over
+    # parking on the issue-type menu. Deep keys still require high-confidence
+    # keyword/fonz intake (not a low-confidence LLM guess).
     suggested_issue_type: Optional[str] = None
     for key in answer_keys:
         if key in ("installation", "delivery", "defect"):
@@ -3194,10 +3241,18 @@ async def smart_start_warranty(
         or suggested_issue_type == "delivery"
         or "delivery" in answer_keys
     ) and _should_start_verified_delivery(message):
-        return _quick_start_ticket(engine, session_id, "delivery", body.domain)
+        return _natural_delivery_start(engine, session_id, message, body.domain)
 
+    confident_intake = (
+        str(extraction.get("source") or "") in {"keyword", "fonz"}
+        and str(extraction.get("confidence") or "") == "high"
+        and bool(answer_keys)
+    )
     safe_keys: list[str] = []
-    if answer_keys:
+    if confident_intake:
+        # Apply warranty → issue → clear component when keyword path is sure.
+        safe_keys = [k for k in answer_keys if k]
+    elif answer_keys:
         safe_keys = ["warranty"]
 
     apply_result: dict[str, Any] = {
@@ -3213,10 +3268,11 @@ async def smart_start_warranty(
             nodes=_NODES,
             answer_keys=safe_keys,
         )
-        # Preserve what the model suggested but did not auto-apply.
-        skipped_deep = [k for k in answer_keys if k not in safe_keys]
-        apply_result["skipped"] = list(apply_result.get("skipped") or []) + skipped_deep
-        if skipped_deep:
+        skipped_deep = [k for k in answer_keys if k not in (apply_result.get("applied") or [])]
+        apply_result["skipped"] = list(apply_result.get("skipped") or []) + [
+            k for k in skipped_deep if k not in (apply_result.get("skipped") or [])
+        ]
+        if skipped_deep and not confident_intake:
             apply_result["stopped_reason"] = "awaiting_intent_confirmation"
 
     from warranty_intake_context import is_valid_model_input, normalize_model_input  # noqa: WPS433
@@ -3267,21 +3323,44 @@ async def smart_start_warranty(
 
     ticket = engine.get_ticket(ticket_id)
     registered_model = str(getattr(ticket, "model_name", "") or "").strip() if ticket else ""
-    can_auto_enter = (
-        suggested_issue_type == "delivery"
-        or (bool(registered_model) and is_valid_model_input(registered_model) and not needs_model_confirmation(ticket))
+    # Delivery never needs a model. Defect/install auto-enter when the model is
+    # already on the ticket — even before the customer taps "yes, that's my
+    # model" — so a clear symptom does not get stuck on the area menu.
+    can_auto_enter = suggested_issue_type == "delivery" or (
+        bool(registered_model) and is_valid_model_input(registered_model)
+    )
+    already_past_issue = (
+        ticket is not None
+        and suggested_issue_type
+        and str(getattr(ticket, "issue_type", "") or "") == suggested_issue_type
+        and str((engine.get_current_node(ticket_id) or {}).get("node_id") or "") != "issue_type"
     )
     if (
         suggested_issue_type in ("installation", "delivery", "defect")
         and ticket is not None
         and can_auto_enter
+        and not already_past_issue
     ):
         # Clear free-text already named the area — enter it without a second tap.
-        payload = _quick_start_ticket(engine, session_id, suggested_issue_type, body.domain)
+        if suggested_issue_type == "delivery":
+            payload = _natural_delivery_start(engine, session_id, message, body.domain)
+        else:
+            payload = _quick_start_ticket(engine, session_id, suggested_issue_type, body.domain)
+            payload = _answer_first_apply_component(
+                engine,
+                session_id,
+                payload,
+                message=message,
+                answer_keys=answer_keys,
+            )
+        applied_now = list(applied_keys_list)
+        if suggested_issue_type not in applied_now:
+            applied_now.append(suggested_issue_type)
+        ticket = engine.get_ticket(ticket_id)
         payload["smart_start"] = {
             "source": extraction.get("source", "empty"),
             "summary": extraction.get("summary", ""),
-            "applied_keys": list(applied_keys_list) + [suggested_issue_type],
+            "applied_keys": applied_now,
             "skipped_keys": [],
             "stopped_reason": "auto_routed",
             "model_name_hint": extraction.get("model_name", ""),
@@ -3289,6 +3368,42 @@ async def smart_start_warranty(
             "suggested_issue_type": suggested_issue_type,
             "auto_entered": True,
         }
+        if ticket and needs_model_confirmation(ticket):
+            model_display = str(ticket.model_name or model_hint or "").strip()
+            payload["model_confirmation"] = {
+                "model_name": model_display,
+                "message": build_model_confirmation_message(model_display),
+            }
+        return payload
+
+    if already_past_issue:
+        ticket = engine.get_ticket(ticket_id)
+        node = engine.get_current_node(ticket_id)
+        payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+        payload = _answer_first_apply_component(
+            engine,
+            session_id,
+            payload,
+            message=message,
+            answer_keys=answer_keys,
+        )
+        payload["smart_start"] = {
+            "source": extraction.get("source", "empty"),
+            "summary": extraction.get("summary", ""),
+            "applied_keys": list(applied_keys_list),
+            "skipped_keys": [],
+            "stopped_reason": "auto_routed",
+            "model_name_hint": extraction.get("model_name", ""),
+            "routing_confirmation": None,
+            "suggested_issue_type": suggested_issue_type,
+            "auto_entered": True,
+        }
+        if ticket and needs_model_confirmation(ticket):
+            model_display = str(ticket.model_name or model_hint or "").strip()
+            payload["model_confirmation"] = {
+                "model_name": model_display,
+                "message": build_model_confirmation_message(model_display),
+            }
         return payload
 
     node = engine.get_current_node(ticket_id)

@@ -274,6 +274,42 @@ def _should_handle_side_question(node: dict, text: str) -> bool:
     return _looks_like_faq_question(text)
 
 
+_GUIDE_STOPWORDS = frozenset(
+    {
+        "the", "a", "an", "and", "or", "to", "of", "for", "on", "in", "at", "is",
+        "are", "do", "does", "how", "can", "i", "my", "me", "you", "your", "with",
+        "this", "that", "it", "chair", "please", "help", "about", "from",
+    }
+)
+
+
+def _guide_tokens(text: str) -> set[str]:
+    return {
+        tok
+        for tok in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(tok) >= 3 and tok not in _GUIDE_STOPWORDS
+    }
+
+
+def _tips_match_question(query_text: str, tips: Sequence[str]) -> bool:
+    """Require tip text to share meaningful tokens with the asked question."""
+    query_tokens = _guide_tokens(query_text)
+    if not query_tokens or not tips:
+        return False
+    tip_tokens = set()
+    for tip in tips:
+        tip_tokens |= _guide_tokens(tip)
+    # At least two overlapping content tokens, or one strong multi-word cue.
+    overlap = query_tokens & tip_tokens
+    if len(overlap) >= 2:
+        return True
+    strong = {
+        "autocheck", "auto", "check", "bluetooth", "watt", "watts", "diagram",
+        "hose", "airbag", "roller", "rollers", "mechanism", "remote", "heater",
+    }
+    return bool(overlap & strong) and len(overlap) >= 1
+
+
 def _format_knowledge_side_answer(
     *,
     node: dict,
@@ -313,6 +349,9 @@ def _format_knowledge_side_answer(
     tips = _pick_step_tips(matches, fallback)
 
     if not matches and not tips:
+        return None
+    # Do not paste an unrelated published check (e.g. air hose for auto-check).
+    if not _tips_match_question(query_text, tips):
         return None
 
     model_display = (model_name or "your chair").strip()

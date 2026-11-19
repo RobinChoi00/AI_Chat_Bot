@@ -176,15 +176,13 @@ def test_incomplete_or_future_warmup_does_not_skip_confirmation(client, report):
     assert payload["ticket"]["current_node"]["node_id"] == "defect_heating_warmup_q"
 
 
-def test_three_natural_confusion_phrases_escape_side_question_loop(client):
+def test_two_natural_confusion_phrases_escape_option_mismatch_loop(client):
     session, ticket = setup(client)
     client.post(f"/api/v1/warranty/session/{session}/quick-start", json={"issue_type": "defect"})
     first = answer(client, ticket, "It just feels odd somehow.")
     assert not (first.get("handoff") or {}).get("requested")
     second = answer(client, ticket, "I really cannot tell which of those fits.")
-    assert second["handoff"]["offered"] is True
-    third = answer(client, ticket, "None of those options makes sense to me.")
-    assert third["handoff"]["reason"] == "clarification_loop"
+    assert second["handoff"]["reason"] == "clarification_loop"
 
 
 def test_real_spec_side_questions_do_not_increment_confusion(client, monkeypatch):
