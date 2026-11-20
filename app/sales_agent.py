@@ -1006,7 +1006,7 @@ def _stock_reply(
         title=product.title or product.display_name,
     )
     tools = ["catalog.resolve_product"]
-    color = parse_asked_color(message)
+    color = parse_asked_color(re.sub(r"\bwhite[\s-]+glove\b", " ", message or "", flags=re.I))
     if color:
         exact_handles = {product.handle, product.handle.removesuffix('-massage-chair'), product.handle.removesuffix('-massage-chairs')}
         def title_key(value):

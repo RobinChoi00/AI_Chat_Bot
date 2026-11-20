@@ -25,6 +25,14 @@ def test_black_duke_stock_and_delivery_time_are_answered_not_mechanism(monkeypat
     assert '2 weeks' not in r.reply and '3 weeks' not in r.reply and 'along the X' not in r.reply
 
 
+def test_white_glove_lead_time_is_not_mistaken_for_a_white_chair(monkeypatch):
+    monkeypatch.setattr(agent, 'fetch_live_stock', lambda *_a, **_k: LiveStockSnapshot(
+        'osaki-duke-xl-4d', 'Duke XL 4D', 'active', True, 5, 'shopify'))
+    r = agent.respond('Is Duke XL 4D in stock, and what is the White Glove lead time?')
+    assert r.intent == 'stock' and 'available to buy' in r.reply and 'confirmed lead time' in r.reply
+    assert 'in **White**' not in r.reply
+
+
 def test_vivant_settings_helps_owner_without_claiming_a_verified_tutorial():
     r = agent.respond('I bought an Osaki Pro Vivant 5D. Where is a tutorial video for the settings?')
     assert 'touchscreen' in r.reply and 'User Manual' in r.reply and 'otasupport.com' in r.reply
