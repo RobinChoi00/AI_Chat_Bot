@@ -207,6 +207,42 @@ _ISSUE = re.compile(
 )
 
 
+def _explicit_context_model(text: str) -> Optional[ProductSpecs]:
+    """A fuzzy catalog hit alone cannot replace a saved conversation model."""
+    from catalog_identity import generation_normalized
+    from sales_agent import _guess_model_from_text
+    from sales_intent_fallback import named_model_in_text
+
+    # A live catalog may contain a model called One (or another ordinary
+    # word). Remove complete referential phrases, not the name inside an
+    # explicit statement like "the broken chair is actually Osaki One 4D".
+    source = _OLD_CHAIR.sub(' ', _NEW_CHAIR.sub(' ', (text or '').replace('’', "'")))
+    product = _guess_model_from_text(source)
+    if product is None:
+        return None
+
+    def words(value: str) -> list[str]:
+        return re.findall(r'[a-z0-9]+(?:\.\d+)?', generation_normalized(value).casefold())
+
+    haystack = ' ' + ' '.join(words(source)) + ' '
+    for name in (product.display_name, product.title, product.handle):
+        terms = words(re.sub(r'\([^)]*\)', ' ', name))
+        if len(terms) >= 2 and ' ' + ' '.join(terms) + ' ' in haystack:
+            return product
+        if terms and terms[0] in {'osaki', 'titan', 'amamedic', 'kanji'}:
+            terms = terms[1:]
+        # A brandless single common name is not sufficient, but the exact
+        # designation "One 4D" (or "TP Epic") is deliberate.
+        if len(terms) >= 2 and ' ' + ' '.join(terms) + ' ' in haystack:
+            return product
+    nickname = named_model_in_text(source)
+    if nickname:
+        named = _guess_model_from_text(nickname)
+        if named is not None and named.handle == product.handle:
+            return product
+    return None
+
+
 def _purchase_in(text: str) -> bool:
     return any(not _NEGATED_PURCHASE.search(text[:match.start()]) and not re.match(
         r"\s+(?:(?:an?|the)\s+)?(?:replacement\s+)?(?:remotes?|upholstery|controllers?|"
@@ -229,7 +265,6 @@ def prospective_repair_question(message: str) -> bool:
 
 def owner_task_clauses(message: str, data: dict) -> tuple[list[str], list[str]]:
     """Split genuinely independent tasks before reading models or fit limits."""
-    from sales_agent import _guess_model_from_text
     from sales_policy import reports_owned_chair_problem
 
     raw = (message or '').replace('’', "'")
@@ -241,7 +276,7 @@ def owner_task_clauses(message: str, data: dict) -> tuple[list[str], list[str]]:
                 and not _NEGATED_REPAIR.search(piece) and not _OLD_CHAIR.search(piece)]
     owned_model_fault = any(
         re.search(r"\b(?:my|our)\b", piece, re.I) and not re.search(r"\b(?:if|would|might|could)\b", piece, re.I)
-        and _guess_model_from_text(piece) is not None for piece in repair
+        and _explicit_context_model(piece) is not None for piece in repair
     )
     owner_evidence = data.get('owner_service_case') or owned_model_fault or any(reports_owned_chair_problem(piece) for piece in repair) or _OLD_CHAIR.search(raw) or re.search(
         r"\b(?:already\s+own|my\s+(?:chair|model)|(?:stopped|is\s+not)\s+working|needs?\s+(?:a\s+)?repair)\b", raw, re.I)
@@ -265,12 +300,11 @@ def _repair_clauses(message: str) -> list[str]:
 
 def owner_case_patch(message: str, data: dict, *, clauses: Optional[list[str]] = None) -> dict:
     """Remember only the existing chair; a model switch never inherits its symptom."""
-    from sales_agent import _guess_model_from_text
     from sales_policy import reports_owned_chair_problem
     case = dict(data.get('owner_service_case') or {})
     pieces = _repair_clauses(message) if clauses is None else clauses
     product = next((found for piece in pieces if not _purchase_in(piece)
-                    and (found := _guess_model_from_text(piece)) is not None), None)
+                    and (found := _explicit_context_model(piece)) is not None), None)
     # Service still accepts retired models that no longer appear in the
     # storefront. Retain a single explicit model code as stated, not a fuzzy
     # match to another generation (e.g. OS-4000T is not OS-4000XT).
@@ -295,7 +329,7 @@ def owner_case_patch(message: str, data: dict, *, clauses: Optional[list[str]] =
             # known component with "chair is broken" or its full model name.
             if case.get('issue') and re.fullmatch(r"(?:current\s+|old\s+|broken\s+|new\s+)?(?:chair|model|one)", part, re.I):
                 continue
-            if product is not None and _guess_model_from_text(part) is not None:
+            if product is not None and _explicit_context_model(part) is not None:
                 continue
             case['issue'] = description[:80]
             break
@@ -330,7 +364,7 @@ def owner_purchase_question(message: str, data: dict) -> Optional[str]:
         # A customer correcting the route explicitly is opting out of the
         # old task, not asking us to restate or reopen it.
         raw = ' '.join(piece for piece in _TASK_BREAK.split(raw) if not _NEGATED_REPAIR.search(piece))
-    if _OLD_CHAIR.search(raw) or _REPAIR.search(raw) or _guess_model_from_text(raw) is not None:
+    if _OLD_CHAIR.search(raw) or _REPAIR.search(raw) or _explicit_context_model(raw) is not None:
         return None
     # Do not reinterpret delivery terms, service fees or refunds as a
     # product-price follow-up merely because a new chair was mentioned.
@@ -367,8 +401,8 @@ def owner_purchase_model_patch(message: str, data: dict, result) -> dict:
     if (not data.get('owner_service_case') or 'conversation.dual_task' in result.tools_used
             or result.intent not in {'specs', 'price', 'stock', 'recommend'} or _OLD_CHAIR.search(message or '')):
         return {}
-    named = _guess_model_from_text(message)
-    if named is None and not data.get('owner_purchase_model') and result.products:
+    named = _explicit_context_model(message)
+    if named is None and not data.get('owner_purchase_model') and result.intent == 'recommend' and result.products:
         named = _guess_model_from_text(str((result.prefs_patch or {}).get('pending_primary') or ''))
     if named is None:
         return {}
@@ -388,7 +422,7 @@ def dual_task_reply(message: str, data: dict):
     repair_model = case.get('model')
     explicit_purchase = next((found for piece in shopping if not _OLD_CHAIR.search(piece)
                               and not (_REPAIR.search(piece) and _SEPARATE.search(piece))
-                              and (found := _guess_model_from_text(piece)) is not None), None)
+                              and (found := _explicit_context_model(piece)) is not None), None)
     saved_purchase = _guess_model_from_text(str(data.get('owner_purchase_model') or ''))
     fallback = _guess_model_from_text(str(data.get('pending_primary') or ''))
     if re.search(r"\b(?:buy|purchase|another)\b.{0,50}\b(?:same|identical)\s+(?:chair|model|one)\b", raw, re.I):

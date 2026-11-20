@@ -1,6 +1,8 @@
 """Context isolation cases through the actual Sales router, with no providers."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from script.quality_v4_product import SalesLog
@@ -90,3 +92,35 @@ def test_hypothetical_service_for_new_chair_does_not_reopen_actual_repair(conver
     assert 'ext. 3' in reply['reply'] and 'osakiusa.com/pages/warranty' in reply['reply']
     assert not reply['handoff'] and 'Titan TP-Epic 4D' not in reply['reply']
     assert conversation.saved['owner_service_case']['model'] == 'Titan TP-Epic 4D'
+
+
+def test_loaded_catalog_product_cannot_capture_generic_old_or_new_one(conversation, monkeypatch):
+    import sales_catalog
+    from sales_agent import _guess_model_from_text
+
+    old_ref = "Going back to the one that's broken, how do I get technical support for the old chair?"
+    new_ref = 'And for the new one, how wide should the doorway be?'
+    products = sales_catalog.load_product_index()
+    base = sales_catalog.resolve_product('Osaki OS-Champ')
+    assert base
+    # Unlike the tracked fixture, the live catalog has a product whose
+    # distinctive name is an ordinary pronoun after dropping brand/mechanism.
+    one = replace(base, handle='osaki-one-4d', title='Osaki One 4D', display_name='Osaki One 4D')
+    monkeypatch.setattr(sales_catalog, 'load_product_index', lambda: (one, *products))
+    assert _guess_model_from_text(old_ref) == one
+    assert _guess_model_from_text(new_ref) == one
+
+    _start_mixed(conversation)
+    repair = conversation.say(old_ref)
+    assert repair['intent'] == 'warranty_redirect'
+    assert 'Titan TP-Epic 4D' in repair['reply'] and 'Osaki One 4D' not in repair['reply']
+    assert conversation.saved['owner_service_case']['model'] == 'Titan TP-Epic 4D'
+
+    purchase = conversation.say(new_ref)
+    assert purchase['intent'] == 'specs'
+    assert 'Osaki OS-Champ' in purchase['reply'] and 'Osaki One 4D' not in purchase['reply']
+    assert conversation.saved['owner_purchase_model'] == 'osaki-os-champ'
+
+    explicit = conversation.say('Correction: the broken chair is actually an Osaki One 4D.')
+    assert explicit['intent'] == 'warranty_redirect' and 'Osaki One 4D' in explicit['reply']
+    assert conversation.saved['owner_service_case']['model'] == 'Osaki One 4D'
