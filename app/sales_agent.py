@@ -4930,7 +4930,8 @@ def _respond_turn(
     # Order support and delivery evidence must not be mistaken for a form
     # answer, a recommendation, or a technical fault inferred from ownership.
     if not payload and not before_handoff:
-        from sales_followups import ambiguous_owner_cost_reply, dual_task_reply, is_owner_repair_followup
+        from sales_followups import (ambiguous_owner_cost_reply, dual_task_reply, is_owner_repair_followup,
+                                     prospective_repair_question)
         from sales_order_support import maybe_sales_support_reply
 
         dual = dual_task_reply(message, prefs or {})
@@ -4940,6 +4941,13 @@ def _respond_turn(
         support = maybe_sales_support_reply(message, prefs, domain=domain)
         if support is not None:
             return _finalize_flow_stage(support)
+
+        if prospective_repair_question(message):
+            from sales_policy import TOPIC_TECHNICAL_SERVICE
+
+            policy = detect_policy_topic(message) or TOPIC_TECHNICAL_SERVICE
+            return _remember_question(_finalize_flow_stage(
+                _prepurchase_policy_reply(message, domain=domain, topic=policy)), message, payload)
 
         if is_owner_repair_followup(message, prefs or {}):
             return _remember_question(_finalize_flow_stage(

@@ -196,6 +196,11 @@ _CORRECT_MODEL = re.compile(
     r"\b(?:correction|i\s+meant|actually|correct\s+model|not\s+the)\b", re.I,
 )
 _OLDER_STATED_CODE = re.compile(r"\b(OS|TP)[\s-]?(\d{3,5}[A-Za-z]{0,3})\b", re.I)
+_FUTURE_CHAIR = re.compile(r"\b(?:next|future|prospective|new)\s+(?:chair|model|one)\b", re.I)
+_CONDITIONAL_FAULT = re.compile(
+    r"\b(?:if|in\s+case)\b[^.!?;]{0,90}\b(?:breaks?|fails?|stops?\s+working|needs?\s+(?:a\s+)?repairs?|"
+    r"(?:is|becomes?)\s+(?:broken|defective|faulty))\b", re.I,
+)
 _ISSUE = re.compile(
     r"\b(?:its|the|my|our)\s+((?:[\w'’-]+\s+){0,4}?[\w'’-]+)\s+(stopped\s+working|(?:is|are)\s+(?:broken|not\s+working)|"
     r"(?:doesn't|don't|won't)\s+work)\b", re.I,
@@ -210,6 +215,18 @@ def _purchase_in(text: str) -> bool:
     ) for match in _PURCHASE.finditer(text))
 
 
+def prospective_repair_question(message: str) -> bool:
+    """A hypothetical problem with an unpurchased chair is a policy question."""
+    raw = (message or '').replace('’', "'")
+    if not (_purchase_in(raw) or _FUTURE_CHAIR.search(raw)) or _OLD_CHAIR.search(raw):
+        return False
+    pieces = _TASK_BREAK.split(raw)
+    return any(_CONDITIONAL_FAULT.search(piece) for piece in pieces) and not any(
+        _REPAIR.search(piece) and not _NEGATED_REPAIR.search(piece) and not _CONDITIONAL_FAULT.search(piece)
+        and not _purchase_in(piece) for piece in pieces
+    )
+
+
 def owner_task_clauses(message: str, data: dict) -> tuple[list[str], list[str]]:
     """Split genuinely independent tasks before reading models or fit limits."""
     from sales_agent import _guess_model_from_text
@@ -218,7 +235,8 @@ def owner_task_clauses(message: str, data: dict) -> tuple[list[str], list[str]]:
     raw = (message or '').replace('’', "'")
     pieces = [piece.strip(' ,;') for piece in _TASK_BREAK.split(raw) if piece.strip(' ,;')]
     repair = [piece for piece in pieces if (_REPAIR.search(piece) or _OLD_CHAIR.search(piece))
-              and not _NEGATED_REPAIR.search(piece) and not _purchase_in(piece)]
+              and not _NEGATED_REPAIR.search(piece) and not _purchase_in(piece)
+              and (not _CONDITIONAL_FAULT.search(piece) or _OLD_CHAIR.search(piece))]
     shopping = [piece for piece in pieces if _purchase_in(piece)
                 and not _NEGATED_REPAIR.search(piece) and not _OLD_CHAIR.search(piece)]
     owned_model_fault = any(
@@ -290,7 +308,7 @@ def is_owner_repair_followup(message: str, data: dict) -> bool:
     """Recognize a return to a known repair, not a new recommendation or order."""
     raw = (message or '').replace('’', "'")
     case = data.get('owner_service_case') or {}
-    if not case or _purchase_in(raw):
+    if not case or _purchase_in(raw) or prospective_repair_question(raw):
         return False
     explicit = bool(_OLD_CHAIR.search(raw) or re.search(r"\b(?:the|my|our)\s+(?:repair|service\s+(?:case|request))\b", raw, re.I))
     correction = bool(_CORRECT_MODEL.search(raw) and _OLD_CHAIR.search(raw))

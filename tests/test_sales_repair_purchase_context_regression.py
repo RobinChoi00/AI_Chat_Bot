@@ -75,3 +75,18 @@ def test_older_repair_model_correction_does_not_inherit_old_component(conversati
     assert correction['intent'] == 'warranty_redirect', correction['reply']
     assert '**Osaki OS-4000T**' in correction['reply']
     assert 'OS-4000XT' not in correction['reply'] and 'foot rollers' not in correction['reply']
+
+
+@pytest.mark.parametrize('question', [
+    'I want to buy an Osaki OS-Champ. If the new one breaks, who repairs it?',
+    'I am looking to buy a new Osaki OS-Champ. Who should I call if it needs a repair?',
+    'If my next chair breaks, can I get technical support?',
+])
+def test_hypothetical_service_for_new_chair_does_not_reopen_actual_repair(conversation, question):
+    initial = conversation.say('I own a Titan TP-Epic 4D and its foot rollers stopped working.')
+    assert initial['intent'] == 'warranty_redirect'
+    reply = conversation.say(question)
+    assert reply['intent'] == 'prepurchase_policy', reply['reply']
+    assert 'ext. 3' in reply['reply'] and 'osakiusa.com/pages/warranty' in reply['reply']
+    assert not reply['handoff'] and 'Titan TP-Epic 4D' not in reply['reply']
+    assert conversation.saved['owner_service_case']['model'] == 'Titan TP-Epic 4D'
