@@ -129,11 +129,13 @@ _REPORTED_PART_FAULT_RE = re.compile(
 
 def reports_product_fault(text: str) -> bool:
     """Recognize a reported part failure before color and feature matching."""
+    from sales_policy import is_prospective_clause_before
+
     raw = (text or "").replace("’", "'")
     for match in _REPORTED_PART_FAULT_RE.finditer(raw):
         # A hypothetical failure is a feature/coverage question, not a report
         # that this customer's chair has stopped working.
-        if re.search(r"\b(?:what\s+if|if|in\s+case)\s+(?:(?:the|my|a)\s+)?$", raw[:match.start()], re.I):
+        if is_prospective_clause_before(raw, match.start()):
             continue
         return True
     return False
@@ -156,6 +158,11 @@ _WARRANTY_REDIRECT_RE = re.compile(
     r"보증|워런티|고장|수리|불량"
     r")\b",
     re.IGNORECASE,
+)
+_NEGATED_FAULT_STATE_RE = re.compile(
+    r"\b(?:(?:is|are|was|were)\s+(?:not|no\s+longer)|isn'?t|aren'?t|wasn'?t|weren'?t)\s+"
+    r"(?:(?:actually|really|currently)\s+)?(?:broken|faulty|defective|stuck|dead)\b",
+    re.I,
 )
 
 # --- Parts / technician (post-purchase service; must route to warranty team) ---
@@ -569,7 +576,7 @@ def classify(text: str) -> SalesIntent:
     if not raw:
         return SalesIntent(label=INTENT_UNCLEAR, confidence="none")
 
-    from sales_policy import is_post_purchase
+    from sales_policy import is_post_purchase, reports_owned_chair_problem
 
     if (
         is_post_purchase(raw)
@@ -663,13 +670,15 @@ def classify(text: str) -> SalesIntent:
         )
 
     # 3) Warranty / defect / already-purchased problems → warranty chat.
-    hits = _requested_matches(_WARRANTY_REDIRECT_RE, raw)
-    if hits:
+    # Neither "my chair is" nor "broken" on either end of a negated fault
+    # description should override an otherwise unrelated shopping question.
+    hits = _requested_matches(_WARRANTY_REDIRECT_RE, _NEGATED_FAULT_STATE_RE.sub(" ", raw))
+    if hits or reports_owned_chair_problem(raw):
         return SalesIntent(
             label=INTENT_WARRANTY_REDIRECT,
             confidence="high",
             handoff=True,
-            matched_terms=hits,
+            matched_terms=hits or ("owner_service_request",),
         )
 
     # 4) Discount / promo / competitor price-gap → specialist. Never treat

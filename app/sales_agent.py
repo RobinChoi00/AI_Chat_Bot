@@ -103,6 +103,7 @@ from sales_intent import (
     INTENT_SPECS,
     INTENT_STOCK,
     INTENT_UNCLEAR,
+    INTENT_WARRANTY_REDIRECT,
     HANDOFF_INTENTS,
     SalesIntent,
     classify,
@@ -3813,6 +3814,9 @@ def _resume_reset_reply() -> SalesReply:
             "pending_product_url": "",
             "pending_pick_summary": "",
             "pending_tier_picks": [],
+            "owner_service_case": None,
+            "owner_case_acknowledged": False,
+            "owner_purchase_model": "",
             "visitor_memory_hydrated": False,
             "awaiting_compare_pick": "",
             "pending_compare_pair": [],
@@ -4846,7 +4850,7 @@ def _answer_specific_shopper_request(message: str, prefs: Optional[dict], *, dom
                           quick_replies=[QuickReply(label='Talk to a human', payload='human')])
 
     topic = detect_policy_topic(message)
-    if topic in {TOPIC_LEASE, TOPIC_TECHNICAL_SERVICE} or (topic == TOPIC_SHOWROOM and local_dealer_requested(message)):
+    if topic == TOPIC_LEASE or (topic == TOPIC_TECHNICAL_SERVICE and intent.label != INTENT_WARRANTY_REDIRECT) or (topic == TOPIC_SHOWROOM and local_dealer_requested(message)):
         return _prepurchase_policy_reply(message, domain=domain, topic=topic)
 
     if intent.label in HANDOFF_INTENTS - {'eta_shipping'}:
@@ -4880,6 +4884,29 @@ def _answer_specific_shopper_request(message: str, prefs: Optional[dict], *, dom
     return None
 
 
+def _owner_warranty_reply(message: str, prefs: Optional[dict], intent: Optional[SalesIntent] = None) -> SalesReply:
+    from sales_followups import WARRANTY_EMAIL, WARRANTY_PHONE, WARRANTY_PORTAL, owner_case_patch
+
+    data = prefs or {}
+    reply = _handoff_reply(intent or SalesIntent(INTENT_WARRANTY_REDIRECT, confidence='high', handoff=True))
+    patch = owner_case_patch(message, data)
+    case = patch.get('owner_service_case') or {}
+    model = case.get('model')
+    if model:
+        issue = f" ({case['issue']})" if case.get('issue') else ''
+        reply.reply = (
+            f"For **{model}**{issue}, contact **Warranty** at **{WARRANTY_PHONE}** or **{WARRANTY_EMAIL}**. "
+            f"You can also submit a service request at {WARRANTY_PORTAL}. Have your order number or proof of purchase "
+            "available if you have it. This is a referral: I haven't submitted a service ticket, booked a callback, "
+            "or approved a repair or replacement."
+        )
+        reply.tools_used = ['routing.warranty', 'conversation.owner_service_case']
+        if model != (data.get('owner_service_case') or {}).get('model'):
+            patch['owner_case_acknowledged'] = False
+    reply.prefs_patch = {**(reply.prefs_patch or {}), **patch}
+    return reply
+
+
 def _respond_turn(
     message: str,
     *,
@@ -4903,7 +4930,7 @@ def _respond_turn(
     # Order support and delivery evidence must not be mistaken for a form
     # answer, a recommendation, or a technical fault inferred from ownership.
     if not payload and not before_handoff:
-        from sales_followups import dual_task_reply
+        from sales_followups import ambiguous_owner_cost_reply, dual_task_reply, is_owner_repair_followup
         from sales_order_support import maybe_sales_support_reply
 
         dual = dual_task_reply(message, prefs or {})
@@ -4913,6 +4940,14 @@ def _respond_turn(
         support = maybe_sales_support_reply(message, prefs, domain=domain)
         if support is not None:
             return _finalize_flow_stage(support)
+
+        if is_owner_repair_followup(message, prefs or {}):
+            return _remember_question(_finalize_flow_stage(
+                _owner_warranty_reply(message, prefs)), message, payload)
+
+        clarification = ambiguous_owner_cost_reply(message, prefs or {})
+        if clarification is not None:
+            return _remember_question(_finalize_flow_stage(clarification), message, payload)
 
     if not payload and message.strip():
         specific = _answer_specific_shopper_request(message, prefs, domain=domain)
@@ -5116,10 +5151,8 @@ def _respond_turn(
             return _remember_question(_finalize_flow_stage(followup), message, payload)
 
     if intent.label in HANDOFF_INTENTS:
-        reply = _handoff_reply(intent)
-        if intent.label == 'warranty_redirect':
-            from sales_followups import owner_case_patch
-            reply.prefs_patch = {**(reply.prefs_patch or {}), **owner_case_patch(message, prefs or {})}
+        reply = (_owner_warranty_reply(message, prefs, intent) if intent.label == INTENT_WARRANTY_REDIRECT
+                 else _handoff_reply(intent))
         return _finalize_flow_stage(reply)
 
     if not payload and (prefs or {}).get('recommend_prefs') and not _guess_model_from_text(message) and re.search(
@@ -5408,6 +5441,8 @@ def respond(message: str, *, payload: Optional[str] = None,
             before_handoff: bool = False) -> SalesReply:
     """Resolve task interruptions before collecting pending form answers."""
     from sales_language import currency_scope_message, localize_reply, medical_scope_message, prepare_message
+    from sales_followups import (is_owner_repair_followup, owner_purchase_model_patch,
+                                 owner_purchase_question, owner_task_clauses)
 
     data = dict(prefs or {})
     original = (message or '').strip()
@@ -5430,7 +5465,20 @@ def respond(message: str, *, payload: Optional[str] = None,
     intent = classify(raw) if raw and not payload else None
     menu = (payload or '').lower() in {'menu', 'root', 'start', 'start_over'} or (not payload and bool(re.fullmatch(r'(?:back to )?menu|start over|cancel(?: that)?|never mind|nevermind', raw, re.I)))
     currency_caution = currency_scope_message(original, language) if original and not payload else None
-    captured = _retain_shopper_constraints(raw, data, intent) if raw and not payload and not menu and not currency_caution else {}
+    captured = {}
+    focused_question = None
+    if raw and not payload and not menu and not currency_caution:
+        repair, shopping = owner_task_clauses(raw, data)
+        if repair and shopping:
+            # In a mixed turn, measurements on the existing chair must not
+            # be applied as requirements for the new one.
+            shopping_text = ' '.join(piece for piece in shopping if piece not in repair)
+            if shopping_text:
+                captured = _retain_shopper_constraints(shopping_text, data, classify(shopping_text))
+        elif not is_owner_repair_followup(raw, data):
+            focused_question = owner_purchase_question(raw, data)
+            if focused_question or intent.label not in {INTENT_WARRANTY_REDIRECT, 'parts_technician'}:
+                captured = _retain_shopper_constraints(raw, data, classify(focused_question) if focused_question else intent)
     waiting_form = any(data.get(key) for key in _TRANSIENT_FLOW_KEYS if key != 'awaiting_pre_human_question')
     # A showroom request must look like a day/time. A technical question,
     # cancellation or request for a person is never an appointment window.
@@ -5469,14 +5517,15 @@ def respond(message: str, *, payload: Optional[str] = None,
         result = SalesReply(reply="I haven't resolved your question clearly. A sales specialist can help with the exact model or requirement; please use **Talk to a human** below.", intent=INTENT_HUMAN, handoff=True, handoff_reason='answer_unresolved', quick_replies=[QuickReply(label='Talk to a human', payload='human:confirm')], flow_stage='handoff')
         result = _finalize_flow_stage(result)
     else:
-        result = _respond_turn(raw, payload=payload, domain=domain, prefs=data, before_handoff=before_handoff)
+        result = _respond_turn(focused_question or raw, payload=payload, domain=domain, prefs=data, before_handoff=before_handoff)
     if raw and not payload and result.intent == INTENT_RECOMMEND and 'conversation.dual_task' not in result.tools_used:
         from sales_followups import new_purchase_note
         note = new_purchase_note(raw, data)
         if note:
             result.reply = note + "\n\n" + result.reply
             result.prefs_patch = {**(result.prefs_patch or {}), 'owner_case_acknowledged': True}
-    patch = {**captured, **reset, **(result.prefs_patch or {})}
+    owner_purchase_patch = owner_purchase_model_patch(focused_question or raw, data, result) if raw and not payload and not menu else {}
+    patch = {**captured, **reset, **owner_purchase_patch, **(result.prefs_patch or {})}
     if data.get('last_policy_topic') and result.intent not in {INTENT_PREPURCHASE_POLICY, INTENT_UNCLEAR}:
         patch['last_policy_topic'] = ''
     if data.get('technical_support_topic') and result.intent not in {'warranty_redirect', 'parts_technician', INTENT_UNCLEAR}:

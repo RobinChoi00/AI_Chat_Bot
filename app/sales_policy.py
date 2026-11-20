@@ -37,6 +37,7 @@ What this module deliberately will NOT do
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from typing import Optional
 
 from store_config import get_storefront_base_url
@@ -125,6 +126,16 @@ _TECHNICAL_SERVICE_RE = re.compile(
     r"\b(?:how|who|where)\b[^?!.;]{0,60}\b(?:service|repair)\s+(?:it|the\s+(?:chair|unit))\b",
     re.I,
 )
+_NEGATED_SERVICE_PREFIX_RE = re.compile(
+    r"\b(?:not|never|no|don'?t|doesn'?t|do\s+not|does\s+not)\s+"
+    r"(?:(?:need|want|offer|request|look(?:ing)?|ask(?:ing)?|shop(?:ping)?)\s+(?:for\s+)?)?"
+    r"(?:(?:any|the|a)\s+)?$", re.I,
+)
+_PROSPECTIVE_CLAUSE_RE = re.compile(r"\b(?:if|whether|once|in\s+case|suppose|hypothetically)\b", re.I)
+_EXPLICIT_NEW_PURCHASE_RE = re.compile(
+    r"\b(?:before\s+(?:i|we)\s+(?:buy|purchase|order)|shopping\s+for|"
+    r"(?:(?:a\s+)?(?:second|new)|another)\s+(?:massage\s+)?chair)\b", re.I,
+)
 _LOCAL_DEALER_RE = re.compile(
     r"\b(?:near|nearby|nearest|closest|local|around|(?:my|this)\s+area|zip(?:\s*code)?)\b|"
     r"\b(?:dealers?|retailers?|showrooms?)\s+in\b|"
@@ -159,11 +170,76 @@ _POST_PURCHASE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_CURRENT_CHAIR_EVIDENCE_RE = re.compile(
+    r"\b(?:my|our)\s+(?:existing\s+|current\s+|old\s+)?(?:massage\s+)?(?:chair|unit)\b|"
+    r"\b(?:i|we)(?:\s+already\s+|\s+|['’]ve\s+)(?:have|own|received|bought|purchased)\s+"
+    r"(?:(?:just|already)\s+)?(?:it|(?:this|that|the|a|an|my|our)\s+(?:massage\s+)?(?:chair|unit))\b|"
+    r"\b(?:i|we)(?:['’]ve|\s+have)\s+had\s+(?:it|(?:this|that|the|a|an|my|our)\s+"
+    r"(?:(?:massage\s+)?(?:chair|unit)|osaki|titan))\b|"
+    r"\b(?:chair|unit|it)\s+(?:is|was)\s+(?:already\s+)?(?:in|at)\s+"
+    r"(?:(?:my|our)\s+(?:house|home|living\s+room)|home)\b",
+    re.I,
+)
+_ACTUAL_CHAIR_FAILURE_RE = re.compile(
+    r"\b(?P<subject>(?:(?:this|that|the|my|our)\s+(?:massage\s+)?(?:chair|unit))|it|"
+    r"(?:(?:its|the|my|our)\s+)?(?:remote|(?:(?:foot|calf)\s+)?rollers?|footrest|heater|screen))\s+"
+    r"(?:has\s+|have\s+)?(?:"
+    r"(?:is|are|was|were)\s+(?:(?:still|now|completely)\s+)?(?:broken|faulty|stuck|dead|not\s+working)|"
+    r"(?:broke\s+down|broke|malfunctioned|stopped\s+(?:working|turning\s+on|responding)|"
+    r"(?:does\s+not|doesn't|do\s+not|don't|won't|will\s+not|no\s+longer)\s+(?:works?|turns?\s+on|responds?)))\b",
+    re.I,
+)
+_OWNER_SUPPORT_REQUEST_RE = re.compile(
+    r"\b(?:need|want|seeking|looking\s+for|ask(?:ing)?\s+for|get|contact)\s+(?:the\s+)?"
+    r"(?:tech(?:nical)?\s+(?:help|service|support)|warranty\s+service|repair\s+help)\b|"
+    r"\b(?:how|where|who)\b[^.!?;]{0,45}\b(?:repair|fix|service)\s+(?:it|this|that|(?:the|my|our)\s+chair)\b",
+    re.I,
+)
+
+
+def _clause_before(text: str, start: int) -> str:
+    return re.split(r"[.!?;,\n]", text[max(0, start - 100):start])[-1]
+
+
+def is_prospective_clause_before(text: str, start: int) -> bool:
+    """An `if`/`once` clause describes a possible fault, not a report."""
+    return bool(_PROSPECTIVE_CLAUSE_RE.search(_clause_before(text, start)))
+
+
+def _affirmative_matches(pattern: re.Pattern[str], text: str) -> Iterator[re.Match[str]]:
+    for match in pattern.finditer(text):
+        if not _NEGATED_SERVICE_PREFIX_RE.search(_clause_before(text, match.start())):
+            yield match
+
+
+def _current_matches(pattern: re.Pattern[str], text: str) -> Iterator[re.Match[str]]:
+    return (match for match in _affirmative_matches(pattern, text)
+            if not is_prospective_clause_before(text, match.start()))
+
+
+def reports_owned_chair_problem(text: str) -> bool:
+    """Distinguish a real fault or owner service request from a policy inquiry.
+
+    A concrete fault of a specific chair is sufficient. A pronoun-only fault
+    needs ownership evidence or an actual support request; the conversation
+    layer handles shorter follow-ups with an active case.
+    """
+    raw = (text or "").replace("’", "'")
+    has_owner = bool(next(_current_matches(_CURRENT_CHAIR_EVIDENCE_RE, raw), None))
+    has_request = bool(next(_current_matches(_OWNER_SUPPORT_REQUEST_RE, raw), None))
+    if any(has_owner or has_request or match.group('subject').lower() != 'it'
+           for match in _current_matches(_ACTUAL_CHAIR_FAILURE_RE, raw)):
+        return True
+    return has_owner and has_request
+
 
 def is_post_purchase(text: str) -> bool:
     """True when the message is about a chair or order the customer has."""
     raw = text or ""
     for match in _POST_PURCHASE_RE.finditer(raw):
+        # A future or hypothetical "my chair" is not proof of ownership.
+        if match.group().lower() in {'my chair', 'my unit'} and is_prospective_clause_before(raw, match.start()):
+            continue
         if match.group().lower() == 'claim' and re.search(
             r"\b(?:not|no)\s+(?:(?:a|an|the)\s+)?(?:(?:repair|warranty)(?:\s+or\s+(?:repair|warranty))?\s+)?$",
             raw[max(0, match.start() - 65):match.start()], re.I,
@@ -392,7 +468,14 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 def detect_topic(text: str) -> Optional[str]:
     """Return the pre-purchase policy topic in this message, if any."""
     raw = (text or "").strip().replace("’", "'")
-    if not raw or is_post_purchase(raw):
+    if not raw or reports_owned_chair_problem(raw):
+        return None
+    service_question = bool(next(_affirmative_matches(_TECHNICAL_SERVICE_RE, raw), None))
+    if is_post_purchase(raw):
+        # Owning one chair does not turn a question about another chair's
+        # pre-buy service policy into a repair. Actual faults took priority.
+        if service_question and next(_affirmative_matches(_EXPLICIT_NEW_PURCHASE_RE, raw), None):
+            return TOPIC_TECHNICAL_SERVICE
         return None
     from sales_language import is_medical_scope_question
 
@@ -402,7 +485,7 @@ def detect_topic(text: str) -> Optional[str]:
     # Service coverage is also independent of shipping to that region.
     if _LEASE_QUESTION_RE.search(raw):
         return TOPIC_LEASE
-    if _TECHNICAL_SERVICE_RE.search(raw):
+    if service_question:
         return TOPIC_TECHNICAL_SERVICE
     # A location in a showroom question is not a shipping destination.
     if re.search(

@@ -155,48 +155,230 @@ _PURCHASE = re.compile(
     r"\b(?:new[\s-]+purchase|new[\s-]+chair|second\s+chair|another\s+chair|buy(?:ing)?|(?:to|for|with)\s+(?:the\s+)?sales)\b", re.I,
 )
 _SEPARATE = re.compile(r"\b(?:separate(?:ly)?|route|split|two\s+(?:different\s+)?(?:requests|issues|things|tasks))\b", re.I)
+_OLD_CHAIR = re.compile(
+    r"\b(?:(?:the|my|our)\s+)?(?:old|current|owned|existing|broken)\s+(?:chair|model|one)\b|"
+    r"\b(?:the\s+)?one\s+that(?:'s|\s+is)\s+broken\b|"
+    r"\b(?:the\s+)?(?:prior|old|original|earlier|existing)\s+(?:repair|fault|service\s+(?:case|request))\b", re.I,
+)
+_NEW_CHAIR = re.compile(
+    r"\b(?:the|my|our|a)\s+(?:(?:separate|second|another|new|office)\s+(?:chair|model|one)|new[\s-]+purchase)\b|"
+    r"\b(?:the\s+)?one\s+i(?:'m|\s+am)\s+(?:buying|considering|shopping\s+for)\b", re.I,
+)
+_CONTACT_OR_STATUS = re.compile(
+    r"\b(?:who|whom|where|what\s+(?:number|email)|how\s+(?:can|do|should)\s+i)\b.{0,65}"
+    r"\b(?:contact|call|email|reach|support|service|help|send|submit|open)\b|"
+    r"\b(?:right\s+team|contact\s+(?:number|details)|technical\s+support|repair\s+status|service\s+status|"
+    r"(?:repair|service|technician)\s+(?:cost|fee|pricing)|"
+    r"(?:scheduled|booked|approved)|status\s+of\s+(?:the\s+)?(?:repair|service\s+request))\b|"
+    r"\bwhat\s+(?:number|email)\b", re.I,
+)
+_MODEL_DETAIL = re.compile(
+    r"\b(?:price|pricing|how\s+much|costs?|stock|availability|available|colou?rs?|door(?:way)?|width|wide|"
+    r"dimensions?|clearance|spec(?:s|ifications)?|capacity|weight|heat(?:ing|er)?|rollers?|zero\s+gravity|"
+    r"airbags?|track|intensity|bluetooth|programs?)\b", re.I,
+)
+_TASK_BREAK = re.compile(
+    r"(?<=[.!?;])\s+|\s*,?\s+\b(?:and|but|while|whereas)\s+"
+    r"(?=(?:separately\b|(?:sales|warranty)\s+for\b|(?:i|we)\s+(?:also\s+)?(?:want|need|would\s+like|plan|own|have|am\s+buying)\b|"
+    r"(?:i|we)'d\s+(?:also\s+)?like\b|"
+    r"(?:buy|purchase|recommend|compare|fix|repair)\b|(?:the|my|our)\s+(?:old|new|broken|current|second)\b))", re.I,
+)
+_NEGATED_REPAIR = re.compile(
+    r"\b(?:not|never|isn't|isnt|wasn't|wasnt)\s+(?:actually\s+|really\s+)?(?:broken|defective|damaged|faulty)\b|"
+    r"\b(?:not|don't|don't\s+want\s+to)\s+(?:asking|ask|talk|talking|need\s+help|discuss)\s+(?:about|with)\s+"
+    r"(?:(?:the|my|our)\s+)?(?:repair|old\s+chair|service\s+(?:case|request))\b", re.I,
+)
+_NEGATED_PURCHASE = re.compile(
+    r"\b(?:not|no|don't|do\s+not|never|isn't)\s+(?:(?:asking|looking)\s+for\s+|"
+    r"(?:want|need|plan)\s+)?(?:a\s+|the\s+|to\s+)?$", re.I,
+)
+_CORRECT_MODEL = re.compile(
+    r"\b(?:correction|i\s+meant|actually|correct\s+model|not\s+the)\b", re.I,
+)
+_OLDER_STATED_CODE = re.compile(r"\b(OS|TP)[\s-]?(\d{3,5}[A-Za-z]{0,3})\b", re.I)
 _ISSUE = re.compile(
     r"\b(?:its|the|my|our)\s+((?:[\w'’-]+\s+){0,4}?[\w'’-]+)\s+(stopped\s+working|(?:is|are)\s+(?:broken|not\s+working)|"
     r"(?:doesn't|don't|won't)\s+work)\b", re.I,
 )
 
 
-def owner_case_patch(message: str, data: dict) -> dict:
-    """Durable repair context saved when Sales routes a fault to Warranty."""
+def _purchase_in(text: str) -> bool:
+    return any(not _NEGATED_PURCHASE.search(text[:match.start()]) and not re.match(
+        r"\s+(?:(?:an?|the)\s+)?(?:replacement\s+)?(?:remotes?|upholstery|controllers?|"
+        r"replacement\s+parts?|parts?|accessor(?:y|ies)|extended\s+warranty|warranty\s+(?:plan|coverage))\b",
+        text[match.end():], re.I,
+    ) for match in _PURCHASE.finditer(text))
+
+
+def owner_task_clauses(message: str, data: dict) -> tuple[list[str], list[str]]:
+    """Split genuinely independent tasks before reading models or fit limits."""
     from sales_agent import _guess_model_from_text
+    from sales_policy import reports_owned_chair_problem
+
+    raw = (message or '').replace('’', "'")
+    pieces = [piece.strip(' ,;') for piece in _TASK_BREAK.split(raw) if piece.strip(' ,;')]
+    repair = [piece for piece in pieces if (_REPAIR.search(piece) or _OLD_CHAIR.search(piece))
+              and not _NEGATED_REPAIR.search(piece) and not _purchase_in(piece)]
+    shopping = [piece for piece in pieces if _purchase_in(piece)
+                and not _NEGATED_REPAIR.search(piece) and not _OLD_CHAIR.search(piece)]
+    owned_model_fault = any(
+        re.search(r"\b(?:my|our)\b", piece, re.I) and not re.search(r"\b(?:if|would|might|could)\b", piece, re.I)
+        and _guess_model_from_text(piece) is not None for piece in repair
+    )
+    owner_evidence = data.get('owner_service_case') or owned_model_fault or any(reports_owned_chair_problem(piece) for piece in repair) or _OLD_CHAIR.search(raw) or re.search(
+        r"\b(?:already\s+own|my\s+(?:chair|model)|(?:stopped|is\s+not)\s+working|needs?\s+(?:a\s+)?repair)\b", raw, re.I)
+    if repair and shopping and (owner_evidence or _SEPARATE.search(raw)):
+        return (repair, shopping)
+    distinct_repair = _OLD_CHAIR.search(raw) or re.search(r"\b(?:old|prior|earlier|original|broken)\s+[\w-]+\s+(?:repair|is\s+a\s+service\s+case)\b", raw, re.I)
+    if _SEPARATE.search(raw) and data.get('owner_service_case') and distinct_repair and _REPAIR.search(raw) and _purchase_in(raw):
+        # E.g. "route my repair to Warranty and my new-purchase question to
+        # Sales" names neither product; use the distinct saved referents.
+        return ([piece for piece in pieces if _OLD_CHAIR.search(piece)] or [raw], shopping or [raw])
+    return ([], [])
+
+
+def _repair_clauses(message: str) -> list[str]:
+    raw = (message or '').replace('’', "'")
+    pieces = _TASK_BREAK.split(raw)
+    relevant = [piece for piece in pieces if (_REPAIR.search(piece) or _OLD_CHAIR.search(piece))
+                and not _NEGATED_REPAIR.search(piece) and not _purchase_in(piece)]
+    return relevant or [piece for piece in pieces if not _NEGATED_REPAIR.search(piece) and not _purchase_in(piece)]
+
+
+def owner_case_patch(message: str, data: dict, *, clauses: Optional[list[str]] = None) -> dict:
+    """Remember only the existing chair; a model switch never inherits its symptom."""
+    from sales_agent import _guess_model_from_text
+    from sales_policy import reports_owned_chair_problem
     case = dict(data.get('owner_service_case') or {})
-    product = _guess_model_from_text(message or '')
-    if product is not None:
-        case['model'] = product.display_name
-    issue = _ISSUE.search(message or '')
-    if issue:
-        part = re.sub(r"^.*['’]s\s+", '', issue.group(1)) if product is not None else issue.group(1)
-        case['issue'] = f"{part} {issue.group(2)}".strip()[:80]
+    pieces = _repair_clauses(message) if clauses is None else clauses
+    product = next((found for piece in pieces if not _purchase_in(piece)
+                    and (found := _guess_model_from_text(piece)) is not None), None)
+    # Service still accepts retired models that no longer appear in the
+    # storefront. Retain a single explicit model code as stated, not a fuzzy
+    # match to another generation (e.g. OS-4000T is not OS-4000XT).
+    codes = {(m[1].upper(), m[2].upper()) for piece in pieces if not _purchase_in(piece)
+             for m in _OLDER_STATED_CODE.finditer(piece)}
+    model = product.display_name if product is not None else None
+    if model is None and len(codes) == 1:
+        prefix, code = next(iter(codes))
+        model = f"{'Osaki' if prefix == 'OS' else 'Titan'} {prefix}-{code}"
+    if model is not None:
+        if case.get('model') and case['model'] != model:
+            case['issue'] = None  # Session dictionaries are shallow-merged.
+        case['model'] = model
+    for piece in pieces:
+        if _purchase_in(piece):
+            continue
+        issue = _ISSUE.search(piece)
+        if issue:
+            part = re.sub(r"^.*['’]s\s+", '', issue.group(1))
+            description = f"{part} {issue.group(2)}".strip()
+            # A generic restatement or model correction must not replace a
+            # known component with "chair is broken" or its full model name.
+            if case.get('issue') and re.fullmatch(r"(?:current\s+|old\s+|broken\s+|new\s+)?(?:chair|model|one)", part, re.I):
+                continue
+            if product is not None and _guess_model_from_text(part) is not None:
+                continue
+            case['issue'] = description[:80]
+            break
+    if not case and any(reports_owned_chair_problem(piece) for piece in pieces):
+        case = {'model': None}  # A real repair, but the model is still unknown.
     return {'owner_service_case': case} if case else {}
+
+
+def is_owner_repair_followup(message: str, data: dict) -> bool:
+    """Recognize a return to a known repair, not a new recommendation or order."""
+    raw = (message or '').replace('’', "'")
+    case = data.get('owner_service_case') or {}
+    if not case or _purchase_in(raw):
+        return False
+    explicit = bool(_OLD_CHAIR.search(raw) or re.search(r"\b(?:the|my|our)\s+(?:repair|service\s+(?:case|request))\b", raw, re.I))
+    correction = bool(_CORRECT_MODEL.search(raw) and _OLD_CHAIR.search(raw))
+    repair_confirmation = bool(re.search(r"\b(?:back|return)\s+to\b|\b(?:still|again)\b", raw, re.I)
+                               and (_REPAIR.search(raw) or explicit))
+    return correction or (explicit and (repair_confirmation or bool(_CONTACT_OR_STATUS.search(raw)))) or (
+        data.get('technical_support_topic') == 'warranty_redirect' and bool(_CONTACT_OR_STATUS.search(raw))
+        and not _MODEL_DETAIL.search(raw)
+    )
+
+
+def owner_purchase_question(message: str, data: dict) -> Optional[str]:
+    """Bind an explicit new-chair reference to the saved purchase model only."""
+    from sales_agent import _guess_model_from_text
+    raw = (message or '').replace('’', "'")
+    if not data.get('owner_service_case') or not _NEW_CHAIR.search(raw) or not _MODEL_DETAIL.search(raw):
+        return None
+    if _NEGATED_REPAIR.search(raw):
+        # A customer correcting the route explicitly is opting out of the
+        # old task, not asking us to restate or reopen it.
+        raw = ' '.join(piece for piece in _TASK_BREAK.split(raw) if not _NEGATED_REPAIR.search(piece))
+    if _OLD_CHAIR.search(raw) or _REPAIR.search(raw) or _guess_model_from_text(raw) is not None:
+        return None
+    # Do not reinterpret delivery terms, service fees or refunds as a
+    # product-price follow-up merely because a new chair was mentioned.
+    if re.search(r"\b(?:warranty|coverage|shipping|delivery|refunds?|return|installation|technician|"
+                 r"financ\w*|order\s+(?:status|number)|price\s+match)\b", raw, re.I):
+        return None
+    product = _guess_model_from_text(str(data.get('owner_purchase_model') or ''))
+    if product is None:
+        fallback = _guess_model_from_text(str(data.get('pending_primary') or ''))
+        if fallback and fallback.display_name != (data.get('owner_service_case') or {}).get('model'):
+            product = fallback
+    return _NEW_CHAIR.sub(product.display_name, raw, count=1) if product else None
+
+
+def ambiguous_owner_cost_reply(message: str, data: dict):
+    """Both repair costs and new-chair price are plausible after a lane switch."""
+    from sales_agent import _guess_model_from_text
+    old = (data.get('owner_service_case') or {}).get('model')
+    product = _guess_model_from_text(str(data.get('owner_purchase_model') or ''))
+    if (not old or product is None or data.get('technical_support_topic') != 'warranty_redirect'
+            or not re.fullmatch(r"\s*(?:and\s+)?(?:how\s+much(?:\s+is\s+it|\s+does\s+it\s+cost)?|"
+                                r"what\s+(?:does\s+it\s+cost|is\s+the\s+price))[?.!\s]*", message, re.I)):
+        return None
+    return _reply(
+        f"Do you mean the **repair cost for {old}**, or the **purchase price for {product.display_name}**? "
+        "Warranty needs to confirm repair pricing; I can look up the catalog price for the new chair.",
+        intent='unclear', tools=['conversation.owner_cost_clarify'], human=False,
+    )
+
+
+def owner_purchase_model_patch(message: str, data: dict, result) -> dict:
+    """Record an unambiguous shopping model without consuming a repair mention."""
+    from sales_agent import _guess_model_from_text
+    if (not data.get('owner_service_case') or 'conversation.dual_task' in result.tools_used
+            or result.intent not in {'specs', 'price', 'stock', 'recommend'} or _OLD_CHAIR.search(message or '')):
+        return {}
+    named = _guess_model_from_text(message)
+    if named is None and not data.get('owner_purchase_model') and result.products:
+        named = _guess_model_from_text(str((result.prefs_patch or {}).get('pending_primary') or ''))
+    if named is None:
+        return {}
+    if named.display_name == (data.get('owner_service_case') or {}).get('model') and not _purchase_in(message):
+        return {}
+    return {'owner_purchase_model': named.handle}
 
 
 def dual_task_reply(message: str, data: dict):
     raw = message or ''
-    case = data.get('owner_service_case') or {}
-    purchase = [match for match in _PURCHASE.finditer(raw)
-                if not re.search(r"\b(?:not|no|don't|do\s+not|never)\s+(?:want\s+|need\s+)?(?:a\s+|to\s+)?$", raw[:match.start()], re.I)]
-    if not (_REPAIR.search(raw) and purchase and (_SEPARATE.search(raw) or case)):
+    repair, shopping = owner_task_clauses(raw, data)
+    if not repair or not shopping:
         return None
     from sales_agent import _guess_model_from_text
-    sentences = [part for part in re.split(r'(?<=[.!?])\s+', raw) if part.strip()]
+    patch = owner_case_patch(raw, data, clauses=repair)
+    case = patch.get('owner_service_case') or {}
     repair_model = case.get('model')
-    purchase_model = None
-    for sentence in sentences:
-        product = _guess_model_from_text(sentence)
-        if product is None:
-            continue
-        if _REPAIR.search(sentence) and not _PURCHASE.search(sentence):
-            repair_model = repair_model or product.display_name
-        elif product.display_name != repair_model:
-            purchase_model = product.display_name
-    purchase_model = purchase_model or str(data.get('pending_primary') or '') or None
-    if purchase_model == repair_model:
-        purchase_model = None
+    explicit_purchase = next((found for piece in shopping if not _OLD_CHAIR.search(piece)
+                              and not (_REPAIR.search(piece) and _SEPARATE.search(piece))
+                              and (found := _guess_model_from_text(piece)) is not None), None)
+    saved_purchase = _guess_model_from_text(str(data.get('owner_purchase_model') or ''))
+    fallback = _guess_model_from_text(str(data.get('pending_primary') or ''))
+    if re.search(r"\b(?:buy|purchase|another)\b.{0,50}\b(?:same|identical)\s+(?:chair|model|one)\b", raw, re.I):
+        explicit_purchase = explicit_purchase or _guess_model_from_text(str(repair_model or ''))
+    product = explicit_purchase or saved_purchase or (fallback if fallback and fallback.display_name != repair_model else None)
+    purchase_model = product.display_name if product else None
+    if product is not None:
+        patch['owner_purchase_model'] = product.handle
     rec = dict(data.get('recommend_prefs') or {})
     repair_label = repair_model or 'your current chair'
     issue = f" ({case['issue']})" if case.get('issue') else ''
@@ -206,7 +388,7 @@ def dual_task_reply(message: str, data: dict):
         f"**1. Repair — {repair_label}{issue} → Warranty Department**",
         f"Email **{WARRANTY_EMAIL}** with the model, a description of the issue, and your order number or proof of purchase, "
         f"or call **{WARRANTY_PHONE}**. You can also open a service request at {WARRANTY_PORTAL}. "
-        "Warranty reviews the issue and coverage; this chat has not approved a repair or replacement.",
+        "I have not submitted a service request, booked a callback, or approved a repair or replacement.",
         "",
         f"**2. New purchase — {purchase_model or 'your new chair'} → Sales**",
     ]
@@ -222,7 +404,7 @@ def dual_task_reply(message: str, data: dict):
                  "The repair stays with Warranty and won't change the new-purchase recommendation.")
     buttons = [('Keep shopping', 'recommend')]
     return _reply('\n'.join(lines), intent='recommend', tools=['conversation.dual_task', 'routing.warranty', 'routing.sales'],
-                  patch={'owner_service_case': case or ({'model': repair_model} if repair_model else {})},
+                  patch=patch,
                   extra_buttons=buttons)
 
 
@@ -231,7 +413,7 @@ def new_purchase_note(message: str, data: dict) -> Optional[str]:
     case = data.get('owner_service_case') or {}
     if not case or data.get('owner_case_acknowledged'):
         return None
-    if not re.search(r"\b(?:separately|second\s+chair|another\s+chair|new[\s-]+purchase|also\s+(?:want|like)\s+to\s+buy)\b", message or '', re.I):
+    if not _purchase_in((message or '').replace('’', "'")) or not re.search(r"\b(?:separately|second\s+chair|another\s+chair|new[\s-]+purchase|also\s+(?:want|like)\s+to\s+buy)\b", message or '', re.I):
         return None
     model = f"**{case['model']}**" if case.get('model') else 'current chair'
     return (f"Your {model} repair stays with Warranty (**{WARRANTY_EMAIL}**, {WARRANTY_PHONE}). "
