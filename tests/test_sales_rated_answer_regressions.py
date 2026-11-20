@@ -83,3 +83,10 @@ def test_orion_source_not_used_when_customer_names_another_chair():
     r = agent.respond('Can I change the pressure on the Manhattan Duo, not the Orion Duo?')
     assert 'catalog.verified_model_specs' not in r.tools_used
     assert '6 levels of 4D roller depth' not in r.reply
+
+
+def test_verified_answer_preserves_pending_explicit_human_handoff():
+    r = agent.respond('How many boxes does a Hamilton LE arrive in?', prefs={'awaiting_pre_human_question': True})
+    assert '2 shipping boxes' in r.reply
+    assert 'human:confirm' in {q.payload for q in r.quick_replies}
+    assert r.prefs_patch['awaiting_pre_human_question'] is False

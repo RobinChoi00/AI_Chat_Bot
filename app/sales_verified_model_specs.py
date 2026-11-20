@@ -66,7 +66,7 @@ def _with_source(text: str, url: str, *, label: str = "Manufacturer source") -> 
     return f"{text}\n\n{label}: {url}"
 
 
-def _orion_fit(name: str, raw: str) -> str | None:
+def _orion_fit(name: str, raw: str) -> tuple[str, bool] | None:
     if _OTHER_CONSTRAINTS.search(raw):
         return None
     ask_height, ask_weight = bool(_USER_HEIGHT.search(raw)), bool(_USER_WEIGHT.search(raw))
@@ -84,7 +84,14 @@ def _orion_fit(name: str, raw: str) -> str | None:
         lines.append(f"**{name}** has a manufacturer-recommended user height range of **{feet(_ORION_MIN_IN)} to {feet(_ORION_MAX_IN)}**.")
     if ask_weight or weights:
         subject = "The manual" if lines else f"The **{name}** manual"
-        lines.append(f"{subject} lists a **{_ORION_MAX_LB} lb maximum user weight**.")
+        lines.append(f"{subject}'s FAQ lists a **{_ORION_MAX_LB} lb maximum user weight**.")
+    weight_discrepancy = (ask_weight and not weights) or any(
+        _ORION_TROUBLESHOOTING_LB < weight <= _ORION_MAX_LB for weight in weights
+    )
+    if weight_discrepancy:
+        lines.append(f"The troubleshooting section mentions **{_ORION_TROUBLESHOOTING_LB} lb**. "
+                     f"I can't confirm fit above {_ORION_TROUBLESHOOTING_LB} lb from those conflicting figures; "
+                     "ask Sales to verify the limit for the exact chair before ordering.")
     if heights or weights:
         outside = (any(not _ORION_MIN_IN <= size <= _ORION_MAX_IN for size in heights)
                    or any(weight > _ORION_MAX_LB for weight in weights))
@@ -92,11 +99,9 @@ def _orion_fit(name: str, raw: str) -> str | None:
         values = " and ".join(checks)
         if outside:
             lines.append(f"**{values}** is outside at least one of these limits; I would not recommend this model for those measurements.")
-        elif any(weight > _ORION_TROUBLESHOOTING_LB for weight in weights):
-            lines.append("The manual's troubleshooting section gives a different weight figure. Have Sales verify the limit for the exact chair before ordering at this weight.")
-        else:
+        elif not weight_discrepancy:
             lines.append(f"**{values}** is within the manual's stated {'height and weight limits' if heights and weights else 'limit for that measurement'}. That does not guarantee comfort or roller reach; a showroom trial is the best way to check.")
-    return " ".join(lines)
+    return " ".join(lines), weight_discrepancy
 
 
 def verified_model_answer(product: ProductSpecs, message: str) -> str | None:
@@ -140,9 +145,15 @@ def verified_model_answer(product: ProductSpecs, message: str) -> str | None:
                 "It doesn't give a pressure measurement or state that every setting can be changed independently."
             )
         fit = _orion_fit(name, raw)
+        pages = "p. 22"
         if fit:
-            lines.append(fit)
+            fit_text, weight_discrepancy = fit
+            fit_pages = "32–33" if weight_discrepancy else "32"
+            if lines:
+                pages = f"pp. 22 and {fit_pages}"
+            else:
+                pages = "pp. 32–33" if weight_discrepancy else "p. 32"
+            lines.append(fit_text)
         if lines:
-            page = "22 and 32" if len(lines) == 2 else "32" if fit else "22"
-            return _with_source("\n\n".join(lines), _ORION_MANUAL, label=f"Manufacturer instructions (p. {page})")
+            return _with_source("\n\n".join(lines), _ORION_MANUAL, label=f"Manufacturer instructions ({pages})")
     return None

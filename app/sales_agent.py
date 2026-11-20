@@ -4917,6 +4917,11 @@ def _respond_turn(
     if not payload and message.strip():
         specific = _answer_specific_shopper_request(message, prefs, domain=domain)
         if specific is not None:
+            if not before_handoff and (prefs or {}).get('awaiting_pre_human_question'):
+                if specific.handoff:
+                    specific.prefs_patch = {**(specific.prefs_patch or {}), 'awaiting_pre_human_question': False}
+                else:
+                    specific = _attach_human_footer(specific)
             return _remember_question(_finalize_flow_stage(specific), message, payload)
 
     if not payload and not before_handoff:

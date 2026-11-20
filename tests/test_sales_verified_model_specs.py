@@ -96,6 +96,14 @@ def test_orion_near_weight_cap_does_not_hide_inconsistent_troubleshooting_figure
     assert "is within" not in detail
 
 
+def test_orion_bare_weight_limit_question_states_both_manual_figures():
+    detail = answer("osaki-4d-3d-orion-duo-mech", "What's the maximum user weight?")
+    assert "FAQ lists a **280 lb maximum user weight**" in detail
+    assert "troubleshooting section mentions **260 lb**" in detail
+    assert "can't confirm fit above 260 lb" in detail
+    assert "Manufacturer instructions (pp. 32–33)" in detail
+
+
 def test_orion_body_fit_does_not_claim_a_delivery_path_or_other_chair_fits():
     assert answer("osaki-4d-3d-orion-duo-mech", "Will I fit this chair through a 6 ft 2 doorway?") is None
     assert answer("osaki-4d-3d-orion-duo-mech", "Compare the Orion and the Vito for a user who is 6 ft 2 and 220 lb") is None
