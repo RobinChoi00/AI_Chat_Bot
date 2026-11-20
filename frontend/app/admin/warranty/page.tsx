@@ -25,15 +25,21 @@ const BACKEND = getBackendUrl();
 type HandoffAttention = {
   total: number;
   safety_reviews: number;
-  items: Array<{ticket_id: string; case_reference: string; safety_review: boolean; department: "warranty" | "sales";
-    notification_state: "failed" | "dead_letter" | "not_recorded"}>;
+  items: Array<{
+    ticket_id: string;
+    case_reference: string;
+    created_at?: string | null;
+    safety_review: boolean;
+    department: "warranty" | "sales";
+    notification_state: "failed" | "dead_letter" | "not_recorded";
+  }>;
 };
 
 async function fetchHandoffAttention(): Promise<HandoffAttention | null> {
   const adminKey = process.env.ADMIN_API_KEY;
   if (!adminKey) return null;
   try {
-    const res = await fetch(`${BACKEND}/admin/warranty/handoff-attention?limit=8`, {
+    const res = await fetch(`${BACKEND}/admin/warranty/handoff-attention?limit=12`, {
       headers: { "X-Admin-Key": adminKey }, cache: "no-store", signal: AbortSignal.timeout(6000),
     });
     if (!res.ok) return null;
@@ -144,7 +150,19 @@ export default async function AdminWarrantyQueuePage({
         {attention && attention.total > 0 ? (
           <section aria-label="Support requests needing review" className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
             <h2 className="font-semibold">{attention.total} open support requests without confirmed submission</h2>
-            <p className="my-1">{attention.safety_reviews} marked for safety review. Reconcile with Freshdesk and staff before any individual retry. Nothing on this page sends notifications.</p>
+            <p className="my-1">
+              {attention.safety_reviews} marked for safety review (shown first). Newest cases follow.
+              Open a case, reconcile Freshdesk if needed, then use{" "}
+              <strong>Mark staff received</strong> to clear it from this list.
+              Nothing here retries or resends notifications.
+            </p>
+            <p className="mb-1 text-xs text-red-800/90">
+              Delivery job details:{" "}
+              <Link href="/admin/warranty/notifications" className="underline">
+                Handoff notification queue
+              </Link>
+              . Do not bulk-retry from that page.
+            </p>
             <ul className="space-y-1 pt-1">
               {attention.items.map((item) => (
                 <li key={item.ticket_id}>
@@ -153,6 +171,11 @@ export default async function AdminWarrantyQueuePage({
                 </li>
               ))}
             </ul>
+            {attention.total > attention.items.length ? (
+              <p className="pt-2 text-xs text-red-800/80">
+                Showing {attention.items.length} of {attention.total}. Remaining clear after case-by-case ack.
+              </p>
+            ) : null}
           </section>
         ) : adminConfigured && !attention && !fetchError ? (
           <p className="mb-5 text-sm text-gray-600">Support notification status could not be loaded.</p>

@@ -65,7 +65,9 @@ describe("admin queue historical pages", () => {
     expect(markup).toContain("open support requests without confirmed submission");
     expect(markup).toContain("Safety review");
     expect(markup).toContain('href="/admin/warranty/safety-case"');
-    expect(markup).toContain("Nothing on this page sends notifications");
+    expect(markup).toContain("Mark staff received");
+    expect(markup).toContain("Nothing here retries or resends notifications");
+    expect(markup).toContain('href="/admin/warranty/notifications"');
     expect(fetchMock.mock.calls).toHaveLength(2);
   });
 });

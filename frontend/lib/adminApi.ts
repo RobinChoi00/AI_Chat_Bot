@@ -124,3 +124,36 @@ export async function submitAdminNote(
   }
   return res.json() as Promise<{ ticket: AdminWarrantyTicket }>;
 }
+
+// ------------------------------------------------------------
+// Handoff staff acknowledgement (clears attention queue)
+// ------------------------------------------------------------
+
+export async function acknowledgeHandoff(
+  ticketId: string,
+  body?: { note?: string; accepted_by?: string }
+): Promise<{
+  ticket_id: string;
+  already_acknowledged: boolean;
+  staff_acceptance_recorded: boolean;
+  accepted_at?: string;
+}> {
+  const res = await fetch(
+    `${PROXY}/tickets/${encodeURIComponent(ticketId)}/handoff-ack`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { detail?: string };
+    throw new Error(err.detail ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{
+    ticket_id: string;
+    already_acknowledged: boolean;
+    staff_acceptance_recorded: boolean;
+    accepted_at?: string;
+  }>;
+}

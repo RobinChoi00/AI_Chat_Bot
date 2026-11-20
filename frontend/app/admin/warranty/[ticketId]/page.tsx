@@ -10,6 +10,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import AdminTicketDetail from "@/components/admin/AdminTicketDetail";
 import AdminDecisionPanel from "@/components/admin/AdminDecisionPanel";
+import AdminHandoffAckButton from "@/components/admin/AdminHandoffAckButton";
 import AdminNoteForm from "@/components/admin/AdminNoteForm";
 import type { TicketDetailResponse } from "@/lib/adminTypes";
 import { getBackendUrl } from "@/lib/backendUrl";
@@ -110,6 +111,29 @@ export default async function AdminTicketDetailPage({
               turns={data.turns}
               evidence={data.evidence}
             />
+
+            {Boolean(data.ticket.collected_data?.human_support_requested) && (
+              <section className="rounded-xl border border-amber-200 bg-white p-5 shadow-sm">
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-amber-800">
+                  Handoff attention
+                </h2>
+                <p className="mb-4 text-xs text-gray-500">
+                  Clear the red attention queue after Freshdesk/staff reconciliation
+                  without changing the claim decision.
+                </p>
+                <AdminHandoffAckButton
+                  ticketId={data.ticket.ticket_id}
+                  alreadyAcknowledged={Boolean(
+                    data.ticket.collected_data?.human_support_staff_accepted_at
+                  )}
+                  acceptedAt={
+                    typeof data.ticket.collected_data?.human_support_staff_accepted_at === "string"
+                      ? data.ticket.collected_data.human_support_staff_accepted_at
+                      : null
+                  }
+                />
+              </section>
+            )}
 
             {/* ── Admin decision panel ─────────────────────────── */}
             <section className="rounded-xl border border-indigo-200 bg-white p-5 shadow-sm">
