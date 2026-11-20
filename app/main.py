@@ -1170,6 +1170,8 @@ app.include_router(warranty_router)
 
 from notification_admin import router as notification_admin_router
 app.include_router(notification_admin_router)
+from warranty_handoff_review import router as warranty_handoff_review_router
+app.include_router(warranty_handoff_review_router)
 
 # RingCentral warranty phone IVR (ApplicationExtension webhooks)
 try:

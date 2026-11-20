@@ -199,6 +199,7 @@ export interface WarrantyMetricsResponse {
   purpose_counts?: { repair: number; delivery: number; other: number; unknown: number };
   repair?: RepairOutcomeMetrics;
   delivery?: DeliveryOutcomeMetrics;
+  case_endings?: WarrantyCaseEndings;
   handoffs?: SupportRequestMetrics;
 }
 
@@ -238,6 +239,8 @@ export interface DeliveryOutcomeMetrics {
   consultations: number;
   latest_lookup_available: number;
   latest_lookup_unavailable: number;
+  lookup_not_recorded?: number;
+  /** Legacy API alias; an absent snapshot does not mean lookup was never attempted. */
   lookup_not_attempted: number;
   answered: number;
   needs_review: number;
@@ -246,10 +249,27 @@ export interface DeliveryOutcomeMetrics {
   unknown: number;
 }
 
+export interface WarrantyCaseEndings {
+  restarted_or_abandoned: number;
+  other_closed: number;
+}
+
 export interface SupportRequestMetrics {
   requested: number;
   by_reason: { reason: string; count: number }[];
   by_department: { department: string; count: number }[];
+  notification?: {
+    queued: number;
+    retry_scheduled: number;
+    smtp_accepted: number;
+    freshdesk_submitted: number;
+    dead_letter: number;
+    delivery_uncertain: number;
+    not_recorded: number;
+    freshdesk_linked: number;
+    staff_acknowledged: number;
+    staff_acknowledgement_unknown: number;
+  };
 }
 
 export interface SalesOutcomeMetrics {

@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Column, DateTime, Integer, String, UniqueConstraint, and_, func, or_, text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint, and_, func, or_, text
 
 from warranty_models import Base, WarrantyEvidence, WarrantyTicket, WarrantyTurn, warranty_db_session
 
@@ -53,11 +53,26 @@ class WarrantyNotificationJob(Base):
     completed_at = Column(DateTime, nullable=True)
 
 
+class WarrantyHandoffDispatch(Base):
+    """Explicit Freshdesk routing for one new handoff; no copied case content.
+
+    An absent row means legacy SMTP. The durable submitting marker prevents a
+    second outbound create if the worker stops after the external submission.
+    """
+
+    __tablename__ = "warranty_handoff_dispatches"
+
+    job_id = Column(Integer, ForeignKey("warranty_notification_jobs.id", ondelete="CASCADE"), primary_key=True)
+    state = Column(String(20), nullable=False, default="queued")
+    provider_ticket_id = Column(Integer, nullable=True)
+
+
 def _ensure_schema(db) -> None:
     # This table is owned by this module; existing deployments need no destructive
     # migration. Resolve the active bind so isolated test databases work too.
     with _schema_lock:
         WarrantyNotificationJob.__table__.create(bind=db.get_bind(), checkfirst=True)
+        WarrantyHandoffDispatch.__table__.create(bind=db.get_bind(), checkfirst=True)
 
 
 def initialize_notification_storage() -> None:
@@ -98,6 +113,8 @@ def enqueue_notification(*, kind: str, ticket_id: str, evidence_id: int | None =
         )
         session.add(row)
         session.flush()
+        if kind == "handoff" and os.getenv("WARRANTY_HANDOFF_CHANNEL", "smtp").strip().lower() == "freshdesk":
+            session.add(WarrantyHandoffDispatch(job_id=int(row.id), state="queued"))
         return int(row.id)
 
     if db is not None:
@@ -134,9 +151,11 @@ def _claim_notification(job_id: int) -> _Claim | None:
             return None
         if int(row.attempts or 0) >= MAX_NOTIFICATION_ATTEMPTS:
             row.status = "dead_letter"
-            row.last_error = "attempts_exhausted"
+            row.last_error = row.last_error or "attempts_exhausted"
             row.lease_token = None
             row.lease_expires_at = None
+            row.next_attempt_at = None
+            logger.warning("Warranty notification requires staff review job_id=%s kind=%s", row.id, row.kind)
             return None
         row.status = "processing"
         row.attempts = int(row.attempts or 0) + 1
@@ -152,8 +171,12 @@ class _PermanentDeliveryError(Exception):
 
 def _deliver_notification(claim: _Claim) -> bool:
     if claim.kind == "handoff":
+        from warranty_handoff_delivery import deliver_freshdesk_handoff
         from warranty_handoff_notifications import send_handoff_notification
 
+        handled = deliver_freshdesk_handoff(claim)
+        if handled is not None:
+            return handled
         return bool(send_handoff_notification(claim.ticket_id))
     if claim.kind == "resume":
         from warranty_resume import deliver_resume_attempt
@@ -226,6 +249,9 @@ def _finish_notification(claim: _Claim, *, sent: bool, error: str = "", permanen
         if permanent or int(row.attempts) >= MAX_NOTIFICATION_ATTEMPTS:
             row.status = "dead_letter"
             row.next_attempt_at = None
+            # Log references and state only. Alerting must not depend on the
+            # same email transport that just failed.
+            logger.warning("Warranty notification requires staff review job_id=%s kind=%s", row.id, row.kind)
         else:
             row.status = "failed"
             row.next_attempt_at = _utcnow() + timedelta(seconds=_RETRY_DELAYS[min(int(row.attempts) - 1, len(_RETRY_DELAYS) - 1)])
@@ -239,9 +265,16 @@ def process_notification(job_id: int) -> bool:
     try:
         sent = _deliver_notification(claim)
     except Exception as exc:
+        from sales_email_transport import SalesEmailError, safe_failure_code
+
         # Exception strings can contain recipients or provider credentials.
-        code = str(exc) if isinstance(exc, _PermanentDeliveryError) else type(exc).__name__
-        logger.warning("Warranty notification failed job_id=%s kind=%s error_type=%s", claim.job_id, claim.kind, type(exc).__name__)
+        if isinstance(exc, SalesEmailError):
+            code = safe_failure_code(exc)
+        elif isinstance(exc, _PermanentDeliveryError):
+            code = str(exc)
+        else:
+            code = type(exc).__name__
+        logger.warning("Warranty notification failed job_id=%s kind=%s failure_code=%s", claim.job_id, claim.kind, code)
         return _finish_notification(claim, sent=False, error=code, permanent=isinstance(exc, _PermanentDeliveryError))
     return _finish_notification(claim, sent=sent)
 
@@ -258,11 +291,14 @@ def process_pending_notifications(*, limit: int = 25) -> int:
     return sum(process_notification(job_id) for job_id in job_ids)
 
 
-def notification_job_stats() -> dict[str, int]:
+def notification_job_stats(*, kind: str | None = None) -> dict[str, int]:
     counts = {"pending": 0, "processing": 0, "failed": 0, "dead_letter": 0, "completed": 0}
     with warranty_db_session() as db:
         _ensure_schema(db)
-        for status, count in db.query(WarrantyNotificationJob.status, func.count(WarrantyNotificationJob.id)).group_by(WarrantyNotificationJob.status):
+        query = db.query(WarrantyNotificationJob.status, func.count(WarrantyNotificationJob.id))
+        if kind is not None:
+            query = query.filter_by(kind=kind)
+        for status, count in query.group_by(WarrantyNotificationJob.status):
             counts[str(status)] = int(count)
     return counts
 
@@ -281,6 +317,9 @@ def retry_notification(job_id: int) -> bool:
         row = db.get(WarrantyNotificationJob, job_id)
         if row is None or row.status not in {"failed", "dead_letter"}:
             return False
+        dispatch = db.get(WarrantyHandoffDispatch, job_id)
+        if dispatch is not None and dispatch.state != "queued":
+            return False  # Reconcile an external attempt first; never blind-replay.
         row.status = "pending"
         row.attempts = 0
         row.next_attempt_at = None

@@ -39,6 +39,9 @@ export default function AdminHeader() {
           >
             Tickets
           </Link>
+          <Link href="/admin/warranty/notifications" className="rounded-md px-2 py-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900">
+            Handoff queue
+          </Link>
           <Link
             href="/admin/warranty/dashboard"
             className="rounded-md px-2 py-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900"

@@ -18,6 +18,13 @@ describe("delivery status lookup", () => {
     expect(html).not.toContain("Latest delivery update");
   });
 
+  it("explains that a lookup offered inside installation or repair leaves that case unchanged", () => {
+    const html = renderToStaticMarkup(<DeliveryTrackingPanel sideLookup storeDomain="osakiusa.com" summary={null} onLookup={vi.fn()} />);
+    expect(html).toContain("does not change your current support case");
+    expect(html).not.toContain("delivery help questions below");
+    expect(html.match(/required=""/g)).toHaveLength(2);
+  });
+
   it("shows the returned status, estimate and check time without extra order details", () => {
     const html = renderToStaticMarkup(<DeliveryTrackingResult summary={{
       available: true, message: "Update found", status: "In transit", carrier: "UPS", eta: "Tomorrow",

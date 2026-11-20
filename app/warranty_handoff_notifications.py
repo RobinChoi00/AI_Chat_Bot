@@ -62,15 +62,23 @@ def handoff_notification_state(ticket_id: str, source_key: str) -> str:
     """Return delivery state without exposing a recipient or message body."""
     if not source_key:
         return "not_scheduled"
-    from warranty_notification_jobs import WarrantyNotificationJob
+    from warranty_notification_jobs import WarrantyHandoffDispatch, WarrantyNotificationJob
 
     try:
         with warranty_db_session() as db:
             WarrantyNotificationJob.__table__.create(bind=db.get_bind(), checkfirst=True)
+            WarrantyHandoffDispatch.__table__.create(bind=db.get_bind(), checkfirst=True)
             row = db.query(WarrantyNotificationJob).filter_by(
                 kind="handoff", ticket_id=ticket_id, source_key=source_key,
             ).first()
-            return str(row.status) if row is not None else "not_scheduled"
+            if row is None:
+                return "not_scheduled"
+            dispatch = db.get(WarrantyHandoffDispatch, row.id)
+            if dispatch is not None and dispatch.state == "submitted" and dispatch.provider_ticket_id:
+                return "freshdesk_submitted"
+            if dispatch is not None and (dispatch.state == "uncertain" or dispatch.state == "submitting" and row.status == "dead_letter"):
+                return "delivery_uncertain"
+            return str(row.status)
     except Exception:
         # Delivery telemetry must not replace the customer's safety response.
         return "unknown"

@@ -172,6 +172,9 @@ export default function WarrantyChat({
   }, [sessionId]);
   const [terminalEnrichment, setTerminalEnrichment] = useState<TerminalEnrichment | null>(null);
   const [trackingResult, setTrackingResult] = useState<{ sessionId: string; ticketId: string; domain: string; summary: TrackingSummary } | null>(null);
+  const [sideTrackingCase, setSideTrackingCase] = useState<string | null>(null);
+  const deliveryCase = warrantyState?.issue_type === "delivery";
+  const sideTracking = Boolean(warrantyState?.ticket_id && sideTrackingCase === `${sessionId}:${warrantyState.ticket_id}`);
   const trackingSummary = trackingResult?.sessionId === sessionId && trackingResult.ticketId === warrantyState?.ticket_id && trackingResult.domain === deliveryStoreDomain ? trackingResult.summary : null;
   const [handoff, setHandoff] = useState<WarrantyHandoff | null>(null);
   const [optionsUsed, setOptionsUsed] = useState(false);
@@ -307,9 +310,11 @@ export default function WarrantyChat({
     setContactSubmitted(Boolean(resp.ticket?.contact_submitted || resp.ticket?.review_requested));
     setContactReceiptSent(Boolean(resp.ticket?.receipt_email_sent));
     setDeferredPaused(resp.ticket?.troubleshooting_outcome === "deferred");
+    setSideTrackingCase(resp.delivery_lookup_required && resp.ticket && resp.ticket.issue_type !== "delivery"
+      ? `${resp.session_id}:${resp.ticket.ticket_id}` : null);
     if (resp.tracking_summary && resp.ticket) {
       setTrackingResult({ sessionId: resp.session_id, ticketId: resp.ticket.ticket_id, domain: resp.ticket.domain?.trim() || storeDomain, summary: resp.tracking_summary });
-    } else if (resp.tracking_summary !== undefined || !resp.ticket) {
+    } else if (resp.tracking_summary !== undefined || resp.ticket?.issue_type !== "delivery") {
       setTrackingResult(null);
     }
     if (resp.suggested_option?.answer_key) {
@@ -375,6 +380,7 @@ export default function WarrantyChat({
       setWarrantyState(null);
       setTerminalEnrichment(null);
       setTrackingResult(null);
+      setSideTrackingCase(null);
       setHandoff(null);
       setSuggestedIssueType(null);
       setPendingDefectStart(null);
@@ -1603,10 +1609,10 @@ export default function WarrantyChat({
           <div className="mt-4"><HumanHandoffNotice handoff={handoff} caseReference={caseReference} /></div>
         )}
 
-        {helpAccessReady && warrantyState?.issue_type === "delivery" && warrantyState.status !== "resolved" && !deferredPaused && !handoff?.requested && (
+        {helpAccessReady && warrantyState && (deliveryCase || sideTracking) && warrantyState.status !== "resolved" && !deferredPaused && !handoff?.requested && (
           <div>
-            <DeliveryTrackingPanel key={`${sessionId}:${deliveryStoreDomain}`} storeDomain={deliveryStoreDomain} initialEmail={intakeContactEmail} summary={trackingSummary} disabled={loading} onLookup={handleDeliveryLookup} />
-            {trackingSummary?.available && <button type="button" disabled={loading} onClick={() => handleResolutionOutcome("delivery_answered", "The delivery update answered my question")} className="mt-2 min-h-[44px] w-full rounded-xl border border-sky-300 bg-white px-4 py-2 text-sm font-medium text-sky-900 hover:bg-sky-50 disabled:opacity-50">This delivery update answered my question</button>}
+            <DeliveryTrackingPanel key={`${sessionId}:${deliveryStoreDomain}`} storeDomain={deliveryStoreDomain} initialEmail={intakeContactEmail} summary={trackingSummary} disabled={loading} sideLookup={sideTracking} onLookup={handleDeliveryLookup} />
+            {deliveryCase && trackingSummary?.available && <button type="button" disabled={loading} onClick={() => handleResolutionOutcome("delivery_answered", "The delivery update answered my question")} className="mt-2 min-h-[44px] w-full rounded-xl border border-sky-300 bg-white px-4 py-2 text-sm font-medium text-sky-900 hover:bg-sky-50 disabled:opacity-50">This delivery update answered my question</button>}
           </div>
         )}
 

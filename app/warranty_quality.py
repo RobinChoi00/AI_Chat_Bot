@@ -12,14 +12,14 @@ import logging
 import os
 import re
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from collections import Counter
-from sqlalchemy import Column, DateTime, Integer, String, Text, or_
+from sqlalchemy import Column, DateTime, Integer, String, Text, inspect, or_
 from sqlalchemy.exc import IntegrityError
 
 from admin_auth import require_admin_key
@@ -165,15 +165,20 @@ async def record_customer_follow_up(request: Request, ticket_id: str, body: Foll
 
 
 def ticket_purpose(ticket) -> str:
-    issue = str(getattr(ticket, "issue_type", "") or "").lower()
+    issue = str(getattr(ticket, "issue_type", "") or "").strip().lower()
     node = str(getattr(ticket, "current_node_id", "") or "")
-    collected = ticket.get_collected()
-    if issue == "delivery" or node.startswith("delivery_") or collected.get("human_support_department") == "sales":
+    # The intended staff department is routing metadata, not the customer's
+    # purpose. Preserve a classified issue before inferring from a legacy node.
+    if issue == "delivery":
         return "delivery"
-    if issue in {"defect", "installation"} or node.startswith(("defect_", "install_")) or collected.get("human_support_reason") == "safety_hazard":
+    if issue in {"defect", "installation"}:
         return "repair"
     if issue in {"sales", "order_cancel"} or node == "sales_routing":
         return "other"
+    if node.startswith("delivery_"):
+        return "delivery"
+    if node.startswith(("defect_", "install_")) or ticket.get_collected().get("human_support_reason") == "safety_hazard":
+        return "repair"
     return "unknown"
 
 
@@ -189,25 +194,87 @@ def _rate(part: int, total: int):
     return round(part / total * 100, 1) if total else None
 
 
-def summarize_ticket_outcomes(tickets, observations) -> dict:
+def read_handoff_notification_states(db, selected_tickets) -> dict[tuple[str, str], str]:
+    """Read the selected tickets' handoff jobs without initializing or replaying them."""
+    from warranty_notification_jobs import WarrantyHandoffDispatch as Dispatch, WarrantyNotificationJob as Job
+
+    schema = inspect(db.connection())
+    if not schema.has_table(Job.__tablename__):
+        return {}
+    query = (db.query(Job.ticket_id, Job.source_key, Job.status)
+             .join(selected_tickets, Job.ticket_id == selected_tickets.c.ticket_id)
+             .filter(Job.kind == "handoff"))
+    if not schema.has_table(Dispatch.__tablename__):
+        return {(str(ticket_id), str(source_key)): str(status) for ticket_id, source_key, status in query.all()}
+
+    states = {}
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    for ticket_id, source_key, status, lease_expires_at, dispatch_id, dispatch_state, provider_id in (
+        query.add_columns(Job.lease_expires_at, Dispatch.job_id, Dispatch.state, Dispatch.provider_ticket_id)
+        .outerjoin(Dispatch, Job.id == Dispatch.job_id).all()
+    ):
+        if dispatch_id is not None:
+            # Provider acceptance is committed first; a worker restart after
+            # that commit may leave the queue row temporarily still processing.
+            if dispatch_state == "submitted" and provider_id:
+                status = "freshdesk_submitted"
+            elif dispatch_state in {"uncertain", "submitted"} or (
+                dispatch_state == "submitting" and (
+                    status != "processing" or lease_expires_at is None or lease_expires_at <= now_utc
+                )
+            ):
+                status = "delivery_uncertain"
+            elif status == "completed":
+                status = "unknown"
+        states[(str(ticket_id), str(source_key))] = str(status)
+    return states
+
+
+def _staff_acknowledgement_recorded(collected: dict) -> bool:
+    """Only the timestamp from the authenticated staff-action flow counts."""
+    value = collected.get("human_support_staff_accepted_at")
+    if not isinstance(value, str) or "T" not in value:
+        return False
+    try:
+        datetime.fromisoformat(value)
+        return True
+    except ValueError:
+        return False
+
+
+def summarize_ticket_outcomes(tickets, observations, handoff_job_states=None) -> dict:
     """One current result per repair case; no result is inferred from closure."""
     by_ticket: dict[str, list] = {}
     for row in observations:
         by_ticket.setdefault(str(row.ticket_id), []).append(row)
     purposes = Counter({name: 0 for name in ("repair", "delivery", "other", "unknown")})
     outcomes = Counter({name: 0 for name in ("fixed", "not_fixed", "unable_to_attempt", "deferred", "unknown")})
-    delivery = Counter({name: 0 for name in ("consultations", "latest_lookup_available", "latest_lookup_unavailable", "lookup_not_attempted", "answered", "needs_review", "unable_to_attempt", "deferred", "unknown")})
+    delivery = Counter({name: 0 for name in ("consultations", "latest_lookup_available", "latest_lookup_unavailable", "lookup_not_recorded", "answered", "needs_review", "unable_to_attempt", "deferred", "unknown")})
+    case_endings = Counter(restarted_or_abandoned=0, other_closed=0)
+    notification = Counter(queued=0, retry_scheduled=0, smtp_accepted=0, freshdesk_submitted=0, dead_letter=0,
+                           delivery_uncertain=0, not_recorded=0, freshdesk_linked=0, staff_acknowledged=0,
+                           staff_acknowledgement_unknown=0)
+    job_bucket = {"pending": "queued", "processing": "queued", "failed": "retry_scheduled",
+                  "completed": "smtp_accepted", "freshdesk_submitted": "freshdesk_submitted",
+                  "dead_letter": "dead_letter", "delivery_uncertain": "delivery_uncertain"}
     reasons, departments = Counter(), Counter()
     followed_up = reopened = diagnosed = 0
     by_id = {}
     for ticket in tickets:
         collected = ticket.get_collected()
+        ticket_id = str(ticket.ticket_id)
         purpose = ticket_purpose(ticket)
         purposes[purpose] += 1
-        history = by_ticket.get(str(ticket.ticket_id), [])
+        decision = str(ticket.admin_decision or "").strip().lower()
+        if decision == "abandoned":
+            case_endings["restarted_or_abandoned"] += 1
+        elif str(getattr(ticket, "status", "") or "").strip().lower() in {"resolved", "closed"}:
+            case_endings["other_closed"] += 1
+        history = by_ticket.get(ticket_id, [])
         initial = str(collected.get("troubleshooting_outcome") or "")
         baseline = {"resolved": "fixed", "unresolved": "not_fixed", "unable_to_attempt": "unable_to_attempt", "deferred": "deferred"}.get(initial)
-        if baseline is None and str(ticket.admin_decision or "") == "self_resolved":
+        # This legacy disposition was only written by the customer outcome action.
+        if baseline is None and not initial and decision == "self_resolved":
             baseline = "fixed"
         normalized_history = []
         for row in history:
@@ -220,11 +287,20 @@ def summarize_ticket_outcomes(tickets, observations) -> dict:
         latest = normalized_history[-1] if normalized_history else baseline or "unknown"
         if latest not in outcomes:
             latest = "unknown"
-        by_id[str(ticket.ticket_id)] = {"purpose": purpose, "outcome": latest, "diagnosis_completed": purpose == "repair" and is_workflow_terminal(ticket)}
+        by_id[ticket_id] = {"purpose": purpose, "outcome": latest, "diagnosis_completed": purpose == "repair" and is_workflow_terminal(ticket)}
         if collected.get("human_support_requested"):
             reasons[str(collected.get("human_support_reason") or "customer_request")] += 1
             department = str(collected.get("human_support_department") or ("sales" if purpose == "delivery" else "warranty"))
             departments[department] += 1
+            source_key = str(collected.get("human_support_notification_source") or "").strip()
+            state = (handoff_job_states or {}).get((ticket_id, source_key)) if source_key else None
+            notification[job_bucket.get(state, "not_recorded")] += 1
+            if str(collected.get("freshdesk_ticket_id") or "").strip():
+                notification["freshdesk_linked"] += 1
+            if _staff_acknowledgement_recorded(collected):
+                notification["staff_acknowledged"] += 1
+            else:
+                notification["staff_acknowledgement_unknown"] += 1
         if purpose == "delivery":
             delivery["consultations"] += 1
             snapshot = collected.get("tracking_snapshot")
@@ -235,7 +311,7 @@ def summarize_ticket_outcomes(tickets, observations) -> dict:
             if isinstance(snapshot, dict) and isinstance(snapshot.get("available"), bool):
                 delivery["latest_lookup_available" if snapshot["available"] else "latest_lookup_unavailable"] += 1
             else:
-                delivery["lookup_not_attempted"] += 1
+                delivery["lookup_not_recorded"] += 1
             service = str(collected.get("delivery_service_outcome") or "")
             service_key = "answered" if service == "delivery_answered" else service if service in {"needs_review", "unable_to_attempt", "deferred"} else "deferred" if initial == "deferred" else "unknown"
             delivery[service_key] += 1
@@ -259,9 +335,13 @@ def summarize_ticket_outcomes(tickets, observations) -> dict:
             "result_reported": reported, "confirmed_fix_rate_all_pct": _rate(outcomes["fixed"], purposes["repair"]),
             "confirmed_fix_rate_reported_pct": _rate(outcomes["fixed"], reported),
             "followed_up": followed_up, "reopened_after_fix": reopened},
-        "delivery": dict(delivery),
+        # Keep the original key for clients, but absence of data does not
+        # establish that a lookup was never attempted.
+        "delivery": {**delivery, "lookup_not_attempted": delivery["lookup_not_recorded"]},
+        "case_endings": dict(case_endings),
         "handoffs": {"requested": sum(reasons.values()), "by_reason": [{"reason": k, "count": v} for k, v in sorted(reasons.items())],
-            "by_department": [{"department": k, "count": v} for k, v in sorted(departments.items())]},
+                     "by_department": [{"department": k, "count": v} for k, v in sorted(departments.items())],
+                     "notification": dict(notification)},
         "_by_ticket": by_id,
     }
 
@@ -280,13 +360,15 @@ def quality_metrics(*, days: Optional[int] = 30, domain: Optional[str] = None, a
         from customer_journey import apply_cohort, cohort_metadata
         query = apply_cohort(db, query, surface="warranty", id_column=WarrantyTicket.ticket_id, cohort=cohort)
         tickets = query.all()
+        selected_tickets = query.with_entities(WarrantyTicket.ticket_id).subquery()
         observations = (db.query(WarrantyOutcomeObservation)
                         .join(WarrantyTicket, WarrantyTicket.ticket_id == WarrantyOutcomeObservation.ticket_id)
                         .filter(WarrantyTicket.id.in_(query.with_entities(WarrantyTicket.id)))
                         .filter(WarrantyOutcomeObservation.observed_at <= now)
                         .order_by(WarrantyOutcomeObservation.observed_at, WarrantyOutcomeObservation.id).all())
+        notification_states = read_handoff_notification_states(db, selected_tickets)
         cohort_info = cohort_metadata(db, surface="warranty", selected=cohort)
-    summary = summarize_ticket_outcomes(tickets, observations)
+    summary = summarize_ticket_outcomes(tickets, observations, notification_states)
     summary.pop("_by_ticket")
     repair = summary["repair"]
     fixed, still_broken = repair["latest_outcomes"]["fixed"], repair["latest_outcomes"]["not_fixed"]

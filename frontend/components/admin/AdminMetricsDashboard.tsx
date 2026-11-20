@@ -12,6 +12,7 @@ import Link from "next/link";
 import { useMemo } from "react";
 import MetricCard from "./MetricCard";
 import RepairOutcomePanel from "./RepairOutcomePanel";
+import SupportRequestPanel from "./SupportRequestPanel";
 import AdminJourneyPanel from "./AdminJourneyPanel";
 import { metricCount, metricRate } from "@/lib/adminMetricDisplay";
 import type {
@@ -36,7 +37,7 @@ const STATUS_LABELS: Record<string, string> = {
   sales_handoff: "Sales request saved",
   admin_reviewing: "Admin reviewing",
   need_more_information: "Needs more info",
-  resolved: "Marked closed",
+  resolved: "Stored resolved status",
   closed: "Closed",
 };
 
@@ -166,15 +167,17 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
         <MetricCard label="Anonymous sessions" value={metricCount(totals.anonymous_sessions)} hint="Sessions without an email; these are not verified unique people" />
       </section>
 
+      <SupportRequestPanel handoffs={data.handoffs} />
+
       <RepairOutcomePanel repair={repair} />
 
       <section className="space-y-3" aria-labelledby="delivery-outcomes-title">
         <h2 id="delivery-outcomes-title" className="font-semibold text-gray-900">Delivery outcomes</h2>
         <p className="text-xs text-gray-600">Delivery updates and postponed cases are not repair fixes. A provider update returned by the API does not prove the customer read it or that the shipment was delivered.</p>
         {delivery ? <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-          <MetricCard label="Latest lookup available" value={String(delivery.latest_lookup_available)} hint={`${delivery.latest_lookup_available} / ${delivery.consultations} delivery consultations returned a provider update`} />
-          <MetricCard label="Latest lookup unavailable" value={String(delivery.latest_lookup_unavailable)} hint="The latest attempted lookup could not verify an update" />
-          <MetricCard label="No lookup attempted" value={String(delivery.lookup_not_attempted)} hint="No saved tracking lookup; not evidence of an unsuccessful shipment" />
+          <MetricCard label="Latest lookup result available" value={String(delivery.latest_lookup_available)} hint={`${delivery.latest_lookup_available} / ${delivery.consultations} delivery consultations have a saved available result`} />
+          <MetricCard label="Latest lookup result unavailable" value={String(delivery.latest_lookup_unavailable)} hint="A saved lookup could not verify an update" />
+          <MetricCard label="No recorded lookup result" value={metricCount(delivery.lookup_not_recorded ?? delivery.lookup_not_attempted)} hint="No stored lookup snapshot; whether lookup was attempted is unknown" />
           <MetricCard label="Delivery question answered" value={String(delivery.answered)} hint="Customer confirmed the delivery question was answered; not a repair fix or proof of shipment delivery" />
           <MetricCard label="Delivery deferred" value={String(delivery.deferred)} hint="Customer will return later; not a self-resolution" />
           <MetricCard label="Delivery outcome unknown" value={String(delivery.unknown)} hint="No confirmed delivery outcome was recorded" />
@@ -184,13 +187,6 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
 
       <AdminJourneyPanel journey={data.journey} />
 
-      <section className="rounded-xl border border-gray-200 bg-white p-4">
-        <h2 className="font-semibold text-gray-900">Support requests saved</h2>
-        <p className="mt-2 text-2xl font-semibold">{metricCount(data.handoffs?.requested)}</p>
-        <p className="mt-1 text-xs text-gray-600">Saved requests do not confirm a notification, staff receipt, or callback. Department records show the intended contact route.</p>
-        {data.handoffs && <div className="mt-3 grid gap-3 sm:grid-cols-2"><div><h3 className="text-xs font-medium text-gray-500">Intended department</h3><ul className="mt-1 text-sm">{data.handoffs.by_department.map((row) => <li key={row.department}>{row.department || "Not recorded"}: {row.count}</li>)}</ul></div><div><h3 className="text-xs font-medium text-gray-500">Reason</h3><ul className="mt-1 text-sm">{data.handoffs.by_reason.map((row) => <li key={row.reason}>{row.reason.replace(/_/g, " ")}: {row.count}</li>)}</ul></div></div>}
-      </section>
-
       <section className="space-y-3" aria-labelledby="workflow-reference-title">
         <h2 id="workflow-reference-title" className="font-semibold text-gray-900">Workflow &amp; queue reference</h2>
         <p className="text-xs text-gray-600">Workflow endpoints, saved emails, and closed statuses do not establish customer resolution. Idle activity is an observation, not confirmed abandonment.</p>
@@ -198,7 +194,10 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
           <MetricCard label="Idle in-progress consultations" value={String(totals.idle_in_progress ?? totals.abandoned)} hint={`No activity >${data.range.abandon_threshold_hours}h · ${metricRate(totals.idle_in_progress ?? totals.abandoned, started)} of saved consultations; departure and outcome unknown`} />
           <MetricCard label="Repair diagnosis completed" value={metricRate(repair?.diagnosis_completed, repair?.consultations)} hint={`${metricCount(repair?.diagnosis_completed)} / ${metricCount(repair?.consultations)} repair consultations reached a diagnosis endpoint`} />
           <MetricCard label="Workflow endpoint reached" value={metricRate(totals.reached_terminal, started)} hint={`${totals.reached_terminal} / ${started} saved consultations; not confirmed fixes`} />
-          <MetricCard label="Tickets marked closed" value={String(totals.resolved)} hint="Administrative and customer closures; not confirmed fixes" />
+          {data.case_endings ? <>
+            <MetricCard label="Restarted or marked abandoned" value={metricCount(data.case_endings.restarted_or_abandoned)} hint="Recorded restart/abandonment, separate from inactivity or a confirmed fix" />
+            <MetricCard label="Other tickets marked closed" value={metricCount(data.case_endings.other_closed)} hint="Excludes restarted/abandoned consultations. Closure alone does not confirm a fix." />
+          </> : <MetricCard label="Tickets marked closed (legacy status)" value={metricCount(totals.resolved)} hint="Includes restarts; not confirmed fixes. A closure breakdown is unavailable." />}
           <MetricCard label="Saved email coverage" value={metricRate(totals.contact_captured, started)} hint={`${totals.contact_captured} / ${started} saved consultations; visits before contact collection are not measured`} />
           <MetricCard label="Median recorded turns to endpoint" value={totals.reached_terminal > 0 ? String(totals.median_turns_to_terminal) : "—"} hint="Recorded workflow turns; fewer turns do not establish a better outcome" />
         </div>
@@ -218,8 +217,9 @@ export default function AdminMetricsDashboard({ data, days }: Props) {
       <section className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <h3 className="mb-2 text-sm font-semibold text-gray-900">
-            Current queue statuses
+            Stored workflow statuses
           </h3>
+          <p className="mb-2 text-xs text-gray-600">The raw resolved status includes restarts and other closures; see the separate counts above.</p>
           {by_status.length === 0 ? (
             <p className="text-sm text-gray-500">No tickets in this window.</p>
           ) : (

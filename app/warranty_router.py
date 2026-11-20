@@ -1222,6 +1222,13 @@ def _natural_delivery_start(engine, session_id: str, message: str, domain: str) 
         safe_lookup_by_tracking_number,
     )
 
+    existing = engine.get_active_session_ticket(session_id)
+    if existing is not None:
+        retained_case = _answer_preserving_case(
+            engine, existing, engine.get_current_node(str(existing.ticket_id)) or {}, message,
+        )
+        if retained_case is not None:
+            return retained_case
     payload = _quick_start_ticket(engine, session_id, "delivery", domain)
     ticket_id = str(((payload.get("ticket") or {}).get("ticket_id")) or "")
     node = engine.get_current_node(ticket_id) if ticket_id else None
@@ -1468,10 +1475,12 @@ def _handoff_message(reason: str, department: str = "warranty", *, notification_
 
 
 def _support_interrupt_reason(text: str) -> Optional[str]:
-    from warranty_intake_context import reported_safety_hazard  # noqa: WPS433
-    from warranty_scope import human_support_reason  # noqa: WPS433
+    from customer_safety import reported_safety_hazard  # noqa: WPS433
+    from warranty_scope import human_support_reason, is_pre_purchase_sales  # noqa: WPS433
 
-    if reported_safety_hazard(text=text):
+    # Pre-existing pain may be a shopping requirement, not an injury from a
+    # chair. A physical incident (even with a shopping request) still wins.
+    if reported_safety_hazard(text=text, physical_only=is_pre_purchase_sales(text)):
         return "safety_hazard"
     return human_support_reason(text)
 
@@ -1849,6 +1858,54 @@ _OPENING_ISSUE_NODE = {
 }
 
 
+def _answer_preserving_case(engine, ticket, node: dict, text: str) -> Optional[Dict[str, Any]]:
+    """Handle a separate question without replacing the original support branch."""
+    from delivery_intake import is_plausible_order_id, map_delivery_free_text
+    from warranty_common_questions import _is_exact_option_text
+    from warranty_scope import support_contact
+    from warranty_side_questions import answer_ambiguous_remote_display, answer_pre_purchase_product_media
+
+    if _is_exact_option_text(node, text):
+        return None
+    ticket_id = str(ticket.ticket_id)
+    reply = answer_pre_purchase_product_media(text, ticket=ticket) or answer_ambiguous_remote_display(node, text)
+    if reply:
+        return _build_side_question_response(
+            engine, ticket_id, reply, customer_text=text, offer_workflow_resolution=False,
+        )
+
+    # A short model/serial-looking number alone is insufficient to override
+    # an existing setup or repair task. Explicit delivery language can offer
+    # verification without reclassifying or closing that case.
+    purpose = str(getattr(ticket, "issue_type", "") or "")
+    if purpose not in {"installation", "defect"} or str(ticket.status) != "in_progress" or is_plausible_order_id(text):
+        return None
+    delivery_kind = map_delivery_free_text("delivery_intent_q", text)
+    delivery_damage = delivery_kind == "damage_issue" and bool(re.search(
+        r"\b(?:delivery|delivered|arrived|shipped|shipment|shipping\s+box)\b", text, re.I,
+    )) and bool(re.search(r"\b(?:damag\w*|broken|cracked|crushed|dent\w*|wrong\s+item|missing)\b", text, re.I))
+    if not delivery_damage and not _should_start_verified_delivery(text):
+        return None
+    sales = support_contact("sales", str(getattr(ticket, "domain", "") or ""))["phone"]
+    if delivery_damage:
+        reply = (
+            "This sounds like a delivery damage or missing-item report. I haven't opened a new claim. "
+            f"Contact **Sales at {sales}** with your order number and a description of what arrived. "
+            "You can also verify the order in the delivery form below. Your current support case is unchanged."
+        )
+    else:
+        reply = (
+            "To verify your delivery, enter your **order number** and the **email used at checkout** "
+            "in the secure delivery form below. I haven't looked up the order yet. "
+            "Your current support case is unchanged."
+        )
+    payload = _build_side_question_response(
+        engine, ticket_id, reply, customer_text=text, offer_workflow_resolution=False,
+    )
+    payload["delivery_lookup_required"] = True
+    return payload
+
+
 def _try_opening_question_payload(
     engine,
     session_id: str,
@@ -1864,8 +1921,15 @@ def _try_opening_question_payload(
     )
     from warranty_intake_context import persist_intake_summary  # noqa: WPS433
     from warranty_scope import evaluate_warranty_scope  # noqa: WPS433
+    from warranty_side_questions import answer_pre_purchase_product_media
 
     stub = SimpleNamespace(domain=domain)
+    media = answer_pre_purchase_product_media(message, ticket=stub)
+    if media:
+        ticket_id = _open_session_ticket(engine, session_id, domain)
+        return _build_side_question_response(
+            engine, ticket_id, media, customer_text=message, hide_workflow_options=True, offer_workflow_resolution=False,
+        )
     factual = try_factual_common_question(_OPENING_ISSUE_NODE, message, ticket=stub)
     if factual:
         hide_menu = is_sales_bound_opening_question(message)
@@ -1903,6 +1967,7 @@ def _build_side_question_response(
     customer_text: str = "",
     suggested_option: Optional[Dict[str, str]] = None,
     hide_workflow_options: bool = False,
+    offer_workflow_resolution: bool = True,
 ) -> Dict[str, Any]:
     ticket = engine.get_ticket(ticket_id)
     node = engine.get_current_node(ticket_id)
@@ -1969,7 +2034,8 @@ def _build_side_question_response(
     )
     lowered = message.lower()
     if (
-        message.strip()
+        offer_workflow_resolution
+        and message.strip()
         and not any(marker in lowered for marker in clarify_markers)
         and not payload.get("help_offer_options")
     ):
@@ -2093,6 +2159,12 @@ def _submit_answer_with_nlp(
 
     from warranty_error_code_gate import is_gate_node, map_gate_free_text  # noqa: WPS433
     from warranty_nlp import interpret_warranty_answer  # noqa: WPS433
+    from warranty_side_questions import explicit_remote_display_answer_key
+
+    if node:
+        mapped_remote = explicit_remote_display_answer_key(node, answer)
+        if mapped_remote and any(opt.get("answer_key") == mapped_remote for opt in node.get("options") or ()):
+            return _submit_mapped_answer(engine, ticket_id, mapped_remote, answer, node)
 
     if node and is_gate_node(node_id):
         mapped = map_gate_free_text(node_id, answer)
@@ -2670,6 +2742,7 @@ def _serialize_ticket_state(
         message = _handoff_message(reason, department, notification_sent=notification_sent, language=handoff_language, notification_status=notification_status)
         payload["assistant_message"] = message
         payload["handoff"] = {"requested": True, "reason": reason, "notification_sent": notification_sent,
+                              "submitted_via": "freshdesk" if notification_status == "freshdesk_submitted" else "smtp" if notification_sent else None,
                               "language": handoff_language,
                               "notification_status": notification_status,
                               **support_contact(department, str(getattr(ticket, "domain", "") or "")), "message": message}
@@ -3045,10 +3118,12 @@ async def lookup_delivery_tracking(request: Request, session_id: str, body: Warr
     if ticket is None:
         raise HTTPException(status_code=404, detail="Warranty session not found.")
     snapshot = safe_lookup_by_order_or_email(f"{order} {email}", domain)
-    persist_snapshot(str(ticket.ticket_id), snapshot, raw_input=f"{order} {email}", lookup_kind="order")
-    ticket = engine.get_ticket(str(ticket.ticket_id))
+    if str(ticket.issue_type or "") == "delivery":
+        persist_snapshot(str(ticket.ticket_id), snapshot, raw_input=f"{order} {email}", lookup_kind="order")
+        ticket = engine.get_ticket(str(ticket.ticket_id))
     payload = _serialize_ticket_state(session_id, ticket, engine.get_current_node(str(ticket.ticket_id)), engine=engine)
     summary = public_delivery_tracking_summary(snapshot, domain)
+    payload["delivery_lookup_required"] = True
     payload["tracking_summary"] = summary
     payload["assistant_message"] = summary["message"]
     return payload
@@ -3516,6 +3591,10 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
             answer,
             domain,
         )
+
+    retained_case = _answer_preserving_case(engine, ticket, node or {}, answer)
+    if retained_case is not None:
+        return retained_case
 
     _recover_explicit_component_correction(engine, ticket_id, answer)
     node = engine.get_current_node(ticket_id)

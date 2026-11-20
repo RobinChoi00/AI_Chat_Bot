@@ -1,6 +1,6 @@
 """Measured repair outcomes, delivery service and progressive consent remain distinct."""
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 
@@ -96,6 +96,97 @@ def test_early_handoff_is_not_diagnosis_and_department_is_preserved(client):
     assert sum(row["completed"] for row in body["daily_started"]) == 1
 
 
+def test_sales_handoff_does_not_change_what_the_customer_asked_about(client):
+    sales_route = {"human_support_requested": True, "human_support_department": "sales"}
+    seed("missing-purpose", issue=None, node="issue_type", collected=sales_route)
+    seed("repair", issue="defect", node="delivery_intent_q", collected=sales_route)
+    seed("cancel", issue="order_cancel", node="delivery_intent_q", collected=sales_route)
+    seed("legacy-delivery", issue=None, node="delivery_intent_q")
+    body = measured(client)
+    assert body["purpose_counts"] == {"repair": 1, "delivery": 1, "other": 1, "unknown": 1}
+    assert body["handoffs"]["by_department"] == [{"department": "sales", "count": 3}]
+
+
+def test_restart_and_other_closure_are_not_counted_as_fixes(client):
+    seed("restart", status="resolved", decision="abandoned")
+    seed("approval", status="resolved", decision="approved")
+    seed("customer-fix", status="resolved", decision="self_resolved", outcome="resolved")
+    seed("no-result", status="in_progress")
+    body = measured(client)
+    assert body["case_endings"] == {"restarted_or_abandoned": 1, "other_closed": 2}
+    assert body["totals"]["resolved"] == 3  # legacy raw status, not the fix count
+    assert body["repair"]["latest_outcomes"]["fixed"] == 1
+    assert body["repair"]["latest_outcomes"]["unknown"] == 3
+
+
+def test_handoff_telemetry_matches_the_saved_job_without_inventing_staff_receipt(client):
+    from warranty_notification_jobs import WarrantyNotificationJob as Job
+
+    for name in ("waiting", "running", "retry", "smtp", "dead", "unknown", "no-source", "acknowledged"):
+        collected = {"human_support_requested": True, "human_support_notification_source": f"{name}:current"}
+        if name == "no-source":
+            collected.pop("human_support_notification_source")
+        if name == "dead":
+            collected.update(freshdesk_ticket_id="example-link", human_support_staff_accepted_at="unverified")
+        if name == "acknowledged":
+            collected["human_support_staff_accepted_at"] = wm._now_cst().isoformat()
+        seed(name, node="root", status="awaiting_admin_review", collected=collected)
+
+    with wm.warranty_db_session() as db:
+        Job.__table__.create(bind=db.get_bind(), checkfirst=True)
+        for name, status in (("waiting", "pending"), ("running", "processing"), ("retry", "failed"), ("smtp", "completed"), ("dead", "dead_letter")):
+            db.add(Job(ticket_id=name, source_key=f"{name}:current", status=status, kind="handoff"))
+        db.add(Job(ticket_id="unknown", source_key="unknown:previous", status="completed", kind="handoff"))
+        db.add(Job(ticket_id="unknown", source_key="unknown:current", status="completed", kind="contact"))
+        db.add(Job(ticket_id="no-source", source_key="no-source:current", status="completed", kind="handoff"))
+
+    handoffs = measured(client)["handoffs"]
+    assert handoffs["requested"] == 8
+    assert handoffs["notification"] == {
+        "queued": 2, "retry_scheduled": 1, "smtp_accepted": 1, "freshdesk_submitted": 0, "dead_letter": 1,
+        "delivery_uncertain": 0, "not_recorded": 3, "freshdesk_linked": 1, "staff_acknowledged": 1,
+        "staff_acknowledgement_unknown": 7,
+    }
+    response = client.get("/admin/warranty/quality?all_time=true", headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json()["handoffs"] == handoffs
+
+
+def test_freshdesk_acceptance_crash_and_uncertain_delivery_are_not_smtp_or_staff_acceptance(client):
+    from warranty_notification_jobs import WarrantyHandoffDispatch as Dispatch, WarrantyNotificationJob as Job
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    examples = (
+        ("signed-off", "completed", "submitted", 910001, None),
+        ("provider-recorded-on-crash", "processing", "submitted", 910002, now - timedelta(seconds=30)),
+        ("active-submit", "processing", "submitting", None, now + timedelta(minutes=5)),
+        ("stopped-at-submit", "processing", "submitting", None, now - timedelta(seconds=30)),
+        ("provider-uncertain", "dead_letter", "uncertain", None, None),
+        ("provider-rejected", "dead_letter", "rejected", None, None),
+    )
+    for name, *_rest in examples:
+        seed(name, node="root", status="awaiting_admin_review", collected={
+            "human_support_requested": True, "human_support_notification_source": f"{name}:support",
+        })
+    with wm.warranty_db_session() as db:
+        Job.__table__.create(bind=db.get_bind(), checkfirst=True)
+        Dispatch.__table__.create(bind=db.get_bind(), checkfirst=True)
+        for name, job_status, state, provider_id, lease in examples:
+            job = Job(ticket_id=name, source_key=f"{name}:support", status=job_status, kind="handoff", lease_expires_at=lease)
+            db.add(job)
+            db.flush()
+            db.add(Dispatch(job_id=job.id, state=state, provider_ticket_id=provider_id))
+
+    notification = measured(client)["handoffs"]["notification"]
+    assert notification["freshdesk_submitted"] == 2
+    assert notification["queued"] == 1
+    assert notification["delivery_uncertain"] == 2
+    assert notification["dead_letter"] == 1
+    assert notification["smtp_accepted"] == notification["freshdesk_linked"] == notification["staff_acknowledged"] == 0
+    assert notification["staff_acknowledgement_unknown"] == 6
+    assert "910001" not in json.dumps(notification)
+
+
 def test_latest_result_progress_inability_deferral_and_unknown_have_distinct_denominators(client):
     seed("fixed", outcome="resolved", decision="self_resolved", status="resolved")
     seed("not-fixed", outcome="unresolved")
@@ -142,6 +233,8 @@ def test_delivery_results_never_inflate_repair_fix_rate(client):
     assert body["delivery"]["consultations"] == 3
     assert body["delivery"]["deferred"] == 1 and body["delivery"]["needs_review"] == 1 and body["delivery"]["unknown"] == 1
     assert body["delivery"]["latest_lookup_available"] == 1 and body["delivery"]["latest_lookup_unavailable"] == 1
+    assert body["delivery"]["lookup_not_recorded"] == 1
+    assert body["delivery"]["answered"] == 0  # provider snapshot alone is not an answer outcome
     assert body["totals"]["self_service_resolved"] == 1
 
 

@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(APP_DIR))
 
@@ -41,6 +43,46 @@ def test_blocks_pre_purchase_and_sales_team_questions():
     )
     assert not is_pre_purchase_sales("OS-4000T footrest air not inflating")
     assert evaluate_warranty_scope("OS-4000T footrest air not inflating").in_scope
+
+
+@pytest.mark.parametrize("text", [
+    "i want buy osaki bliss VL but i need photos and videos about this product",
+    "Can I see the Bliss VL before I buy it? I need photos and a video.",
+    "I plan to buy the Bliss VL and I'd like to see a demo video.",
+])
+def test_pre_purchase_media_is_not_mapped_to_installation(text):
+    from warranty_scope import is_pre_purchase_product_media
+
+    assert is_pre_purchase_product_media(text)
+    assert evaluate_warranty_scope(text, node_id="install_concern", issue_type="installation").reason == "sales_topic"
+
+
+@pytest.mark.parametrize("text", [
+    "I want to buy a replacement remote for my chair. Can you send photos?",
+    "I don't want to buy a new chair. I need to send photos of my damaged footrest.",
+    "I bought this chair and need an assembly video.",
+])
+def test_warranty_photo_or_video_requests_do_not_become_sales(text):
+    from warranty_scope import is_pre_purchase_product_media
+
+    assert not is_pre_purchase_product_media(text)
+
+
+@pytest.mark.parametrize("text", [
+    "I do not want you to call me back. Please send the assembly guide.",
+    "No human needed, I want the installation guide.",
+    "Do you offer 24-hour customer service? I am not requesting a callback.",
+])
+def test_negated_human_requests_do_not_interrupt_warranty(text):
+    from warranty_scope import human_support_reason
+
+    assert not human_support_reason(text)
+
+
+def test_separate_positive_handoff_request_survives_negation():
+    from warranty_scope import human_support_reason
+
+    assert human_support_reason("I do not want you to call me back, but please connect me with a live agent.") == "customer_request"
 
 
 def test_blocks_off_topic():

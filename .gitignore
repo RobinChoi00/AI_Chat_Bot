@@ -2,6 +2,7 @@
 # 1. Security & Credentials (보안 및 자격 증명) - [무관용 원칙] 절대 업로드 금지
 # ==========================================
 .env
+.env.warranty-handoff
 *.pem
 secrets.json
 

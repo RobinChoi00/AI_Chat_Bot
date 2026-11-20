@@ -59,6 +59,103 @@ _DELIVERY_TEXT_NODES = frozenset(
 )
 
 
+def answer_pre_purchase_product_media(text: str, *, ticket=None) -> Optional[str]:
+    """Point shoppers to an exact published product, independent of repair state."""
+    from warranty_scope import is_pre_purchase_product_media, support_contact
+
+    if not is_pre_purchase_product_media(text):
+        return None
+
+    from catalog_identity import sentence_product
+    from sales_catalog import load_product_index
+
+    # Never reuse a previously saved warranty model as the shopping target:
+    # someone asking about another chair should not get an unrelated gallery.
+    product, _named = sentence_product(text, load_product_index())
+    contact = support_contact("sales", str(getattr(ticket, "domain", "") or ""))["phone"]
+    if product is None or product.status.lower() != "active" or not re.fullmatch(r"[a-z0-9-]{1,120}", product.handle):
+        return (
+            "I couldn't verify the exact product for your photo or video request. "
+            f"Please share its full model name or the product page, or contact **Sales at {contact}**."
+        )
+    # The catalog is the official Osaki USA storefront export. Other store
+    # handles can differ; use the catalog's source rather than guessing one.
+    url = f"https://osakiusa.com/products/{product.handle}"
+    message = f"For the **{product.display_name}**, see the [official product photos and details]({url})."
+    if re.search(r"\b(?:videos?|demo(?:nstration)?s?)\b", text, re.I):
+        message += f" I don't have a verified official video link for this model. **Sales at {contact}** can check whether one is available."
+    return message
+
+
+def _remote_display_observation(node: dict, text: str) -> tuple[bool, bool, str]:
+    """Interpret explicit display and control information only at remote checks."""
+    from warranty_common_questions import _is_exact_option_text
+
+    if str(node.get("node_id") or "") not in {"defect_remote_power_q", "defect_remote_screen_q"} or _is_exact_option_text(node, text):
+        return False, False, ""
+    raw = (text or "").strip().replace("’", "'")
+    if re.search(r"\b(?:cable|cord)\b[^.!?;\n]{0,20}\b(?:cut|broken|damaged|frayed)\b", raw, re.I):
+        return False, False, ""  # Let the separate cable symptom be handled.
+    display = r"(?:screen|display|touch\s*screen)"
+    states = r"(?:blank|black|dark|off|not\s+(?:showing|displaying)\s+anything)"
+    shows_image = bool(re.search(
+        rf"\b{display}\s+(?:(?:is|was)\s+not|(?:isn't|wasn't))\s+(?:blank|black|dark|off)\b|"
+        rf"\b{display}\s+(?:shows|displays|lights\s+up|comes\s+on)\b",
+        raw,
+        re.I,
+    )) and not bool(re.search(rf"\b{display}\s+(?:shows|displays)\s+nothing\b", raw, re.I))
+    blank_or_unspecified = not shows_image and bool(re.search(
+        rf"\b{display}\b[^.!?;\n]{{0,24}}\b{states}\b|\b{states}\s+(?:remote\s+)?{display}\b|\bno\s+display\b|"
+        rf"^\s*(?:the\s+)?{display}[!.?]*\s*$",
+        raw,
+        re.I,
+    ))
+    controls = r"(?:commands?|buttons?|controls?)"
+    fails = r"(?:(?:do\s+not|don't|will\s+not|won't|cannot|can't)\s+(?:work|respond|move)|(?:are\s+)?(?:unresponsive|dead)|fail)"
+    responds = r"(?:work|respond|move)(?:s|ing)?"
+    some = rf"\b(?:some|certain|only\s+(?:some|a\s+few))\s+(?:of\s+the\s+)?{controls}\s+"
+    if re.search(rf"{some}(?:still\s+)?{responds}\b", raw, re.I):
+        control_status = "partial_working"
+    elif re.search(rf"{some}{fails}\b|\bnot\s+all\s+{controls}\s+{responds}\b", raw, re.I):
+        control_status = "partial_failure"
+    elif re.search(rf"\b(?:no|none\s+of\s+the)\s+{controls}\s+{responds}\b|\b{controls}\s+{fails}\b", raw, re.I):
+        control_status = "unresponsive"
+    elif re.search(rf"\b{controls}\s+(?:(?:still|all|do)\s+){{0,2}}{responds}\b", raw, re.I):
+        control_status = "working"
+    else:
+        control_status = ""
+    return blank_or_unspecified, shows_image, control_status
+
+
+def explicit_remote_display_answer_key(node: dict, text: str) -> Optional[str]:
+    """Resolve a stated result instead of guessing it from the word 'screen'."""
+    blank, shows_image, controls = _remote_display_observation(node, text)
+    if node.get("node_id") == "defect_remote_power_q":
+        if shows_image or controls in {"working", "partial_working"}:
+            return "has_power"
+        if blank and controls == "unresponsive":
+            return "no_power"
+    elif node.get("node_id") == "defect_remote_screen_q":
+        if controls in {"unresponsive", "partial_working", "partial_failure"}:
+            return "commands_not_responding"
+        # A bare mention of the screen is not evidence that it is blank.
+        if blank and controls == "working" and len(text.split()) > 2:
+            return "blank_screen_commands_ok"
+    return None
+
+
+def answer_ambiguous_remote_display(node: dict, text: str) -> Optional[str]:
+    """Do not turn a blank display into an assumed power failure or replacement."""
+    blank, _shows_image, controls = _remote_display_observation(node, text)
+    if not blank or (controls and not (controls == "partial_failure" and node.get("node_id") == "defect_remote_power_q")):
+        return None
+    return (
+        "A blank screen by itself doesn't tell us whether the remote can still send commands. "
+        "Do the remote buttons still move the chair, or are the buttons unresponsive too? "
+        "Please tell me both what you see on the screen and whether the buttons work."
+    )
+
+
 def _normalize(text: str) -> str:
     return " ".join((text or "").strip().lower().split())
 
@@ -389,6 +486,12 @@ def try_answer_side_question(
     text = (answer or "").strip()
     if not text or not node:
         return None
+    product_media = answer_pre_purchase_product_media(text, ticket=ticket)
+    if product_media:
+        return product_media
+    display_help = answer_ambiguous_remote_display(node, text)
+    if display_help:
+        return display_help
     factual = try_factual_common_question(node, text, ticket=ticket)
     if factual:
         return factual

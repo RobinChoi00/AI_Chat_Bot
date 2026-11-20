@@ -44,8 +44,8 @@ tickets. Fields are:
 | Field | Meaning |
 |---|---|
 | `latest_confirmed_fixed` | Latest customer observation says fixed |
-| `latest_still_broken` | Latest result says not fixed or unable to attempt |
-| `outcome_unknown` | No customer result was recorded |
+| `latest_still_broken` | Latest result says not fixed (unable to attempt is separate) |
+| `outcome_unknown` | Legacy count outside fixed/not-fixed repair outcomes, including non-repair consultations; prefer `repair.latest_outcomes` |
 | `followed_up` | Tickets with at least one later customer follow-up |
 | `reopened_after_fix` | Tickets with a not-fixed observation after a confirmed fix; this is a quality recurrence, not a changed claim status |
 | `confirmed_fix_rate_all_pct` | Latest fixed / all selected consultations |
@@ -54,6 +54,21 @@ tickets. Fields are:
 Existing explicit self-service outcomes are used as a legacy baseline. An
 approval, rejection, restart, or closed status alone is never treated as a fix.
 Historical unknown outcomes cannot be reconstructed from closure status.
+
+The Warranty dashboard and quality API also report three separate observations:
+
+- `case_endings` separates recorded restarts/abandonment from other closed cases.
+  The older `resolved` total is a raw status and includes restarts. An idle
+  in-progress ticket is not a confirmed abandonment.
+- `delivery.lookup_not_recorded` means no stored lookup result (the old key
+  `lookup_not_attempted` is a compatibility alias). A recorded provider result
+  and an explicit customer-confirmed delivery answer are independent.
+- `handoffs.notification` counts the saved request's matching handoff job as
+  queued, scheduled to retry, SMTP accepted, submitted to Freshdesk,
+  dead-lettered, delivery uncertain, or not recorded. Freshdesk linkage and an
+  authenticated staff acknowledgement are counted separately. Missing
+  acknowledgement does not rule out staff contact in
+  another channel, and a provider accepting an email is not staff receipt.
 
 ## Publishing verified troubleshooting knowledge
 

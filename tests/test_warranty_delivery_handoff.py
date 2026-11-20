@@ -42,6 +42,172 @@ def _ticket(session="handoff"):
     return ticket_id
 
 
+def _setup_ticket(session, model="OS-4000XT"):
+    ticket_id, _ = wf.WarrantyEngine.start_session(session, "osakiusa.com")
+    wf.WarrantyEngine.set_model_name(ticket_id, model)
+    wf.WarrantyEngine.submit_answer(ticket_id, "warranty")
+    wf.WarrantyEngine.submit_answer(ticket_id, "installation")
+    wf.WarrantyEngine.submit_answer(ticket_id, model)
+    assert wf.WarrantyEngine.get_current_node(ticket_id)["node_id"] == "install_concern"
+    return ticket_id
+
+
+@pytest.mark.parametrize("entry", ("answer", "natural-start", "smart-start"))
+def test_purchase_media_answers_exact_saved_bliss_case_without_install_reprompt(client, monkeypatch, entry):
+    session = f"bliss-media-{entry}"
+    monkeypatch.setenv("WARRANTY_CHAT_EMAIL_REQUIRED", "0")
+    assert client.post(f"/api/v1/warranty/session/{session}/consent", json={"domain": "osakiusa.com"}).status_code == 200
+    ticket_id = _setup_ticket(session, "osaki bliss vl")
+    turns_before = len(wf.WarrantyEngine.get_turns(ticket_id))
+    message = "i want buy osaki bliss VL but i need photos and videos about this product"
+    route = f"{ticket_id}/answer" if entry == "answer" else f"session/{session}/{entry}"
+    response = client.post(f"/api/v1/warranty/{route}", json={"answer" if entry == "answer" else "message": message})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["side_question"] is True
+    assert body["ticket"]["ticket_id"] == ticket_id
+    assert body["ticket"]["issue_type"] == "installation"
+    assert body["ticket"]["current_node"]["node_id"] == "install_concern"
+    assert not body.get("help_offer_options")  # Photos do not count as repair resolution.
+    answer = body["assistant_message"]
+    assert "https://osakiusa.com/products/os-bliss-vl" in answer
+    assert "don't have a verified official video link" in answer
+    assert "installation issue" not in answer.lower()
+    assert len(wf.WarrantyEngine.get_turns(ticket_id)) == turns_before
+    with wm.warranty_db_session() as db:
+        rows = db.query(wm.WarrantyConversationMessage).filter_by(ticket_id=ticket_id).order_by(wm.WarrantyConversationMessage.id).all()
+        assert rows[-2].content == message and rows[-2].origin == "customer_input"
+        assert rows[-1].content == answer and rows[-1].origin == "api_response"
+        assert rows[-1].exchange_id == rows[-2].exchange_id
+
+
+def test_unknown_shopping_model_never_borrows_saved_bliss_model(client):
+    tid = _setup_ticket("unknown-shopping-model", "Osaki Bliss VL")
+    response = client.post(f"/api/v1/warranty/{tid}/answer", json={"answer": "I want to buy the Osaki Unlisted XX model. Can I see product photos?"})
+    assert response.status_code == 200, response.text
+    reply = response.json()["assistant_message"]
+    assert "couldn't verify the exact product" in reply
+    assert "os-bliss-vl" not in reply
+
+
+@pytest.mark.parametrize("entry", ("answer", "natural-start", "smart-start"))
+def test_order_status_in_setup_offers_secure_lookup_without_advancing(client, monkeypatch, entry):
+    session = f"delivery-side-{entry}"
+    ticket_id = _setup_ticket(session)
+    turns_before = len(wf.WarrantyEngine.get_turns(ticket_id))
+    # Looking up is explicit, not a side effect of writing a chat question.
+    monkeypatch.setattr("delivery_lookup._lazy_logistics", lambda: pytest.fail("Side question reached provider"))
+    route = f"{ticket_id}/answer" if entry == "answer" else f"session/{session}/{entry}"
+    response = client.post(f"/api/v1/warranty/{route}", json={"answer" if entry == "answer" else "message": "Where is my order?"})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["delivery_lookup_required"] is True
+    assert payload["ticket"]["ticket_id"] == ticket_id
+    assert payload["ticket"]["issue_type"] == "installation"
+    assert payload["ticket"]["current_node"]["node_id"] == "install_concern"
+    assert payload.get("tracking_summary") is None
+    assert "I haven't looked up the order yet" in payload["assistant_message"]
+    assert "email used at checkout" in payload["assistant_message"]
+    assert not payload.get("help_offer_options")
+    assert len(wf.WarrantyEngine.get_turns(ticket_id)) == turns_before
+
+
+def test_side_tracking_checks_checkout_identity_and_does_not_put_order_data_on_repair_ticket(client, monkeypatch):
+    tid = _setup_ticket("separate-delivery-lookup")
+    before = wf.WarrantyEngine.get_ticket(tid).get_collected()
+    calls = []
+
+    class Provider:
+        @staticmethod
+        def fetch_shopify_order_status(order, email, domain, *, allow_order_only):
+            calls.append((order, email, domain, allow_order_only))
+            return {"order_number": "#12345", "status": "DELIVERED", "company": "UPS"}
+
+    monkeypatch.setattr("delivery_lookup._lazy_logistics", lambda: Provider())
+    endpoint = "/api/v1/warranty/session/separate-delivery-lookup/delivery-tracking"
+    assert client.post(endpoint, json={"order_number": "12345"}).status_code == 422
+    response = client.post(endpoint, json={"order_number": "12345", "email": "buyer@example.invalid", "domain": "titanchair.com"})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["delivery_lookup_required"] is True and payload["tracking_summary"]["available"] is True
+    assert calls == [("12345", "buyer@example.invalid", "osakiusa.com", False)]
+    assert payload["ticket"]["ticket_id"] == tid and payload["ticket"]["issue_type"] == "installation"
+    assert payload["ticket"]["current_node"]["node_id"] == "install_concern"
+    assert wf.WarrantyEngine.get_ticket(tid).get_collected() == before
+    assert "buyer@example.invalid" not in response.text
+
+
+@pytest.mark.parametrize("start,expected_node", (
+    (_setup_ticket, "install_concern"),
+    (_ticket, "defect_problem_type"),
+))
+def test_delivery_damage_inside_another_case_does_not_promise_a_new_claim(client, start, expected_node):
+    tid = start("independent-damage-question")
+    response = client.post(f"/api/v1/warranty/{tid}/answer", json={"answer": "My new chair arrived with a cracked armrest and a crushed box."})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert "haven't opened a new claim" in payload["assistant_message"]
+    assert "ext. 2" in payload["assistant_message"]
+    assert payload["ticket"]["current_node"]["node_id"] == expected_node
+
+
+@pytest.mark.parametrize("symptom", ("the screen", "touch screen"))
+def test_blank_remote_screen_is_not_assumed_to_mean_controls_work_or_power_failure(client, symptom):
+    tid = _ticket("remote-screen-details")
+    first = client.post(f"/api/v1/warranty/{tid}/answer", json={"answer": symptom})
+    assert first.status_code == 200, first.text
+    assert first.json()["ticket"]["current_node"]["node_id"] == "defect_remote_power_q"
+    before = len(wf.WarrantyEngine.get_turns(tid))
+    response = client.post(f"/api/v1/warranty/{tid}/answer", json={"answer": "The screen is blank."})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["side_question"] is True
+    assert "buttons still move the chair" in payload["assistant_message"]
+    assert payload["ticket"]["current_node"]["node_id"] == "defect_remote_power_q"
+    assert len(wf.WarrantyEngine.get_turns(tid)) == before
+    exact = client.post(f"/api/v1/warranty/{tid}/answer", json={"answer": "no_power"})
+    assert exact.status_code == 200
+    assert exact.json()["ticket"]["current_node"]["node_id"] == "defect_remote_no_power_checks"
+
+
+@pytest.mark.parametrize("statement,node", (
+    ("The screen is blank and the buttons still move the chair.", "defect_remote_screen_q"),
+    ("The screen is not blank and everything works.", "defect_remote_screen_q"),
+    ("The screen is blank and no buttons respond.", "defect_remote_no_power_checks"),
+))
+def test_remote_power_step_uses_stated_control_result(client, statement, node):
+    tid = _ticket("remote-power-explicit")
+    wf.WarrantyEngine.submit_answer(tid, "remote")
+    response = client.post(f"/api/v1/warranty/{tid}/answer", json={"answer": statement})
+    assert response.status_code == 200, response.text
+    assert response.json()["ticket"]["current_node"]["node_id"] == node
+
+
+def test_no_buttons_respond_does_not_become_blank_screen_with_working_commands(client):
+    tid = _ticket("remote-screen-no-buttons")
+    wf.WarrantyEngine.submit_answer(tid, "remote")
+    wf.WarrantyEngine.submit_answer(tid, "has_power")
+    response = client.post(f"/api/v1/warranty/{tid}/answer", json={"answer": "The screen is blank and no buttons respond."})
+    assert response.status_code == 200, response.text
+    assert response.json()["ticket"]["current_node"]["node_id"] == "defect_remote_partial_terminal"
+
+
+@pytest.mark.parametrize("hazard", (
+    "My chair is smoking. I want to buy the Osaki Bliss VL and see a video.",
+    "I want to buy a replacement chair because the rollers hurt me while sitting in my chair.",
+))
+def test_shopping_pain_does_not_interrupt_but_real_chair_hazard_does(client, hazard):
+    tid = _setup_ticket("shopping-safety-precedence")
+    plain = client.post(f"/api/v1/warranty/{tid}/answer", json={"answer": "I want to buy the Osaki Bliss VL for my existing back pain. Can I see a demo video?"})
+    assert plain.status_code == 200, plain.text
+    assert not plain.json().get("handoff")
+    assert "os-bliss-vl" in plain.json()["assistant_message"]
+    danger = client.post(f"/api/v1/warranty/{tid}/answer", json={"answer": hazard})
+    assert danger.status_code == 200, danger.text
+    assert danger.json()["handoff"]["reason"] == "safety_hazard"
+    assert "Stop using the chair" in danger.json()["assistant_message"]
+
+
 def test_repeated_human_requests_interrupt_before_node_mapping_and_preserve_context(client, monkeypatch):
     ticket_id = _ticket()
     previous = wf.WarrantyEngine.get_ticket(ticket_id).current_node_id

@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { AIHealth, KnowledgeReview, OutcomeQuality } from "@/lib/qualityTypes";
 import RepairOutcomePanel from "./RepairOutcomePanel";
+import SupportRequestPanel from "./SupportRequestPanel";
 
 function track123ProbeLabel(status: AIHealth["track123"]): string {
   if (!status || status.error_code === "not_checked") return "Not checked";
@@ -59,6 +60,7 @@ export default function AIQualityDashboard({ outcomes, reviews, health }: {
   const input = "w-full rounded border border-gray-300 bg-white p-2 text-sm";
   const modelCalls = health?.model_calls;
   return <div className="space-y-6">
+    {outcomes && <SupportRequestPanel handoffs={outcomes.handoffs} />}
     {outcomes && <RepairOutcomePanel repair={outcomes.repair} />}
     {health && <section className="rounded-xl border bg-white p-4">
       <h2 className="font-semibold">Current runtime · response times in the last 7 days</h2>

@@ -150,17 +150,45 @@ retries transient delivery failures, with bounded attempts. It does not replay
 historic unemailed evidence automatically.
 
 Use the authenticated `GET /admin/warranty/notification-jobs?status=dead_letter`
-to inspect exhausted jobs. `POST /admin/warranty/notification-jobs/{id}/retry`
-queues a failed or exhausted job; completed and active jobs cannot be replayed
-through that operation. Both require the existing `X-Admin-Key` authentication.
-Queue records contain references and failure codes, not copied messages or
-recipients. Back up the SQLite database because it contains the queue.
+or the read-only Admin → Handoff queue to inspect exhausted jobs. Completed
+jobs report the accepting channel; acceptance is not a staff response or a
+callback booking. SMTP records contain allowlisted delivery failure codes only.
+
+New handoffs can use an explicitly configured internal Freshdesk work queue
+instead of SMTP (`WARRANTY_HANDOFF_CHANNEL=freshdesk`) in the optional host-only
+`.env.warranty-handoff` Compose overlay. Configure the reviewed
+`FRESHDESK_HANDOFF_GROUP_ID`, the existing staff-only
+`FRESHDESK_HANDOFF_REQUESTER_ID`, and `FRESHDESK_HANDOFF_ADMIN_ORIGIN`, together
+with the existing Freshdesk API settings. Verify the chosen identity/group
+and any helpdesk automations using one labeled internal test case with no
+customer details. The handoff creates an internal review job, not a linked
+customer-facing ticket. Only a case reference, intended department, safety
+category and an authenticated admin link are sent. The job stores only its
+provider reference; it does not copy the chat, customer contact or attachments.
+`WARRANTY_FRESHDESK_CREATE_CASE=0` stops all Freshdesk create calls (including
+already-queued internal handoffs), without rerouting to SMTP or replaying jobs.
+
+The selected channel is captured only when a new job is inserted. Changing the
+configuration does not reschedule, move, or resend older jobs. Do not
+replay a backlog in bulk. Reconcile failed historical requests in Admin first,
+with safety cases first, checking the support team's existing tickets and notes.
+`POST /admin/warranty/notification-jobs/{id}/retry` only queues an individual
+eligible failed job, not a send; completed, active or already-attempted Freshdesk
+jobs cannot be replayed through that operation. For ambiguous helpdesk results,
+search the internal queue by the warranty case reference before any manual action.
+Both APIs require the existing `X-Admin-Key` authentication. Back up the SQLite
+database because it contains the queue and one-attempt dispatch markers.
 
 SMTP acceptance confirms submission to the mail server, not inbox delivery or
 a staff response. Delivery is at least once: a process failure after SMTP
 acceptance but before its database acknowledgement can cause a resend. A saved
 human-support request does not book a callback or confirm that a staff member
 has read it.
+
+The Warranty queue's read-only attention panel puts unresolved safety requests
+first. Have a staff member verify assignment independently of the provider's
+acceptance. Rotate a rejected SMTP service credential with the mailbox owner,
+without changing Admin credentials or automatically re-sending old jobs.
 
 ## 6. Incident response
 

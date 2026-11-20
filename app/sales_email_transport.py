@@ -17,6 +17,18 @@ class SalesEmailError(RuntimeError):
         super().__init__(code)
 
 
+# Keep only stable, non-sensitive codes when a fault is persisted or surfaced.
+_PUBLIC_FAILURE_CODES = frozenset({
+    'smtp_not_configured', 'smtp_invalid_configuration', 'smtp_invalid_recipient',
+    'smtp_recipient_rejected', 'smtp_authentication_failed', 'smtp_tls_unavailable',
+    'smtp_connection_failed', 'smtp_submission_failed', 'sales_inbox_unconfigured',
+})
+
+
+def safe_failure_code(error: SalesEmailError) -> str:
+    return error.code if isinstance(error.code, str) and error.code in _PUBLIC_FAILURE_CODES else 'smtp_transport_error'
+
+
 def _settings() -> tuple[str, str, str, int]:
     # Read environment values at delivery time, rather than importing main
     # (which initializes the application and captures an older config value).
@@ -38,7 +50,7 @@ def transport_health() -> dict:
     try:
         _sender, _password, _host, port = _settings()
     except SalesEmailError as exc:
-        return {'configured': False, 'failure_code': exc.code, 'acceptance_is_staff_confirmation': False}
+        return {'configured': False, 'failure_code': safe_failure_code(exc), 'acceptance_is_staff_confirmation': False}
     return {'configured': True, 'failure_code': None,
             'tls_mode': 'implicit_tls' if port == 465 else 'starttls',
             'timeout_seconds': 8, 'acceptance_is_staff_confirmation': False}

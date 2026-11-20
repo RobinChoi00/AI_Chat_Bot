@@ -27,7 +27,7 @@ export default function HumanHandoffNotice({ handoff, caseReference }: { handoff
       <h2 id="human-handoff-heading" className="text-sm font-semibold text-amber-950">{handoff.reason === "safety_hazard" ? labels.safety : labels.request}</h2>
       <p className="mt-1 text-sm text-amber-900">{handoff.message}</p>
       {caseReference && <p className="mt-2 text-sm text-amber-900">{labels.reference}: <strong>{caseReference}</strong>. {labels.context}</p>}
-      {!handoff.notification_sent && <p className="mt-2 text-xs text-amber-900">{handoff.reason === "safety_hazard" ? labels.supportPending : labels.callbackPending} {labels.contact}</p>}
+      {!handoff.notification_sent && handoff.submitted_via !== "freshdesk" && <p className="mt-2 text-xs text-amber-900">{handoff.reason === "safety_hazard" ? labels.supportPending : labels.callbackPending} {labels.contact}</p>}
       <SupportContactActions contact={handoff} language={language} />
     </section>
   );

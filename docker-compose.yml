@@ -36,6 +36,9 @@ services:
       - .env
       # Reviewed non-secret release pins override legacy model IDs in host .env.
       - ./deploy/customer-models.env
+      # Optional host-local handoff routing; keep admin credentials in .env.
+      - path: ./.env.warranty-handoff
+        required: false
     volumes:
       - ./faiss_index:/app/faiss_index
       - ./db_data:/app/db_data

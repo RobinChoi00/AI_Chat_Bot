@@ -57,11 +57,12 @@ export function DeliveryTrackingResult({ summary }: { summary: TrackingSummary }
   );
 }
 
-export default function DeliveryTrackingPanel({ storeDomain, initialEmail = "", summary, disabled = false, onLookup }: {
+export default function DeliveryTrackingPanel({ storeDomain, initialEmail = "", summary, disabled = false, sideLookup = false, onLookup }: {
   storeDomain: string;
   initialEmail?: string;
   summary: TrackingSummary | null;
   disabled?: boolean;
+  sideLookup?: boolean;
   onLookup: (identity: DeliveryLookupIdentity) => Promise<void>;
 }) {
   const [orderNumber, setOrderNumber] = useState("");
@@ -109,7 +110,9 @@ export default function DeliveryTrackingPanel({ storeDomain, initialEmail = "", 
           {lastIdentity && !identityChanged && <button type="button" onClick={() => void lookup(lastIdentity)} disabled={disabled || busy} className="rounded-full border border-sky-300 bg-white px-4 py-2 text-sm font-medium text-sky-900 disabled:opacity-50">Refresh</button>}
         </div>
       </form>
-      <p className="mt-2 text-xs text-gray-600">Each check requests a new update. For damage or missing parts, you can continue with the delivery help questions below.</p>
+      <p className="mt-2 text-xs text-gray-600">{sideLookup
+        ? "Each check requests a new update. Checking delivery here does not change your current support case."
+        : "Each check requests a new update. For damage or missing parts, you can continue with the delivery help questions below."}</p>
       {error && <p role="alert" className="mt-3 text-sm text-red-800">{error} We have not confirmed a current delivery update.</p>}
       {identityChanged && <p className="mt-3 text-sm text-sky-900">Order details changed. Check delivery status to load an update for these details.</p>}
       {summary && !error && !identityChanged && <DeliveryTrackingResult summary={summary} />}

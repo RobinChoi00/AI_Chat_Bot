@@ -72,6 +72,35 @@ describe("evidence-based admin outcomes", () => {
     expect(html).not.toContain(">Confirmed fixed / repair consultations<");
   });
 
+  it("shows support delivery and staff evidence separately from request and closure counts", () => {
+    const data = warranty();
+    data.totals.started = 9;
+    data.totals.resolved = 8;
+    data.case_endings = { restarted_or_abandoned: 7, other_closed: 1 };
+    data.delivery = { ...data.delivery!, consultations: 4, latest_lookup_available: 2, lookup_not_recorded: 2 };
+    data.handoffs = { requested: 9, by_department: [], by_reason: [], notification: {
+      queued: 2, retry_scheduled: 1, smtp_accepted: 1, freshdesk_submitted: 1, dead_letter: 2, delivery_uncertain: 1, not_recorded: 1, freshdesk_linked: 1,
+      staff_acknowledged: 1, staff_acknowledgement_unknown: 8,
+    } };
+    const html = renderToStaticMarkup(<AdminMetricsDashboard data={data} days={30} />);
+    expect(html).toContain("Notification in queue");
+    expect(html).toContain("1 additional requests scheduled to retry");
+    expect(html).toContain("Accepted by email service");
+    expect(html).toContain("Submitted to Freshdesk");
+    expect(html).toContain("Notification failed permanently");
+    expect(html).toContain("Notification delivery uncertain");
+    expect(html).toContain("Notification status not recorded");
+    expect(html).toContain("Freshdesk linked");
+    expect(html).toContain("Staff acknowledgement recorded");
+    expect(html).toContain("8 requests without a recorded authenticated staff action");
+    expect(html).toContain("Review warranty notifications");
+    expect(html).toContain("Restarted or marked abandoned");
+    expect(html).toContain("Other tickets marked closed");
+    expect(html).not.toContain("Tickets marked closed (legacy status)");
+    expect(html).toContain("No recorded lookup result");
+    expect(html).not.toContain("No lookup attempted");
+  });
+
   it("uses eligible recommendation and rated samples, while keeping handoff acceptance separate", () => {
     const data = sales();
     data.totals.started = 100;

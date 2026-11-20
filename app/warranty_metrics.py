@@ -27,7 +27,9 @@ Definitions
                            an early handoff does not complete diagnosis.
 - **Contact captured**   – ticket.collected_data has a ``customer_email``.
 - **Admin decided**      – staff decision is set, excluding automatic closures.
-- **Resolved**           – ticket.status == "resolved" (closed, not necessarily fixed).
+- **Resolved (legacy)**  – raw ticket.status == "resolved" (includes restarts).
+- **Case endings**       – restart/abandonment separated from other closed cases;
+                           neither disposition is evidence of a fix.
 - **Self-service started** – latest repair result is fixed or not fixed; progress,
                              inability and deferred results remain separate.
 - **Self-service resolved** – latest customer repair result confirms a fix.
@@ -149,7 +151,8 @@ async def warranty_metrics(
 
     with warranty_db_session() as db:
         from customer_journey import apply_cohort, cohort_metadata, journey_summary
-        from warranty_quality import WarrantyOutcomeObservation, _ensure_quality_tables, is_workflow_terminal, summarize_ticket_outcomes
+        from warranty_quality import (WarrantyOutcomeObservation, _ensure_quality_tables, is_workflow_terminal,
+                                      read_handoff_notification_states, summarize_ticket_outcomes)
 
         q = db.query(WarrantyTicket).filter(or_(WarrantyTicket.created_at <= end, WarrantyTicket.created_at.is_(None)))
         if not all_time:
@@ -164,7 +167,8 @@ async def warranty_metrics(
             .join(selected_tickets, WarrantyOutcomeObservation.ticket_id == selected_tickets.c.ticket_id)
             .filter(WarrantyOutcomeObservation.observed_at <= end)
             .order_by(WarrantyOutcomeObservation.observed_at, WarrantyOutcomeObservation.id).all())
-        outcome_summary = summarize_ticket_outcomes(tickets, observations)
+        notification_states = read_handoff_notification_states(db, selected_tickets)
+        outcome_summary = summarize_ticket_outcomes(tickets, observations, notification_states)
         latest_by_ticket = outcome_summary.pop("_by_ticket")
         cohort_info = cohort_metadata(db, surface="warranty", selected=cohort)
         journey = journey_summary(db, surface="warranty", start=None if all_time else start, end=end, domain=domain, cohort=cohort)
@@ -410,6 +414,8 @@ async def warranty_metrics(
             "outcomes": "Latest customer repair result; progress, inability, deferral, closure and delivery service are separate.",
             "idle": "In-progress tickets older than the configured DB-update threshold; not confirmed departures or unique people.",
             "email": "Provided divided by provided plus skipped; excludes unobserved gate views and is not a conversion rate.",
-            "closure": "Resolved status divided by all consultations; ended sessions and service cases are not confirmed repairs.",
+            "closure": "Legacy resolved includes restarts; case_endings separates restart/abandonment from other closure. Neither establishes a confirmed repair.",
+            "handoff": "One matching job per requesting ticket, by exact saved source key. SMTP acceptance, Freshdesk submission/linkage, and authenticated staff acknowledgement are distinct.",
+            "delivery_lookup": "Latest recorded lookup only. No snapshot does not establish whether a lookup was attempted, and a provider result does not establish a customer answer.",
         },
     }

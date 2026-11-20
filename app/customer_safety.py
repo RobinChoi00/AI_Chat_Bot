@@ -52,7 +52,7 @@ _KO = rf"(?:{_KO_PHYSICAL}|통증|아프|아파)"
 _HAZARD = re.compile(rf"(?<![a-z])(?:{_EN}|{_ES})(?![a-z])|{_KO}", re.I)
 _PHYSICAL_HAZARD = re.compile(rf"(?<![a-z])(?:{_EN_PHYSICAL}|{_ES_PHYSICAL})(?![a-z])|{_KO_PHYSICAL}", re.I)
 _CHAIR_CAUSED_INJURY = re.compile(
-    r"\b(?:chair|seat|roller|footrest|armrest|frame)\s+(?:has\s+)?(?:hurt|hurts|burned)\s+(?:me|my|our|his|her)\b|"
+    r"\b(?:chair|seat|rollers?|footrest|armrest|frame)\s+(?:(?:has|have)\s+)?(?:hurt|hurts|burned)\s+(?:me|my|our|his|her)\b|"
     r"\bsilla\s+(?:me|nos)\s+(?:ha\s+)?(?:causado|causo|provocado|provoco)\s+dolor\b|"
     r"(?:의자|안마기)\s*때문에[^.!?\n]{0,20}(?:통증|아프|아파)", re.I,
 )
@@ -321,6 +321,10 @@ def detect_customer_language(text: str, default: str = "en") -> str:
 
 
 def _notification_copy(language: str, sent: bool, status: str | None) -> str:
+    if status == "freshdesk_submitted":
+        return {"en": "Our helpdesk accepted the case for team review. An agent response or callback has not been confirmed. ",
+                "ko": "지원 시스템에 담당자 검토용 접수가 등록되었습니다. 담당자 답변이나 콜백은 아직 확인되지 않았습니다. ",
+                "es": "Nuestro sistema de soporte aceptó el caso para revisión. Aún no se ha confirmado una respuesta del equipo ni una devolución de llamada. "}[language]
     if sent:
         return {"en": "A notification has been submitted to our support inbox. A callback has not been booked. ",
                 "ko": "지원팀 수신함으로 알림을 제출했습니다. 콜백은 아직 예약되지 않았습니다. ",

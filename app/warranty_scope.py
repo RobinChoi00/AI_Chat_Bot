@@ -73,6 +73,22 @@ _PRE_PURCHASE_SALES_RE = re.compile(
     re.IGNORECASE,
 )
 
+_EXPLICIT_PURCHASE_RE = re.compile(
+    r"\b(?:want|plan|hoping|look(?:ing)?)\s+(?:to\s+)?(?:buy|purchase)\b|"
+    r"\bbefore\s+(?:i\s+|we\s+)?(?:buy|purchase|buying|purchasing)\b",
+    re.IGNORECASE,
+)
+_NEGATED_PURCHASE_RE = re.compile(
+    r"\b(?:do\s+not|don't|never)\s+(?:want|plan|look)\s+(?:to\s+)?(?:buy|purchase)\b",
+    re.IGNORECASE,
+)
+_REPLACEMENT_PURCHASE_RE = re.compile(
+    r"\b(?:buy|purchase)\b[^.!?;\n]{0,50}\b(?:replacement\s+)?"
+    r"(?:remote(?:\s+control)?|controller|adapter|cable|power\s+cord|spare\s+part|replacement\s+part)\b",
+    re.IGNORECASE,
+)
+_PRODUCT_MEDIA_RE = re.compile(r"\b(?:photos?|pictures?|images?|videos?|demo(?:nstration)?s?)\b", re.I)
+
 _WHITE_GLOVE_POLICY_RE = re.compile(
     r"\bwhite[- ]?glove\b.{0,90}\b("
     r"include|included|assembly|install|set\s*up|living\s+room|packaging|"
@@ -232,6 +248,11 @@ def is_pre_purchase_sales(text: str) -> bool:
         return False
     if _POST_PURCHASE_DELIVERY_RE.search(raw):
         return False
+    affirmed = _NEGATED_PURCHASE_RE.sub("", raw.replace("’", "'"))
+    if _EXPLICIT_PURCHASE_RE.search(affirmed) and not _REPLACEMENT_PURCHASE_RE.search(raw):
+        # A request to buy a spare part, unlike shopping for a chair, stays
+        # in support. An explicit reported failure still gets handled there.
+        return not bool(_OWNED_CHAIR_RE.search(raw))
     if _OWNED_CHAIR_RE.search(raw) and not _PRE_PURCHASE_SALES_RE.search(raw):
         return False
     if _PRE_PURCHASE_SALES_RE.search(raw):
@@ -245,6 +266,12 @@ def is_pre_purchase_sales(text: str) -> bool:
     ):
         return True
     return False
+
+
+def is_pre_purchase_product_media(text: str) -> bool:
+    """Distinguish a shopper's product photos/demo from repair evidence or setup video."""
+    raw = (text or "").strip().replace("’", "'")
+    return bool(_PRODUCT_MEDIA_RE.search(raw) and is_pre_purchase_sales(raw))
 
 
 def wants_sales_contact(text: str) -> bool:
@@ -489,12 +516,18 @@ def human_support_reason(text: str) -> Optional[str]:
     raw = re.sub(
         r"\b(?:don't|do not|never|no need to)\s+(?:call\s+me(?:\s+back)?|phone\s+me|"
         r"(?:connect|transfer)\s+me\s+(?:to|with)\s+(?:a\s+)?(?:human|person|agent))\b|"
-        r"\b(?:don't|do not)\s+(?:need|want)\s+(?:a\s+)?(?:human|person|agent|callback)\b", "", raw, flags=re.I,
+        r"\b(?:don't|do not)\s+(?:need|want)\s+(?:a\s+)?(?:human|person|agent|callback)\b|"
+        r"\b(?:don't|do not)\s+(?:want|need)\s+you\s+to\s+(?:call\s+me(?:\s+back)?|phone\s+me)\b|"
+        r"\b(?:no|not)\s+(?:(?:a\s+)?(?:human|person|(?:live\s+)?agent|callback)\s+(?:needed|required|necessary)|"
+        r"(?:requesting|asking\s+for)\s+(?:a\s+)?(?:callback|human|person|agent))\b|"
+        r"\bno\s+callback(?:\s+please)?(?=[.!?,;]|$)", "", raw, flags=re.I,
     )
     if re.search(r"\b(?:call\s+me|call\s+(?:me\s+)?back|callback|phone\s+me)\b|전화\s*(?:해|주세요|부탁)|ll[aá]m(?:e|ame)", raw, re.I):
         return "callback_request"
     if re.search(
-        r"\b(?:human|real\s+person|live\s+(?:agent|person)|representative|customer\s+service)\b|"
+        r"\b(?:human|real\s+person|live\s+(?:agent|person)|representative)\b|"
+        r"^\s*customer\s+service[.!?\s]*$|"
+        r"\b(?:speak|talk|connect|transfer)\s+(?:me\s+)?(?:to|with)\s+customer\s+service\b|"
         r"\b(?:speak|talk|connect)\s+(?:me\s+)?(?:to|with)\s+(?:a\s+)?(?:person|someone|agent|support)\b|"
         r"\b(?:have|get|ask)\s+(?:a\s+)?(?:person|someone|agent|specialist)\s+(?:to\s+)?(?:review|help|assist|contact)\b|"
         r"\b(?:need|want|would like)\s+(?:a\s+)?(?:person|someone|agent|specialist)\s+(?:to\s+)?(?:help|review|assist|contact)\b|"

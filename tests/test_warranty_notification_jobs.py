@@ -215,3 +215,25 @@ def test_provider_exception_details_are_not_copied_to_job_or_log(database, monke
         assert db.get(jobs.WarrantyNotificationJob, job_id).last_error == "OSError"
     assert "synthetic@example.test" not in caplog.text
     assert "not-a-real-secret" not in caplog.text
+
+
+def test_only_allowlisted_transport_diagnostics_are_persisted(database, monkeypatch, caplog):
+    from sales_email_transport import SalesEmailError
+
+    _engine, clock, evidence_id = database
+    outcomes = iter(["smtp_authentication_failed", "synthetic@example.test password=not-a-real-secret"])
+
+    def sender(**kwargs):
+        raise SalesEmailError(next(outcomes))
+
+    monkeypatch.setattr(email, "send_evidence_upload_notification", sender)
+    job_id = _enqueue(evidence_id)
+    assert jobs.process_notification(job_id) is False
+    with wm.warranty_db_session() as db:
+        assert db.get(jobs.WarrantyNotificationJob, job_id).last_error == "smtp_authentication_failed"
+    clock[0] += timedelta(seconds=11)
+    assert jobs.process_notification(job_id) is False
+    with wm.warranty_db_session() as db:
+        assert db.get(jobs.WarrantyNotificationJob, job_id).last_error == "smtp_transport_error"
+    assert "synthetic@example.test" not in caplog.text
+    assert "not-a-real-secret" not in caplog.text

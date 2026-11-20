@@ -53,4 +53,19 @@ describe("admin queue historical pages", () => {
     expect(markup).not.toContain("Showing 0–0");
     expect(markup).not.toContain('aria-label="Ticket pages"');
   });
+
+  it("shows active safety review as a read-only ticket link", async () => {
+    vi.stubEnv("ADMIN_API_KEY", "page-test-key");
+    const fetchMock = vi.fn(async (url: string) => new Response(JSON.stringify(url.includes("handoff-attention") ? {
+      total: 2, safety_reviews: 1, items: [{ticket_id: "safety-case", case_reference: "WR-test", safety_review: true,
+        department: "warranty", notification_state: "dead_letter"}],
+    } : { total: 0, offset: 0, tickets: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    const markup = renderToStaticMarkup(await AdminWarrantyQueuePage({ searchParams: Promise.resolve({}) }));
+    expect(markup).toContain("open support requests without confirmed submission");
+    expect(markup).toContain("Safety review");
+    expect(markup).toContain('href="/admin/warranty/safety-case"');
+    expect(markup).toContain("Nothing on this page sends notifications");
+    expect(fetchMock.mock.calls).toHaveLength(2);
+  });
 });
