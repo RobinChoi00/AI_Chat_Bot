@@ -420,7 +420,23 @@ _MENU_INTRO = (
 # ---------------------------------------------------------------------------
 
 
+def _normalize_orion_model_name(text: str) -> str:
+    # "And" between the Orion's two mechanisms is not a comparison between
+    # two chairs. Keep real comparisons elsewhere in the sentence intact.
+    return re.sub(r"(\borion\s+duo\s+4\s*d)\s+and\s+(3\s*d\b)", r"\1+\2", text or '', flags=re.I)
+
+
 def _guess_model_from_text(text: str) -> Optional[ProductSpecs]:
+    # The generic resolver can mistake the long Orion Duo name for the
+    # Manhattan Duo when token overlap outweighs the distinct family name.
+    text = re.sub(r"\b(?:not|rather\s+than|instead\s+of)\s+(?:the\s+)?(?:osaki\s+)?(?:ai\s+)?orion\s+duo\b",
+                  " ", text or '', flags=re.I)
+    if re.search(r"\borion\b", text or '', re.I) and re.search(r"\bduo\b|\b[34]\s*d\b", text or '', re.I):
+        pair = split_compare_terms(_normalize_orion_model_name(text))
+        if not (pair and all(resolve_product(part) is not None for part in pair)):
+            orion = product_by_handle('osaki-4d-3d-orion-duo-mech')
+            if orion is not None:
+                return orion
     product = resolve_product(text or "")
     requested_mechanisms = re.findall(r"\b([2345]D)\b", text or "", re.I)
     def consistent(candidate):
@@ -617,11 +633,13 @@ def _direct_shopper_reply(message: str) -> Optional[SalesReply]:
 
 def _named_compare_pair(message: str) -> bool:
     """True when the shopper named two chairs, even without the word compare."""
-    pair = split_compare_terms(message or "")
+    pair = split_compare_terms(_normalize_orion_model_name(message))
     if not pair:
         return False
 
     def specific(term: str) -> bool:
+        if re.fullmatch(r"\s*\d+(?:\.\d+)?\s*(?:lbs?|pounds?|kg|kilograms?|inches?|in|cm)\s*[?.!]?\s*", term, re.I):
+            return False  # A user's measurement is not a second model.
         looked = lookup_shop_models(term)
         if looked.matches:
             return True
@@ -988,7 +1006,26 @@ def _stock_reply(
         title=product.title or product.display_name,
     )
     tools = ["catalog.resolve_product"]
-    if live is not None:
+    color = parse_asked_color(message)
+    if color:
+        exact_handles = {product.handle, product.handle.removesuffix('-massage-chair'), product.handle.removesuffix('-massage-chairs')}
+        def title_key(value):
+            return re.sub(r'[^a-z0-9]', '', (value or '').lower())
+        exact_titles = {key for value in (product.title, product.display_name) if (key := title_key(value))}
+        same_product = live is not None and (live.handle in exact_handles or title_key(live.title) in exact_titles)
+        color_available = live.available_in_color(color) if same_product and live is not None else None
+        if same_product:
+            tools.append("shopify.inventory")
+        if color_available is True:
+            reply = (f"**{product.display_name}** in **{color}** is currently listed as **available to order**. "
+                     "That does not confirm warehouse inventory or a delivery date.")
+        elif color_available is False:
+            reply = (f"Shopify does not currently list **{product.display_name}** in **{color}** as available to order. "
+                     "I don't have a confirmed restock date.")
+        else:
+            reply = (f"I couldn't confirm live availability for **{product.display_name}** in **{color}**. "
+                     "Select that color on the product page or ask Sales to verify it; another color's availability is not confirmation.")
+    elif live is not None:
         tools.append("shopify.inventory")
         if live.in_stock:
             low = " (low stock)" if live.is_low else ""
@@ -1015,8 +1052,8 @@ def _stock_reply(
         )
     if re.search(r"\blead\s+time\b|\bhow\s+long\b|\bshipping\s+time\b", message or "", re.I):
         reply += (
-            "\n\nPublished shipping is up to **2 weeks** curbside and **3 weeks** "
-            "White Glove. That is not a confirmed date for an order."
+            "\n\nI don't have a confirmed lead time. Sales can check it for this configuration, "
+            "delivery ZIP code and service (curbside or White Glove)."
         )
     extra, close_quick, close_patch = _product_closeout(product, domain=domain)
     return SalesReply(
@@ -3836,15 +3873,19 @@ def _feedback_reply(direction: str, prefs: Optional[dict]) -> Optional[SalesRepl
 
 def _prepurchase_policy_reply(message: str, *, domain: str, topic: Optional[str] = None) -> SalesReply:
     """Answer a published policy question instead of handing it to a human."""
+    from sales_policy import local_dealer_requested
+
     topic = topic or detect_policy_topic(message)
     answer = policy_answer(topic, domain, message=message) if topic else None
     if answer is None:
         return _unclear_reply()
     patch = {"last_policy_topic": topic}
     named = _guess_model_from_text(message)
+    local_demo = topic == TOPIC_SHOWROOM and local_dealer_requested(message)
     if topic == TOPIC_SHOWROOM and named is not None:
-        answer = (f"I cannot confirm whether **{named.display_name}** is on the showroom floor today. "
-                  "Please ask Sales to confirm that exact model before you travel.\n\n" + answer)
+        if not local_demo:
+            answer = (f"I cannot confirm whether **{named.display_name}** is on the showroom floor today. "
+                      "Please ask Sales to confirm that exact model before you travel.\n\n" + answer)
         patch.update(_product_closeout(named, domain=domain)[2])
 
     followups = [QuickReply(label="Recommend a chair", payload="recommend")]
@@ -3852,11 +3893,11 @@ def _prepurchase_policy_reply(message: str, *, domain: str, topic: Optional[str]
         followups.append(
             QuickReply(label="Check doorway fit", payload="recommend:space:narrow")
         )
-    if topic == TOPIC_SHOWROOM:
+    if topic == TOPIC_SHOWROOM and not local_demo:
         followups.insert(
             0, QuickReply(label="Request a visit", payload="cta:showroom:book")
         )
-    else:
+    elif topic != TOPIC_SHOWROOM:
         followups.append(QuickReply(label="Visit showroom", payload="cta:showroom"))
     followups.append(QuickReply(label="Talk to a human", payload="human"))
 
@@ -4780,6 +4821,65 @@ def _remember_question(result: SalesReply, message: str, payload: Optional[str])
     return result
 
 
+def _answer_specific_shopper_request(message: str, prefs: Optional[dict], *, domain: str) -> Optional[SalesReply]:
+    """Let explicit questions outrank older context and generic spec templates."""
+    from sales_answer_first import (replacement_parts_answer, requests_stock, vivant_settings_answer,
+                                    wants_higher_capacity_yoga_alternative)
+    from sales_policy import TOPIC_LEASE, TOPIC_TECHNICAL_SERVICE, local_dealer_requested
+    from sales_verified_model_specs import verified_model_answer
+    from store_config import normalize_storefront_domain
+
+    data = prefs or {}
+    intent = classify(message)
+    if intent.label in HANDOFF_INTENTS - {'eta_shipping', 'warranty_redirect', 'parts_technician', 'discount'}:
+        return None
+    parts = replacement_parts_answer(message, continuing_parts=data.get('technical_support_topic') == 'parts_technician')
+    if parts is not None:
+        return SalesReply(reply=parts, intent='parts_technician', handoff=True, handoff_reason='parts_technician',
+                          flow_stage='warranty', tools_used=['support.replacement_parts'],
+                          prefs_patch={'technical_support_topic': 'parts_technician', 'awaiting_recommend': False})
+    product = _resolve_focus_product(message, data)
+    guide = vivant_settings_answer(message, focused_handle=product.handle if product else '')
+    if guide is not None and (product is None or product.handle == 'osaki-pro-vivant-5d'):
+        return SalesReply(reply=guide, intent=INTENT_SPECS, tools_used=['support.model_guide'],
+                          prefs_patch={'pending_primary': 'osaki-pro-vivant-5d'},
+                          quick_replies=[QuickReply(label='Talk to a human', payload='human')])
+
+    topic = detect_policy_topic(message)
+    if topic in {TOPIC_LEASE, TOPIC_TECHNICAL_SERVICE} or (topic == TOPIC_SHOWROOM and local_dealer_requested(message)):
+        return _prepurchase_policy_reply(message, domain=domain, topic=topic)
+
+    if intent.label in HANDOFF_INTENTS - {'eta_shipping'}:
+        return None
+    if product is not None and requests_stock(message):
+        return _stock_reply(message, domain=domain, prefs=data)
+
+    if wants_higher_capacity_yoga_alternative(message):
+        # The official Duke XL listing verifies the higher capacity; this is a
+        # model to compare, not a fit claim without the buyer's requirements.
+        duke = product_by_handle('osaki-duke-xl-4d') if normalize_storefront_domain(domain) == 'osakiusa.com' else None
+        constraints = dict(data.get('recommend_prefs') or {})
+        hard_no_stretch = bool(re.search(r"\b(?:no\s+stretch\w*\s+(?:at all|whatsoever)|must\s+not\s+stretch|no\s+stretching\s+(?:program|function|feature))\b", message, re.I))
+        eligible = duke is not None and not hard_no_stretch and not product_constraint_issues(duke, constraints)
+        text = "The **Yoga Flex** is designed around stretching, so I wouldn't suggest the same chair for this request. "
+        if eligible:
+            text += ("One higher-capacity chair to compare is the [**Osaki Duke XL 4D**](https://osakiusa.com/products/osaki-duke-xl-4d). "
+                     "Osaki lists a **400 lb maximum user weight** and highlights 4D massage and calf massage. "
+                     "This is not a guarantee of fit or a claim that it has no stretch programs. ")
+        text += "What user weight and height must it accommodate? I can narrow the options to that fit."
+        return SalesReply(reply=text, intent=INTENT_RECOMMEND, tools_used=['catalog.capacity_alternative'],
+                          quick_replies=[QuickReply(label='Talk to a human', payload='human')])
+
+    if product is not None and not _named_compare_pair(message):
+        answer = verified_model_answer(product, message)
+        if answer:
+            return SalesReply(reply=answer, intent=INTENT_SPECS,
+                              tools_used=['catalog.resolve_product', 'catalog.verified_model_specs'],
+                              prefs_patch={'pending_primary': product.handle},
+                              quick_replies=[QuickReply(label='Talk to a human', payload='human')])
+    return None
+
+
 def _respond_turn(
     message: str,
     *,
@@ -4814,6 +4914,12 @@ def _respond_turn(
         if support is not None:
             return _finalize_flow_stage(support)
 
+    if not payload and message.strip():
+        specific = _answer_specific_shopper_request(message, prefs, domain=domain)
+        if specific is not None:
+            return _remember_question(_finalize_flow_stage(specific), message, payload)
+
+    if not payload and not before_handoff:
         previous_policy = policy_followup_topic(message, (prefs or {}).get("last_policy_topic"))
         early_intent = classify(message or "")
         if previous_policy and early_intent.label not in HANDOFF_INTENTS - {'eta_shipping'}:

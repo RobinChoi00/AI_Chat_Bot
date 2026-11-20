@@ -70,3 +70,25 @@ python script/evaluate_llm_quality.py --live \
 실제 모델의 전체 답변 검토와 운영 반영은 이 접근 문제가 해소된 뒤 확인한다.
 배포는 [운영 절차](production_runbook.md), 운영 성과는
 [고객 성과 측정](measured_customer_success.ko.md)을 따른다.
+
+## 부정 평가 점검: 제품 사양과 구매 전 정책
+
+문제가 보고된 15개 응답에서 현재 질문보다 모델명, 과거 대화 주제, 또는 4D/3D
+키워드를 우선하는 사례를 확인했다. 검증에 필요한 질문 유형만 재현하고 고객 대화
+원문·식별자는 회귀 테스트에 저장하지 않는다.
+
+- 세부 질문은 정확한 모델의 제조사 자료가 있을 때 그 내용만 먼저 답한다.
+  [Hamilton LE](https://osakimassagechair.com/products/osaki-os-3d-hamilton-le)의 포장,
+  [Bravo Duo Flex](https://osakimassagechair.com/products/osaki-4d-bravo-duo-flex)의 조작부,
+  Orion Duo 설명서의 조절 기능·권장 키 범위가 예다. Cura 모터 방식과 Vito 캐스터처럼
+  공개 자료에 명시되지 않은 항목은 추정하지 않는다.
+- 특정 색상 재고는 동일 제품·색상에 대한 Shopify 판매 가능 여부로 확인한다.
+  상품 전체의 판매 가능 여부를 특정 색상이나 실제 창고 재고로 취급하지 않는다.
+  [공개 배송 안내](https://osakiusa.com/pages/shipping-handling)는 개별 도착일을 보장하지 않는다.
+- 임대와 구매 할부, 시연 매장과 실제 전시 모델, 기술 지원과 기사 방문 예약을 구분한다.
+  [판매 정책](https://osakiusa.com/pages/sales-policy), [공식 딜러 검색](https://osakichair.com/pages/find-your-osaki-store),
+  [보증 안내](https://osakiusa.com/pages/warranty)를 사용한다. 사용 설명·부품 문의는
+  제품 판매로 돌리지 않는다.
+
+관리자 Track123 확인은 예시 번호에 대한 상태 검사다. 404는 서버가 응답했다는 뜻일
+뿐, 인증이나 실제 배송 조회 성공으로 집계하지 않는다.

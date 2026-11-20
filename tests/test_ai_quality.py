@@ -18,11 +18,14 @@ import warranty_models as wm
 
 @pytest.fixture
 def client(monkeypatch):
+    import store_config
+
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     monkeypatch.setattr(wm, "_SessionFactory", factory)
     monkeypatch.setenv("ADMIN_API_KEY", "quality-test-key")
     monkeypatch.setattr(quality, "_release_id", lambda: "release-test")
+    monkeypatch.setattr(store_config, "get_store_config", lambda _domain: {})
     app = FastAPI()
     app.include_router(quality.router)
     with TestClient(app) as client:
@@ -41,6 +44,49 @@ def test_quality_health_requires_admin_and_does_not_return_secret(client):
     assert body["model_calls"]["roles"]["agent"]["latest_call"] is None
     assert body["model_calls"]["roles"]["router"]["latest_successful_call"] is None
     assert "not verified" in body["scope"]
+
+
+@pytest.mark.parametrize(("upstream_status", "payload", "expected"), [
+    (200, {"order": {"order_number": 99999999}}, (True, None)),
+    (200, {"error": "maintenance"}, (False, "invalid_payload")),
+    (302, {}, (False, "http_302")),
+    (401, {}, (False, "unauthorized")),
+    (404, {}, (False, "probe_not_found")),
+    (429, {}, (False, "rate_limited")),
+    (None, None, (False, "network_error")),
+])
+def test_track123_health_calls_bounded_vendor_probe(client, monkeypatch, upstream_status, payload, expected):
+    import requests
+    import store_config
+
+    key = "synthetic-track123-api-key"
+    contacts = []
+    monkeypatch.setattr(store_config, "get_store_config", lambda domain: {
+        "shop_domain": f"{domain.split('.')[0]}.myshopify.com", "track123_api_key": key,
+    })
+
+    class VendorResponse:
+        status_code = upstream_status
+
+        def json(self):
+            return payload
+
+    def get(url, *, timeout, headers, allow_redirects):
+        contacts.append((url, timeout, headers["X-Api-Key"], allow_redirects))
+        if upstream_status is None:
+            raise requests.ConnectionError("synthetic probe failure")
+        return VendorResponse()
+
+    monkeypatch.setattr(requests, "get", get)
+    assert client.get("/admin/ai/health").status_code == 401
+    assert contacts == []
+    response = client.get("/admin/ai/health", headers={"X-Admin-Key": "quality-test-key"})
+    assert response.status_code == 200
+    assert key not in response.text
+    assert contacts == [("https://shp.track123.com/shopify/api/v1/osakiusa/orders/by-number/99999999.json", 8, key, False)]
+    status = response.json()["track123"]
+    assert status["configured"] is True
+    assert (status["ok"], status["error_code"]) == expected
 
 
 def test_response_timing_percentiles_and_surface_isolation(client):

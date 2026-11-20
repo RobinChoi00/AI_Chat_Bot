@@ -1,4 +1,4 @@
-"""Admin health observations for the AI workflow; never makes external calls."""
+"""Admin AI runtime observations and a bounded Track123 reachability probe."""
 from __future__ import annotations
 
 import logging
@@ -178,7 +178,7 @@ def timing_summary(days: int = 7) -> dict:
 
 
 @router.get("/admin/ai/health")
-async def ai_health(
+def ai_health(
     days: int = Query(7, ge=1, le=30),
     x_admin_key: Optional[str] = Header(default=None),
 ) -> dict:
@@ -193,10 +193,13 @@ async def ai_health(
         from store_config import get_store_config
         from track123_shopify_client import shopify_app_auth_status
 
-        # Health check uses Shopify App API (API & Webhook / X-Api-Key), not Open API.
+        # Consume the client's timeout argument exactly once. Do not allow a
+        # provider redirect to forward the Shopify App API key to another host.
         track123_health = shopify_app_auth_status(
             get_store_config("osakiusa.com"),
-            http_get=lambda url, **kwargs: requests.get(url, timeout=8, **kwargs),
+            http_get=lambda url, *, timeout, **kwargs: requests.get(
+                url, timeout=min(timeout, 8), allow_redirects=False, **kwargs
+            ),
         )
     except Exception:
         track123_health = {"configured": False, "ok": False, "error_code": "check_failed"}
@@ -212,5 +215,5 @@ async def ai_health(
         "stock_cache": stock_cache_status(),
         "warranty_embeddings": embedding_cache_status(),
         "track123": track123_health,
-        "scope": "Local process observations; external integration access is not verified by this endpoint.",
+        "scope": "Local process observations, plus a Track123 probe. Live shipment lookup is not verified by this endpoint.",
     }

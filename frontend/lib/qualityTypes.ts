@@ -53,6 +53,7 @@ export interface AIHealth {
   latency: Record<string, { samples: number; p50_ms: number | null; p95_ms: number | null }>;
   stock_cache: Record<string, unknown>;
   warranty_embeddings: Record<string, unknown>;
+  track123?: { configured: boolean; ok: boolean; error_code: string | null };
 }
 
 export interface ModelCallObservation {

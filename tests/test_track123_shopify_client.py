@@ -113,7 +113,7 @@ def test_query_by_tracking_uses_x_api_key_header():
     assert "Track123-Api-Secret" not in headers
 
 
-def test_shopify_app_auth_status_treats_404_as_ok():
+def test_shopify_app_auth_status_does_not_treat_generic_404_as_verified():
     class FakeResponse:
         status_code = 404
 
@@ -125,7 +125,8 @@ def test_shopify_app_auth_status_treats_404_as_ok():
         http_get=lambda *_a, **_k: FakeResponse(),
     )
     assert status["configured"] is True
-    assert status["ok"] is True
+    assert status["ok"] is False
+    assert status["error_code"] == "probe_not_found"
     assert status["store_uuid"] == "osakiusa"
 
 

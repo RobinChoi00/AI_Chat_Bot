@@ -5,6 +5,21 @@ import { useRouter } from "next/navigation";
 import type { AIHealth, KnowledgeReview, OutcomeQuality } from "@/lib/qualityTypes";
 import RepairOutcomePanel from "./RepairOutcomePanel";
 
+function track123ProbeLabel(status: AIHealth["track123"]): string {
+  if (!status || status.error_code === "not_checked") return "Not checked";
+  if (status.ok) return "Sample request verified";
+  switch (status.error_code) {
+    case "probe_not_found": return "Reached provider; sample order not found, access unverified";
+    case "unauthorized": return "Credentials rejected";
+    case "rate_limited": return "Rate limited";
+    case "network_error": return "Could not reach provider";
+    case "invalid_payload": return "Unexpected provider response";
+    case "check_failed": return "Status check could not run";
+    case "missing_credentials": return "Not configured";
+    default: return "Status not verified";
+  }
+}
+
 export default function AIQualityDashboard({ outcomes, reviews, health }: {
   outcomes: OutcomeQuality | null; reviews: KnowledgeReview[] | null; health: AIHealth | null;
 }) {
@@ -79,6 +94,7 @@ export default function AIQualityDashboard({ outcomes, reviews, health }: {
       </p>)}
       <p className="mt-3 text-sm">Stock cache: {String(health.stock_cache.fresh_entries ?? 0)} fresh entries · TTL {String(health.stock_cache.ttl_seconds ?? "—")} seconds · Last provider fetch {String(health.stock_cache.latest_fetched_at ?? "unmeasured")}</p>
       <p className="mt-2 text-sm">Warranty semantic index: {health.warranty_embeddings.ready ? "Ready" : "Not loaded"} · {String(health.warranty_embeddings.entries ?? 0)} entries · Source {String(health.warranty_embeddings.source ?? "none")}</p>
+      <p className="mt-2 text-sm">Track123 (Osaki USA): {track123ProbeLabel(health.track123)}. Live shipment lookup was not tested.</p>
       <p className="mt-3 text-xs text-gray-500">This runtime view is not filtered by the selected release cohort. Model names describe the current configuration, not versions used in past conversations. No samples means unmeasured. Streamed chat completion is measured separately in chat traces and live evaluations. Cache status does not verify external service access.</p>
     </section>}
     <section className="rounded-xl border bg-white p-4">

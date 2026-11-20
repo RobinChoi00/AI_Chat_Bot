@@ -84,12 +84,14 @@ _PRODUCT_FIELDS = """
     status
     totalInventory
     variants(first: 25) {
+      pageInfo { hasNextPage }
       edges {
         node {
           title
           availableForSale
           inventoryQuantity
           price
+          selectedOptions { name value }
         }
       }
     }
@@ -129,6 +131,10 @@ class LiveStockSnapshot:
     fetched_at: Optional[str] = None
     cache_hit: bool = False
     cache_age_seconds: float = 0.0
+    color_availability: tuple[tuple[str, bool], ...] = ()
+
+    def available_in_color(self, color: str) -> Optional[bool]:
+        return dict(self.color_availability).get(_color_key(color))
 
     @property
     def in_stock(self) -> bool:
@@ -181,6 +187,27 @@ def _handle_candidates(handle: str) -> list[str]:
     return uniq
 
 
+def _color_key(value: str) -> str:
+    return " ".join(value.casefold().split()).replace("grey", "gray")
+
+
+def _variant_colors(nodes: list[dict], *, complete: bool) -> tuple[tuple[str, bool], ...]:
+    by_color: dict[str, list[Optional[bool]]] = {}
+    for variant in nodes:
+        options = variant.get("selectedOptions") or []
+        for option in options:
+            if str(option.get("name") or "").casefold() not in {"color", "colour"}:
+                continue
+            key = _color_key(str(option.get("value") or ""))
+            value = variant.get("availableForSale")
+            if key:
+                by_color.setdefault(key, []).append(value if isinstance(value, bool) else None)
+    # One sellable configuration can prove availability; an incomplete page
+    # cannot establish that all variants of that color are unavailable.
+    return tuple(sorted((key, any(values)) for key, values in by_color.items()
+                        if any(values) or complete and all(v is False for v in values)))
+
+
 def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> Optional[LiveStockSnapshot]:
     total = node.get("totalInventory")
     try:
@@ -188,7 +215,8 @@ def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> Option
     except (TypeError, ValueError, OverflowError):
         total_int = None
 
-    variant_edges = (((node.get("variants") or {}).get("edges")) or [])
+    variants = node.get("variants") or {}
+    variant_edges = variants.get("edges") or []
     variant_nodes = [(edge or {}).get("node") or {} for edge in variant_edges]
     availability = [v.get("availableForSale") for v in variant_nodes]
     known_availability = [value for value in availability if isinstance(value, bool)]
@@ -236,6 +264,7 @@ def _snapshot_from_node(node: dict[str, Any], *, fallback_handle: str) -> Option
         price_usd=min(prices) if prices else None,
         price_max_usd=max(prices) if prices else None,
         fetched_at=datetime.now(timezone.utc).isoformat(),
+        color_availability=_variant_colors(variant_nodes, complete=(variants.get("pageInfo") or {}).get("hasNextPage") is False),
     )
 
 

@@ -34,10 +34,12 @@ from sales_policy import (  # noqa: E402
     TOPIC_RETURNS,
     TOPIC_SHIPPING,
     TOPIC_SHOWROOM,
+    TOPIC_TECHNICAL_SERVICE,
     TOPIC_TRADE_IN,
     TOPIC_WARRANTY_TERMS,
     TOPIC_WHITE_GLOVE,
     detect_topic,
+    followup_topic,
     is_post_purchase,
     policy_answer,
 )
@@ -101,6 +103,11 @@ from sales_policy import (  # noqa: E402
             TOPIC_LIMITS,
         ),
         ("can I lease a chair", TOPIC_LEASE),
+        ("Can I rent a massage chair?", TOPIC_LEASE),
+        ("Do you offer a rental program?", TOPIC_LEASE),
+        ("Can I lease or rent one with monthly payments and return it at the end?", TOPIC_LEASE),
+        ("How would you provide service / technical support in Los Angeles?", TOPIC_TECHNICAL_SERVICE),
+        ("How do I get warranty service if I live in Alaska?", TOPIC_TECHNICAL_SERVICE),
         ("ship to Canada", TOPIC_INTERNATIONAL),
         ("international shipping to Mexico", TOPIC_INTERNATIONAL),
         ("is it pet friendly", TOPIC_LIMITS),
@@ -110,7 +117,7 @@ from sales_policy import (  # noqa: E402
         ("do you take PayPal", TOPIC_LIMITS),
         ("can I use HSA", TOPIC_LIMITS),
         ("I live on the third floor", TOPIC_WHITE_GLOVE),
-        ("lease to own", TOPIC_FINANCING),
+        ("lease to own", TOPIC_LEASE),
     ],
 )
 def test_prepurchase_questions_route_to_their_topic(message, topic):
@@ -129,6 +136,7 @@ def test_prepurchase_questions_route_to_their_topic(message, topic):
         "my order number is 12345, what's the return policy",
         "I received it damaged, can I get a refund",
         "tracking says delivered but nothing arrived",
+        "I already bought the chair and now need technical support",
     ],
 )
 def test_post_purchase_messages_never_get_the_policy_answer(message):
@@ -257,9 +265,40 @@ def test_refurbished_trade_in_lease_are_honest_nos():
         TOPIC_TRADE_IN, "osakiusa.com"
     ).lower()
     lease = policy_answer(TOPIC_LEASE, "osakiusa.com")
-    assert "don't lease" in lease.lower()
-    assert "Affirm" in lease
+    assert "does not list a **lease or rental**" in lease.lower()
+    assert "purchase" in lease.lower() and "give the chair back" in lease.lower()
+    assert "Affirm" not in lease
     assert "%" not in lease
+
+
+def test_rental_followup_does_not_become_purchase_return_policy():
+    msg = "Could I give it back after four years?"
+    assert followup_topic(msg, TOPIC_LEASE) == TOPIC_LEASE
+    assert followup_topic("I want to return my chair", TOPIC_LEASE) is None
+
+
+@pytest.mark.parametrize("message", [
+    "Where can I try the OS-3D Ai Vito near 123 Example Road, New Braunfels, TX?",
+    "OS-3D Ai Vito WHERE CAN I TRY THIS CHAIR, I AM IN New Braunfels TX",
+])
+def test_local_showroom_answers_with_official_directory_without_echoing_address(message):
+    assert detect_topic(message) == TOPIC_SHOWROOM
+    answer = policy_answer(TOPIC_SHOWROOM, "osakiusa.com", message=message)
+    assert "https://osakichair.com/pages/find-your-osaki-store" in answer
+    assert answer.index("Dealer Locator") < answer.index("Carrollton")
+    assert "exact model" in answer and "not a confirmed nearest store" in answer
+    assert "123 Example Road" not in answer
+    assert "New Braunfels" not in answer
+
+
+@pytest.mark.parametrize("domain", ["osakiusa.com", "titanchair.com", "osakimassagechair.com"])
+def test_technical_service_explains_published_region_and_confirmation_limits(domain):
+    answer = policy_answer(TOPIC_TECHNICAL_SERVICE, domain, message="How does technical support work in Los Angeles?")
+    assert "48 contiguous U.S. states" in answer and "Canada" in answer
+    assert "California" in answer and "ZIP code" in answer
+    assert "1-888-848-2630 ext. 3" in answer and "proof of purchase" in answer
+    assert "can't confirm local technician availability" in answer
+    assert f"https://{domain}/pages/warranty" in answer
 
 
 def test_financing_answer_quotes_no_rate_or_term():
@@ -374,3 +413,26 @@ def test_agent_still_hands_off_a_broken_chair(monkeypatch):
     reply = respond("my chair is broken", domain="osakiusa.com")
     assert reply.handoff is True
     assert reply.intent != INTENT_PREPURCHASE_POLICY
+
+
+@pytest.mark.parametrize(
+    ("message", "tool", "must_say", "must_not_say"),
+    [
+        ("Could I lease or rent a chair for a few years and give it back? I don't want to purchase one.",
+         "policy.lease", "lease or rental", "Affirm"),
+        ("OS-3D Ai Vito WHERE CAN I TRY THIS CHAIR, I AM IN New Braunfels TX",
+         "policy.showroom", "find-your-osaki-store", "Full quick specs"),
+        ("How do you provide technical support for the Osaki 4D Emperor II in Los Angeles?",
+         "policy.technical_service", "1-888-848-2630 ext. 3", "260 lb"),
+    ],
+)
+def test_policy_answers_the_explicit_task_over_model_and_financing_clues(
+    message, tool, must_say, must_not_say, monkeypatch,
+):
+    monkeypatch.setenv("SALES_INTENT_LLM", "0")
+    from sales_agent import respond
+
+    reply = respond(message, domain="osakiusa.com", prefs={"pending_primary": "Osaki Maestro LE 2.0"})
+    assert reply.intent == INTENT_PREPURCHASE_POLICY and not reply.handoff
+    assert tool in reply.tools_used
+    assert must_say in reply.reply and must_not_say not in reply.reply

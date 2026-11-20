@@ -66,6 +66,21 @@ def test_stock_badge_labels():
     )
 
 
+@pytest.mark.parametrize("more,black_available,expected", [(False, False, False), (True, False, None), (True, True, True), (False, None, None)])
+def test_color_availability_uses_exact_variant_without_borrowing_other_color(more, black_available, expected):
+    def variant(color, available):
+        return {"node": {"selectedOptions": [{"name": "Colour", "value": color}], "availableForSale": available}}
+
+    snap = stock._snapshot_from_node({"handle": "chair", "status": "ACTIVE", "variants": {
+        "pageInfo": {"hasNextPage": more},
+        "edges": [variant("Black", black_available), variant("Taupe", True)],
+    }}, fallback_handle="chair")
+    assert snap is not None and snap.in_stock
+    assert snap.available_in_color("BLACK") is expected
+    assert snap.available_in_color("Taupe") is True
+    assert snap.available_in_color("Red") is None
+
+
 def test_snapshot_uses_shopify_sellability_and_variant_price_range():
     from sales_shopify_stock import _snapshot_from_node
 

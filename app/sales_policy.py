@@ -43,6 +43,7 @@ from store_config import get_storefront_base_url
 
 TOPIC_RETURNS = "returns"
 TOPIC_WARRANTY_TERMS = "warranty_terms"
+TOPIC_TECHNICAL_SERVICE = "technical_service"
 TOPIC_SHIPPING = "shipping"
 TOPIC_REMOTE_SHIPPING = "remote_shipping"
 TOPIC_RESTRICTED_REGION = "restricted_region"
@@ -59,6 +60,7 @@ TOPIC_LIMITS = "limits"
 POLICY_TOPICS = (
     TOPIC_RETURNS,
     TOPIC_WARRANTY_TERMS,
+    TOPIC_TECHNICAL_SERVICE,
     TOPIC_SHIPPING,
     TOPIC_REMOTE_SHIPPING,
     TOPIC_RESTRICTED_REGION,
@@ -110,6 +112,26 @@ _INTERNATIONAL_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+
+_LEASE_QUESTION_RE = re.compile(
+    r"\b(?:lease|rent)[\s-]+to[\s-]+own\b|\b(?:lease|rent)(?:\s*/\s*|\s+or\s+)(?:lease|rent)\b|"
+    r"\b(?:do you|can i|can you|could i|do you offer|looking to|want to)\s+(?:lease|rent)\b|"
+    r"\b(?:lease|rent)\s+(?:a\s+|the\s+|your\s+)?(?:massage\s+)?(?:chairs?|one|it)\b|"
+    r"\b(?:leasing|rental)\s+(?:options?|program|plans?)\b|\b(?:chair|equipment)\s+(?:lease|rental)\b",
+    re.I,
+)
+_TECHNICAL_SERVICE_RE = re.compile(
+    r"\b(?:tech(?:nical)?\s+(?:service|support)|warranty\s+service|repair\s+service)\b|"
+    r"\b(?:how|who|where)\b[^?!.;]{0,60}\b(?:service|repair)\s+(?:it|the\s+(?:chair|unit))\b",
+    re.I,
+)
+_LOCAL_DEALER_RE = re.compile(
+    r"\b(?:near|nearby|nearest|closest|local|around|(?:my|this)\s+area|zip(?:\s*code)?)\b|"
+    r"\b(?:dealers?|retailers?|showrooms?)\s+in\b|"
+    r"\b(?:i\s+am|i['’]m|we\s+are|we['’]re|i\s+live|we\s+live)\s+(?:in|from)\b",
+    re.I,
+)
+_DEALER_LOCATOR_URL = "https://osakichair.com/pages/find-your-osaki-store"
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +242,6 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"pay\s+over\s+time|installments?|"
             r"affirm|klarna|afterpay|"
             r"\bapr\b|interest\s+rate|"
-            r"lease\s+to\s+own|rent\s+to\s+own|"
             r"can\s+i\s+split\s+the\s+(?:cost|payment)|"
             r"할부"
             r")",
@@ -258,18 +279,6 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
     (
-        TOPIC_LEASE,
-        re.compile(
-            r"("
-            r"(?:do\s+you|can\s+i|can\s+you)\s+lease|"
-            r"\blease(?:s|d|ing)?\s+(?:a\s+)?(?:chair|one)|"
-            r"chair\s+lease|"
-            r"equipment\s+lease"
-            r")",
-            re.IGNORECASE,
-        ),
-    ),
-    (
         TOPIC_LIMITS,
         re.compile(
             r"("
@@ -282,7 +291,6 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"affiliate\s+program|influencer\s+program|referral\s+program|"
             r"become\s+an?\s+affiliate|"
             r"\b889\b|government\s+(?:form|contract|purchase)|"
-            r"rental\s+program|\brent(?:al|s)?\s+a\s+chair|"
             r"outdoor|patio|porch|"
             r"medical\s+device|fda\s+approv|"
             r"pregnan(?:t|cy)|for\s+(?:kids?|children|toddlers?)|"
@@ -390,6 +398,12 @@ def detect_topic(text: str) -> Optional[str]:
 
     if is_medical_scope_question(raw):
         return TOPIC_LIMITS
+    # Paying for ownership is different from temporary use with a return.
+    # Service coverage is also independent of shipping to that region.
+    if _LEASE_QUESTION_RE.search(raw):
+        return TOPIC_LEASE
+    if _TECHNICAL_SERVICE_RE.search(raw):
+        return TOPIC_TECHNICAL_SERVICE
     # A location in a showroom question is not a shipping destination.
     if re.search(
         r"\b(?:showroom|local\s+dealer|nearby\s+dealer|nearest\s+dealer|"
@@ -472,6 +486,7 @@ def followup_topic(text: str, previous: Optional[str]) -> Optional[str]:
     patterns = {
         TOPIC_RETURNS: r"\bboth\s+ways\b|\b(?:deduct\w*|restocking|packaging|rma|authorization)\b|\breturn\s+(?:shipping|freight|costs?)\b|\btrip\s+(?:here|back)\b",
         TOPIC_WARRANTY_TERMS: r"\b(?:labor|parts|coverage)\b|\b(?:all|three|3)\s+years\b",
+        TOPIC_LEASE: r"\bgive\s+(?:it|the chair)\s+back\b|\breturn\s+(?:it|the chair)\b.{0,40}\b(?:after|at the end)\b|\b(?:own|keep)\b.{0,40}\b(?:after|at the end)\b",
         TOPIC_REMOTE_SHIPPING: r"\b(?:freight|there|that\s+(?:location|address))\b.{0,40}\b(?:free|pay|quote|cost|included)\b|\b(?:free|pay|quote|cost)\b.{0,40}\b(?:there|freight)\b",
         TOPIC_SHOWROOM: r"\b(?:open|closed|hours|sunday|saturday|appointment|visit|confirmed)\b|\b(?:there|floor)\b.{0,35}\b(?:try|today|available)\b|\bbe\s+there\b",
     }
@@ -516,6 +531,30 @@ def _warranty_terms_answer(domain: str) -> str:
         "labor coverage in the later years.\n\n"
         "The warranty is non-transferable and proof of purchase is required for any claim.\n\n"
         f"Full terms and exclusions: {url}"
+    )
+
+
+def _technical_service_answer(domain: str, message: str = "") -> str:
+    # These storefronts publish the same Titan Chair service contact and
+    # geographic limitation. Don't infer coverage for an unverified store.
+    origin = get_storefront_base_url(domain)
+    if origin not in {"https://osakiusa.com", "https://titanchair.com", "https://osakimassagechair.com"}:
+        return (
+            "For technical support, call **1-888-848-2630 ext. 3**. Ask the service team to confirm "
+            "your model's warranty and the options for your ZIP code before purchasing. "
+            "I can't confirm coverage or schedule a technician from this chat."
+        )
+    url = _policy_url(domain, "pages/warranty")
+    area = " (including California)" if re.search(r"\b(?:california|los angeles)\b", message or "", re.I) else ""
+    return (
+        "**How to get technical support**\n\n"
+        f"The published massage-chair warranty terms apply in the **48 contiguous U.S. states**{area} and "
+        "**Canada**. Coverage still depends on your model and warranty terms.\n\n"
+        "Call the service team at **1-888-848-2630 ext. 3**. If you're buying, ask about the service options "
+        "for the exact model and ZIP code. If you need warranty service after purchase, have your proof of "
+        "purchase ready. The team can advise on next steps; I can't confirm local technician availability, "
+        "a visit, or repair costs here.\n\n"
+        f"Warranty and service details: {url}"
     )
 
 
@@ -605,6 +644,11 @@ def _financing_answer(domain: str) -> str:
     )
 
 
+def local_dealer_requested(message: str) -> bool:
+    """Recognize a local demo request without extracting or echoing a location."""
+    return bool(_LOCAL_DEALER_RE.search(message or ""))
+
+
 def _showroom_answer(domain: str, message: str = "") -> str:
     from sales_cta import showroom_address, showroom_hours, showroom_maps_url, showroom_phone
 
@@ -612,6 +656,15 @@ def _showroom_answer(domain: str, message: str = "") -> str:
     phone_line = f"- **Call:** {phone}\n" if phone else ""
     extra: list[str] = []
     raw = message or ""
+    if local_dealer_requested(raw):
+        return (
+            "**Find a nearby place to try the chair**\n\n"
+            f"Use the official [Osaki Dealer Locator]({_DEALER_LOCATOR_URL}) and search by city or ZIP code. "
+            "Call a listed store before you travel and ask whether the exact model is on display to try. "
+            "I don't have live dealer floor inventory.\n\n"
+            f"The Carrollton showroom ({showroom_address()}) is another option, not a confirmed nearest store. "
+            "Confirm model availability there before visiting too."
+        )
     if re.search(r"\bsun(?:day)?s?\b", raw, re.I):
         extra.append(
             "Sunday isn't listed in the published hours, so I won't promise "
@@ -635,9 +688,8 @@ def _showroom_answer(domain: str, message: str = "") -> str:
         )
     if re.search(r"\b(?:dealer|retailer)s?\b", raw, re.I):
         extra.append(
-            "This is the verified showroom address I can provide. "
-            "I don't have a verified local dealer list or model availability "
-            "for other locations; sales can check before you travel."
+            f"You can also search the official [Osaki Dealer Locator]({_DEALER_LOCATOR_URL}). "
+            "Check with the store for availability of the exact floor model before visiting."
         )
     extra_block = ("\n\n" + " ".join(extra)) if extra else ""
     return (
@@ -732,8 +784,6 @@ def _limits_kind(message: str) -> str:
         re.I,
     ):
         return "relocate"
-    if re.search(r"rental\s+program|\brent(?:al|s)?\s+a\s+chair", raw, re.I):
-        return "rental"
     if re.search(r"outdoor|patio|porch", raw, re.I):
         return "outdoor"
     if re.search(
@@ -840,11 +890,6 @@ def _limits_answer(_domain: str, message: str = "") -> str:
             "A Sales specialist can look at the payment page with you — share your "
             "**email**."
         )
-    if kind == "rental":
-        return (
-            "We **don't rent** chairs, and I don't have a wholesale list in this chat.\n\n"
-            "**Affirm** pay-over-time is available at checkout. I won't quote a rate."
-        )
     if kind == "outdoor":
         return (
             "These chairs are sold for **indoor home use**. I won't recommend one "
@@ -920,13 +965,16 @@ def _limits_answer(_domain: str, message: str = "") -> str:
     )
 
 
-def _lease_answer(_domain: str) -> str:
-    return (
-        "We **don't lease** chairs.\n\n"
-        "**Affirm** pay-over-time is available at checkout on our store. "
-        "You'll see the monthly amount there — I won't quote a rate here.\n\n"
-        "Want a specialist to walk through checkout options? Share your **email**."
+def _lease_answer(domain: str) -> str:
+    text = (
+        "This storefront does not list a **lease or rental** program for massage chairs. "
+        "I can't offer a fixed rental term or a return-at-the-end agreement.\n\n"
+        "Paying in installments is a **purchase**, not a lease where you give the chair back. "
+        "If temporary use without ownership is essential, purchase financing doesn't meet that need."
     )
+    if get_storefront_base_url(domain) in {"https://osakiusa.com", "https://titanchair.com", "https://osakimassagechair.com"}:
+        return f"{text}\n\nPublished sales policy: {_policy_url(domain, 'pages/sales-policy')}"
+    return text
 
 
 def _mechanism_answer(_domain: str) -> str:
@@ -948,6 +996,7 @@ def _mechanism_answer(_domain: str) -> str:
 _ANSWERS = {
     TOPIC_RETURNS: _returns_answer,
     TOPIC_WARRANTY_TERMS: _warranty_terms_answer,
+    TOPIC_TECHNICAL_SERVICE: _technical_service_answer,
     TOPIC_SHIPPING: _shipping_answer,
     TOPIC_REMOTE_SHIPPING: _remote_shipping_answer,
     TOPIC_RESTRICTED_REGION: _restricted_region_answer,
@@ -974,4 +1023,6 @@ def policy_answer(topic: str, domain: str = "", message: str = "") -> Optional[s
         return _limits_answer(domain, message=message)
     if topic == TOPIC_WHITE_GLOVE:
         return _white_glove_answer(domain, message=message)
+    if topic == TOPIC_TECHNICAL_SERVICE:
+        return _technical_service_answer(domain, message=message)
     return builder(domain)

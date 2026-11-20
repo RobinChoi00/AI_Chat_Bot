@@ -106,7 +106,8 @@ def test_try_before_buying_is_showroom_even_with_model_or_shipping_region(messag
     answer = policy_answer(TOPIC_SHOWROOM, "osakiusa.com", message=message)
     assert "Carrollton" in answer
     if "dealer" in message:
-        assert "don't have a verified local dealer list" in answer
+        assert "https://osakichair.com/pages/find-your-osaki-store" in answer
+        assert "exact model" in answer
 
 
 @pytest.mark.parametrize("message", [

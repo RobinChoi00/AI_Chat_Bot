@@ -100,7 +100,7 @@ _NO_PHRASES = [
     ("do you sell refurbished chairs", ("new", "refurb")),
     ("any open box models", ("new", "open")),
     ("do you take trade-ins", ("trade",)),
-    ("can I lease a chair", ("lease", "affirm")),
+    ("can I lease a chair", ("lease", "rental", "purchase")),
 ]
 
 

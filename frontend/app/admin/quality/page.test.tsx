@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OutcomeQuality } from "@/lib/qualityTypes";
+import type { AIHealth, OutcomeQuality } from "@/lib/qualityTypes";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock("@/lib/backendUrl", () => ({ getBackendUrl: () => "http://backend.test" }));
@@ -21,11 +21,11 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.resetAllMocks(); });
 
-function backend(body: OutcomeQuality) {
+function backend(body: OutcomeQuality, track123?: AIHealth["track123"]) {
   fetchMock.mockImplementation(async (raw: string) => {
     if (raw.includes("/warranty/quality?")) return Response.json(body);
     if (raw.includes("knowledge-reviews")) return Response.json({ reviews: [] });
-    return Response.json({ models: { agent: "current-agent", router: "current-router", embedding: "current-embedding" }, latency: { warranty: { samples: 0, p50_ms: 0, p95_ms: 0 } }, stock_cache: {}, warranty_embeddings: {} });
+    return Response.json({ models: { agent: "current-agent", router: "current-router", embedding: "current-embedding" }, latency: { warranty: { samples: 0, p50_ms: 0, p95_ms: 0 } }, stock_cache: {}, warranty_embeddings: {}, track123 });
   });
 }
 
@@ -49,5 +49,17 @@ describe("quality release cohorts", () => {
     expect(html).toContain("backend must be updated before release-cohort outcomes");
     expect(html).not.toContain("Latest repair outcomes");
     expect(html).toContain("Current runtime");
+  });
+
+  it.each([
+    [true, null, "Sample request verified"],
+    [false, "probe_not_found", "Reached provider; sample order not found, access unverified"],
+    [false, "network_error", "Could not reach provider"],
+  ])("separates a Track123 probe from customer shipment results", async (ok, error_code, label) => {
+    backend(outcomes("all"), { configured: true, ok, error_code });
+    const html = renderToStaticMarkup(await AIQualityPage({}));
+    expect(html).toContain("Track123 (Osaki USA)");
+    expect(html).toContain(label);
+    expect(html).toContain("Live shipment lookup was not tested");
   });
 });

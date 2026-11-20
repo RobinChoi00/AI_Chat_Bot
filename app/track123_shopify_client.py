@@ -53,6 +53,9 @@ def _get_json(
     headers = {"X-Api-Key": api_key, "Content-Type": "application/json", "accept": "application/json"}
     try:
         response = http_get(url, headers=headers, timeout=12)
+    except TypeError:
+        logger.warning("Track123 Shopify API request could not be constructed")
+        return None, "check_failed"
     except Exception as exc:
         logger.warning("Track123 Shopify API network error: %s", type(exc).__name__)
         return None, "network_error"
@@ -67,7 +70,7 @@ def _get_json(
         return None, "not_found"
     if status == 429:
         return None, "rate_limited"
-    if status >= 400:
+    if not 200 <= status < 300:
         logger.warning("Track123 Shopify API HTTP %s path=%s", status, path)
         return None, f"http_{status}"
     if not isinstance(payload, dict):
@@ -235,17 +238,20 @@ def shopify_app_auth_status(
     *,
     http_get: Callable[..., Any],
 ) -> Dict[str, Any]:
-    """Probe auth with a definitely-missing order number."""
+    """Probe the integration with a reserved sample order number."""
     api_key = _api_key(store_config)
     uuid = resolve_track123_store_uuid(store_config)
     if not api_key or not uuid:
         return {"configured": False, "ok": False, "error_code": "missing_credentials"}
-    _payload, error = _get_json(
+    payload, error = _get_json(
         f"{quote(uuid, safe='')}/orders/by-number/99999999.json",
         api_key,
         http_get=http_get,
     )
-    if error in {None, "not_found"}:
-        # 404 means the key was accepted.
+    if error is None and isinstance((payload or {}).get("order"), dict):
         return {"configured": True, "ok": True, "store_uuid": uuid, "error_code": None}
-    return {"configured": True, "ok": False, "store_uuid": uuid, "error_code": error or "unknown"}
+    # A generic 404 means an HTTP response arrived, not that the key or the
+    # configured store was accepted. The vendor does not specify otherwise.
+    if error == "not_found":
+        error = "probe_not_found"
+    return {"configured": True, "ok": False, "store_uuid": uuid, "error_code": error or "invalid_payload"}
