@@ -61,7 +61,7 @@ describe("admin queue historical pages", () => {
     const markup = renderToStaticMarkup(await AdminWarrantyQueuePage({ searchParams: Promise.resolve({}) }));
     expect(markup).not.toContain("open support requests without confirmed submission");
     expect(markup).not.toContain("Mark staff received");
-    expect(fetchMock.mock.calls).toHaveLength(1);
-    expect(String(fetchMock.mock.calls[0]?.[0] ?? "")).toContain("/admin/warranty/tickets");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(fetchMock.mock.calls)).toContain("/admin/warranty/tickets");
   });
 });
