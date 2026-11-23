@@ -255,6 +255,22 @@ def test_opening_questions_from_real_customer_turns_are_answered():
             "will not inflate",
             "otasupport.com",
         ),
+        "how can i pay": (
+            "Sales",
+            "ext. 2",
+            "Affirm",
+            "checkout",
+        ),
+        "What payment methods do you accept?": (
+            "Sales",
+            "ext. 2",
+            "Affirm",
+        ),
+        "Can I use Affirm financing?": (
+            "Sales",
+            "Affirm",
+            "checkout",
+        ),
     }
     for text, needles in cases.items():
         msg = try_factual_common_question(_MENU, text, ticket=_Ticket())
@@ -266,7 +282,10 @@ def test_opening_questions_from_real_customer_turns_are_answered():
         assert "wasn't fully sure" not in lower
         if "white glove" not in text.lower():
             assert "$275" not in msg
-        if any(token in text.lower() for token in ("white glove", "fsa", "hallway", "assemble")):
+        if any(
+            token in text.lower()
+            for token in ("white glove", "fsa", "hallway", "assemble", "pay", "affirm", "payment")
+        ):
             assert "which area do you need help with" not in lower
             assert is_sales_bound_opening_question(text)
 
@@ -337,6 +356,16 @@ def test_bluetooth_pairing_failure_is_not_a_how_to_faq():
     for text in failures:
         assert looks_like_factual_common_question(text) is False, text
         assert try_factual_common_question(_MENU, text, ticket=_Ticket()) is None, text
+
+
+def test_repair_payment_is_not_checkout_sales_faq():
+    text = "How much will I pay for a repair?"
+    assert is_sales_bound_opening_question(text) is False
+    msg = try_factual_common_question(_MENU, text, ticket=_Ticket())
+    assert msg is not None
+    lower = msg.lower()
+    assert "won't quote a repair cost" in lower or "repair cost" in lower
+    assert "affirm" not in lower
 
 
 def test_send_part_at_problem_type_is_not_treated_as_remote_option():

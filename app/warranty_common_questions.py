@@ -220,6 +220,23 @@ _PARTS_DIAGRAM_RE = re.compile(
     r"\b(?:replacement|spare)\s+parts?\b",
     re.I,
 )
+_PAYMENT_PURCHASE_RE = re.compile(
+    r"\b(?:how\s+(?:can|do)\s+(?:i|we|you)\s+pay|"
+    r"how\s+to\s+pay|"
+    r"ways?\s+to\s+pay|"
+    r"payment\s+methods?|"
+    r"methods?\s+of\s+payment|"
+    r"pay\s+(?:with|by|using)\b|"
+    r"financing|affirm|klarna|afterpay|"
+    r"monthly\s+payments?|"
+    r"payment\s+plan|"
+    r"how\s+(?:can|do)\s+(?:i|we|you)\s+(?:buy|purchase)|"
+    r"how\s+to\s+(?:buy|purchase)\b|"
+    r"(?:accept|take|offer)\s+(?:credit\s+cards?|debit|affirm|paypal|financing)|"
+    r"(?:credit\s+cards?|paypal)\s+(?:accepted|ok|okay|allowed)\b"
+    r")",
+    re.I,
+)
 _AIR_NOT_INFLATING_RE = re.compile(
     r"\b(?:will\s+not|won't|does\s+not|doesn't|cannot|can't|not)\s+"
     r"(?:inflat(?:e|ing)|stay\s+inflated)\b|"
@@ -592,6 +609,30 @@ def _accessory_compat_answer() -> str:
     )
 
 
+def _is_payment_or_purchase_question(text: str) -> bool:
+    """Checkout / financing / how-to-pay — Sales, not warranty intake."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if _REPAIR_COST_RE.search(raw) or _PART_SHIP_COST_RE.search(raw):
+        return False
+    if re.search(r"\b(?:repair|parts?|technician|service\s+call)\b", raw, re.I) and re.search(
+        r"\bpay(?:ment|ing)?\b", raw, re.I
+    ):
+        return False
+    return bool(_PAYMENT_PURCHASE_RE.search(raw))
+
+
+def _payment_purchase_answer() -> str:
+    return (
+        "Payment and purchasing are handled by **Sales**, not this warranty chat. "
+        "I cannot take a payment, change an order, or quote financing terms here.\n\n"
+        "**Affirm** (pay over time) appears at checkout on the store once you pick a chair — "
+        "the monthly amount and any interest depend on Affirm's approval, so I won't quote a rate.\n\n"
+        f"For payment methods, checkout help, or a purchase, call **Sales at {SALES_PHONE}**."
+    )
+
+
 def _is_assembly_howto(text: str) -> bool:
     """How-to assembly questions only — a failed install is still a setup case."""
     raw = (text or "").strip()
@@ -613,6 +654,7 @@ def is_sales_bound_opening_question(text: str) -> bool:
         or _WARRANTY_REGISTER_RE.search(raw)
         or _ACCESSORY_COMPAT_RE.search(raw)
         or _is_air_intensity_question(raw)
+        or _is_payment_or_purchase_question(raw)
     )
 
 
@@ -652,6 +694,7 @@ def looks_like_factual_common_question(text: str) -> bool:
         or _is_air_intensity_question(raw)
         or _WARRANTY_REGISTER_RE.search(raw)
         or _ACCESSORY_COMPAT_RE.search(raw)
+        or _is_payment_or_purchase_question(raw)
         or _AUTO_CHECK_RE.search(raw)
         or _WATTS_RE.search(raw)
         or _PARTS_DIAGRAM_RE.search(raw)
@@ -695,6 +738,8 @@ def try_factual_common_question(
         return _join(_bluetooth_pair_answer(), node)
     if _FSA_RECEIPT_RE.search(raw):
         return _join_without_issue_menu(_fsa_receipt_answer(), node)
+    if _is_payment_or_purchase_question(raw):
+        return _join_without_issue_menu(_payment_purchase_answer(), node)
     if _HALLWAY_FIT_RE.search(raw):
         return _join_without_issue_menu(_hallway_fit_answer(raw, ticket), node)
     if _is_assembly_howto(raw):

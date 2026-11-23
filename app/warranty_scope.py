@@ -50,6 +50,8 @@ _SALES_ONLY_RE = re.compile(
     r"\b("
     r"how\s+much|what'?s?\s+the\s+price|price\s+of|cost\s+of|on\s+sale|discount|"
     r"coupon|promo\s*code|financing|affirm|buy\s+now|purchase|"
+    r"how\s+(?:can|do)\s+(?:i|we|you)\s+pay|how\s+to\s+pay|ways?\s+to\s+pay|"
+    r"payment\s+methods?|methods?\s+of\s+payment|payment\s+plan|monthly\s+payments?|"
     r"recommend|suggest|best\s+chair|compare\s+models|which\s+chair\s+should|"
     r"showroom|visit\s+(?:your|the)\s+store|"
     r"specs?\s+only|dimensions?\s+only|tell\s+me\s+about\s+(?:the\s+)?(?:chair|model)\b|"

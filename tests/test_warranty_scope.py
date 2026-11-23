@@ -22,6 +22,17 @@ def test_blocks_sales_pricing_question():
     assert decision.reason == "sales_topic"
 
 
+def test_blocks_payment_and_checkout_questions():
+    for text in (
+        "how can i pay",
+        "What payment methods do you accept?",
+        "Can I get Affirm financing?",
+    ):
+        decision = evaluate_warranty_scope(text)
+        assert decision.is_blocked, text
+        assert decision.reason == "sales_topic", text
+
+
 def test_blocks_pre_purchase_and_sales_team_questions():
     from warranty_scope import is_pre_purchase_sales, wants_sales_contact
 
