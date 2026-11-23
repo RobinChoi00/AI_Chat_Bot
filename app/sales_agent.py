@@ -5183,6 +5183,14 @@ def _respond_turn(
 
     waiting = _in_recommend_wait(prefs)
 
+    from sales_intent import _ELECTRICAL_POWER_RE  # noqa: WPS433
+
+    if _ELECTRICAL_POWER_RE.search(message or ""):
+        result = _prepurchase_policy_reply(message, domain=domain, topic="limits")
+        if waiting:
+            result = _resume_recommend_after_side(result, prefs, domain=domain)
+        return _remember_question(_finalize_flow_stage(result), message, payload)
+
     if intent.label == INTENT_INTENSITY and re.search(r"\?|\b(?:can|does|how|what|which|adjust|settings?)\b", message or '', re.I):
         return _remember_question(_finalize_flow_stage(_intensity_reply(message, prefs)), message, payload)
 

@@ -243,8 +243,28 @@ def test_human_request_before_model_gate(client, monkeypatch, route, body):
     monkeypatch.setattr("warranty_order_verification.verify_ticket_purchase", lambda **_kw: pytest.fail("Human request scheduled a model purchase verification"))
     response = client.post(f"/api/v1/warranty/session/first-{route}/{route}", json=body)
     assert response.status_code == 200, response.text
-    assert response.json()["handoff"]["requested"] is True
-    assert not response.json()["ticket"]["model_name"]
+    body_json = response.json()
+    # Opening human-only asks get phone numbers — not a Freshdesk queue entry.
+    assert not (body_json.get("handoff") or {}).get("requested")
+    assert "ext. 3" in body_json["assistant_message"] or "888-848-2630" in body_json["assistant_message"]
+    assert body_json["ticket"]["status"] != "awaiting_admin_review"
+    assert not body_json["ticket"]["model_name"]
+
+
+def test_opening_human_request_does_not_enqueue_handoff(client, monkeypatch):
+    from warranty_notification_jobs import WarrantyNotificationJob
+
+    monkeypatch.setenv("WARRANTY_CHAT_EMAIL_REQUIRED", "0")
+    assert client.post("/api/v1/warranty/session/bare-human/consent", json={"domain": "osakiusa.com"}).status_code == 200
+    response = client.post(
+        "/api/v1/warranty/session/bare-human/smart-start",
+        json={"message": "I need a human"},
+    )
+    assert response.status_code == 200, response.text
+    assert not (response.json().get("handoff") or {}).get("requested")
+    assert "has not opened a warranty case" in response.json()["assistant_message"]
+    with wm.warranty_db_session() as db:
+        assert db.query(WarrantyNotificationJob).count() == 0
 
 
 @pytest.mark.parametrize("route,body", [

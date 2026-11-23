@@ -1485,6 +1485,55 @@ def _support_interrupt_reason(text: str) -> Optional[str]:
     return human_support_reason(text)
 
 
+def _message_has_warranty_substance(text: str) -> bool:
+    """True when the customer described a setup/delivery/defect case beyond asking for a person."""
+    from warranty_scope import _WARRANTY_TOPIC_RE  # noqa: WPS433
+
+    cleaned = re.sub(
+        r"\b(?:human|real\s+person|live\s+(?:agent|person)|representative|"
+        r"customer\s+service|agent|specialist|someone|person|"
+        r"call\s+me(?:\s+back)?|callback|phone\s+me|"
+        r"speak|talk|connect|transfer|need|want|please|help|assist|review)\b",
+        " ",
+        text or "",
+        flags=re.I,
+    )
+    return bool(_WARRANTY_TOPIC_RE.search(cleaned))
+
+
+def _is_bare_opening_human_request(row, message: str, reason: str) -> bool:
+    """Opening human taps with no issue path should get phone numbers, not a queue entry."""
+    if (reason or "").strip() == "safety_hazard":
+        return False
+    issue = str(getattr(row, "issue_type", "") or "").strip().lower()
+    if issue in ("installation", "delivery", "defect"):
+        return False
+    node_id = str(getattr(row, "current_node_id", "") or "").strip()
+    if node_id and node_id not in ("root", "issue_type"):
+        return False
+    if _message_has_warranty_substance(message):
+        return False
+    return True
+
+
+def _opening_human_contact_payload(engine, session_id: str, ticket_id: str, domain: str) -> Dict[str, Any]:
+    from warranty_scope import department_phone_directory  # noqa: WPS433
+
+    ticket = engine.get_ticket(ticket_id)
+    node = engine.get_current_node(ticket_id)
+    payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    payload["side_question"] = True
+    payload["assistant_message"] = (
+        "I can share the support numbers here. This chat has not opened a warranty "
+        "case or queued a callback.\n\n"
+        f"{department_phone_directory()}\n\n"
+        "If this is setup, delivery, or a chair malfunction, describe the issue here "
+        "and we can continue — or call the number above."
+    )
+    payload.pop("handoff", None)
+    return payload
+
+
 def _request_human_handoff(engine, session_id: str, message: str, domain: str, *, reason: str = "customer_request") -> Dict[str, Any]:
     """Persist a visible support request without claiming a live transfer/email."""
     from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
@@ -1521,6 +1570,9 @@ def _request_human_handoff(engine, session_id: str, message: str, domain: str, *
             # the customer has already received in their original language.
             if not current_hazard and not requested_customer_language(message):
                 language = prior_language
+        if _is_bare_opening_human_request(row, message, reason):
+            # Contact-only: no Freshdesk queue and no awaiting_admin_review.
+            return _opening_human_contact_payload(engine, session_id, ticket_id, domain)
         from warranty_scope import is_delivery_inquiry, wants_sales_contact  # noqa: WPS433
 
         department = str(row.get_collected().get("human_support_department") or "warranty")

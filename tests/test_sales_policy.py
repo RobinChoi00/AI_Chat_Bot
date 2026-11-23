@@ -350,6 +350,22 @@ def test_limits_kinds_stay_honest(monkeypatch):
     )
     assert "catalog" in friend.lower()
     assert "model name" in friend.lower()
+    power = policy_answer(
+        TOPIC_LIMITS,
+        "osakiusa.com",
+        message="I need to know if the chair supports 120 v and 240 V 50hz power",
+    )
+    assert "voltage" in power.lower()
+    assert "ext. 2" in power
+    assert "won't invent" in power.lower()
+    show = policy_answer(
+        TOPIC_LIMITS,
+        "osakiusa.com",
+        message="Which listed product was displayed at the Charlotte Auto show this weekend?",
+    )
+    assert "displayed" in show.lower()
+    assert "ext. 2" in show
+    assert "won't invent" in show.lower()
 
 
 def test_hawaii_zip_is_remote_freight_not_included_shipping():

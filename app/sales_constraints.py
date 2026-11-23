@@ -139,10 +139,10 @@ def _is_person_height(text: str, start: int, end: int) -> bool:
         return False
     if re.match(r'\s*(?:tall\s+)?(?:user|person|buyer|man|woman)\b', suffix, re.I):
         return True
-    if re.match(r'\s*(?:(?:tall|high)\s+(?:and\s+)?)?(?:of\s+)?(?:clearance|space|room|wide|deep|long|behind|door(?:way)?|opening|ceiling)\b', suffix, re.I):
+    if re.match(r'\s*(?:(?:tall|high)\s+(?:and\s+)?)?(?:of\s+)?(?:clearance|space|room|wide|deep|long|behind|door(?:s|ways?)?|opening|ceiling)\b', suffix, re.I):
         return False
     person = _latest_subject_position(r"\b(?:i\s+am|i'm|my\s+(?:body\s+)?height(?:\s+is)?|(?:buyer|user|person|husband|wife|father|mother|dad|mom|spouse)(?:\s+(?:is|who\s+is))?)\b", prefix)
-    dimension = _latest_subject_position(r'\b(?:door(?:way)?|opening|entrance|ceiling|hall(?:way)?|chair|package|product|shipment|box|unit|device|room|clearance|space|height\s+(?:range|limit)|supported\s+height)\b', prefix)
+    dimension = _latest_subject_position(r'\b(?:door(?:s|ways?)?|opening|entrance|ceiling|hall(?:way)?|chair|package|product|shipment|box|unit|device|room|clearance|space|height\s+(?:range|limit)|supported\s+height)\b', prefix)
     return dimension < 0 or person > dimension
 
 
@@ -293,12 +293,12 @@ def _doorway_measurements(text: str) -> list[tuple[int, float]]:
             continue
         prefix = re.split(r'[;!?]|\.(?=\s|$)', text[:match.start()])[-1][-140:]
         suffix = text[match.end():]
-        before = re.search(r'\b(?:door(?:way)?|entrance|opening)\b', prefix, re.I)
-        after = re.match(r'\s*(?:wide\s+)?(?:door(?:way)?|entrance|opening)\b', suffix, re.I)
+        before = re.search(r'\b(?:door(?:s|ways?)?|entrance|opening)\b', prefix, re.I)
+        after = re.match(r'\s*(?:wide\s+)?(?:door(?:s|ways?)?|entrance|opening)\b', suffix, re.I)
         if not (before or after) or re.match(r'\s*(?:tall|high)\b', suffix, re.I):
             continue
         # A later body measurement is not another width of the earlier door.
-        if before and not after and _latest_subject_position(r"\b(?:i\s+am|i'm|my\s+height|(?:father|mother|husband|wife)\s+is)\b", prefix) > _latest_subject_position(r'\b(?:door(?:way)?|entrance|opening)\b', prefix):
+        if before and not after and _latest_subject_position(r"\b(?:i\s+am|i'm|my\s+height|(?:father|mother|husband|wife)\s+is)\b", prefix) > _latest_subject_position(r'\b(?:door(?:s|ways?)?|entrance|opening)\b', prefix):
             continue
         value = float(match.group(1))
         unit = match.group(2).lower()
@@ -335,7 +335,7 @@ def _is_customer_doorway(text: str, start: int, end: int) -> bool:
     """A model's published doorway requirement is not a home measurement."""
     prefix = re.split(r'[;!?]|\.(?=\s|$)', text[:start])[-1][-160:]
     scope = prefix + text[start:end]
-    customer = _latest_subject_position(r'\b(?:my|our|your)\s+(?:(?:own|home|house)\s+)?(?:door(?:way)?|opening|entrance)\b', scope)
+    customer = _latest_subject_position(r'\b(?:my|our|your)\s+(?:(?:own|home|house)\s+)?(?:door(?:s|ways?)?|opening|entrance)\b', scope)
     product = _latest_subject_position(
         r"\b(?:published|listed|catalog|specifications?|specs?|required|requires|minimum|assembled|disassembled)\b|"
         r"\b(?:chair|model|product|unit)(?:['’]s|\s+(?:has|needs|requires|lists))\b|\b(?!(?:my|our|your)\b)[a-z][\w-]*['’]s\b", scope,
@@ -382,12 +382,12 @@ def extract_constraints(text: str, previous: Mapping[str, str] | None = None) ->
         r"\b(?:has|have|needs?|must)\s+to\s+(?:go|come|fit)\s+(?:in|through)\s+assembled\b|"
         r"\b(?:go|goes|fit|fits)\s+(?:in|through)\s+(?:fully\s+)?assembled\b|"
         r"\b\d{2}(?:\.\d+)?\s*(?:\"|in\b|inch(?:es)?\b)\s*,?\s*(?:wide\s*,?\s*)?assembled\b|"
-        r"\b(?:door(?:way)?|opening|entrance)\b.{0,30}\b\d{2}(?:\.\d+)?\s*(?:\"|in\b|inch(?:es)?\b).{0,20}\bassembled\b", raw, re.I,
+        r"\b(?:door(?:s|ways?)?|opening|entrance)\b.{0,30}\b\d{2}(?:\.\d+)?\s*(?:\"|in\b|inch(?:es)?\b).{0,20}\bassembled\b", raw, re.I,
     ):
         out['doorway_fit'] = 'assembled'
     elif re.search(r"\b(?:ok(?:ay)?\s+to\s+disassembl\w*|allow\s+disassembly|disassembly\s+(?:is\s+)?(?:ok(?:ay)?|fine|allowed)|(?:i|we)\s+can\s+take\s+(?:it|the chair)\s+apart|(?:i|we)(?:'m|\s+am|\s+are)?\s+(?:ok(?:ay)?|fine)\s+with\s+disassembl\w*)\b", raw, re.I):
         out['doorway_fit'] = 'disassembled'
-    if re.search(r'\b(?:no\s+(?:doorway|door)\s+(?:limit|constraint)|doorway\s+(?:is\s+)?(?:not|no longer)\s+a\s+constraint)\b', raw, re.I):
+    if re.search(r'\b(?:no\s+(?:doorways?|doors?)\s+(?:limit|constraint)|doorways?\s+(?:is\s+)?(?:not|no longer)\s+a\s+constraint)\b', raw, re.I):
         out['doorway_in'] = 'skip'
         if out.get('space') != 'Small Room':
             out['space'] = 'No Space Constraint'

@@ -211,6 +211,9 @@ def test_constraint_parser_correction_negation_and_decimal_budget():
     assert parsed['intensity'] == 'Gentle'
     assert not extract_constraints('I am 5 ft 18').get('height_in')
     assert extract_constraints('I have a 30 inch doorway')['doorway_in'] == '30'
+    plural_doors = extract_constraints('My doors are 29" wide, what can I do')
+    assert plural_doors['doorway_in'] == '29'
+    assert plural_doors.get('space') == 'Narrow Doorway'
     assert extract_constraints('My budget is $3500, but this chair costs $8499')['budget_max_usd'] == '3500'
     assert extract_constraints('3D instead of 4D', {'mechanism': '4D'})['mechanism'] == '3D'
     assert not product_constraint_issues(resolve_product('Titan TP-Epic 4D'), {'doorway_in': 'skip'})

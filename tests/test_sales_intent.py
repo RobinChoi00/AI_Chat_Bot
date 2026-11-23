@@ -331,6 +331,25 @@ def test_intensity_intent():
         assert intent.label == INTENT_INTENSITY, text
 
 
+def test_electrical_power_is_policy_not_intensity():
+    from sales_intent import INTENT_PREPURCHASE_POLICY
+
+    for text in [
+        "I need to know if the chair supports 120 v and 240 V 50hz power",
+        "I need to know power input",
+        "what voltage outlet does it need",
+    ]:
+        intent = classify(text)
+        assert intent.label == INTENT_PREPURCHASE_POLICY, text
+
+
+def test_auto_show_display_is_policy_not_recommend():
+    from sales_intent import INTENT_PREPURCHASE_POLICY
+
+    text = "Which listed product was displayed at the Charlotte Auto show this weekend?"
+    assert classify(text).label == INTENT_PREPURCHASE_POLICY
+
+
 def test_body_fit_hints_route_to_recommend_not_intensity():
     """Mixed body-fit + intensity language must go to recommend so the AI
     proposes an actual chair for the customer's body (regression: this

@@ -410,10 +410,21 @@ _SPECS_RE = re.compile(
 
 _INTENSITY_RE = re.compile(
     r"\b("
-    r"intensity|(?:massage\s+)?strong|(?:massage\s+)?strength|(?:massage\s+)?power(?:ful)?|"
+    r"intensity|(?:massage\s+)?strong|(?:massage\s+)?strength|"
+    r"massage\s+power|powerful|"
     r"(?:massage\s+)?deep|(?:massage\s+)?hard|(?:massage\s+)?soft|"
     r"gentle\s+massage|firm\s+massage"
     r")\b",
+    re.IGNORECASE,
+)
+
+# Electrical / outlet questions must not collide with massage "power".
+_ELECTRICAL_POWER_RE = re.compile(
+    r"voltage|special\s+outlet|what\s+outlet|"
+    r"(?:110|120|220|240)\s*v(?:olts?)?|"
+    r"\d{2,3}\s*hz|"
+    r"power\s+input|ac\s+(?:power|input|voltage)|"
+    r"supports?\s+(?:both\s+)?(?:\d+\s*v|120|240)",
     re.IGNORECASE,
 )
 
@@ -736,7 +747,7 @@ def classify(text: str) -> SalesIntent:
     compare_hits = _matched(_COMPARE_RE, raw)
     recommend_hits = _matched(_RECOMMEND_RE, raw)
     body_fit_hits = _matched(_BODY_FIT_RE, raw)
-    intensity_hits = _matched(_INTENSITY_RE, raw)
+    intensity_hits = () if _ELECTRICAL_POWER_RE.search(raw) else _matched(_INTENSITY_RE, raw)
     specs_hits = _matched(_SPECS_RE, raw)
 
     if price_hits:

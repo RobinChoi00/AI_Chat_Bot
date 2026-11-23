@@ -374,7 +374,15 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"pacemaker|after\s+(?:a\s+)?(?:hip\s+)?surgery|"
             r"\bhsa\b|\bfsa\b|flex(?:ible)?\s+spend|insurance\s+cover|"
             r"how\s+loud|decibel|\bnois(?:y|e)\b|"
-            r"voltage|special\s+outlet|what\s+outlet|110\s*v|220\s*v|"
+            r"voltage|special\s+outlet|what\s+outlet|"
+            r"(?:110|120|220|240)\s*v(?:olts?)?|"
+            r"\d{2,3}\s*hz|"
+            r"power\s+input|ac\s+(?:power|input|voltage)|"
+            r"supports?\s+(?:both\s+)?(?:\d+\s*v|120|240)|"
+            r"(?:auto(?:\s+|-)?show|trade\s+show|car\s+show|\bexpo\b)|"
+            r"displayed\s+at.{0,48}\b(?:show|expo|event)\b|"
+            r"which\s+(?:listed\s+)?product\s+was\s+displayed|"
+            r"on\s+(?:the\s+)?(?:show\s+)?floor\s+at|"
             r"paypal|apple\s+pay|google\s+pay|\bvenmo\b|"
             r"(?:amex|american\s+express|visa|mastercard|discover|credit\s+card|debit\s+card|\bcard\b)\s+"
             r"(?:(?:is|was|has\s+been|keeps?\s+getting|is\s+being)\s+)?(?:not\s+going\s+through|declin(?:ed|ing)|won'?t\s+go\s+through|rejected|fail(?:ed|ing))|"
@@ -881,7 +889,24 @@ def _limits_kind(message: str) -> str:
         return "benefit_payment"
     if re.search(r"how\s+loud|decibel|\bnois(?:y|e)\b", raw, re.I):
         return "noise"
-    if re.search(r"voltage|special\s+outlet|what\s+outlet|110\s*v|220\s*v", raw, re.I):
+    if re.search(
+        r"(?:auto(?:\s+|-)?show|trade\s+show|car\s+show|\bexpo\b)|"
+        r"displayed\s+at.{0,48}\b(?:show|expo|event)\b|"
+        r"which\s+(?:listed\s+)?product\s+was\s+displayed|"
+        r"on\s+(?:the\s+)?(?:show\s+)?floor\s+at",
+        raw,
+        re.I,
+    ):
+        return "event_display"
+    if re.search(
+        r"voltage|special\s+outlet|what\s+outlet|"
+        r"(?:110|120|220|240)\s*v(?:olts?)?|"
+        r"\d{2,3}\s*hz|"
+        r"power\s+input|ac\s+(?:power|input|voltage)|"
+        r"supports?\s+(?:both\s+)?(?:\d+\s*v|120|240)",
+        raw,
+        re.I,
+    ):
         return "power"
     if re.search(
         r"paypal|apple\s+pay|google\s+pay|\bvenmo\b|"
@@ -1001,11 +1026,28 @@ def _limits_answer(_domain: str, message: str = "") -> str:
             "The Carrollton showroom is the honest way to judge noise, or a "
             "specialist can follow up — share your **email**."
         )
+    if kind == "event_display":
+        try:
+            from config import SALES_PHONE
+        except ImportError:  # pragma: no cover
+            SALES_PHONE = "+1-888-848-2630 ext. 2"
+        return (
+            "I don't have a published list of which models were displayed at a "
+            "show or event.\n\n"
+            f"Please call **Sales at {SALES_PHONE}**. "
+            "I won't invent floor inventory from this chat."
+        )
     if kind == "power":
+        try:
+            from config import SALES_PHONE
+        except ImportError:  # pragma: no cover
+            SALES_PHONE = "+1-888-848-2630 ext. 2"
         return (
             "I don't have a published **voltage / outlet** spec I can quote here.\n\n"
-            "This storefront is for US checkout. A specialist can confirm the plug "
-            "for your address — share your **email** and zip code."
+            "This storefront is for US checkout. "
+            f"Call **Sales at {SALES_PHONE}** to confirm the plug for your address, "
+            "or share your **email** and zip code for a specialist follow-up. "
+            "I won't invent a voltage rating."
         )
     if kind == "payments":
         return (
