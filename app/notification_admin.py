@@ -10,14 +10,21 @@ from admin_auth import require_admin_key
 from sales_email_transport import transport_health
 from warranty_handoff_delivery import freshdesk_handoff_health
 from warranty_models import warranty_db_session
-from warranty_notification_jobs import WarrantyHandoffDispatch, WarrantyNotificationJob, notification_job_stats, notification_worker_health, retry_notification
+from warranty_notification_jobs import (
+    WarrantyHandoffDispatch,
+    WarrantyNotificationJob,
+    dismiss_legacy_smtp_dead_letters,
+    notification_job_stats,
+    notification_worker_health,
+    retry_notification,
+)
 
 router = APIRouter(tags=["admin-notifications"])
 
 
 @router.get("/admin/warranty/notification-jobs")
 def get_notification_jobs(
-    status: Literal["pending", "processing", "failed", "dead_letter", "completed"] | None = None,
+    status: Literal["pending", "processing", "failed", "dead_letter", "completed", "dismissed"] | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     kind: Literal["handoff", "evidence", "contact", "resume"] | None = None,
     offset: int = Query(default=0, ge=0),
@@ -55,3 +62,13 @@ def retry_notification_job(job_id: int, x_admin_key: str | None = Header(default
     if not retry_notification(job_id):
         raise HTTPException(status_code=409, detail="Only failed jobs without an unresolved external submission can be retried. Reconcile any Freshdesk attempt first.")
     return {"job_id": job_id, "queued": True, "sent": False}
+
+
+@router.post("/admin/warranty/notification-jobs/dismiss-legacy-smtp")
+def dismiss_legacy_smtp_notification_jobs(
+    limit: int = Query(default=500, ge=1, le=1000),
+    x_admin_key: str | None = Header(default=None),
+):
+    """Close exhausted SMTP-era dead letters without sending mail or creating Freshdesk tickets."""
+    require_admin_key(x_admin_key)
+    return dismiss_legacy_smtp_dead_letters(limit=limit)

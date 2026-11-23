@@ -237,3 +237,37 @@ def test_only_allowlisted_transport_diagnostics_are_persisted(database, monkeypa
         assert db.get(jobs.WarrantyNotificationJob, job_id).last_error == "smtp_transport_error"
     assert "synthetic@example.test" not in caplog.text
     assert "not-a-real-secret" not in caplog.text
+
+
+def test_legacy_smtp_dead_letters_can_be_closed_without_resending(database, monkeypatch):
+    _engine, _clock, evidence_id = database
+    monkeypatch.setattr(email, "send_evidence_upload_notification", lambda **kwargs: pytest.fail("dismiss must not send"))
+    job_id = _enqueue(evidence_id)
+    with wm.warranty_db_session() as db:
+        row = db.get(jobs.WarrantyNotificationJob, job_id)
+        row.status = "dead_letter"
+        row.attempts = jobs.MAX_NOTIFICATION_ATTEMPTS
+        row.last_error = "SalesEmailError"
+        other = jobs.WarrantyNotificationJob(
+            kind="handoff",
+            source_key="freshdesk-protected",
+            ticket_id="synthetic-ticket",
+            status="dead_letter",
+            attempts=8,
+            last_error="SalesEmailError",
+        )
+        db.add(other)
+        db.flush()
+        protected_id = int(other.id)
+        db.add(jobs.WarrantyHandoffDispatch(job_id=protected_id, state="submitted", provider_ticket_id=99))
+
+    result = jobs.dismiss_legacy_smtp_dead_letters(limit=50)
+    assert result["dismissed"] == 1
+    with wm.warranty_db_session() as db:
+        closed = db.get(jobs.WarrantyNotificationJob, job_id)
+        protected = db.get(jobs.WarrantyNotificationJob, protected_id)
+        assert closed.status == "dismissed"
+        assert str(closed.last_error).startswith("closed_no_send:")
+        assert protected.status == "dead_letter"
+        assert jobs.notification_job_stats()["dismissed"] == 1
+        assert jobs.notification_job_stats()["dead_letter"] == 1

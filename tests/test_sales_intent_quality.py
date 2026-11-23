@@ -42,10 +42,25 @@ from sales_policy import (  # noqa: E402
     "foot rest replacement for model OS-Hiro LT",
     "Can I replace the remote control for my chair?",
     "I need a spare tablet for an OS-Hiro LT",
+    "I am looking for a osaki tablet on a model OS pro. Alpina, if need zero number, I have it",
+    "I need a tablet for OS-Pro Alpina",
+    "looking for osaki tablet for Alpina",
 ])
 def test_existing_service_parts_do_not_become_chair_shopping(message):
     intent = classify(message)
     assert intent.label == INTENT_PARTS_TECHNICIAN
+    assert intent.is_handoff
+
+
+@pytest.mark.parametrize("message", [
+    "It's told me a number two code. It won't let the chair operate",
+    "error code 2 won't let the chair operate",
+    "number two code",
+    "code 2 on the chair",
+])
+def test_spoken_error_codes_route_to_warranty(message):
+    intent = classify(message)
+    assert intent.label == INTENT_WARRANTY_REDIRECT
     assert intent.is_handoff
 
 

@@ -162,7 +162,7 @@ def purge_chat_records(
         resume_requests = rows("warranty_resume_requests", (
             "attempt_id", "ticket_id", "status", "created_at", "updated_at",
         ))
-        terminal_jobs = {"completed", "dead_letter"}
+        terminal_jobs = {"completed", "dead_letter", "dismissed"}
 
         def expired_notification(record) -> bool:
             return (str(record["status"]) in terminal_jobs and

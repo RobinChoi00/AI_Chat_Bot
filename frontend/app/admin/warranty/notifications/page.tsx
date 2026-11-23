@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 const path = "/admin/warranty/notifications";
 const pageSize = 50;
-const filters = ["dead_letter", "failed", "pending", "processing", "completed", "all"] as const;
+const filters = ["dead_letter", "failed", "pending", "processing", "completed", "dismissed", "all"] as const;
 type Filter = (typeof filters)[number];
 type Status = Exclude<Filter, "all">;
 
@@ -15,6 +15,7 @@ const labels: Record<Filter, string> = {
   pending: "Queued",
   processing: "Sending",
   completed: "Accepted by a provider",
+  dismissed: "Closed without sending",
   all: "All jobs",
 };
 

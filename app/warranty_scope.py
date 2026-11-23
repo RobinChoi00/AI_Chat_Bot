@@ -165,11 +165,17 @@ _PRE_PURCHASE_SHIPPING_ASK_RE = re.compile(
     r"\b(?:available|eligibility)\s+(?:in|for|to)\b|"
     r"\bshipping\s+(?:to|for|policy|cost|fee|rate|price|time|eta)\b|"
     r"\bdelivery\s+(?:to|for|available|fee|cost|time|eta)\b|"
-    r"\bhow\s+long\b.{0,40}\b(?:ship(?:ping|ment)?|deliver(?:y|ies)?|arriv(?:e|al))\b|"
+    r"\b(?:ship(?:ping)?|deliver(?:y)?)\s+eta\b|\bshipping\s+eta\b|"
+    r"\bhow\s+(?:long|soon|fast|many\s+days?)\b.{0,48}\b(?:ship(?:ping|ment)?|deliver(?:y|ies)?|arriv\w*|get\s+delivered|receive)\b|"
+    r"\b(?:how\s+long|how\s+soon|how\s+fast)\b.{0,40}\b(?:to\s+)?(?:get\s+delivered|receive|arriv\w*)\b|"
     r"\b(?:estimate|estimated|approx(?:imate)?)\b.{0,24}\b(?:ship(?:ping)?|deliver(?:y)?)\b|"
-    r"\blead\s+time\b|"
-    r"\b(?:if\s+i\s+buy|before\s+i\s+buy|when\s+i\s+order)\b.{0,40}\b(?:ship(?:ping)?|deliver(?:y)?)\b|"
-    r"\b(?:ship(?:ping)?|deliver(?:y)?)\b.{0,40}\b(?:if\s+i\s+buy|before\s+i\s+buy|when\s+i\s+order)\b"
+    r"\blead\s+time\b|\bshipping\s+time\b|\bdelivery\s+time\b|\btransit\s+time\b|"
+    r"\b(?:if\s+i\s+(?:buy|order|purchase)|before\s+i\s+buy|when\s+i\s+order)\b.{0,40}\b(?:ship(?:ping)?|deliver(?:y)?)\b|"
+    r"\b(?:ship(?:ping)?|deliver(?:y)?)\b.{0,40}\b(?:if\s+i\s+(?:buy|order|purchase)|before\s+i\s+buy|when\s+i\s+order)\b|"
+    r"\bif\s+i\s+(?:buy|order|purchase)\b.{0,48}\b(?:when|how\s+soon|arriv\w*|get\s+(?:it|here)|ship\w*|deliver\w*|receive)\b|"
+    r"\b(?:when|how\s+soon)\b.{0,48}\b(?:arriv\w*|ship\w*|deliver\w*|get\s+(?:it|here|the\s+chair)|receive)\b"
+    r".{0,40}\bif\s+i\s+(?:buy|order|purchase)\b|"
+    r"\bwhen\s+can\s+i\s+get\b.{0,40}\b(?:chair|it)\b.{0,40}\bif\s+i\s+(?:buy|order|purchase)\b"
     r")",
     re.IGNORECASE,
 )
@@ -310,11 +316,23 @@ def build_warranty_scope_refusal(reason: str = "") -> str:
     if (reason or "").strip().lower() == "order_cancel":
         return build_order_cancel_handoff_message()
     if (reason or "").strip().lower() == "shipping_policy":
+        try:
+            from sales_policy import TOPIC_SHIPPING, policy_answer  # noqa: WPS433
+            from warranty_defaults import DEFAULT_WARRANTY_DOMAIN  # noqa: WPS433
+        except ImportError:  # pragma: no cover
+            policy_answer = None  # type: ignore
+            TOPIC_SHIPPING = "shipping"
+            DEFAULT_WARRANTY_DOMAIN = "osakiusa.com"
+        shipping = policy_answer(TOPIC_SHIPPING, DEFAULT_WARRANTY_DOMAIN) if policy_answer else None
+        lead = (
+            f"{shipping}\n\n"
+            if shipping
+            else "Pre-purchase shipping timing uses the published storefront lead times.\n\n"
+        )
         return (
-            "This chat is for **warranty support** after a purchase.\n\n"
-            "Pre-purchase shipping timing, free-shipping rules, and ship-to eligibility "
-            "(including **Hawaii, Alaska, or Guam**) are handled by **sales**. "
-            f"Please call **sales** at {SALES_PHONE}. "
+            f"{lead}"
+            "Ship-to eligibility and free-shipping rules for **Hawaii, Alaska, or Guam** "
+            f"are confirmed by **sales** at {SALES_PHONE}. "
             "I won't quote freight, eligibility, a ship date, or a dollar amount here.\n\n"
             f"{phones}"
         )
@@ -402,8 +420,10 @@ def is_pre_purchase_shipping_policy(text: str) -> bool:
         return True
     # Pre-purchase ETA / lead-time questions (no order/tracking markers above).
     if has_shipping_ask and re.search(
-        r"\b(?:how\s+long|estimate|estimated|lead\s+time|shipping\s+time|delivery\s+time|"
-        r"if\s+i\s+buy|before\s+i\s+buy|when\s+i\s+order)\b",
+        r"\b(?:how\s+long|how\s+soon|how\s+fast|how\s+many\s+days?|estimate|estimated|approx|"
+        r"lead\s+time|shipping\s+time|delivery\s+time|transit\s+time|shipping\s+eta|\beta\b|"
+        r"if\s+i\s+(?:buy|order|purchase)|before\s+i\s+buy|when\s+i\s+order|"
+        r"arriv\w*|get\s+(?:it|here|delivered)|receive)\b",
         raw,
         re.I,
     ):

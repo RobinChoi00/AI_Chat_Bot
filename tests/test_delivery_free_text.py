@@ -52,10 +52,25 @@ def test_free_text_maps_to_the_intended_option(node, text, key):
     "how much is shipping?",
     "how long does shipping take?",
     "which carrier do you use?",
+    "Estimate shipping if I buy today",
+    "if I buy today when will it arrive",
+    "when will it arrive if I order today",
+    "shipping eta",
+    "how fast is shipping",
+    "how long does it take to get delivered",
+    "when can I get the chair if I purchase today",
+    "how long until it arrives if I buy",
+    "how long to receive after order",
 ])
 def test_sales_topics_are_not_forced_into_a_menu_choice(text):
-    assert delivery_sales_topic(text)
     assert map_delivery_free_text("delivery_intent_q", text) is None
+
+
+def test_prepurchase_estimate_is_not_a_tracking_status_choice():
+    assert map_delivery_free_text("delivery_intent_q", "Estimate shipping if I buy today") is None
+    assert map_delivery_free_text("delivery_intent_q", "shipping eta") is None
+    assert map_delivery_free_text("delivery_intent_q", "when will my chair arrive") == "status_check"
+    assert map_delivery_free_text("delivery_intent_q", "where's my order") == "status_check"
 
 
 @pytest.mark.parametrize("text", [

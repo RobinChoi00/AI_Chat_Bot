@@ -258,11 +258,17 @@ _PRICE_COMPARE_SHOP_RE = re.compile(
     re.I,
 )
 _PREPURCHASE_SHIP_ETA_RE = re.compile(
-    r"\b(?:how\s+long|how\s+many\s+days?|how\s+soon|what(?:'s|\s+is)\s+the\s+(?:eta|lead\s+time))\b"
-    r".{0,40}\b(?:ship(?:ping|ment)?|deliver(?:y|ies)?|arriv(?:e|al))\b|"
+    r"\b(?:how\s+long|how\s+many\s+days?|how\s+soon|how\s+fast|what(?:'s|\s+is)\s+the\s+(?:eta|lead\s+time))\b"
+    r".{0,48}\b(?:ship(?:ping|ment)?|deliver(?:y|ies)?|arriv\w*|get\s+delivered|receive)\b|"
+    r"\b(?:how\s+long|how\s+soon|how\s+fast)\b.{0,40}\b(?:to\s+)?(?:get\s+delivered|receive|arriv\w*)\b|"
     r"\b(?:estimate|estimated|approx(?:imate)?)\b.{0,24}\b(?:ship(?:ping)?|deliver(?:y)?)\b|"
-    r"\b(?:ship(?:ping)?|deliver(?:y)?)\b.{0,40}\b(?:if\s+i\s+buy|before\s+i\s+buy|when\s+i\s+order)\b|"
-    r"\blead\s+time\b|\bshipping\s+time\b|\bdelivery\s+time\b",
+    r"\b(?:ship(?:ping)?|deliver(?:y)?)\s+eta\b|\bshipping\s+eta\b|"
+    r"\b(?:ship(?:ping)?|deliver(?:y)?)\b.{0,40}\b(?:if\s+i\s+(?:buy|order|purchase)|before\s+i\s+buy|when\s+i\s+order)\b|"
+    r"\bif\s+i\s+(?:buy|order|purchase)\b.{0,48}\b(?:when|how\s+soon|arriv\w*|get\s+(?:it|here)|ship\w*|deliver\w*|receive)\b|"
+    r"\b(?:when|how\s+soon)\b.{0,48}\b(?:arriv\w*|ship\w*|deliver\w*|get\s+(?:it|here|the\s+chair)|receive)\b"
+    r".{0,40}\bif\s+i\s+(?:buy|order|purchase)\b|"
+    r"\bwhen\s+can\s+i\s+get\b.{0,40}\b(?:chair|it)\b.{0,40}\bif\s+i\s+(?:buy|order|purchase)\b|"
+    r"\blead\s+time\b|\bshipping\s+time\b|\bdelivery\s+time\b|\btransit\s+time\b",
     re.I,
 )
 _FEATURE_SHOP_RE = re.compile(
@@ -869,8 +875,15 @@ def try_factual_common_question(
             _sales_redirect_answer("Price comparisons and checkout pricing"), node
         )
     if _is_prepurchase_ship_eta_question(raw):
+        from sales_policy import TOPIC_SHIPPING, policy_answer  # noqa: WPS433
+
+        domain = normalize_warranty_domain(
+            str(getattr(ticket, "domain", "") or "") if ticket is not None else ""
+        )
+        shipping = policy_answer(TOPIC_SHIPPING, domain, raw)
         return _join_without_issue_menu(
-            _sales_redirect_answer("Pre-purchase shipping timing"), node
+            shipping or _sales_redirect_answer("Pre-purchase shipping timing"),
+            node,
         )
     if _is_feature_shop_question(raw):
         return _join_without_issue_menu(

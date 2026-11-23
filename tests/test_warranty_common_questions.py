@@ -281,8 +281,42 @@ def test_opening_questions_from_real_customer_turns_are_answered():
             "Price comparisons",
         ),
         "How long is shipping": (
-            "Sales",
-            "shipping timing",
+            "up to 2 weeks",
+            "up to 3 weeks",
+            "shipping-handling",
+        ),
+        "Estimate shipping if I buy today": (
+            "up to 2 weeks",
+            "up to 3 weeks",
+            "can't promise a specific calendar date",
+        ),
+        "if I buy today when will it arrive": (
+            "up to 2 weeks",
+            "up to 3 weeks",
+        ),
+        "shipping eta": (
+            "up to 2 weeks",
+            "up to 3 weeks",
+        ),
+        "how fast is shipping": (
+            "up to 2 weeks",
+            "up to 3 weeks",
+        ),
+        "how long does it take to get delivered": (
+            "up to 2 weeks",
+            "up to 3 weeks",
+        ),
+        "when can I get the chair if I purchase today": (
+            "up to 2 weeks",
+            "up to 3 weeks",
+        ),
+        "how long until it arrives if I buy": (
+            "up to 2 weeks",
+            "up to 3 weeks",
+        ),
+        "how long to receive after order": (
+            "up to 2 weeks",
+            "up to 3 weeks",
         ),
         "AI HealthPro what model it has": (
             "Sales",

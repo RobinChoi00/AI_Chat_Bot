@@ -291,18 +291,6 @@ def process_pending_notifications(*, limit: int = 25) -> int:
     return sum(process_notification(job_id) for job_id in job_ids)
 
 
-def notification_job_stats(*, kind: str | None = None) -> dict[str, int]:
-    counts = {"pending": 0, "processing": 0, "failed": 0, "dead_letter": 0, "completed": 0}
-    with warranty_db_session() as db:
-        _ensure_schema(db)
-        query = db.query(WarrantyNotificationJob.status, func.count(WarrantyNotificationJob.id))
-        if kind is not None:
-            query = query.filter_by(kind=kind)
-        for status, count in query.group_by(WarrantyNotificationJob.status):
-            counts[str(status)] = int(count)
-    return counts
-
-
 def notification_worker_health() -> dict[str, bool]:
     """Expose process state independently from persisted delivery counts."""
     enabled = os.getenv("WARRANTY_NOTIFICATION_WORKER_ENABLED", "true").strip().lower() not in {"0", "false", "off", "no"}
@@ -328,6 +316,81 @@ def retry_notification(job_id: int) -> bool:
         row.last_error = None
     _worker_wakeup.set()
     return True
+
+
+_LEGACY_SMTP_FAILURE_CODES = frozenset({
+    "SalesEmailError",
+    "smtp_authentication_failed",
+    "smtp_connection_failed",
+    "smtp_not_configured",
+    "smtp_invalid_configuration",
+    "smtp_invalid_recipient",
+    "smtp_recipient_rejected",
+    "sales_inbox_unconfigured",
+    "smtp_tls_unavailable",
+    "smtp_submission_failed",
+    "smtp_transport_error",
+    "send_not_confirmed",
+    "attempts_exhausted",
+})
+
+
+def _is_legacy_smtp_dead_letter(row: WarrantyNotificationJob, dispatch: WarrantyHandoffDispatch | None) -> bool:
+    """True for exhausted SMTP-only jobs that must not be bulk-retried."""
+    if str(row.status) != "dead_letter":
+        return False
+    if dispatch is not None:
+        return False
+    code = str(row.last_error or "").split(":", 1)[0].strip()
+    return code in _LEGACY_SMTP_FAILURE_CODES
+
+
+def dismiss_legacy_smtp_dead_letters(*, limit: int = 500) -> dict[str, int]:
+    """Close historical SMTP dead-letters without sending or Freshdesk replay.
+
+    Only SMTP-era jobs with known permanent mail failures are closed. Jobs with
+    a Freshdesk dispatch row are left alone so operators can reconcile them.
+    """
+    closed = 0
+    with warranty_db_session() as db:
+        _ensure_schema(db)
+        db.execute(text("BEGIN IMMEDIATE"))
+        rows = (
+            db.query(WarrantyNotificationJob, WarrantyHandoffDispatch)
+            .outerjoin(WarrantyHandoffDispatch, WarrantyHandoffDispatch.job_id == WarrantyNotificationJob.id)
+            .filter(WarrantyNotificationJob.status == "dead_letter")
+            .order_by(WarrantyNotificationJob.id.asc())
+            .limit(max(1, min(int(limit), 1000)))
+            .all()
+        )
+        for row, dispatch in rows:
+            if not _is_legacy_smtp_dead_letter(row, dispatch):
+                continue
+            prior = str(row.last_error or "SalesEmailError")[:80]
+            row.status = "dismissed"
+            row.next_attempt_at = None
+            row.lease_token = None
+            row.lease_expires_at = None
+            row.last_error = f"closed_no_send:{prior}"[:100]
+            row.updated_at = _utcnow()
+            closed += 1
+    return {"dismissed": closed, "scanned": len(rows)}
+
+
+def notification_job_stats(*, kind: str | None = None) -> dict[str, int]:
+    counts = {"pending": 0, "processing": 0, "failed": 0, "dead_letter": 0, "completed": 0, "dismissed": 0}
+    with warranty_db_session() as db:
+        _ensure_schema(db)
+        query = db.query(WarrantyNotificationJob.status, func.count(WarrantyNotificationJob.id))
+        if kind is not None:
+            query = query.filter_by(kind=kind)
+        for status, count in query.group_by(WarrantyNotificationJob.status):
+            key = str(status)
+            if key in counts:
+                counts[key] = int(count)
+            else:
+                counts[key] = int(count)
+    return counts
 
 
 _worker_stop = threading.Event()

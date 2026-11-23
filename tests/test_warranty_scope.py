@@ -135,9 +135,21 @@ def test_blocks_prepurchase_how_long_shipping_without_order_markers():
     decision = evaluate_warranty_scope("how long does shipping take")
     assert decision.is_blocked
     assert decision.reason == "shipping_policy"
-    msg = build_warranty_scope_refusal(decision.reason)
-    assert "sales" in msg.lower()
+    msg = build_warranty_scope_refusal(decision.reason).lower()
+    assert "sales" in msg
     assert "ext. 2" in msg
+    assert "up to 2 weeks" in msg
+    assert "up to 3 weeks" in msg
+
+
+@pytest.mark.parametrize("text", [
+    "Estimate shipping if I buy today",
+    "if I buy today when will it arrive",
+])
+def test_blocks_prepurchase_buy_today_shipping_estimate(text):
+    decision = evaluate_warranty_scope(text)
+    assert decision.is_blocked, text
+    assert decision.reason == "shipping_policy", text
 
 
 def test_allows_how_long_shipping_when_order_markers_present():

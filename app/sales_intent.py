@@ -141,8 +141,13 @@ def reports_product_fault(text: str) -> bool:
     return False
 _WARRANTY_REDIRECT_RE = re.compile(
     r"\b("
-    r"warranty|defect|malfunction|broken|not\s+working|won'?t\s+(?:turn|power|start|inflate)|"
-    r"repair|troubleshoot|error\s*code|err\s*\d+|e\d{1,3}|"
+    r"warranty|defect|malfunction|broken|not\s+working|"
+    r"won'?t\s+(?:turn|power|start|inflate|operat\w*|run|move)|"
+    r"won'?t\s+let\s+(?:the\s+|my\s+)?chair\s+operat\w*|"
+    r"repair|troubleshoot|"
+    r"error\s*code|err\s*\d+|e\d{1,3}|"
+    r"number\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+code|"
+    r"code\s+(?:number\s+)?(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\b|"
     # part + defect verb (order matters — allows "footrest is stuck", "airbag stopped inflating")
     rf"(?:remote|footrest|airbag|roller|heat|heater|recline|motor|calf\s+massager)\s+"
     rf"(?:(?:is|are|was|were|has|have|keeps?|keep|got|got\s+stuck)\s+)?{_WARRANTY_DEFECT_VERBS}|"
@@ -175,6 +180,11 @@ _PARTS_TECHNICIAN_RE = re.compile(
     r"cushion)\s+replacement|"
     r"(?:replace|replacing)\s+(?:(?:the|my|a)\s+)?(?:remote(?:\s+control(?:ler)?)?|"
     r"tablet|controller|screen|foot[\s-]*rest|head(?:\s+and\s+shoulder)?\s+cushion|shoulder\s+cushion)|"
+    # Owned-chair tablet / remote asks without the word "replacement".
+    r"(?:looking\s+for|need|want|get|order|buy)\s+(?:(?:a|an|the|my|osaki|titan)\s+)*"
+    r"(?:tablet|remote(?:\s+control(?:ler)?)?|controller|touchscreen)|"
+    r"(?:tablet|remote(?:\s+control(?:ler)?)?)\s+for\s+(?:(?:my|the|an?|osaki|titan|os-?pro)\s+)+"
+    r"(?:alpina|maestro|chair|model)|"
     r"send\s+(?:me\s+)?(?:a\s+)?parts?|buy\s+(?:a\s+)?parts?|"
     # Bare "part(s)" covers Tidio short triggers; longer phrases stay above.
     r"parts?|"

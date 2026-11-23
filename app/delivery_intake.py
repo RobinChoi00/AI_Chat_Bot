@@ -330,8 +330,18 @@ _SALES_TOPICS: Sequence[tuple[str, re.Pattern[str], str]] = (
      "Delivery service options depend on the order, and this chat can't add or change them."),
     ("cost", re.compile(r"\b(delivery|shipping|freight)\s+(fee|cost|charge|price)s?\b|\bhow much\b.{0,25}\b(ship|deliver)\w*\b|\bfree (shipping|delivery)\b", re.I),
      "I can't quote delivery costs from this chat."),
-    ("timing", re.compile(r"\bhow long\b.{0,40}\b(take|takes|ship|shipping|deliver\w*|arrive|transit)\b|\bshipping time\b|\btransit time\b", re.I),
-     "I can't promise a delivery time here. Once the order ships, the carrier estimate appears in the tracking status."),
+    ("timing", re.compile(
+        r"\bhow\s+(?:long|soon|fast|many\s+days?)\b.{0,48}\b(take|takes|ship|shipping|deliver\w*|arrive|transit|get\s+delivered|receive)\b|"
+        r"\b(?:how\s+long|how\s+soon|how\s+fast)\b.{0,40}\b(?:to\s+)?(?:get\s+delivered|receive|arrive)\b|"
+        r"\bshipping time\b|\btransit time\b|\bdelivery time\b|\bshipping\s+eta\b|\b(?:ship(?:ping)?|deliver(?:y)?)\s+eta\b|"
+        r"\b(?:estimate|estimated)\b.{0,24}\b(?:ship(?:ping)?|deliver(?:y)?)\b|"
+        r"\b(?:ship(?:ping)?|deliver(?:y)?)\b.{0,40}\bif\s+i\s+(?:buy|order|purchase)\b|"
+        r"\bif\s+i\s+(?:buy|order|purchase)\b.{0,48}\b(?:when|arriv\w*|ship\w*|deliver\w*|receive)\b|"
+        r"\bwhen\s+can\s+i\s+get\b.{0,40}\b(?:chair|it)\b.{0,40}\bif\s+i\s+(?:buy|order|purchase)\b",
+        re.I,
+     ),
+     "Pre-purchase shipping timing uses the published lead times (curbside up to about 2 weeks; "
+     "White Glove up to about 3 weeks). I can't promise a specific calendar date."),
     ("carrier", re.compile(r"\b(which|what|who)\b.{0,20}\b(carrier|courier|shipping company|delivery company)\b", re.I),
      "The carrier shows up in the tracking status once I can look up the order."),
 )
@@ -370,6 +380,16 @@ def map_delivery_free_text(node_id: str, text: str) -> Optional[str]:
     if not raw or delivery_sales_topic(raw) or tracking_number_explainer(raw):
         return None
     if _NOT_DELIVERY_STATUS_RE.search(raw):
+        return None
+    # Pre-purchase ETA / shipping-policy asks are Sales answers — never a
+    # tracking-number step. Keep post-purchase "where's my order" on status_check.
+    try:
+        from warranty_common_questions import _is_prepurchase_ship_eta_question  # noqa: WPS433
+        from warranty_scope import is_pre_purchase_shipping_policy  # noqa: WPS433
+    except ImportError:  # pragma: no cover
+        is_pre_purchase_shipping_policy = lambda _t: False  # type: ignore
+        _is_prepurchase_ship_eta_question = lambda _t: False  # type: ignore
+    if is_pre_purchase_shipping_policy(raw) or _is_prepurchase_ship_eta_question(raw):
         return None
     if node_id == "delivery_intent_q":
         already_came = re.search(r"\b(arrived|came|delivered|showed up|got (it|here))\b", raw, re.I)
