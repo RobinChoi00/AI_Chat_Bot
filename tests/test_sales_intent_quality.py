@@ -120,11 +120,32 @@ def test_benefit_payment_question_gets_eligibility_answer_without_inventing_poli
     assert detect_topic(message) == TOPIC_LIMITS
     assert classify(message).label == INTENT_PREPURCHASE_POLICY
     answer = policy_answer(TOPIC_LIMITS, "osakiusa.com", message=message).lower()
-    assert "don't have verified" in answer
-    assert "plan administrator" in answer
+    assert "medpaid" in answer
+    assert "hsa/fsa" in answer or "hsa" in answer
+    assert "pages/hsa-fsa-massage-chairs" in answer
     assert "can't promise reimbursement" in answer
     assert "won't give medical advice" not in answer
     assert "clinician" not in answer
+
+
+def test_named_model_fsa_question_uses_published_osaki_guide():
+    message = "Titan Axiom LE (S50) Is this fsa eligible"
+    assert detect_topic(message) == TOPIC_LIMITS
+    answer = policy_answer(TOPIC_LIMITS, "osakiusa.com", message=message)
+    lower = answer.lower()
+    assert "Titan Axiom LE (S50)" in answer
+    assert "medpaid" in lower
+    assert "letter of medical necessity" in lower or "lmn" in lower
+    assert "pages/hsa-fsa-massage-chairs" in lower
+    assert "can't promise reimbursement" in lower
+
+
+def test_titanchair_fsa_question_uses_published_truemed_guide():
+    message = "Can I pay with HSA?"
+    answer = policy_answer(TOPIC_LIMITS, "titanchair.com", message=message).lower()
+    assert "truemed" in answer
+    assert "pages/hsa-fsa-payment-options" in answer
+    assert "can't promise reimbursement" in answer
 
 
 @pytest.mark.parametrize("message", [

@@ -271,6 +271,27 @@ def test_opening_questions_from_real_customer_turns_are_answered():
             "Affirm",
             "checkout",
         ),
+        "Do yall have anything for 400 pounds or above?": (
+            "Sales",
+            "ext. 2",
+            "Weight capacity",
+        ),
+        "in costco i see 4999 but here is different": (
+            "Sales",
+            "Price comparisons",
+        ),
+        "How long is shipping": (
+            "Sales",
+            "shipping timing",
+        ),
+        "AI HealthPro what model it has": (
+            "Sales",
+            "Model features",
+        ),
+        "Where can I go to demo your chairs?": (
+            "Sales",
+            "Showroom",
+        ),
     }
     for text, needles in cases.items():
         msg = try_factual_common_question(_MENU, text, ticket=_Ticket())
@@ -284,7 +305,20 @@ def test_opening_questions_from_real_customer_turns_are_answered():
             assert "$275" not in msg
         if any(
             token in text.lower()
-            for token in ("white glove", "fsa", "hallway", "assemble", "pay", "affirm", "payment")
+            for token in (
+                "white glove",
+                "fsa",
+                "hallway",
+                "assemble",
+                "pay",
+                "affirm",
+                "payment",
+                "400 pounds",
+                "costco",
+                "shipping",
+                "healthpro",
+                "demo",
+            )
         ):
             assert "which area do you need help with" not in lower
             assert is_sales_bound_opening_question(text)

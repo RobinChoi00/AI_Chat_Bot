@@ -237,6 +237,49 @@ _PAYMENT_PURCHASE_RE = re.compile(
     r")",
     re.I,
 )
+_WEIGHT_CAPACITY_SHOP_RE = re.compile(
+    r"\b(?:anything|something|chair|model|option|options)\b.{0,40}"
+    r"\b(?:for|over|above|up\s+to)\b.{0,12}"
+    r"\b\d{2,4}\s*(?:lb|lbs|pounds?)\b|"
+    r"\b\d{2,4}\s*(?:lb|lbs|pounds?)\b.{0,24}"
+    r"\b(?:or\s+above|or\s+more|and\s+above|capacity|limit|user\s+weight)\b|"
+    r"\b(?:weight\s+capacity|user\s+weight|max(?:imum)?\s+weight)\b.{0,40}"
+    r"\b(?:recommend|looking|need|want|have|support|handle)\b|"
+    r"\b(?:recommend|looking|need|want|have)\b.{0,40}"
+    r"\b(?:weight\s+capacity|user\s+weight|max(?:imum)?\s+weight|\d{2,4}\s*(?:lb|lbs|pounds?))\b",
+    re.I,
+)
+_PRICE_COMPARE_SHOP_RE = re.compile(
+    r"\b(?:costco|walmart|amazon|sam'?s\s+club)\b.{0,60}"
+    r"\b(?:price|priced|\$\s*\d|different|cheaper|expensive|discount|deal)\b|"
+    r"\b(?:price|priced|\$\s*\d|different|cheaper|expensive)\b.{0,60}"
+    r"\b(?:costco|walmart|amazon|sam'?s\s+club|here|your\s+site|website)\b|"
+    r"\b(?:here|your\s+(?:site|store|price)|website)\b.{0,40}\b(?:different|higher|lower|more)\b",
+    re.I,
+)
+_PREPURCHASE_SHIP_ETA_RE = re.compile(
+    r"\b(?:how\s+long|how\s+many\s+days?|how\s+soon|what(?:'s|\s+is)\s+the\s+(?:eta|lead\s+time))\b"
+    r".{0,40}\b(?:ship(?:ping|ment)?|deliver(?:y|ies)?|arriv(?:e|al))\b|"
+    r"\b(?:estimate|estimated|approx(?:imate)?)\b.{0,24}\b(?:ship(?:ping)?|deliver(?:y)?)\b|"
+    r"\b(?:ship(?:ping)?|deliver(?:y)?)\b.{0,40}\b(?:if\s+i\s+buy|before\s+i\s+buy|when\s+i\s+order)\b|"
+    r"\blead\s+time\b|\bshipping\s+time\b|\bdelivery\s+time\b",
+    re.I,
+)
+_FEATURE_SHOP_RE = re.compile(
+    r"\b(?:ai\s+)?health\s*pro\b|"
+    r"\bwhat\s+model\s+(?:it\s+)?(?:has|have|includes?|comes?\s+with)\b|"
+    r"\b(?:which|what)\s+(?:model|chair|product)\b.{0,40}\b(?:has|have|includes?|with)\b|"
+    r"\bdoes\b.{0,40}\b(?:model|chair)\b.{0,24}\bhave\b|"
+    r"\blooking\s+for\b.{0,40}\b(?:feature|with|that\s+has)\b",
+    re.I,
+)
+_DEALER_DEMO_SHOP_RE = re.compile(
+    r"\b(?:where|how)\b.{0,40}\b(?:demo|try|test|sit\s+in)\b|"
+    r"\b(?:demo|try|test)\b.{0,40}\b(?:chair|model|showroom|dealer|store)\b|"
+    r"\b(?:local|nearby|nearest)\s+(?:dealer|retailer|showroom|store)\b|"
+    r"\b(?:dealer|retailer)\s+locator\b",
+    re.I,
+)
 _AIR_NOT_INFLATING_RE = re.compile(
     r"\b(?:will\s+not|won't|does\s+not|doesn't|cannot|can't|not)\s+"
     r"(?:inflat(?:e|ing)|stay\s+inflated)\b|"
@@ -633,6 +676,73 @@ def _payment_purchase_answer() -> str:
     )
 
 
+def _is_owned_defect_context(text: str) -> bool:
+    """True when the message is about a chair already owned / failing — stay in warranty."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    return bool(
+        re.search(
+            r"\b(?:my\s+chair|broken|defect|malfunction|not\s+working|won'?t\s+(?:turn|power|start)|"
+            r"error\s*code|repair|technician|already\s+(?:bought|purchased|own))\b",
+            raw,
+            re.I,
+        )
+    )
+
+
+def _is_weight_capacity_shop_question(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw or _is_owned_defect_context(raw):
+        return False
+    return bool(_WEIGHT_CAPACITY_SHOP_RE.search(raw))
+
+
+def _is_price_compare_shop_question(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw or _is_owned_defect_context(raw):
+        return False
+    if _REPAIR_COST_RE.search(raw) or _PART_SHIP_COST_RE.search(raw):
+        return False
+    return bool(_PRICE_COMPARE_SHOP_RE.search(raw))
+
+
+def _is_prepurchase_ship_eta_question(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw or _is_owned_defect_context(raw):
+        return False
+    if re.search(
+        r"\b(?:tracking|track(?:ing)?\s+(?:number|my)|fedex|ups|usps|my\s+order|"
+        r"where\s+is\s+my|in\s+transit|never\s+arrived)\b",
+        raw,
+        re.I,
+    ):
+        return False
+    return bool(_PREPURCHASE_SHIP_ETA_RE.search(raw))
+
+
+def _is_feature_shop_question(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw or _is_owned_defect_context(raw):
+        return False
+    return bool(_FEATURE_SHOP_RE.search(raw))
+
+
+def _is_dealer_demo_shop_question(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw or _is_owned_defect_context(raw):
+        return False
+    return bool(_DEALER_DEMO_SHOP_RE.search(raw))
+
+
+def _sales_redirect_answer(topic: str) -> str:
+    return (
+        f"{topic} is handled by **Sales**, not this warranty chat. "
+        "I won't recommend models, quote prices, compare storefronts, or promise a ship date here.\n\n"
+        f"Call **Sales at {SALES_PHONE}**, or continue in the Sales chat with the model and details you care about."
+    )
+
+
 def _is_assembly_howto(text: str) -> bool:
     """How-to assembly questions only — a failed install is still a setup case."""
     raw = (text or "").strip()
@@ -655,6 +765,11 @@ def is_sales_bound_opening_question(text: str) -> bool:
         or _ACCESSORY_COMPAT_RE.search(raw)
         or _is_air_intensity_question(raw)
         or _is_payment_or_purchase_question(raw)
+        or _is_weight_capacity_shop_question(raw)
+        or _is_price_compare_shop_question(raw)
+        or _is_prepurchase_ship_eta_question(raw)
+        or _is_feature_shop_question(raw)
+        or _is_dealer_demo_shop_question(raw)
     )
 
 
@@ -695,6 +810,11 @@ def looks_like_factual_common_question(text: str) -> bool:
         or _WARRANTY_REGISTER_RE.search(raw)
         or _ACCESSORY_COMPAT_RE.search(raw)
         or _is_payment_or_purchase_question(raw)
+        or _is_weight_capacity_shop_question(raw)
+        or _is_price_compare_shop_question(raw)
+        or _is_prepurchase_ship_eta_question(raw)
+        or _is_feature_shop_question(raw)
+        or _is_dealer_demo_shop_question(raw)
         or _AUTO_CHECK_RE.search(raw)
         or _WATTS_RE.search(raw)
         or _PARTS_DIAGRAM_RE.search(raw)
@@ -740,6 +860,26 @@ def try_factual_common_question(
         return _join_without_issue_menu(_fsa_receipt_answer(), node)
     if _is_payment_or_purchase_question(raw):
         return _join_without_issue_menu(_payment_purchase_answer(), node)
+    if _is_weight_capacity_shop_question(raw):
+        return _join_without_issue_menu(
+            _sales_redirect_answer("Weight capacity and chair recommendations"), node
+        )
+    if _is_price_compare_shop_question(raw):
+        return _join_without_issue_menu(
+            _sales_redirect_answer("Price comparisons and checkout pricing"), node
+        )
+    if _is_prepurchase_ship_eta_question(raw):
+        return _join_without_issue_menu(
+            _sales_redirect_answer("Pre-purchase shipping timing"), node
+        )
+    if _is_feature_shop_question(raw):
+        return _join_without_issue_menu(
+            _sales_redirect_answer("Model features and shopping questions"), node
+        )
+    if _is_dealer_demo_shop_question(raw):
+        return _join_without_issue_menu(
+            _sales_redirect_answer("Showroom / dealer demos"), node
+        )
     if _HALLWAY_FIT_RE.search(raw):
         return _join_without_issue_menu(_hallway_fit_answer(raw, ticket), node)
     if _is_assembly_howto(raw):

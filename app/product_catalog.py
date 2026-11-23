@@ -274,6 +274,9 @@ def resolve_model_name(raw: str) -> Optional[str]:
     norm = _normalize_key(text)
     if not norm:
         return None
+    # Mechanism-only input is not a model identity.
+    if re.fullmatch(r"[2345]d", norm):
+        return None
 
     tokens = [t for t in re.findall(r"[a-z0-9]+", text.lower()) if t not in _NOISE and len(t) >= 3]
 

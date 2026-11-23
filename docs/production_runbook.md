@@ -154,19 +154,24 @@ or the read-only Admin → Handoff queue to inspect exhausted jobs. Completed
 jobs report the accepting channel; acceptance is not a staff response or a
 callback booking. SMTP records contain allowlisted delivery failure codes only.
 
-New handoffs can use an explicitly configured internal Freshdesk work queue
-instead of SMTP (`WARRANTY_HANDOFF_CHANNEL=freshdesk`) in the optional host-only
-`.env.warranty-handoff` Compose overlay. Configure the reviewed
-`FRESHDESK_HANDOFF_GROUP_ID`, the existing staff-only
-`FRESHDESK_HANDOFF_REQUESTER_ID`, and `FRESHDESK_HANDOFF_ADMIN_ORIGIN`, together
-with the existing Freshdesk API settings. Verify the chosen identity/group
-and any helpdesk automations using one labeled internal test case with no
-customer details. The handoff creates an internal review job, not a linked
-customer-facing ticket. Only a case reference, intended department, safety
-category and an authenticated admin link are sent. The job stores only its
-provider reference; it does not copy the chat, customer contact or attachments.
-`WARRANTY_FRESHDESK_CREATE_CASE=0` stops all Freshdesk create calls (including
-already-queued internal handoffs), without rerouting to SMTP or replaying jobs.
+Human-support handoffs default to **SMTP** (`WARRANTY_HANDOFF_CHANNEL=smtp`):
+the team inbox is notified with no Freshdesk ticket and therefore no Reporter.
+Freshdesk’s create-ticket API always requires a requester (email / requester_id /
+etc.), and that contact is shown as Reporter — so do not invent a fake mailbox
+just to fill the field. Prefer SMTP when you want Reporter off.
+
+An optional Freshdesk work queue (`WARRANTY_HANDOFF_CHANNEL=freshdesk`) can be
+enabled in the host-only `.env.warranty-handoff` Compose overlay if the team
+accepts a configured `FRESHDESK_HANDOFF_REQUESTER_ID` as Reporter. Also set
+`FRESHDESK_HANDOFF_GROUP_ID` and `FRESHDESK_HANDOFF_ADMIN_ORIGIN` with the
+existing Freshdesk API settings, and verify with one labeled internal test
+case with no customer details. That path creates an internal review job, not a
+linked customer-facing ticket. Only a case reference, intended department,
+safety category and an authenticated admin link are sent. The job stores only
+its provider reference; it does not copy the chat, customer contact or
+attachments. `WARRANTY_FRESHDESK_CREATE_CASE=0` stops all Freshdesk create
+calls (including already-queued internal handoffs), without rerouting to SMTP
+or replaying jobs.
 
 The selected channel is captured only when a new job is inserted. Changing the
 configuration does not reschedule, move, or resend older jobs. Do not

@@ -22,34 +22,6 @@ import {
 
 const BACKEND = getBackendUrl();
 
-type HandoffAttention = {
-  total: number;
-  safety_reviews: number;
-  items: Array<{
-    ticket_id: string;
-    case_reference: string;
-    created_at?: string | null;
-    safety_review: boolean;
-    department: "warranty" | "sales";
-    notification_state: "failed" | "dead_letter" | "not_recorded";
-  }>;
-};
-
-async function fetchHandoffAttention(): Promise<HandoffAttention | null> {
-  const adminKey = process.env.ADMIN_API_KEY;
-  if (!adminKey) return null;
-  try {
-    const res = await fetch(`${BACKEND}/admin/warranty/handoff-attention?limit=12`, {
-      headers: { "X-Admin-Key": adminKey }, cache: "no-store", signal: AbortSignal.timeout(6000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json() as HandoffAttention;
-    return typeof data.total === "number" && Array.isArray(data.items) ? data : null;
-  } catch {
-    return null;
-  }
-}
-
 async function fetchTickets(page: number, status?: string, channel?: string): Promise<TicketListResponse> {
   const adminKey = process.env.ADMIN_API_KEY;
   if (!adminKey) {
@@ -88,11 +60,9 @@ export default async function AdminWarrantyQueuePage({
 
   let data: TicketListResponse = { total: 0, offset: 0, tickets: [] };
   let fetchError: string | null = null;
-  const tickets = fetchTickets(page, status, channel);
-  const attentionRequest = fetchHandoffAttention();
 
   try {
-    data = await tickets;
+    data = await fetchTickets(page, status, channel);
   } catch (err) {
     fetchError = err instanceof Error ? err.message : "Failed to load tickets from the backend.";
   }
@@ -102,7 +72,6 @@ export default async function AdminWarrantyQueuePage({
   if (!fetchError && page > pagination.pageCount) {
     redirect(ticketQueueHref(pagination.pageCount, status, channel));
   }
-  const attention = await attentionRequest;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -146,40 +115,6 @@ export default async function AdminWarrantyQueuePage({
         )}
 
         <AdminEmailPromptToggle />
-
-        {attention && attention.total > 0 ? (
-          <section aria-label="Support requests needing review" className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
-            <h2 className="font-semibold">{attention.total} open support requests without confirmed submission</h2>
-            <p className="my-1">
-              {attention.safety_reviews} marked for safety review (shown first). Newest cases follow.
-              Open a case, reconcile Freshdesk if needed, then use{" "}
-              <strong>Mark staff received</strong> to clear it from this list.
-              Nothing here retries or resends notifications.
-            </p>
-            <p className="mb-1 text-xs text-red-800/90">
-              Delivery job details:{" "}
-              <Link href="/admin/warranty/notifications" className="underline">
-                Handoff notification queue
-              </Link>
-              . Do not bulk-retry from that page.
-            </p>
-            <ul className="space-y-1 pt-1">
-              {attention.items.map((item) => (
-                <li key={item.ticket_id}>
-                  <Link className="font-medium underline" href={`/admin/warranty/${encodeURIComponent(item.ticket_id)}`}>{item.case_reference}</Link>
-                  {item.safety_review ? " · Safety review" : ""} · {item.department === "sales" ? "Sales" : "Warranty"} · {item.notification_state === "not_recorded" ? "No matching job" : item.notification_state === "dead_letter" ? "Failed or unconfirmed" : "Retry pending"}
-                </li>
-              ))}
-            </ul>
-            {attention.total > attention.items.length ? (
-              <p className="pt-2 text-xs text-red-800/80">
-                Showing {attention.items.length} of {attention.total}. Remaining clear after case-by-case ack.
-              </p>
-            ) : null}
-          </section>
-        ) : adminConfigured && !attention && !fetchError ? (
-          <p className="mb-5 text-sm text-gray-600">Support notification status could not be loaded.</p>
-        ) : null}
 
         {/* Admin decision warning */}
         <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">

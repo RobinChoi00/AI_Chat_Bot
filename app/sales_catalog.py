@@ -52,6 +52,15 @@ _CSV_PATH = _PROJECT_ROOT / "raw_data" / "products_export.csv"
 
 
 @dataclass(frozen=True)
+class ProductMatch:
+    """A catalog hit plus whether the identity is safe to answer without confirming."""
+
+    product: "ProductSpecs"
+    confidence: str  # "high" | "low"
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class ProductSpecs:
     """Facts we're willing to state publicly for a given chair."""
 
@@ -248,11 +257,24 @@ def _strip_lookup_noise(text: str) -> str:
     raw = rewrite_shopper_typos(text or "")
     raw = re.sub(r"\bblack\s+friday\b", " ", raw, flags=re.I)
     raw = _COLOR_RE.sub(" ", raw)
-    tokens = [
-        token
-        for token in re.findall(r"[A-Za-z0-9]+", raw)
-        if token.lower() not in _LOOKUP_FILLER
-    ]
+    # Keep "One" when it is part of a model identity ("One 4D"), not filler "one".
+    raw = re.sub(
+        r"\b(one)\s*([2345]\s*d)\b",
+        lambda m: f"{m.group(1)} {m.group(2)}",
+        raw,
+        flags=re.I,
+    )
+    tokens = []
+    parts = re.findall(r"[A-Za-z0-9]+", raw)
+    for index, token in enumerate(parts):
+        lower = token.lower()
+        if lower == "one":
+            nxt = parts[index + 1].lower() if index + 1 < len(parts) else ""
+            if re.fullmatch(r"[2345]d", nxt.replace(" ", "")):
+                tokens.append(token)
+                continue
+        if lower not in _LOOKUP_FILLER:
+            tokens.append(token)
     return " ".join(tokens)
 
 
@@ -313,18 +335,36 @@ def _published_features(row: dict) -> tuple[str, str, tuple[tuple[str, str], ...
 def product_feature_answer(product: ProductSpecs, query: str) -> str | None:
     """Answer requested published features without turning missing data into a fact."""
     lines = []
-    if re.search(r"\bcolou?rs?\b", query or "", re.I):
+    raw_query = query or ""
+    if re.search(r"\bcolou?rs?\b", raw_query, re.I):
         if product.colors:
             lines.append(f"- **Listed colors**: {', '.join(product.colors)}. Checkout confirms current availability.")
         else:
             lines.append("- **Colors**: not verified in this catalog. Sales can confirm the options for this exact model.")
+    if re.search(r"\b(?:leather|upholstery|pu\s+leather|vegan\s+leather|material|fabric)\b", raw_query, re.I):
+        lines.append(
+            "- **Upholstery / leather**: not verified as a published material line in this catalog. "
+            "Sales can confirm the exact cover material for this model."
+        )
+    if re.search(
+        r"\b(?:cover|slipcover|chair\s+cover|protective\s+cover)\b.{0,40}\b(?:fit|compatible|work)|"
+        r"\b(?:fit|compatible|work)\b.{0,40}\b(?:cover|slipcover)\b|"
+        r"\b(?:accessory|ottoman|aromodule|aro[\s-]?module)\b.{0,40}\b(?:fit|compatible)|"
+        r"\b(?:fit|compatible)\b.{0,40}\b(?:accessory|ottoman|aromodule|aro[\s-]?module|cover)\b",
+        raw_query,
+        re.I,
+    ):
+        lines.append(
+            "- **Cover / accessory fit**: I won't confirm compatibility from this chat. "
+            "Share both product names with Sales so they can verify the exact accessory for this chair."
+        )
     for pattern, label, value in (
         (r"\bbluetooth\b|\bspeakers?\b", "Bluetooth speakers", product.bluetooth_speakers),
         (r"\bbody[\s-]+scan(?:ning|ner)?\b|\bscan(?:s|ning)?\b.{0,30}\bbody\b|\bbody\b.{0,24}\bscanned\b", "Body scanning", product.body_scanning),
         (r"\b(?:mobile\s+)?app(?:lication)?\b|\b(?:smartphone|phone)\b.{0,24}\b(?:control|remote)\b", "App control", ""),
         (r"\bvoice[\s-]+(?:control|commands?|assistant)\b", "Voice control", ""),
     ):
-        if re.search(pattern, query or "", re.I):
+        if re.search(pattern, raw_query, re.I):
             if value:
                 lines.append(f"- **{label}**: {value}, according to the published catalog.")
             else:
@@ -444,14 +484,23 @@ def load_product_index() -> tuple[ProductSpecs, ...]:
 # ---------------------------------------------------------------------------
 
 
-def resolve_product(text: str) -> Optional[ProductSpecs]:
-    """Find a single product identity without substituting another generation."""
+def resolve_product_match(text: str) -> Optional[ProductMatch]:
+    """Find a product and whether the identity is strong enough to answer outright.
+
+    High confidence: exact title/handle/alias, or a unique named identity in the
+    sentence. Low confidence: substring / token-overlap guesses that can confuse
+    similarly named chairs — callers should confirm those once.
+    """
     raw = _strip_lookup_noise(text or "")
     if len(raw) < 2:
+        return None
+    # Bare mechanism words are not a model identity ("4D" ≠ Manhattan Duo).
+    if re.fullmatch(r"[2345]\s*d", raw, re.I):
         return None
 
     # Explicit aliases for case-workbook / sales names that diverge from Shopify titles.
     alias = _CASE_MODEL_ALIASES.get(_normalize_key(raw))
+    alias_applied = bool(alias)
     if alias:
         raw = alias
 
@@ -461,28 +510,74 @@ def resolve_product(text: str) -> Optional[ProductSpecs]:
         _normalize_key(record.display_name), _normalize_key(record.title), _normalize_key(record.handle),
     }]
     if len(exact) == 1:
-        return exact[0]
+        return ProductMatch(exact[0], "high", "exact")
     named, has_named_identity = _sentence_product(rewrite_shopper_typos(alias or text), products)
     if has_named_identity:
-        return named
+        if named is None:
+            return None
+        return ProductMatch(named, "high", "named_identity")
     # A version explicitly supplied by the customer is a hard identity limit.
     if re.search(r"\b(?:le\s*|v(?:ersion)?\s*)\d+(?:\.\d+)?\b", text or "", re.I):
+        return None
+    # "One 4D" / similar shorthand with no catalog identity must not fall through
+    # to a different 4D family chair.
+    if re.search(r"\bone\s*[2345]\s*d\b", text or "", re.I) and not re.search(
+        r"\b(?:manhattan|orion|maestro|soho|duke|vivant|yoga|apex|kairos)\b",
+        text or "",
+        re.I,
+    ):
+        one_keys = {_normalize_key("Osaki One 4D"), _normalize_key("One 4D"), _normalize_key("osaki-one-4d")}
+        one_hits = [
+            record
+            for record in products
+            if {_normalize_key(record.display_name), _normalize_key(record.title), _normalize_key(record.handle)}
+            & one_keys
+        ]
+        if len(one_hits) == 1:
+            return ProductMatch(one_hits[0], "high", "one_4d_alias")
         return None
 
     resolved_title = resolve_model_name(raw)
     if not resolved_title:
         resolved_title = raw
+    if re.fullmatch(r"[2345]\s*d", (resolved_title or "").strip(), re.I):
+        return None
     resolved_key = _normalize_key(resolved_title)
     if not resolved_key:
         return None
 
+    # Distinctive tokens left after stripping filler / brand noise.
+    tokens = [t for t in re.findall(r"[a-z0-9]+", raw.lower()) if len(t) >= 3]
+    tokens = [
+        t
+        for t in tokens
+        if t not in {"osaki", "titan", "massage", "chair", "pro", "the"} | _LOOKUP_FILLER
+    ]
+    # A single generic family word ("Duo", "Pro") must not auto-answer as a
+    # specific chair without confirmation.
+    short_ambiguous = len(tokens) <= 1
+
     for record in products:
         if _normalize_key(record.display_name) == resolved_key:
-            return record
+            if alias_applied:
+                return ProductMatch(record, "high", "alias")
+            return ProductMatch(
+                record,
+                "low" if short_ambiguous else "high",
+                "short_resolved" if short_ambiguous else "resolved_exact",
+            )
         if _normalize_key(record.title) == resolved_key:
-            return record
+            return ProductMatch(
+                record,
+                "low" if short_ambiguous else "high",
+                "short_resolved" if short_ambiguous else "resolved_title",
+            )
         if _normalize_key(record.handle) == resolved_key:
-            return record
+            return ProductMatch(
+                record,
+                "low" if short_ambiguous else "high",
+                "short_resolved" if short_ambiguous else "resolved_handle",
+            )
 
     for record in products:
         title_key = _normalize_key(record.title)
@@ -493,15 +588,9 @@ def resolve_product(text: str) -> Optional[ProductSpecs]:
             or resolved_key in title_key
             or resolved_key in display_key
         ):
-            return record
+            return ProductMatch(record, "low", "substring")
 
     # Token overlap: require most distinctive tokens (ignore brand noise).
-    tokens = [t for t in re.findall(r"[a-z0-9]+", raw.lower()) if len(t) >= 3]
-    tokens = [
-        t
-        for t in tokens
-        if t not in {"osaki", "titan", "massage", "chair", "pro", "the"} | _LOOKUP_FILLER
-    ]
     if len(tokens) >= 1:
         scored: list[tuple[int, ProductSpecs]] = []
         need = max(1, len(tokens) - 1)
@@ -527,12 +616,18 @@ def resolve_product(text: str) -> Optional[ProductSpecs]:
                 if xl_hits:
                     top = xl_hits
             if len(top) == 1:
-                return top[0]
+                return ProductMatch(top[0], "low", "token_overlap")
             # Prefer the shortest display name among remaining ties (Grande XL
             # over a longer XL family member when scores match).
             top.sort(key=lambda rec: (len(rec.display_name), rec.display_name))
-            return top[0]
+            return ProductMatch(top[0], "low", "token_overlap_tiebreak")
     return None
+
+
+def resolve_product(text: str) -> Optional[ProductSpecs]:
+    """Find a single product identity without substituting another generation."""
+    match = resolve_product_match(text)
+    return match.product if match is not None else None
 
 
 # Case workbook / sales shorthand → Shopify-facing name hints.

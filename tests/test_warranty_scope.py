@@ -131,8 +131,17 @@ def test_blocks_alaska_and_guam_shipping_questions():
         assert decision.reason == "shipping_policy", text
 
 
-def test_allows_how_long_shipping_for_verified_tracking():
+def test_blocks_prepurchase_how_long_shipping_without_order_markers():
     decision = evaluate_warranty_scope("how long does shipping take")
+    assert decision.is_blocked
+    assert decision.reason == "shipping_policy"
+    msg = build_warranty_scope_refusal(decision.reason)
+    assert "sales" in msg.lower()
+    assert "ext. 2" in msg
+
+
+def test_allows_how_long_shipping_when_order_markers_present():
+    decision = evaluate_warranty_scope("how long does shipping take for my order #12345")
     assert decision.in_scope
     assert decision.reason == "delivery"
 

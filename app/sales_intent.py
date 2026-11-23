@@ -190,9 +190,10 @@ _PARTS_TECHNICIAN_RE = re.compile(
 # `\b` doesn't fire between two CJK word characters (e.g. "환불해주세요").
 _CANCEL_REFUND_RE = re.compile(
     r"(?:\b(?:"
-    r"cancel(?:ling|led)?\s+(?:my\s+)?(?:order|purchase|buy|subscription)|"
+    r"cancel(?:ling|led|lation)?\s+(?:my\s+)?(?:order|purchase|buy|subscription)|"
     r"(?:want|need|please|how\s+(?:do|can)\s+i)\s+to\s+cancel|"
     r"cancel\s+(?:my\s+)?(?:order|purchase)|order\s+cancel|"
+    r"order\s+change\s+or\s+cancell?ation|cancell?ation|"
     r"refund(?:\s+my\s+(?:order|purchase|money|payment))?|"
     r"(?:want|need|please)\s+(?:a\s+)?refund|"
     r"return\s+(?:(?:my|the|this|that)\s+)?(?:(?:delivered|ordered)\s+)?(?:order|chair|purchase|item)|"
@@ -228,8 +229,10 @@ _DISCOUNT_RE = re.compile(
 # Competitor / "why is this $1000 more" — never a recommend budget.
 _PRICE_GAP_RE = re.compile(
     r"("
-    r"\b(?:costco|walmart|amazon)\b.{0,48}\b(?:cheaper|expensive|price|priced|discount|deal|coupon|\$)|"
-    r"\b(?:cheaper|expensive|price|priced|discount|deal|coupon|\$\s*\d).{0,48}\b(?:costco|walmart|amazon)\b|"
+    r"\b(?:costco|walmart|amazon|sam'?s\s+club)\b.{0,64}"
+    r"\b(?:cheaper|expensive|price|priced|discount|deal|coupon|different|\$)|"
+    r"\b(?:cheaper|expensive|price|priced|discount|deal|coupon|different|\$\s*\d).{0,64}"
+    r"\b(?:costco|walmart|amazon|sam'?s\s+club|here|your\s+(?:site|store|price)|website)\b|"
     r"on\s+amazon|"
     r"amazon\.com|"
     r"amazon\s+site|"
@@ -317,7 +320,11 @@ _POSITIVE_PURCHASE_RE = re.compile(
 )
 
 _EXISTING_ORDER_CHANGE_RE = re.compile(
-    r"\border\s+change\b|forgot\s+(?:to\s+)?(?:add|choose|select)|"
+    r"\border\s+change\b|"
+    r"\b(?:upgrade|modify)\s+(?:my\s+)?order\b|"
+    r"\bchange\s+(?:my\s+)?order\s+to\b|"
+    r"\border\s+(?:upgrade|modification)\b|"
+    r"forgot\s+(?:to\s+)?(?:add|choose|select)|"
     r"(?:add|upgrade|change|modify).{0,55}(?:white[\s-]*glove|delivery\s+(?:method|service)|"
     r"shipping\s+(?:address|method)|delivery\s+address)|"
     r"(?:white[\s-]*glove|delivery\s+address).{0,45}(?:add|change|upgrade|too\s+late)|"
@@ -329,11 +336,14 @@ _EXISTING_ORDER_CHANGE_RE = re.compile(
 )
 
 _DIRECT_SPEC_QUESTION_RE = re.compile(
-    r"\b(?:does|do|has|have|can|what|how|is|are)\b.{0,160}"
+    r"\b(?:does|do|has|have|can|what|how|is|are|will)\b.{0,160}"
     r"\b(?:rollers?|heat(?:ing)?|airbags?|recline|capacity|dimensions?|weight|height|"
     r"wide|heavy|track|bluetooth|wifi|wi-fi|body\s+scann?(?:ing)?|colou?rs?|upholstery|leather|"
-    r"app|voice\s+(?:control|commands?)|scann?(?:ing)?\s+(?:(?:my|your|the)\s+)?body)\b|"
-    r"\b(?:foot|calf)\s+rollers?\s+(?:on|for)\b",
+    r"app|voice\s+(?:control|commands?)|scann?(?:ing)?\s+(?:(?:my|your|the)\s+)?body|"
+    r"cover|slipcover|accessory|ottoman|aromodule)\b|"
+    r"\b(?:foot|calf)\s+rollers?\s+(?:on|for)\b|"
+    r"\b(?:cover|slipcover|accessory|ottoman|aromodule)\b.{0,40}\b(?:fit|compatible|work)\b|"
+    r"\b(?:fit|compatible|work)\b.{0,40}\b(?:cover|slipcover|accessory|ottoman|aromodule)\b",
     re.I,
 )
 
@@ -403,7 +413,8 @@ _SPECS_RE = re.compile(
     r"3d|4d|airbags?|heat(?:ing|er)?|foot\s+rollers?|calf\s+rollers?|bluetooth|"
     r"app\s+control|\bapp\b|voice\s+(?:control|commands?)|"
     r"scann?(?:ing)?\s+(?:(?:my|your|the)\s+)?body|"
-    r"wi[\s-]?fi|body\s+scann?(?:ing)?|colou?rs?|leather|upholstery"
+    r"wi[\s-]?fi|body\s+scann?(?:ing)?|colou?rs?|leather|upholstery|"
+    r"cover|slipcover|accessory\s+fit|(?:ai\s+)?health\s*pro"
     r")\b",
     re.IGNORECASE,
 )
@@ -616,10 +627,19 @@ def classify(text: str) -> SalesIntent:
     if is_post_purchase(raw) and re.search(r"\b(?:invoice|receipt)\b", raw, re.I):
         return SalesIntent(label=INTENT_ORDER_STATUS, confidence="high", handoff=True,
                            matched_terms=("order_document",))
+    order_change_hits = _requested_matches(_EXISTING_ORDER_CHANGE_RE, raw)
+    explicit_order_change = bool(
+        re.search(
+            r"\border\s+change\b|\b(?:upgrade|modify)\s+(?:my\s+)?order\b|"
+            r"\bchange\s+(?:my\s+)?order\s+to\b|\border\s+(?:upgrade|modification)\b",
+            raw,
+            re.I,
+        )
+    )
     if (
-        is_post_purchase(raw)
-        and _requested_matches(_EXISTING_ORDER_CHANGE_RE, raw)
+        order_change_hits
         and not explicit_cancellation
+        and (is_post_purchase(raw) or explicit_order_change)
     ):
         return SalesIntent(
             label=INTENT_ORDER_CHANGE,
@@ -683,7 +703,17 @@ def classify(text: str) -> SalesIntent:
     # 3) Warranty / defect / already-purchased problems → warranty chat.
     # Neither "my chair is" nor "broken" on either end of a negated fault
     # description should override an otherwise unrelated shopping question.
+    # "Price and warranty for Model X" is shopping policy, not a claim.
+    shopping_price_and_warranty = bool(
+        _PRICE_RE.search(raw)
+        and re.search(r"\bwarrant", raw, re.I)
+        and not is_post_purchase(raw)
+        and not reports_owned_chair_problem(raw)
+        and not reports_product_fault(raw)
+    )
     hits = _requested_matches(_WARRANTY_REDIRECT_RE, _NEGATED_FAULT_STATE_RE.sub(" ", raw))
+    if shopping_price_and_warranty and set(hits) <= {"warranty"}:
+        hits = ()
     if hits or reports_owned_chair_problem(raw):
         return SalesIntent(
             label=INTENT_WARRANTY_REDIRECT,

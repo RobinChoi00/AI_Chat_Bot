@@ -27,6 +27,7 @@ from typing import Optional
 from sales_constraints import extract_constraints, product_constraint_issues, constraint_verification_notes, doorway_width_from_text
 
 from sales_catalog import (
+    ProductMatch,
     ProductSpecs,
     RecommendationRequest,
     color_is_listed,
@@ -41,6 +42,7 @@ from sales_catalog import (
     price_tier_label,
     recommend,
     resolve_product,
+    resolve_product_match,
 )
 from sales_compare import (
     is_which_of_pair,
@@ -427,7 +429,8 @@ def _normalize_orion_model_name(text: str) -> str:
     return re.sub(r"(\borion\s+duo\s+4\s*d)\s+and\s+(3\s*d\b)", r"\1+\2", text or '', flags=re.I)
 
 
-def _guess_model_from_text(text: str) -> Optional[ProductSpecs]:
+def _guess_model_match(text: str) -> Optional[ProductMatch]:
+    """Resolve a named chair and whether the hit is strong enough to answer."""
     # The generic resolver can mistake the long Orion Duo name for the
     # Manhattan Duo when token overlap outweighs the distinct family name.
     text = re.sub(r"\b(?:not|rather\s+than|instead\s+of)\s+(?:the\s+)?(?:osaki\s+)?(?:ai\s+)?orion\s+duo\b",
@@ -437,16 +440,18 @@ def _guess_model_from_text(text: str) -> Optional[ProductSpecs]:
         if not (pair and all(resolve_product(part) is not None for part in pair)):
             orion = product_by_handle('osaki-4d-3d-orion-duo-mech')
             if orion is not None:
-                return orion
-    product = resolve_product(text or "")
+                return ProductMatch(orion, "high", "orion_duo")
+    match = resolve_product_match(text or "")
     requested_mechanisms = re.findall(r"\b([2345]D)\b", text or "", re.I)
-    def consistent(candidate):
+
+    def consistent(candidate: Optional[ProductSpecs]) -> bool:
         return candidate is not None and (not requested_mechanisms or any(
             mechanism.lower() in ' '.join([candidate.massage_mechanism or '', candidate.display_name or '', candidate.title or '']).lower()
             for mechanism in requested_mechanisms
         ))
-    if consistent(product):
-        return product
+
+    if match is not None and consistent(match.product):
+        return match
     if re.search(r"\b\d+\.\d+\b", text or ""):
         # Do not discard a requested generation when a nickname fallback
         # recognizes only the older family name.
@@ -458,8 +463,144 @@ def _guess_model_from_text(text: str) -> Optional[ProductSpecs]:
     # Maestro" slips past it. The fallback index knows which catalog token was
     # in the message, so retry with just that name.
     named = named_model_in_text(text or "")
-    candidate = resolve_product(named) if named else None
-    return candidate if consistent(candidate) else None
+    if not named:
+        return None
+    named_match = resolve_product_match(named)
+    if named_match is None or not consistent(named_match.product):
+        return None
+    # A bare nickname recovered from a sentence is still only as strong as
+    # that nickname match — keep low confidence when the hit was fuzzy.
+    return named_match
+
+
+def _guess_model_from_text(text: str) -> Optional[ProductSpecs]:
+    match = _guess_model_match(text)
+    return match.product if match is not None else None
+
+
+_YES_MODEL_CONFIRM_RE = re.compile(
+    r"^\s*(?:yes|yeah|yep|yup|correct|right|exactly|that(?:'s|\s+is)\s+(?:it|right|correct|the\s+one)|"
+    r"맞아요|맞습니다|네)\s*[.!]?\s*$",
+    re.I,
+)
+_NO_MODEL_CONFIRM_RE = re.compile(
+    r"^\s*(?:no|nope|nah|wrong|different|not\s+(?:that|it)|다른\s*거|아니요|아니)\b",
+    re.I,
+)
+
+
+def _clear_model_confirm_prefs(prefs: Optional[dict]) -> dict:
+    patch = dict(prefs or {})
+    patch["awaiting_model_confirm"] = False
+    patch["pending_model_confirm_handle"] = ""
+    patch["pending_model_confirm_question"] = ""
+    patch["pending_model_confirm_intent"] = ""
+    return patch
+
+
+def _ask_model_confirm(
+    product: ProductSpecs,
+    original_message: str,
+    *,
+    intent_label: str,
+) -> SalesReply:
+    short = short_model_label(product)
+    return SalesReply(
+        reply=(
+            f"Just to confirm — did you mean **{product.display_name}**?\n\n"
+            "Reply **yes** to continue with that chair, or type the exact model name."
+        ),
+        intent="model_confirm",
+        quick_replies=[
+            QuickReply(
+                label=f"Yes — {short}",
+                payload=f"model_confirm:yes:{product.handle}",
+            ),
+            QuickReply(label="Different model", payload="model_confirm:no"),
+            QuickReply(label="Talk to a human", payload="human"),
+        ],
+        tools_used=["catalog.resolve_product"],
+        products=[product.as_public_dict()],
+        prefs_patch={
+            "awaiting_model_confirm": True,
+            "pending_model_confirm_handle": product.handle,
+            "pending_model_confirm_question": (original_message or "").strip()[:500],
+            "pending_model_confirm_intent": intent_label,
+            "pending_primary": product.display_name,
+        },
+        flow_stage="model_confirm",
+    )
+
+
+def _model_confirm_needed(
+    message: str,
+    prefs: Optional[dict],
+    *,
+    intent_label: str,
+) -> Optional[SalesReply]:
+    """Ask once when a fuzzy catalog hit would otherwise answer as a specific chair."""
+    data = prefs or {}
+    if data.get("awaiting_model_confirm"):
+        return None
+    if intent_label not in {
+        INTENT_PRICE,
+        INTENT_SPECS,
+        INTENT_STOCK,
+        INTENT_UNCLEAR,
+        INTENT_PREPURCHASE_POLICY,
+    } and not looks_like_color_question(message or ""):
+        return None
+    match = _guess_model_match(message or "")
+    if match is None or match.confidence != "low":
+        return None
+    if data.get("confirmed_model_handle") == match.product.handle:
+        return None
+    return _ask_model_confirm(
+        match.product,
+        message or "",
+        intent_label=intent_label,
+    )
+
+
+def _resume_after_model_confirm(
+    prefs: Optional[dict],
+    *,
+    domain: str,
+    product: ProductSpecs,
+) -> SalesReply:
+    data = _clear_model_confirm_prefs(prefs)
+    data["confirmed_model_handle"] = product.handle
+    data["pending_primary"] = product.display_name
+    confirm_clear = {
+        "awaiting_model_confirm": False,
+        "pending_model_confirm_handle": "",
+        "pending_model_confirm_question": "",
+        "pending_model_confirm_intent": "",
+        "confirmed_model_handle": product.handle,
+        "pending_primary": product.display_name,
+    }
+    question = str((prefs or {}).get("pending_model_confirm_question") or "").strip()
+    if not question:
+        extra, close_quick, close_patch = _product_closeout(product, domain=domain)
+        return SalesReply(
+            reply=(
+                f"Got it — **{product.display_name}**. "
+                f"What would you like to know about it?{extra}"
+            ),
+            intent=INTENT_SPECS,
+            quick_replies=[
+                *close_quick,
+                QuickReply(label="Check the price", payload=f"price:{product.handle}"),
+                QuickReply(label="Talk to a human", payload="human"),
+            ],
+            tools_used=["catalog.resolve_product"],
+            products=[product.as_public_dict()],
+            prefs_patch={**close_patch, **confirm_clear},
+        )
+    # Replay the original question with the confirmed focus already set.
+    reply = _respond_turn(question, domain=domain, prefs=data)
+    reply.prefs_patch = {**(reply.prefs_patch or {}), **confirm_clear}
+    return reply
 
 
 _CHEAPER_FROM_LIST_RE = re.compile(
@@ -628,6 +769,22 @@ def _direct_shopper_reply(message: str) -> Optional[SalesReply]:
             quick_replies=human,
             tools_used=["policy.sale_calendar"],
             flow_stage="policy",
+        )
+    if re.search(r"\b(?:ai\s+)?health\s*pro\b", raw, re.I):
+        return SalesReply(
+            reply=(
+                "I don't see **AI HealthPro** as a published catalog model name on this storefront, "
+                "so I won't map it to another chair or invent its features.\n\n"
+                "If you have a product link, model number, or the exact storefront title, paste it here "
+                "and I'll check the published listing — or ask Sales to confirm which model that name refers to."
+            ),
+            intent=INTENT_SPECS,
+            quick_replies=[
+                QuickReply(label="See all models", payload="list"),
+                QuickReply(label="Talk to a human", payload="human"),
+            ],
+            tools_used=["catalog.resolve_product"],
+            flow_stage="specs",
         )
     return None
 
@@ -3877,7 +4034,7 @@ def _feedback_reply(direction: str, prefs: Optional[dict]) -> Optional[SalesRepl
 
 def _prepurchase_policy_reply(message: str, *, domain: str, topic: Optional[str] = None) -> SalesReply:
     """Answer a published policy question instead of handing it to a human."""
-    from sales_policy import local_dealer_requested
+    from sales_policy import TOPIC_WARRANTY_TERMS, local_dealer_requested
 
     topic = topic or detect_policy_topic(message)
     answer = policy_answer(topic, domain, message=message) if topic else None
@@ -3890,6 +4047,22 @@ def _prepurchase_policy_reply(message: str, *, domain: str, topic: Optional[str]
         if not local_demo:
             answer = (f"I cannot confirm whether **{named.display_name}** is on the showroom floor today. "
                       "Please ask Sales to confirm that exact model before you travel.\n\n" + answer)
+        patch.update(_product_closeout(named, domain=domain)[2])
+    if (
+        topic == TOPIC_WARRANTY_TERMS
+        and named is not None
+        and re.search(r"\bprice\b|\bcost\b|\bhow\s+much\b", message or "", re.I)
+    ):
+        live = fetch_live_stock(
+            named.handle,
+            domain=domain,
+            title=named.title or named.display_name,
+        )
+        price_txt = _fmt_live_price(live, named.price_usd)
+        answer = (
+            f"**{named.display_name}** — {price_txt} on the published catalog "
+            "(checkout confirms the final amount).\n\n" + answer
+        )
         patch.update(_product_closeout(named, domain=domain)[2])
 
     followups = [QuickReply(label="Recommend a chair", payload="recommend")]
@@ -3905,12 +4078,14 @@ def _prepurchase_policy_reply(message: str, *, domain: str, topic: Optional[str]
         followups.append(QuickReply(label="Visit showroom", payload="cta:showroom"))
     followups.append(QuickReply(label="Talk to a human", payload="human"))
 
+    products = [named.as_public_dict()] if named is not None and topic == TOPIC_WARRANTY_TERMS else None
     return SalesReply(
         reply=answer,
         intent=INTENT_PREPURCHASE_POLICY,
         quick_replies=followups,
         tools_used=[f"policy.{topic}"],
         prefs_patch=patch,
+        products=products or [],
     )
 
 
@@ -4281,6 +4456,36 @@ def _payload_reply(
             ],
             flow_stage="menu",
         )
+    if root == "model_confirm":
+        action = parts[1].strip().lower() if len(parts) > 1 else ""
+        if action == "yes":
+            handle = ":".join(parts[2:]).strip() if len(parts) > 2 else ""
+            product = product_by_handle(handle) if handle else None
+            if product is None:
+                pending = str((prefs or {}).get("pending_model_confirm_handle") or "").strip()
+                product = product_by_handle(pending) if pending else None
+            if product is None:
+                cleared = _clear_model_confirm_prefs(prefs)
+                return SalesReply(
+                    reply="Which model did you mean? Type the full name and I'll check again.",
+                    intent=INTENT_UNCLEAR,
+                    quick_replies=_menu_quick_replies(),
+                    prefs_patch=cleared,
+                )
+            return _resume_after_model_confirm(prefs, domain=domain, product=product)
+        if action == "no":
+            cleared = _clear_model_confirm_prefs(prefs)
+            cleared["pending_primary"] = ""
+            return SalesReply(
+                reply=(
+                    "No problem — which model did you mean? "
+                    "Type the exact name (for example *Osaki OS-Pro Soho II*)."
+                ),
+                intent=INTENT_UNCLEAR,
+                quick_replies=_menu_quick_replies(),
+                prefs_patch=cleared,
+            )
+        return None
     if root == "menu":
         return _greeting_reply(prefs)
     if root == "resume":
@@ -4958,6 +5163,13 @@ def _respond_turn(
             return _remember_question(_finalize_flow_stage(clarification), message, payload)
 
     if not payload and message.strip():
+        early_confirm = _model_confirm_needed(
+            message,
+            prefs,
+            intent_label=classify(message or "").label,
+        )
+        if early_confirm is not None:
+            return _remember_question(_finalize_flow_stage(early_confirm), message, payload)
         specific = _answer_specific_shopper_request(message, prefs, domain=domain)
         if specific is not None:
             if not before_handoff and (prefs or {}).get('awaiting_pre_human_question'):
@@ -4973,6 +5185,61 @@ def _respond_turn(
         if previous_policy and early_intent.label not in HANDOFF_INTENTS - {'eta_shipping'}:
             return _remember_question(_finalize_flow_stage(
                 _prepurchase_policy_reply(message, domain=domain, topic=previous_policy)), message, payload)
+
+    # Low-confidence model guess — confirm before answering price/specs/stock.
+    if (prefs or {}).get("awaiting_model_confirm") and not payload:
+        pending_handle = str((prefs or {}).get("pending_model_confirm_handle") or "").strip()
+        pending_product = product_by_handle(pending_handle) if pending_handle else None
+        raw_confirm = (message or "").strip()
+        if pending_product is not None and _YES_MODEL_CONFIRM_RE.match(raw_confirm):
+            return _finalize_flow_stage(
+                _resume_after_model_confirm(prefs, domain=domain, product=pending_product)
+            )
+        if _NO_MODEL_CONFIRM_RE.match(raw_confirm):
+            cleared = _clear_model_confirm_prefs(prefs)
+            cleared["pending_primary"] = ""
+            return _finalize_flow_stage(
+                SalesReply(
+                    reply=(
+                        "No problem — which model did you mean? "
+                        "Type the exact name (for example *Osaki OS-Pro Soho II*)."
+                    ),
+                    intent=INTENT_UNCLEAR,
+                    quick_replies=_menu_quick_replies(),
+                    prefs_patch=cleared,
+                )
+            )
+        # A new model name replaces the pending guess.
+        replacement = _guess_model_match(raw_confirm)
+        if replacement is not None and replacement.confidence == "high":
+            return _finalize_flow_stage(
+                _resume_after_model_confirm(
+                    prefs, domain=domain, product=replacement.product
+                )
+            )
+        if replacement is not None and replacement.confidence == "low":
+            return _finalize_flow_stage(
+                _ask_model_confirm(
+                    replacement.product,
+                    str((prefs or {}).get("pending_model_confirm_question") or raw_confirm),
+                    intent_label=str(
+                        (prefs or {}).get("pending_model_confirm_intent") or INTENT_SPECS
+                    ),
+                )
+            )
+        cleared = _clear_model_confirm_prefs(prefs)
+        cleared["pending_primary"] = ""
+        return _finalize_flow_stage(
+            SalesReply(
+                reply=(
+                    "I still need the exact model name before I answer. "
+                    "Type it the way it appears on the product page."
+                ),
+                intent=INTENT_UNCLEAR,
+                quick_replies=_menu_quick_replies(),
+                prefs_patch=cleared,
+            )
+        )
 
     # Awaiting email after "Email me this pick" — capture before other intents.
     if (prefs or {}).get("awaiting_email_for_pick"):
@@ -5265,6 +5532,16 @@ def _respond_turn(
     named = _guess_model_from_text(message or "")
     hints = parse_recommendation_hints(message or "")
 
+    confirm_gate = _model_confirm_needed(
+        message or "",
+        prefs,
+        intent_label=(
+            INTENT_STOCK if color_ask else intent.label
+        ),
+    )
+    if confirm_gate is not None:
+        return _remember_question(_finalize_flow_stage(confirm_gate), message, payload)
+
     if color_ask and not (intent.label == INTENT_RECOMMEND and hints.height_in):
         if named is not None or waiting or intent.label in {
             INTENT_UNCLEAR,
@@ -5406,6 +5683,7 @@ def _respond_turn(
 _TRANSIENT_FLOW_KEYS = (
     'awaiting_showroom_window', 'awaiting_showroom_email',
     'awaiting_email_for_pick', 'awaiting_pre_human_question',
+    'awaiting_model_confirm',
 )
 
 

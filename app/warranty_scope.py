@@ -54,6 +54,12 @@ _SALES_ONLY_RE = re.compile(
     r"payment\s+methods?|methods?\s+of\s+payment|payment\s+plan|monthly\s+payments?|"
     r"recommend|suggest|best\s+chair|compare\s+models|which\s+chair\s+should|"
     r"showroom|visit\s+(?:your|the)\s+store|"
+    r"demo\s+(?:your|a|the)\s+chairs?|"
+    r"where.{0,40}demo|"
+    r"(?:local|nearby|nearest)\s+(?:dealer|retailer|showroom)|"
+    r"costco|walmart|amazon|sam'?s\s+club|"
+    r"weight\s+capacity|user\s+weight|\d{2,4}\s*(?:lb|lbs|pounds?)\s+(?:or\s+above|capacity)|"
+    r"(?:ai\s+)?health\s*pro|"
     r"specs?\s+only|dimensions?\s+only|tell\s+me\s+about\s+(?:the\s+)?(?:chair|model)\b|"
     r"가격|할인|구매|추천|"
     r"precio|descuento|comprar|recomienda"
@@ -151,15 +157,20 @@ _GREETING_PREFIX_RE = re.compile(
 )
 
 _PRE_PURCHASE_SHIPPING_ASK_RE = re.compile(
-    r"\b("
-    r"free\s+(?:deliver(?:y|ies)?|shipping)|"
-    r"(?:do\s+you|can\s+you|will\s+you|able\s+to)\s+(?:deliver|ship)\b|"
-    r"(?:deliver|ship|shipping|delivery)\s+to\b|"
-    r"ship\s+to\b|deliver\s+to\b|"
-    r"(?:available|eligibility)\s+(?:in|for|to)\b|"
-    r"shipping\s+(?:to|for|policy|cost|fee|rate|price)|"
-    r"delivery\s+(?:to|for|available|fee|cost)"
-    r")\b",
+    r"(?:"
+    r"\bfree\s+(?:deliver(?:y|ies)?|shipping)\b|"
+    r"\b(?:do\s+you|can\s+you|will\s+you|able\s+to)\s+(?:deliver|ship)\b|"
+    r"\b(?:deliver|ship|shipping|delivery)\s+to\b|"
+    r"\bship\s+to\b|\bdeliver\s+to\b|"
+    r"\b(?:available|eligibility)\s+(?:in|for|to)\b|"
+    r"\bshipping\s+(?:to|for|policy|cost|fee|rate|price|time|eta)\b|"
+    r"\bdelivery\s+(?:to|for|available|fee|cost|time|eta)\b|"
+    r"\bhow\s+long\b.{0,40}\b(?:ship(?:ping|ment)?|deliver(?:y|ies)?|arriv(?:e|al))\b|"
+    r"\b(?:estimate|estimated|approx(?:imate)?)\b.{0,24}\b(?:ship(?:ping)?|deliver(?:y)?)\b|"
+    r"\blead\s+time\b|"
+    r"\b(?:if\s+i\s+buy|before\s+i\s+buy|when\s+i\s+order)\b.{0,40}\b(?:ship(?:ping)?|deliver(?:y)?)\b|"
+    r"\b(?:ship(?:ping)?|deliver(?:y)?)\b.{0,40}\b(?:if\s+i\s+buy|before\s+i\s+buy|when\s+i\s+order)\b"
+    r")",
     re.IGNORECASE,
 )
 
@@ -301,9 +312,10 @@ def build_warranty_scope_refusal(reason: str = "") -> str:
     if (reason or "").strip().lower() == "shipping_policy":
         return (
             "This chat is for **warranty support** after a purchase.\n\n"
-            "Questions about shipping to **Hawaii, Alaska, or Guam** are handled by **sales**. "
+            "Pre-purchase shipping timing, free-shipping rules, and ship-to eligibility "
+            "(including **Hawaii, Alaska, or Guam**) are handled by **sales**. "
             f"Please call **sales** at {SALES_PHONE}. "
-            "I won't quote freight, eligibility, or a dollar amount here.\n\n"
+            "I won't quote freight, eligibility, a ship date, or a dollar amount here.\n\n"
             f"{phones}"
         )
     if (reason or "").strip().lower() == "delivery":
@@ -370,7 +382,7 @@ def _has_restricted_ship_region(text: str) -> bool:
 
 
 def is_pre_purchase_shipping_policy(text: str) -> bool:
-    """True for free-shipping / region-eligibility questions (not claim tracking)."""
+    """True for free-shipping / region-eligibility / ETA questions (not claim tracking)."""
     raw = (text or "").strip()
     if not raw:
         return False
@@ -387,6 +399,14 @@ def is_pre_purchase_shipping_policy(text: str) -> bool:
         return True
     # Region + delivery/shipping word without post-purchase signal.
     if has_region and re.search(r"\b(deliver|delivery|ship|shipping)\b", raw, re.I):
+        return True
+    # Pre-purchase ETA / lead-time questions (no order/tracking markers above).
+    if has_shipping_ask and re.search(
+        r"\b(?:how\s+long|estimate|estimated|lead\s+time|shipping\s+time|delivery\s+time|"
+        r"if\s+i\s+buy|before\s+i\s+buy|when\s+i\s+order)\b",
+        raw,
+        re.I,
+    ):
         return True
     return False
 

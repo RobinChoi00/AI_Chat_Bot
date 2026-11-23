@@ -139,7 +139,9 @@ _EXPLICIT_NEW_PURCHASE_RE = re.compile(
 _LOCAL_DEALER_RE = re.compile(
     r"\b(?:near|nearby|nearest|closest|local|around|(?:my|this)\s+area|zip(?:\s*code)?)\b|"
     r"\b(?:dealers?|retailers?|showrooms?)\s+in\b|"
-    r"\b(?:i\s+am|i['’]m|we\s+are|we['’]re|i\s+live|we\s+live)\s+(?:in|from)\b",
+    r"\b(?:i\s+am|i['’]m|we\s+are|we['’]re|i\s+live|we\s+live)\s+(?:in|from)\b|"
+    r"\bwhere\b.{0,40}\b(?:can|could)\s+i\s+go\s+to\s+(?:demo|try|test)\b|"
+    r"\b(?:demo|try|test)\b.{0,24}\byour\s+chairs?\b",
     re.I,
 )
 _DEALER_LOCATOR_URL = "https://osakichair.com/pages/find-your-osaki-store"
@@ -304,7 +306,8 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"come\s+with\s+(?:a\s+)?warranty|"
             r"extended\s+warranty|"
             r"years?\s+warranty|warranty\s+years?|"
-            r"what'?s?\s+covered"
+            r"what'?s?\s+covered|"
+            r"\bprice\b.{0,48}\bwarrant|\bwarrant\w*.{0,48}\bprice\b"
             r")",
             re.IGNORECASE,
         ),
@@ -408,8 +411,9 @@ _TOPIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"showroom|show\s+room|"
             r"(?:do\s+you\s+have\s+a|is\s+there\s+a|nearest)\s+(?:store|shop|location)|"
             r"store\s+(?:near|location|address|hours)|"
-            r"(?:try|test|sit\s+in|see)\s+(?:it|one|them|a\s+chair)\s+(?:in\s+person|out|first)?|"
-            r"where\s+(?:(?:can|could)\s+i\s+|to\s+)?(?:try|test|sit\s+in)\b|"
+            r"(?:try|test|sit\s+in|see|demo)\s+(?:it|one|them|a\s+chair|your\s+chairs?)\s*(?:in\s+person|out|first)?|"
+            r"where\s+(?:(?:can|could)\s+i\s+|to\s+)?(?:try|test|sit\s+in|demo)\b|"
+            r"where\s+(?:can|could)\s+i\s+(?:go\s+to\s+)?(?:demo|try|test|see)\b|"
             r"where\s+(?:can|could)\s+i\s+see\s+(?:the|this|a)\s+chair|"
             r"(?:local|nearby|nearest)\s+(?:dealer|retailer)|"
             r"(?:dealer|retailer)s?\s+(?:in|near)\b|"
@@ -498,7 +502,8 @@ def detect_topic(text: str) -> Optional[str]:
     # A location in a showroom question is not a shipping destination.
     if re.search(
         r"\b(?:showroom|local\s+dealer|nearby\s+dealer|nearest\s+dealer|"
-        r"dealers?\s+(?:in|near)|where\s+(?:(?:can|could)\s+i\s+|to\s+)?(?:try|test))\b",
+        r"dealers?\s+(?:in|near)|where\s+(?:(?:can|could)\s+i\s+|to\s+)?"
+        r"(?:try|test|demo)|where\s+(?:can|could)\s+i\s+go\s+to\s+(?:demo|try|test))\b",
         raw,
         re.I,
     ):
@@ -941,7 +946,62 @@ def _limits_kind(message: str) -> str:
     return "pets"
 
 
-def _limits_answer(_domain: str, message: str = "") -> str:
+def _benefit_payment_answer(domain: str, message: str = "") -> str:
+    """Published HSA/FSA checkout guidance — never promise a shopper's plan will pay."""
+    model_name = ""
+    try:
+        from sales_catalog import resolve_product
+
+        named = resolve_product(message or "")
+        if named is not None:
+            model_name = named.display_name
+    except Exception:  # pragma: no cover
+        model_name = ""
+    model_lead = f"For **{model_name}**, " if model_name else ""
+    origin = get_storefront_base_url(domain)
+
+    if origin == "https://titanchair.com":
+        url = _policy_url(domain, "pages/hsa-fsa-payment-options")
+        return (
+            f"{model_lead}Titan Chair publishes an **HSA/FSA** checkout path "
+            "(via **TrueMed**):\n\n"
+            "1. At checkout, choose **Pay with HSA/FSA via TrueMed**.\n"
+            "2. Complete the short TrueMed health questionnaire.\n"
+            "3. If approved, you receive a **Letter of Medical Necessity (LMN)**.\n"
+            "4. Pay with your HSA/FSA card, or pay another way and submit the LMN "
+            "plus receipt to your plan for reimbursement.\n\n"
+            "The page says most Osaki and Titan chairs can go through this program, "
+            "and to check the product page for an **HSA/FSA Eligible** badge. "
+            "**Your plan still decides** — I can't promise reimbursement or coverage.\n\n"
+            f"Full steps and FAQ: {url}"
+        )
+
+    if origin == "https://osakiusa.com":
+        url = _policy_url(domain, "pages/hsa-fsa-massage-chairs")
+        return (
+            f"{model_lead}Osaki USA publishes an **HSA/FSA** reimbursement path "
+            "(via **Medpaid**):\n\n"
+            "1. Choose a product that shows the **HSA/FSA** eligibility badge.\n"
+            "2. After checkout, use **Reimburse Purchase** on the order confirmation page "
+            "and complete the Medpaid assessment.\n"
+            "3. If approved, Medpaid issues a free **Letter of Medical Necessity (LMN)**.\n"
+            "4. Submit your receipt and LMN to your HSA/FSA administrator.\n\n"
+            "Eligibility is confirmed per shopper through that assessment, and "
+            "**requirements vary by plan administrator** — I can't promise reimbursement "
+            "or coverage.\n\n"
+            f"Published guide: {url}"
+        )
+
+    return (
+        f"{model_lead}I don't have a verified storefront HSA/FSA page for this site. "
+        "Please check with your **plan administrator** before purchasing; eligibility "
+        "and documentation requirements depend on your plan.\n\n"
+        "Sales can confirm the payment options shown at checkout. "
+        "I can't promise reimbursement or coverage."
+    )
+
+
+def _limits_answer(domain: str, message: str = "") -> str:
     kind = _limits_kind(message)
     if kind == "gift":
         return (
@@ -1004,14 +1064,7 @@ def _limits_answer(_domain: str, message: str = "") -> str:
             "for a patio or outdoor space."
         )
     if kind == "benefit_payment":
-        return (
-            "I don't have verified **FSA / HSA eligibility or payment acceptance** "
-            "for these chairs. Please check with your **plan administrator** "
-            "before purchasing; eligibility and any documentation requirements "
-            "depend on your plan.\n\n"
-            "Sales can confirm the storefront's payment process and available "
-            "product documentation. I can't promise reimbursement or coverage."
-        )
+        return _benefit_payment_answer(domain, message)
     if kind == "medical":
         return (
             "I **won't give medical advice**, and these chairs are **not listed as "

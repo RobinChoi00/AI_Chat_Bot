@@ -32,12 +32,93 @@ def merge(prefs, reply):
     ('I already purchased a chair and I love it!', 'greeting'),
     ('Can I use FSA?', 'prepurchase_policy'),
     ('I already ordered but forgot to upgrade White Glove delivery', 'order_change'),
+    ('I want to upgrade my order to the OS-4D Pro Maestro', 'order_change'),
+    ('Where can I go to demo your chairs?', 'prepurchase_policy'),
+    ('Can you confirm the price and warranty for the OS-Pro 4D Maestro?', 'prepurchase_policy'),
+    ('Does the Manhattan Duo have leather?', 'specs'),
+    ('Will the Titan cover fit my Astoria?', 'specs'),
+    ('AI HealthPro what model it has', 'specs'),
 ])
 def test_real_failure_routes(question, label):
     reply = agent.respond(question)
     assert reply.intent == label
-    assert not reply.products
+    if label not in {'prepurchase_policy', 'specs'}:
+        assert not reply.products
     assert 'user height' not in reply.reply.lower()
+
+
+def test_price_and_warranty_includes_published_price_and_terms():
+    reply = agent.respond(
+        'Can you confirm the price and warranty for the OS-Pro 4D Maestro?'
+    )
+    assert reply.intent == 'prepurchase_policy'
+    lower = reply.reply.lower()
+    assert 'maestro' in lower
+    assert 'warranty' in lower
+    assert '3 years' in lower or 'three' in lower
+    assert '$' in reply.reply
+
+
+def test_dealer_demo_uses_official_locator():
+    reply = agent.respond('Where can I go to demo your chairs?')
+    assert 'find-your-osaki-store' in reply.reply
+    assert 'Dealer Locator' in reply.reply
+
+
+def test_one_4d_and_bare_mechanism_do_not_become_manhattan():
+    assert resolve_product('One 4D') is None
+    assert resolve_product('4D') is None
+    soho = resolve_product('Is the taupe chair soho 11 chair the one pictured')
+    assert soho is not None
+    assert 'Soho' in soho.display_name
+    assert 'Manhattan' not in soho.display_name
+
+
+def test_soho_taupe_stays_on_named_model():
+    first = agent.respond('Is the taupe chair soho 11 chair the one pictured')
+    # Fuzzy "soho 11" must confirm before answering as Soho II.
+    assert first.intent == 'model_confirm'
+    assert 'Soho' in first.reply
+    assert 'Manhattan' not in first.reply
+    assert first.prefs_patch.get('awaiting_model_confirm') is True
+    reply = agent.respond('yes', prefs=merge({}, first))
+    assert 'Soho' in reply.reply
+    assert 'Manhattan' not in reply.reply
+    assert 'Taupe' in reply.reply or 'taupe' in reply.reply.lower()
+
+
+def test_low_confidence_model_asks_once_then_answers():
+    first = agent.respond('price of the Duo chair')
+    assert first.intent == 'model_confirm'
+    assert 'did you mean' in first.reply.lower()
+    assert first.prefs_patch.get('awaiting_model_confirm') is True
+    confirmed = first.prefs_patch.get('pending_model_confirm_handle')
+    assert confirmed
+    yes = agent.respond('yes', prefs=merge({}, first))
+    assert yes.intent == 'price'
+    assert not yes.prefs_patch.get('awaiting_model_confirm')
+    assert yes.prefs_patch.get('confirmed_model_handle') == confirmed
+    assert '$' in yes.reply
+
+
+def test_clear_model_name_skips_confirmation():
+    reply = agent.respond('price of the OS-Pro Maestro')
+    assert reply.intent == 'price'
+    assert 'did you mean' not in reply.reply.lower()
+    assert 'Maestro' in reply.reply
+
+
+def test_model_confirm_no_asks_for_exact_name():
+    first = agent.respond('price of the Duo chair')
+    assert first.intent == 'model_confirm'
+    no = agent.respond('no', prefs=merge({}, first))
+    assert no.intent == 'unclear'
+    assert 'exact name' in no.reply.lower()
+    assert not no.prefs_patch.get('awaiting_model_confirm')
+
+    bare = agent.respond('price of the Duo')
+    assert bare.intent == 'model_confirm'
+    assert 'did you mean' in bare.reply.lower()
 
 
 def test_feature_answer_before_interview_even_with_pending_recommendation():
