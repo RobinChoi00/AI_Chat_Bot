@@ -269,7 +269,12 @@ def _order_progress_reply(node: dict, text: str, ticket) -> Optional[str]:
     return f"{lead}\n\n{_reprompt_current(node)}"
 
 
-def _delivery_side_reply(node: dict, text: str, issue_type: str) -> Optional[str]:
+def _delivery_side_reply(
+    node: dict,
+    text: str,
+    issue_type: str,
+    ticket=None,
+) -> Optional[str]:
     """Order questions owned by Sales, and what a tracking number is, during a delivery case."""
     from delivery_intake import delivery_sales_topic, tracking_number_explainer  # noqa: WPS433
     from warranty_scope import SALES_PHONE  # noqa: WPS433
@@ -285,8 +290,16 @@ def _delivery_side_reply(node: dict, text: str, issue_type: str) -> Optional[str
     lead = delivery_sales_topic(text)
     if not lead:
         return None
+    # Ask before creating a Sales review request (does not change the order).
+    if ticket is not None and hasattr(ticket, "set_collected"):
+        ticket.set_collected("awaiting_sales_submit_consent", True)
+        ticket.set_collected("sales_submit_pending_text", (text or "")[:2000])
+        ticket.set_collected("human_support_department", "sales")
     return (
-        f"{lead} Sales handles that at **{SALES_PHONE}**, and I have not changed anything on your order.\n\n"
+        f"{lead} I can submit this to **Sales** for review — that does **not** "
+        f"change your order, address, or delivery schedule.\n\n"
+        f"Would you like me to submit it to Sales?\n\n"
+        f"(You can also call **Sales** at **{SALES_PHONE}**.)\n\n"
         f"{_reprompt_current(node)}"
     )
 
@@ -498,7 +511,7 @@ def try_answer_side_question(
     progress = _order_progress_reply(node, text, ticket)
     if progress:
         return progress
-    delivery = _delivery_side_reply(node, text, issue_type)
+    delivery = _delivery_side_reply(node, text, issue_type, ticket=ticket)
     if delivery:
         return delivery
     if not _looks_like_valid_workflow_answer(node, text):

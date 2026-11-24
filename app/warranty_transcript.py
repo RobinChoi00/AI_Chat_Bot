@@ -45,6 +45,12 @@ def _customer_input(path: str, body: dict) -> tuple[str, str]:
 
 
 def _reply(payload: dict) -> str:
+    # Prefer the customer-visible confirm/routing copy over the raw node prompt.
+    confirmation = payload.get('model_confirmation')
+    if isinstance(confirmation, dict):
+        confirm_msg = confirmation.get('message')
+        if isinstance(confirm_msg, str) and confirm_msg.strip():
+            return confirm_msg.strip()
     for value in (
         payload.get('assistant_message'),
         (payload.get('terminal_enrichment') or {}).get('message'),

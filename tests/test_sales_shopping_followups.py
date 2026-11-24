@@ -293,6 +293,7 @@ def test_general_concepts_are_explained_and_contrasted(chat):
 def test_repair_and_new_purchase_stay_separate(chat):
     first, prefs = chat('I own a Titan TP-Epic 4D and its foot rollers stopped working.')
     assert first['intent'] == 'warranty_redirect'
+    assert 'submit' in first['reply'].lower()
     assert prefs['owner_service_case'] == {'model': 'Titan TP-Epic 4D', 'issue': 'foot rollers stopped working'}
     support, _ = chat('This chair is already in my house. It is broken. I need technical support, not a new chair.')
     assert 'two separate requests' not in support['reply']
@@ -303,7 +304,8 @@ def test_repair_and_new_purchase_stay_separate(chat):
     dual, _ = chat('Please route the old Epic repair to Warranty and the new-purchase question to Sales.')
     assert '**1. Repair — Titan TP-Epic 4D (foot rollers stopped working) → Warranty Department**' in dual['reply']
     assert '**2. New purchase — Osaki OS-Champ → Sales**' in dual['reply']
-    assert 'service@osakititan.com' in dual['reply'] and 'ext. 2' in dual['reply']
+    assert 'ext. 2' in dual['reply']
+    assert 'warranty' in dual['reply'].lower()
 
 
 @pytest.mark.parametrize('message', [

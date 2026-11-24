@@ -85,9 +85,16 @@ def test_guardrail_intents_return_handoff(client, message, expected_intent):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["intent"] == expected_intent
-    assert body["handoff"] is True
-    assert body["handoff_reason"] == expected_intent
     assert body["reply"], "handoff replies must not be empty"
+    if expected_intent in {"warranty_redirect", "parts_technician"}:
+        assert body["handoff"] is False
+        assert "submit" in body["reply"].lower()
+        assert "not** approve" in body["reply"].lower() or "does **not** approve" in body["reply"].lower()
+        payloads = [q["payload"] for q in body["quick_replies"]]
+        assert "warranty_submit:yes" in payloads and "warranty_submit:no" in payloads
+    else:
+        assert body["handoff"] is True
+        assert body["handoff_reason"] == expected_intent
     if expected_intent in ("eta_shipping", "order_status", "warranty_redirect"):
         if expected_intent == "order_status":
             assert "sales" in body["reply"].lower()

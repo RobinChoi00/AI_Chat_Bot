@@ -43,8 +43,8 @@ export function resolutionGateLabels(
   return {
     resolved: "Yes — it’s working now",
     unresolved: isPreparation
-      ? "Yes — continue to team review"
-      : "No — the issue is still there",
+      ? "Yes — submit to Warranty team"
+      : "No — submit to Warranty team",
     unable: "I can’t safely complete these steps",
   };
 }
@@ -101,15 +101,15 @@ export default function TroubleshootingGate({
               : "I’ve tried all the steps",
             unable: "I can’t safely complete these steps",
             outcomeTitle: isPreparation
-              ? "What would you like to do next?"
+              ? "Submit this to the Warranty team?"
               : "Did the steps solve the issue?",
             outcomeBody: isPreparation
-              ? "Choose one option below before we can send this for team review."
-              : "Choose one option below. If it’s working, we close the case; if not, you can send it for review.",
+              ? "I can send this for Warranty review. That does not approve a repair or replacement."
+              : "If it’s working, we close the case. If not, I can submit it to the Warranty team for review — that does not approve a repair or replacement.",
             resolved: "Yes — it’s working now",
             unresolved: isPreparation
-              ? "Yes — continue to team review"
-              : "No — the issue is still there",
+              ? "Yes — submit to Warranty team"
+              : "No — submit to Warranty team",
           };
 
   if (stage === "review") {

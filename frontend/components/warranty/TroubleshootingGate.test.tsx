@@ -33,7 +33,7 @@ describe("TroubleshootingGate", () => {
 
     expect(markup).toContain("Try the troubleshooting steps above first");
     expect(markup).toContain("I’ve tried all the steps");
-    expect(markup).not.toContain("the issue is still there");
+    expect(markup).not.toContain("submit to Warranty team");
     expect(markup).not.toContain("continue to team review");
   });
 
@@ -99,7 +99,7 @@ describe("TroubleshootingGate", () => {
     );
 
     const resolved = markup.indexOf("Yes — it’s working now");
-    const unresolved = markup.indexOf("No — the issue is still there");
+    const unresolved = markup.indexOf("No — submit to Warranty team");
     expect(resolved).toBeGreaterThan(-1);
     expect(unresolved).toBeGreaterThan(resolved);
   });

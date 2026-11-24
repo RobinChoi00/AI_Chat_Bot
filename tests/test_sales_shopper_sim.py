@@ -613,11 +613,11 @@ def test_production_unclear_phrases_never_dump_the_menu():
         ),
         ("is this a brand new chair?", "prepurchase_policy", ("new",), ("open-box deal",)),
         ("which product is right for me?", "recommend", ("height",), ()),
-        ("need manual", "warranty_redirect", ("service@osakititan.com",), ()),
+        ("need manual", "warranty_redirect", ("submit", "warranty team"), ()),
         (
             "how to connect osaki app to the chair",
             "warranty_redirect",
-            ("service@osakititan.com",),
+            ("submit", "warranty team"),
             (),
         ),
         ("can i switch my order?", "cancel_refund", ("email",), ()),

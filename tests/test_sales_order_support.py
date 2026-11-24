@@ -75,7 +75,10 @@ def test_negated_cancellation_does_not_start_cancellation(message):
 def test_concrete_technical_fault_keeps_warranty_route(message):
     reply = agent.respond(message, prefs={'sales_support_topic': 'order_status'})
     assert reply.intent in {'warranty_redirect', 'parts_technician'}
-    assert reply.handoff
+    # Consent first — handoff/lead only after they opt in (or decline to self-serve).
+    assert reply.handoff is False
+    assert 'submit' in reply.reply.lower() or 'warranty' in reply.reply.lower()
+    assert 'where is my order' not in reply.reply.lower()
 
 
 def test_new_shopping_task_owns_its_contact_email_instead_of_old_order_context():

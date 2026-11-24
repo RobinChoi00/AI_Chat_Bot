@@ -436,3 +436,71 @@ def test_explicit_handoff_button_preserves_reported_hazard_priority(client):
     assert response.status_code == 200, response.text
     assert response.json()["handoff"]["reason"] == "safety_hazard"
     assert "Stop using" in response.json()["assistant_message"]
+
+
+def _delivery_ticket(session: str) -> str:
+    ticket_id, _ = wf.WarrantyEngine.start_session(session, "osakiusa.com")
+    wf.WarrantyEngine.set_model_name(ticket_id, "OS-4000T")
+    wf.WarrantyEngine.submit_answer(ticket_id, "warranty")
+    wf.WarrantyEngine.submit_answer(ticket_id, "delivery")
+    assert wf.WarrantyEngine.get_current_node(ticket_id)["node_id"] == "delivery_intent_q"
+    return ticket_id
+
+
+def test_address_change_asks_to_submit_to_sales_before_phone_dump(client):
+    ticket_id = _delivery_ticket("addr-offer")
+    response = client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "I need to change delivery address. I have a tracking number"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body.get("side_question") is True
+    assert body["ticket"]["current_node"]["node_id"] == "delivery_intent_q"
+    assert not body.get("handoff", {}).get("requested")
+    msg = body["assistant_message"].lower()
+    assert "submit" in msg and "sales" in msg
+    assert "does **not** change" in body["assistant_message"].lower() or "does not change" in msg
+    assert "ext. 2" in body["assistant_message"]
+    collected = wf.WarrantyEngine.get_ticket(ticket_id).get_collected()
+    assert collected.get("awaiting_sales_submit_consent") is True
+    assert "change delivery address" in (collected.get("sales_submit_pending_text") or "").lower()
+
+
+def test_address_change_yes_saves_sales_review_without_changing_order(client):
+    ticket_id = _delivery_ticket("addr-yes")
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "I need to change delivery address. I have a tracking number"},
+    )
+    yes = client.post(f"/api/v1/warranty/{ticket_id}/answer", json={"answer": "yes"})
+    assert yes.status_code == 200, yes.text
+    body = yes.json()
+    assert body.get("handoff", {}).get("requested") is True
+    assert body["handoff"]["department"] == "sales"
+    assert body["handoff"]["reason"] == "sales_submit"
+    assert "Sales review request" in body["assistant_message"]
+    assert "ext. 2" in body["assistant_message"]
+    collected = wf.WarrantyEngine.get_ticket(ticket_id).get_collected()
+    assert collected.get("awaiting_sales_submit_consent") is False
+    assert "change delivery address" in (collected.get("human_support_request") or "").lower()
+
+
+def test_address_change_no_returns_sales_phone_and_keeps_delivery_menu(client):
+    ticket_id = _delivery_ticket("addr-no")
+    client.post(
+        f"/api/v1/warranty/{ticket_id}/answer",
+        json={"answer": "Please update my shipping address"},
+    )
+    declined = client.post(f"/api/v1/warranty/{ticket_id}/answer", json={"answer": "no"})
+    assert declined.status_code == 200, declined.text
+    body = declined.json()
+    assert body.get("side_question") is True
+    assert not body.get("handoff", {}).get("requested")
+    assert "Sales handles that" in body["assistant_message"]
+    assert "ext. 2" in body["assistant_message"]
+    assert body["ticket"]["current_node"]["node_id"] == "delivery_intent_q"
+    assert body["ticket"]["status"] == "in_progress"
+    assert wf.WarrantyEngine.get_ticket(ticket_id).get_collected().get(
+        "awaiting_sales_submit_consent"
+    ) is False

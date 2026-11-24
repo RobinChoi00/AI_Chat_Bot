@@ -34,12 +34,16 @@ def chat():
     "The air bags are not inflating.",
 ])
 def test_reported_part_failures_reach_warranty_instead_of_shopping(chat, message):
-    reply, _ = chat(message)
+    reply, state = chat(message)
     assert reply["intent"] == "warranty_redirect"
-    assert reply["handoff"]
-    assert "service@osakititan.com" in reply["reply"]
+    assert not reply["handoff"]
+    assert "submit" in reply["reply"].lower()
+    assert "not** approve" in reply["reply"].lower() or "does **not** approve" in reply["reply"].lower()
     assert "user height" not in reply["reply"].lower()
-    assert "approved a repair" in reply["reply"]  # explicitly denies approval
+    declined, _ = chat("no", state)
+    assert declined["handoff"]
+    assert "service@osakititan.com" in declined["reply"]
+    assert "approved a repair" in declined["reply"]  # explicitly denies approval
 
 
 def test_return_policy_then_actual_refund_retains_the_new_order_task(chat):

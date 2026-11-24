@@ -42,7 +42,8 @@ def test_vivant_settings_helps_owner_without_claiming_a_verified_tutorial():
 
 def test_parts_questions_keep_support_task_when_model_is_repeated():
     r = agent.respond('Where can I get replacement upholstery for my red OS-3D Cyber Pro?')
-    assert r.intent == 'parts_technician' and r.handoff
+    assert r.intent == 'parts_technician' and not r.handoff
+    assert 'upholstery' in r.reply and 'submit' in r.reply.lower()
     followup = agent.respond('Osaki OS-3D Cyber Pro Massage Chair, Red', prefs=r.prefs_patch)
     assert followup.intent == 'parts_technician' and 'upholstery' in followup.reply
     assert 'can check availability' in followup.reply and 'Shop:' not in followup.reply
@@ -50,8 +51,9 @@ def test_parts_questions_keep_support_task_when_model_is_repeated():
 
 def test_unidentified_connector_is_not_a_product_pitch_or_wiring_instruction():
     r = agent.respond('My OS-4000XT needs a replacement remote and I found an unmatched connector.')
-    assert r.intent == 'parts_technician' and r.handoff
+    assert r.intent == 'parts_technician' and not r.handoff
     assert 'Do not connect' in r.reply and 'confirm the exact compatible part' in r.reply
+    assert 'submit' in r.reply.lower()
     assert '260 lb' not in r.reply and 'Shop:' not in r.reply
 
 

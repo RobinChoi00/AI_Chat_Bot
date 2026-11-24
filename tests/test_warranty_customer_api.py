@@ -80,7 +80,7 @@ def test_register_model_then_ready_for_issue_type(client):
     assert ticket["current_node"]["node_id"] == "issue_type"
 
 
-def test_confirm_model_after_smart_start(client, monkeypatch):
+def test_smart_start_auto_confirms_extracted_model(client, monkeypatch):
     monkeypatch.setattr(
         "warranty_intake.extract_workflow_prefill",
         lambda **kwargs: {
@@ -99,19 +99,37 @@ def test_confirm_model_after_smart_start(client, monkeypatch):
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["ticket"]["model_name"] == "3D LTX"
-    assert data["ticket"]["needs_model_confirmation"] is True
-    assert data.get("model_confirmation", {}).get("message")
+    assert data["ticket"]["model_confirmed"] is True
+    assert data["ticket"]["needs_model_confirmation"] is False
+    assert not data.get("model_confirmation")
+    assert "Is that correct?" not in (data.get("assistant_message") or "")
 
-    confirm = client.post(
-        f"/api/v1/warranty/session/{session_id}/confirm-model",
-        json={"confirmed": True, "domain": "osaki.com"},
+
+def test_model_only_titan_pro_cura_skips_confirm_and_asks_area(client, monkeypatch):
+    monkeypatch.setattr(
+        "warranty_intake.extract_workflow_prefill",
+        lambda **kwargs: {
+            "answer_keys": ["warranty"],
+            "model_name": "TITAN PRO CURA",
+            "summary": "Titan Pro Cura",
+            "source": "heuristic",
+        },
     )
-    assert confirm.status_code == 200
-    assert confirm.json()["ticket"]["model_confirmed"] is True
-    assert confirm.json()["ticket"]["needs_model_confirmation"] is False
+    session_id = "cust-api-cura-no-confirm"
+    resp = client.post(
+        f"/api/v1/warranty/session/{session_id}/smart-start",
+        json={"message": "TITAN PRO CURA", "domain": "osakiusa.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "Cura" in data["ticket"]["model_name"]
+    assert data["ticket"]["model_confirmed"] is True
+    assert data["ticket"]["needs_model_confirmation"] is False
+    assert data["ticket"]["current_node"]["node_id"] == "issue_type"
+    assert data["ticket"]["ready_for_issue_type"] is True
 
 
-def test_natural_start_corrects_model_while_confirmation_pending(client, monkeypatch):
+def test_natural_start_can_correct_auto_confirmed_model(client, monkeypatch):
     monkeypatch.setattr(
         "warranty_intake.extract_workflow_prefill",
         lambda **kwargs: {
@@ -128,7 +146,17 @@ def test_natural_start_corrects_model_while_confirmation_pending(client, monkeyp
         json={"message": "3D LTX footrest air issue", "domain": "osaki.com"},
     )
     assert start.status_code == 200, start.text
-    assert start.json()["ticket"]["needs_model_confirmation"] is True
+    assert start.json()["ticket"]["model_confirmed"] is True
+
+    # Force pending confirmation so natural-start correction path still works.
+    from warranty_workflow import WarrantyEngine  # noqa: WPS433
+
+    ticket = WarrantyEngine.get_active_session_ticket(session_id)
+    assert ticket is not None
+    ticket.set_collected("model_confirmed", "")
+    from warranty_router import _persist_ticket_row  # noqa: WPS433
+
+    _persist_ticket_row(str(ticket.ticket_id), ticket)
 
     resp = client.post(
         f"/api/v1/warranty/session/{session_id}/natural-start",
@@ -141,8 +169,6 @@ def test_natural_start_corrects_model_while_confirmation_pending(client, monkeyp
     assert data["ticket"]["needs_model_confirmation"] is False
     model_name = data["ticket"]["model_name"].lower()
     assert "hypnos" in model_name
-
-    from warranty_workflow import WarrantyEngine  # noqa: WPS433
 
     ticket = WarrantyEngine.get_active_session_ticket(session_id)
     assert ticket is not None

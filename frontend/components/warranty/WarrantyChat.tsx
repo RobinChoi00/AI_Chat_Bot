@@ -885,15 +885,7 @@ export default function WarrantyChat({
           return;
         }
         if (resp.ticket?.model_confirmed) reportJourney("model", "completed");
-        await sleep(THINKING_DELAY_MS);
-        setMessages((prev) => [
-          ...prev,
-          assistantMessage(
-            correctedModel?.trim()
-              ? `Updated — we'll use **${resp.ticket?.model_name ?? correctedModel}** for this case.`
-              : `Great — we'll continue with **${resp.ticket?.model_name ?? "your model"}**.`
-          ),
-        ]);
+        // Backend already returns one "continue with model + next question" message.
         await appendAssistantFromResponse(resp.ticket, resp);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Something went wrong.";
@@ -1005,8 +997,8 @@ export default function WarrantyChat({
           ...previous,
           assistantMessage(
             recorded === "unable_to_attempt"
-              ? "Please don’t attempt anything that feels unsafe. You can send a request for team review below without photos or videos."
-              : "You can send this case for team review below. Photos and documents are optional."
+              ? "Please don’t attempt anything that feels unsafe. You can submit this to the Warranty team below without photos or videos. Submitting does not approve a repair or replacement."
+              : "You can submit this to the Warranty team below. Photos and documents are optional. Submitting does not approve a repair or replacement."
           ),
         ]);
         return true;

@@ -1534,6 +1534,75 @@ def _opening_human_contact_payload(engine, session_id: str, ticket_id: str, doma
     return payload
 
 
+_SALES_SUBMIT_YES_RE = re.compile(
+    r"^\s*(yes|y|yeah|yep|sure|ok|okay|please|submit)(?:\s|,|\.|!|$)",
+    re.I,
+)
+_SALES_SUBMIT_NO_RE = re.compile(
+    r"^\s*(no|nope|nah|no\s+thanks)(?:\s|,|\.|!|$)|"
+    r"\bi(?:'|’)?ll\s+contact\b|\bi\s+will\s+contact\b|\bi(?:'|’)?ll\s+call\b",
+    re.I,
+)
+
+
+def _clear_sales_submit_consent(row_or_ticket) -> None:
+    if row_or_ticket is None or not hasattr(row_or_ticket, "set_collected"):
+        return
+    row_or_ticket.set_collected("awaiting_sales_submit_consent", False)
+    row_or_ticket.set_collected("sales_submit_pending_text", "")
+
+
+def _maybe_handle_sales_submit_consent(engine, ticket, answer: str) -> Optional[Dict[str, Any]]:
+    """Yes/no after a Sales-owned delivery side question (address change, etc.)."""
+    collected = ticket.get_collected() if ticket is not None else {}
+    if not collected.get("awaiting_sales_submit_consent"):
+        return None
+    raw = (answer or "").strip()
+    if not raw:
+        return None
+    ticket_id = str(ticket.ticket_id)
+    session_id = str(ticket.session_id)
+    domain = str(ticket.domain or DEFAULT_WARRANTY_DOMAIN)
+    pending = str(collected.get("sales_submit_pending_text") or "").strip() or raw
+    node = engine.get_current_node(ticket_id) or {}
+
+    if _SALES_SUBMIT_YES_RE.match(raw) or re.search(r"\bsubmit\b.{0,20}\bsales\b", raw, re.I):
+        _clear_sales_submit_consent(ticket)
+        engine.persist_collected_data(ticket_id, str(ticket.collected_data or "{}"))
+        return _request_human_handoff(
+            engine,
+            session_id,
+            pending,
+            domain,
+            reason="sales_submit",
+        )
+
+    if _SALES_SUBMIT_NO_RE.search(raw):
+        from warranty_scope import SALES_PHONE  # noqa: WPS433
+        from warranty_side_questions import _reprompt_current  # noqa: WPS433
+
+        _clear_sales_submit_consent(ticket)
+        engine.persist_collected_data(ticket_id, str(ticket.collected_data or "{}"))
+        message = (
+            f"No problem. Sales handles that at **{SALES_PHONE}**, and I have not "
+            f"changed anything on your order.\n\n{_reprompt_current(node)}"
+        )
+        return _build_side_question_response(
+            engine, ticket_id, message, customer_text=raw
+        )
+
+    from warranty_side_questions import _reprompt_current  # noqa: WPS433
+
+    clarify = (
+        "Please reply **yes** to submit this to Sales for review, or **no** if you "
+        "prefer to contact Sales yourself. Submitting does **not** change your order.\n\n"
+        f"{_reprompt_current(node)}"
+    )
+    return _build_side_question_response(
+        engine, ticket_id, clarify, customer_text=raw
+    )
+
+
 def _request_human_handoff(engine, session_id: str, message: str, domain: str, *, reason: str = "customer_request") -> Dict[str, Any]:
     """Persist a visible support request without claiming a live transfer/email."""
     from warranty_models import WarrantyTicket, warranty_db_session  # noqa: WPS433
@@ -1578,7 +1647,7 @@ def _request_human_handoff(engine, session_id: str, message: str, domain: str, *
         department = str(row.get_collected().get("human_support_department") or "warranty")
         if str(row.issue_type or "") == "delivery" or is_delivery_inquiry(message):
             department = "sales"
-        if wants_sales_contact(message):
+        if wants_sales_contact(message) or reason == "sales_submit":
             department = "sales"
         if reason == "safety_hazard":
             department = "warranty"
@@ -1588,6 +1657,7 @@ def _request_human_handoff(engine, session_id: str, message: str, domain: str, *
         row.set_collected("human_support_requested_at", _now_cst_iso())
         row.set_collected("human_support_request", message[:2000])
         row.set_collected("human_support_language", language)
+        _clear_sales_submit_consent(row)
         if reason == "safety_hazard" and current_hazard and not saved_safety_report:
             row.set_collected("human_support_safety_report", message[:2000])
         row.set_collected("human_support_previous_node", str(row.current_node_id or ""))
@@ -3115,6 +3185,20 @@ async def confirm_warranty_model(
     ticket = engine.get_ticket(ticket_id)
     node = engine.get_current_node(ticket_id)
     payload = _serialize_ticket_state(session_id, ticket, node, engine=engine)
+    model_display = str(getattr(ticket, "model_name", "") or "").strip() or "your model"
+    node_id = str((node or {}).get("node_id") or "")
+    if node_id == "issue_type" and not str(getattr(ticket, "issue_type", "") or "").strip():
+        # One clear next step after confirm — avoid looking like a stuck re-ask.
+        payload["assistant_message"] = (
+            f"Great — we'll continue with **{model_display}**.\n\n"
+            "Which area do you need help with: setup, delivery, or a chair malfunction? "
+            "Please choose an option below."
+        )
+    elif model_display:
+        payload["assistant_message"] = (
+            f"Great — we'll continue with **{model_display}**.\n\n"
+            f"{str((node or {}).get('prompt') or '').strip()}"
+        ).strip()
     if ticket is not None and str(ticket.model_name or "").strip():
         from warranty_order_verification import verify_ticket_purchase  # noqa: WPS433
 
@@ -3447,9 +3531,16 @@ async def smart_start_warranty(
         extraction = {**extraction, "model_name": existing_model}
     elif model_hint and is_valid_model_input(model_hint):
         from product_catalog import resolve_model_name  # noqa: WPS433
+        from warranty_intake_context import mark_model_confirmed  # noqa: WPS433
 
         resolved_model = resolve_model_name(model_hint) or model_hint
         engine.set_model_name(ticket_id, resolved_model)
+        # Same as register-model: a resolved/typed model does not need a
+        # second "is that correct?" tap before the area menu.
+        ticket_for_model = engine.get_ticket(ticket_id)
+        if ticket_for_model is not None:
+            mark_model_confirmed(ticket_for_model)
+            _persist_ticket_row(ticket_id, ticket_for_model)
 
     applied_keys_list: list[str] = list(apply_result.get("applied") or [])
     if not applied_keys_list:
@@ -3531,10 +3622,13 @@ async def smart_start_warranty(
         }
         if ticket and needs_model_confirmation(ticket):
             model_display = str(ticket.model_name or model_hint or "").strip()
+            confirm_msg = build_model_confirmation_message(model_display)
             payload["model_confirmation"] = {
                 "model_name": model_display,
-                "message": build_model_confirmation_message(model_display),
+                "message": confirm_msg,
             }
+            # Record/show the confirm ask — not the issue_type prompt yet.
+            payload["assistant_message"] = confirm_msg
         return payload
 
     if already_past_issue:
@@ -3561,10 +3655,12 @@ async def smart_start_warranty(
         }
         if ticket and needs_model_confirmation(ticket):
             model_display = str(ticket.model_name or model_hint or "").strip()
+            confirm_msg = build_model_confirmation_message(model_display)
             payload["model_confirmation"] = {
                 "model_name": model_display,
-                "message": build_model_confirmation_message(model_display),
+                "message": confirm_msg,
             }
+            payload["assistant_message"] = confirm_msg
         return payload
 
     node = engine.get_current_node(ticket_id)
@@ -3598,10 +3694,12 @@ async def smart_start_warranty(
     }
     if ticket and needs_model_confirmation(ticket):
         model_display = str(ticket.model_name or model_hint or "").strip()
+        confirm_msg = build_model_confirmation_message(model_display)
         payload["model_confirmation"] = {
             "model_name": model_display,
-            "message": build_model_confirmation_message(model_display),
+            "message": confirm_msg,
         }
+        payload["assistant_message"] = confirm_msg
     return payload
 
 
@@ -3625,6 +3723,10 @@ async def submit_warranty_answer(ticket_id: str, body: WarrantyAnswerRequest):
 
     from warranty_scope import human_support_reason, is_order_cancel_request  # noqa: WPS433
     from warranty_common_questions import _is_exact_option_text  # noqa: WPS433
+
+    sales_consent = _maybe_handle_sales_submit_consent(engine, ticket, answer)
+    if sales_consent is not None:
+        return sales_consent
 
     node = engine.get_current_node(ticket_id)
     # Exact menu labels (e.g. "Heat feels too hot or uneven") are workflow

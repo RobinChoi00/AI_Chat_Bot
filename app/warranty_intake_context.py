@@ -452,8 +452,7 @@ def try_side_question_for_ticket(engine, ticket_id: str, answer: str) -> Optiona
     order = mentioned_order_number(answer)
     if order:
         ticket.set_collected("order_number", order)
-        engine.persist_collected_data(ticket_id, str(ticket.collected_data or "{}"))
-    return try_answer_side_question(
+    reply = try_answer_side_question(
         node=node,
         answer=answer,
         model_name=str(getattr(ticket, "model_name", None) or ""),
@@ -461,3 +460,6 @@ def try_side_question_for_ticket(engine, ticket_id: str, answer: str) -> Optiona
         turns=engine.get_turns(ticket_id),
         ticket=ticket,
     )
+    if order or reply:
+        engine.persist_collected_data(ticket_id, str(ticket.collected_data or "{}"))
+    return reply

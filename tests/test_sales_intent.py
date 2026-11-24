@@ -88,7 +88,9 @@ def test_parts_and_technician_route_to_warranty_team():
         intent = classify(text)
         assert intent.label == INTENT_PARTS_TECHNICIAN, text
         assert intent.is_handoff, text
-        assert "service@osakititan.com" in (handoff_message(intent) or "").lower()
+        offer = (handoff_message(intent) or "").lower()
+        assert "submit" in offer
+        assert "warranty team" in offer
 
 
 def test_discount_never_answered_directly():
@@ -161,17 +163,24 @@ def test_eta_and_order_status_handoff_to_sales_phone():
         assert "business days" not in msg.lower()
 
 
-def test_defect_handoffs_use_warranty_department_contact():
-    from sales_intent import SalesIntent, handoff_message
+def test_defect_handoffs_offer_warranty_submit_before_self_serve_contact():
+    from sales_intent import (
+        SalesIntent,
+        handoff_message,
+        warranty_self_serve_contact_message,
+    )
 
     for label in (INTENT_WARRANTY_REDIRECT, INTENT_PARTS_TECHNICIAN):
         msg = handoff_message(SalesIntent(label=label, confidence="high", handoff=True))
         assert msg
-        assert "service@osakititan.com" in msg.lower()
-        assert "ext. 2" in msg
-        assert "ext. 3" in msg
-        assert "warranty chat icon" not in msg.lower()
-        assert "freshdesk.com" in msg.lower()
+        assert "submit" in msg.lower()
+        assert "warranty team" in msg.lower()
+        assert "does **not** approve" in msg.lower() or "does not approve" in msg.lower()
+        assert "service@osakititan.com" not in msg.lower()
+    contact = warranty_self_serve_contact_message()
+    assert "service@osakititan.com" in contact.lower()
+    assert "freshdesk.com" in contact.lower()
+    assert "ext. 3" in contact
 
 
 def test_cancel_handoff_connects_agent_not_warranty_email():
@@ -365,7 +374,7 @@ def test_body_fit_hints_route_to_recommend_not_intensity():
         assert intent.label == INTENT_RECOMMEND, text
 
 
-def test_defect_and_parts_share_warranty_department_copy():
+def test_defect_and_parts_share_warranty_submit_offer_copy():
     from sales_intent import SalesIntent
 
     a = handoff_message(
@@ -375,7 +384,9 @@ def test_defect_and_parts_share_warranty_department_copy():
         SalesIntent(label=INTENT_PARTS_TECHNICIAN, confidence="high", handoff=True)
     )
     assert a == b
-    assert "service@osakititan.com" in (a or "").lower()
+    assert "submit" in (a or "").lower()
+    assert "warranty team" in (a or "").lower()
+    assert "service@osakititan.com" not in (a or "").lower()
 
 
 def test_greeting_is_greeting():

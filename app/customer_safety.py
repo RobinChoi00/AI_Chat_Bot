@@ -378,6 +378,11 @@ def support_handoff_message(language: str, phone: str, reason: str = "customer_r
         request = "solicitud de llamada" if reason == "callback_request" else "solicitud de hablar con una persona"
         return (f"He guardado su {request} y el contexto de la conversación en su caso para que el equipo los revise. "
                 f"{notification}Para recibir ayuda directa, llame al **{phone}**. No necesita repetir aquí las pruebas de solución de problemas.")
-    request = "callback request" if reason == "callback_request" else "request for a person"
+    if reason == "callback_request":
+        request = "callback request"
+    elif reason == "sales_submit":
+        request = "Sales review request"
+    else:
+        request = "request for a person"
     return (f"I've saved your {request} with this case and its conversation context for team review. "
             f"{notification}For direct help, please call **{phone}**. You do not need to repeat the troubleshooting steps here.")

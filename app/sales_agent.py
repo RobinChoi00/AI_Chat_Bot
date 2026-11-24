@@ -104,12 +104,17 @@ from sales_intent import (
     INTENT_RECOMMEND,
     INTENT_SPECS,
     INTENT_STOCK,
+    INTENT_PARTS_TECHNICIAN,
     INTENT_UNCLEAR,
     INTENT_WARRANTY_REDIRECT,
     HANDOFF_INTENTS,
     SalesIntent,
     classify,
     handoff_message,
+    warranty_self_serve_contact_message,
+    warranty_submit_email_ask_message,
+    warranty_submit_offer_message,
+    warranty_submit_saved_message,
     looks_like_price_gap,
 )
 from sales_intent_fallback import named_model_in_text, resolve_unclear, revise_recommend
@@ -963,6 +968,103 @@ def _complete_then_offer_human(
     return _ask_question_before_human()
 
 
+def _warranty_submit_offer_reply(intent_label: str, *, prior: str = "") -> SalesReply:
+    """Ask before saving a Warranty review request from Sales."""
+    return SalesReply(
+        reply=warranty_submit_offer_message(prior=prior),
+        intent=intent_label,
+        handoff=False,
+        handoff_reason=None,
+        quick_replies=[
+            QuickReply(label="Yes — submit to Warranty", payload="warranty_submit:yes"),
+            QuickReply(label="No — I'll contact them", payload="warranty_submit:no"),
+        ],
+        tools_used=["warranty.submit_offer"],
+        prefs_patch={
+            "awaiting_warranty_submit_consent": True,
+            "awaiting_warranty_submit_email": False,
+            "technical_support_topic": intent_label,
+            "awaiting_recommend": False,
+        },
+        flow_stage="warranty",
+    )
+
+
+def _warranty_submit_decline_reply(intent_label: str) -> SalesReply:
+    return SalesReply(
+        reply=warranty_self_serve_contact_message(),
+        intent=intent_label,
+        handoff=True,
+        handoff_reason=intent_label,
+        quick_replies=[
+            QuickReply(label="Back to menu", payload="menu"),
+            QuickReply(label="Talk to Sales", payload="human"),
+        ],
+        tools_used=["warranty.submit_declined"],
+        prefs_patch={
+            "awaiting_warranty_submit_consent": False,
+            "awaiting_warranty_submit_email": False,
+            "technical_support_topic": intent_label,
+            "awaiting_recommend": False,
+        },
+        flow_stage="warranty",
+    )
+
+
+def _warranty_submit_ask_email_reply(intent_label: str) -> SalesReply:
+    return SalesReply(
+        reply=warranty_submit_email_ask_message(),
+        intent=intent_label,
+        handoff=False,
+        quick_replies=[
+            QuickReply(label="No — I'll contact them", payload="warranty_submit:no"),
+            QuickReply(label="Back to menu", payload="menu"),
+        ],
+        tools_used=["warranty.submit_email_ask"],
+        prefs_patch={
+            "awaiting_warranty_submit_consent": False,
+            "awaiting_warranty_submit_email": True,
+            "technical_support_topic": intent_label,
+            "awaiting_recommend": False,
+        },
+        flow_stage="warranty",
+    )
+
+
+def _warranty_submit_capture_reply(email: str, prefs: Optional[dict]) -> SalesReply:
+    topic = str((prefs or {}).get("technical_support_topic") or INTENT_WARRANTY_REDIRECT)
+    question = str((prefs or {}).get("last_shopper_question") or "").strip()
+    summary = (
+        f"Warranty review request ({topic})"
+        + (f": {question[:400]}" if question else "")
+    )
+    return SalesReply(
+        reply=warranty_submit_saved_message(),
+        intent=topic,
+        handoff=True,
+        handoff_reason="warranty_submit",
+        quick_replies=[
+            QuickReply(label="Back to menu", payload="menu"),
+            QuickReply(label="Talk to Sales", payload="human"),
+        ],
+        tools_used=["warranty.submit_saved", "lead.capture"],
+        prefs_patch={
+            "awaiting_warranty_submit_consent": False,
+            "awaiting_warranty_submit_email": False,
+            "warranty_submit_saved": True,
+            "technical_support_topic": topic,
+            "awaiting_recommend": False,
+            "followup_request_saved": True,
+        },
+        lead_capture={
+            "email": email,
+            "interest_summary": summary,
+            "reason": "warranty_submit",
+        },
+        flow_stage="warranty",
+    )
+
+
 def _handoff_reply(intent: SalesIntent) -> SalesReply:
     if intent.label == INTENT_HUMAN:
         return SalesReply(
@@ -977,6 +1079,8 @@ def _handoff_reply(intent: SalesIntent) -> SalesReply:
                          'handoff_state': 'requested'},
             flow_stage='handoff',
         )
+    if intent.label in {INTENT_WARRANTY_REDIRECT, INTENT_PARTS_TECHNICIAN}:
+        return _warranty_submit_offer_reply(intent.label)
     reply = handoff_message(intent) or (
         "Let me connect you with a human. Share your **email** and someone "
         "from our team will reach out within one business day."
@@ -987,9 +1091,7 @@ def _handoff_reply(intent: SalesIntent) -> SalesReply:
         handoff=True,
         handoff_reason=intent.label,
         prefs_patch=({'sales_support_topic': intent.label, 'awaiting_recommend': False}
-                     if intent.label in {'order_status', 'cancel_refund', 'order_change'} else
-                     {'technical_support_topic': intent.label, 'awaiting_recommend': False}
-                     if intent.label in {'warranty_redirect', 'parts_technician'} else None),
+                     if intent.label in {'order_status', 'cancel_refund', 'order_change'} else None),
         quick_replies=[
             QuickReply(label="Share my email", payload="lead:email"),
             QuickReply(label="Back to menu", payload="menu"),
@@ -4575,6 +4677,17 @@ def _payload_reply(
             )
     if root == "human":
         return _handoff_reply(SalesIntent(label=INTENT_HUMAN, confidence="high", handoff=True))
+    if root == "warranty_submit":
+        topic = str((prefs or {}).get("technical_support_topic") or INTENT_WARRANTY_REDIRECT)
+        action = parts[1].strip().lower() if len(parts) > 1 else ""
+        if action in {"yes", "y", "submit"}:
+            email = extract_email(message or "")
+            if email:
+                return _warranty_submit_capture_reply(email, prefs)
+            return _warranty_submit_ask_email_reply(topic)
+        if action in {"no", "n", "decline", "self"}:
+            return _warranty_submit_decline_reply(topic)
+        return _warranty_submit_offer_reply(topic)
     if root == "feedback" and len(parts) >= 2:
         return _feedback_reply(parts[1].strip().lower(), prefs)
     if root == "open" and len(parts) >= 2:
@@ -5044,9 +5157,9 @@ def _answer_specific_shopper_request(message: str, prefs: Optional[dict], *, dom
         return None
     parts = replacement_parts_answer(message, continuing_parts=data.get('technical_support_topic') == 'parts_technician')
     if parts is not None:
-        return SalesReply(reply=parts, intent='parts_technician', handoff=True, handoff_reason='parts_technician',
-                          flow_stage='warranty', tools_used=['support.replacement_parts'],
-                          prefs_patch={'technical_support_topic': 'parts_technician', 'awaiting_recommend': False})
+        offer = _warranty_submit_offer_reply('parts_technician', prior=parts)
+        offer.tools_used = ['support.replacement_parts', 'warranty.submit_offer']
+        return offer
     product = _resolve_focus_product(message, data)
     guide = vivant_settings_answer(message, focused_handle=product.handle if product else '')
     if guide is not None and (product is None or product.handle == 'osaki-pro-vivant-5d'):
@@ -5090,24 +5203,56 @@ def _answer_specific_shopper_request(message: str, prefs: Optional[dict], *, dom
 
 
 def _owner_warranty_reply(message: str, prefs: Optional[dict], intent: Optional[SalesIntent] = None) -> SalesReply:
-    from sales_followups import WARRANTY_EMAIL, WARRANTY_PHONE, WARRANTY_PORTAL, owner_case_patch
+    from sales_followups import (
+        WARRANTY_EMAIL,
+        WARRANTY_PHONE,
+        WARRANTY_PORTAL,
+        _CONTACT_OR_STATUS,
+        owner_case_patch,
+    )
 
     data = prefs or {}
-    reply = _handoff_reply(intent or SalesIntent(INTENT_WARRANTY_REDIRECT, confidence='high', handoff=True))
     patch = owner_case_patch(message, data)
     case = patch.get('owner_service_case') or {}
     model = case.get('model')
-    if model:
-        issue = f" ({case['issue']})" if case.get('issue') else ''
-        reply.reply = (
-            f"For **{model}**{issue}, contact **Warranty** at **{WARRANTY_PHONE}** or **{WARRANTY_EMAIL}**. "
-            f"You can also submit a service request at {WARRANTY_PORTAL}. Have your order number or proof of purchase "
-            "available if you have it. This is a referral: I haven't submitted a service ticket, booked a callback, "
-            "or approved a repair or replacement."
+    issue = f" ({case['issue']})" if case.get('issue') else ''
+    intent_label = (intent.label if intent else INTENT_WARRANTY_REDIRECT)
+
+    # Explicit "what number / who do I call" → self-serve contacts (no silent ticket).
+    if _CONTACT_OR_STATUS.search(message or ""):
+        if model:
+            body = (
+                f"For **{model}**{issue}, contact **Warranty** at **{WARRANTY_PHONE}** or **{WARRANTY_EMAIL}**. "
+                f"You can also submit a service request at {WARRANTY_PORTAL}. Have your order number or proof of "
+                "purchase available if you have it. This is a referral: I haven't submitted a service ticket, "
+                "booked a callback, or approved a repair or replacement."
+            )
+        else:
+            body = warranty_self_serve_contact_message()
+        reply = SalesReply(
+            reply=body,
+            intent=intent_label,
+            handoff=True,
+            handoff_reason=intent_label,
+            tools_used=['routing.warranty', 'conversation.owner_service_case'],
+            quick_replies=[
+                QuickReply(label="Yes — submit to Warranty", payload="warranty_submit:yes"),
+                QuickReply(label="Back to menu", payload="menu"),
+            ],
+            prefs_patch={
+                "awaiting_warranty_submit_consent": False,
+                "awaiting_warranty_submit_email": False,
+                "technical_support_topic": intent_label,
+            },
+            flow_stage="warranty",
         )
+    else:
+        prior = f"Noted: **{model}**{issue}." if model else ""
+        reply = _warranty_submit_offer_reply(intent_label, prior=prior)
         reply.tools_used = ['routing.warranty', 'conversation.owner_service_case']
-        if model != (data.get('owner_service_case') or {}).get('model'):
-            patch['owner_case_acknowledged'] = False
+
+    if model and model != (data.get('owner_service_case') or {}).get('model'):
+        patch['owner_case_acknowledged'] = False
     reply.prefs_patch = {**(reply.prefs_patch or {}), **patch}
     return reply
 
@@ -5246,6 +5391,34 @@ def _respond_turn(
         email = extract_email(message or "")
         if email:
             return _finalize_flow_stage(_capture_pick_lead(email, prefs, domain=domain))
+
+    if (prefs or {}).get("awaiting_warranty_submit_email"):
+        topic = str((prefs or {}).get("technical_support_topic") or INTENT_WARRANTY_REDIRECT)
+        email = extract_email(message or "")
+        if email:
+            return _finalize_flow_stage(_warranty_submit_capture_reply(email, prefs))
+        if re.search(r"^\s*(no|nope|nah)\b", message or "", re.I) or (payload or "") == "warranty_submit:no":
+            return _finalize_flow_stage(_warranty_submit_decline_reply(topic))
+        return _finalize_flow_stage(_warranty_submit_ask_email_reply(topic))
+
+    if (prefs or {}).get("awaiting_warranty_submit_consent"):
+        topic = str((prefs or {}).get("technical_support_topic") or INTENT_WARRANTY_REDIRECT)
+        raw_consent = (message or "").strip().lower()
+        payload_consent = (payload or "").strip().lower()
+        if (
+            payload_consent in {"warranty_submit:yes", "warranty_submit:y", "warranty_submit:submit"}
+            or re.search(r"^\s*(yes|yeah|yep|y|sure|please|ok|okay|submit)\b", raw_consent)
+        ):
+            email = extract_email(message or "")
+            if email:
+                return _finalize_flow_stage(_warranty_submit_capture_reply(email, prefs))
+            return _finalize_flow_stage(_warranty_submit_ask_email_reply(topic))
+        if (
+            payload_consent in {"warranty_submit:no", "warranty_submit:n", "warranty_submit:decline"}
+            or re.search(r"^\s*(no|nope|nah|no thanks|i'?ll contact)\b", raw_consent)
+        ):
+            return _finalize_flow_stage(_warranty_submit_decline_reply(topic))
+        return _finalize_flow_stage(_warranty_submit_offer_reply(topic))
 
     if (prefs or {}).get("awaiting_showroom_email"):
         email = extract_email(message or "")
@@ -5684,6 +5857,7 @@ _TRANSIENT_FLOW_KEYS = (
     'awaiting_showroom_window', 'awaiting_showroom_email',
     'awaiting_email_for_pick', 'awaiting_pre_human_question',
     'awaiting_model_confirm',
+    'awaiting_warranty_submit_consent', 'awaiting_warranty_submit_email',
 )
 
 

@@ -905,6 +905,26 @@ _WARRANTY_SERVICE_CONTACT = (
     "The team will review the issue and any applicable coverage; this chat has not approved a repair or replacement."
 )
 
+_WARRANTY_SUBMIT_OFFER = (
+    "I can send this to our **Warranty team** for review. "
+    "This does **not** approve a repair, replacement, or parts shipment.\n\n"
+    "Would you like me to submit it?"
+)
+
+_WARRANTY_SUBMIT_EMAIL_ASK = (
+    "Please share the **email** we should attach to the Warranty review request "
+    "(order number helps if you have it).\n\n"
+    "Submitting only asks the team to review the case — it does **not** approve a repair or replacement."
+)
+
+_WARRANTY_SUBMIT_SAVED = (
+    "Thanks — your Warranty review request is **saved** with this chat. "
+    "A team member has **not** confirmed receipt, and this chat has **not** approved a repair or replacement.\n\n"
+    f"{_phone_directory()}\n"
+    "\nYou can also follow up at **service@osakititan.com** or "
+    "https://titanchair.freshdesk.com/support/home."
+)
+
 _SALES_DELIVERY_CONTACT = (
     "I can't look up live tracking or promise a delivery date from this chat.\n"
     "\n"
@@ -927,12 +947,32 @@ _AGENT_CONNECT_CANCEL = (
 )
 
 
+def warranty_submit_offer_message(*, prior: str = "") -> str:
+    """Ask before creating a Warranty review request from Sales."""
+    lead = (prior or "").strip()
+    if lead:
+        return f"{lead}\n\n{_WARRANTY_SUBMIT_OFFER}"
+    return _WARRANTY_SUBMIT_OFFER
+
+
+def warranty_submit_email_ask_message() -> str:
+    return _WARRANTY_SUBMIT_EMAIL_ASK
+
+
+def warranty_submit_saved_message() -> str:
+    return _WARRANTY_SUBMIT_SAVED
+
+
+def warranty_self_serve_contact_message() -> str:
+    return _WARRANTY_SERVICE_CONTACT
+
+
 def handoff_message(intent: SalesIntent) -> Optional[str]:
     """Return the safe, non-committal reply for a handoff intent.
 
     OsakiUSA Sales (Tidio) policy:
       - Never invent discount % or shipping ETAs in this chat.
-      - Defect / parts / technician → Warranty Department (email / Freshdesk / ext. 3).
+      - Defect / parts / technician → ask to submit a Warranty review (no approval).
       - Delivery date / tracking / order status → sales phone (ext. 2).
       - Cancel / refund / return → sales agent.
       - Discount / explicit human request → sales agent (email capture).
@@ -948,7 +988,7 @@ def handoff_message(intent: SalesIntent) -> Optional[str]:
         INTENT_WARRANTY_REDIRECT,
         INTENT_PARTS_TECHNICIAN,
     ):
-        return _WARRANTY_SERVICE_CONTACT
+        return warranty_submit_offer_message()
     if label == INTENT_CANCEL_REFUND:
         return _AGENT_CONNECT_CANCEL
     if label == INTENT_ORDER_CHANGE:
